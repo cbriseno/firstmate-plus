@@ -157,6 +157,8 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   CLAUDE_STORE=$(rec_get "$ROOT" claude_store)
   PI_TRUST_STORE=$(rec_get "$ROOT" pi_trust_store)
   TREEHOUSE_DIR=$(rec_get "$ROOT" treehouse_dir)
+  LAB_TMPDIR=$(rec_get "$ROOT" tmpdir)
+  LAB_TMPDIR=${LAB_TMPDIR:-/tmp}
 }
 
 lab_tmux() {
@@ -167,7 +169,7 @@ lab_tmux() {
 # The empty-environment base every lab process starts from.
 lab_env_base() {
   printf '%s\n' "HOME=$HOME" "USER=${USER:-$(id -un)}" "LOGNAME=${USER:-$(id -un)}" \
-    "PATH=$PATH" "SHELL=${SHELL:-/bin/zsh}" "TERM=xterm-256color" "LANG=${LANG:-en_US.UTF-8}" \
+    "TMPDIR=${LAB_TMPDIR:-/tmp}" "PATH=$PATH" "SHELL=${SHELL:-/bin/zsh}" "TERM=xterm-256color" "LANG=${LANG:-en_US.UTF-8}" \
     "TMUX_TMPDIR=$TMUX_DIR" "TREEHOUSE_ROOT=$ROOT/treehouse" "FM_BACKEND=tmux" "DISABLE_AUTOUPDATER=1"
   [ -z "${CLAUDE_DIR:-}" ] || printf '%s\n' "CLAUDE_CONFIG_DIR=$CLAUDE_DIR"
 }
@@ -490,11 +492,12 @@ cmd_up() {
   done
 
   if [ -z "$root" ]; then
-    root=$(mktemp -d /tmp/fmlab.XXXXXX) || die "cannot create a lab root"
+    root=$(mktemp -d "${TMPDIR:-/tmp}/fmlab.XXXXXX") || die "cannot create a lab root"
   else
     mkdir -p "$root" || die "cannot create '$root'"
   fi
   ROOT=$(real_dir "$root")
+  LAB_TMPDIR=$(real_dir "${TMPDIR:-/tmp}") || die "invalid TMPDIR"
   LAB="$ROOT/home"
   HARNESS=$harness EXPECT_HOST=$expect_host WANT_MATE=$mate WANT_WORKER=$worker
   NONCE=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
@@ -519,6 +522,7 @@ cmd_up() {
     echo "claude_store=$CLAUDE_STORE"
     echo "pi_trust_store=$PI_TRUST_STORE"
     echo "treehouse_dir=$TREEHOUSE_DIR"
+    echo "tmpdir=$LAB_TMPDIR"
   } > "$ROOT/$RECORD_NAME"
   echo "lab: $ROOT (tear down with: $0 down $ROOT)"
 
@@ -789,7 +793,7 @@ cmd_down() {
     die "refusing to remove the lab: its processes did not exit (pid ppid pgid state command): $details"
   fi
   echo "stopped: lab tmux server and lab processes"
-  # A spawn keeps /tmp/fm-<id> and /tmp/fm-<id>+<sha256 of the spawning home>.
+  # A spawn keeps task and home-scoped launch namespaces under the recorded TMPDIR.
   # The second is scoped to this lab home for any task it spawned; the first is
   # removed only for the lab's own unique ids, since another home may share it.
   home_hash=$(printf '%s' "$LAB" | shasum -a 256 | awk '{print $1}')
@@ -799,8 +803,8 @@ cmd_down() {
   done
   for id in "${ids[@]}"; do
     [ -n "$id" ] || continue
-    for dir in "/tmp/fm-$id+$home_hash" "/tmp/fm-$id"; do
-      [ "$dir" != "/tmp/fm-$id" ] || [ "$id" = "$MATE_ID" ] || [ "$id" = "$WORKER_ID" ] || continue
+    for dir in "$LAB_TMPDIR/fm-$id+$home_hash" "$LAB_TMPDIR/fm-$id"; do
+      [ "$dir" != "$LAB_TMPDIR/fm-$id" ] || [ "$id" = "$MATE_ID" ] || [ "$id" = "$WORKER_ID" ] || continue
       if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
         rm -rf "$dir" && echo "removed: task temp $dir"
       fi

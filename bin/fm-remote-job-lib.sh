@@ -847,7 +847,8 @@ fm_remote_job_reap_stale() { # <account-home>
       cutoff=$((now - FM_REMOTE_JOB_SEQ_CLAIM_REAP_SECONDS))
       ref=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap-ref.XXXXXX") || ref=
       if [ -n "$ref" ]; then
-        # touch -d ISO-8601 is POSIX; date(1) needs a host-specific epoch
+        # touch may reject fractional ISO timestamps; retain claims and retry then.
+        # date(1) needs a host-specific epoch
         # conversion. The beacon sits at the last instant of the cutoff second
         # so fractional claim mtimes keep the former whole-second expiry.
         stamp=$(TZ=UTC0 date -d "@$cutoff" +%Y-%m-%dT%H:%M:%S 2>/dev/null) \

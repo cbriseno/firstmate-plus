@@ -22,11 +22,11 @@ date() {
   if [ "$*" = '+%s' ]; then printf '%s\n' "$NOW"; else command date "$@"; fi
 }
 touch_frac() { # <epoch> <fraction> <path>
-  local stamp
-  stamp=$(TZ=UTC0 command date -d "@$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null) \
-    || stamp=$(TZ=UTC0 command date -r "$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null) \
-    || fail "touch_frac: date(1) accepted neither -d @<epoch> nor -r <epoch>"
-  touch -d "$stamp.$2Z" "$3" || fail "touch_frac: touch -d $stamp.$2Z failed"
+  python3 - "$1" "$2" "$3" <<'PYTHON'
+import os, sys
+ns = int(sys.argv[1]) * 1000000000 + int(sys.argv[2].ljust(9, "0"))
+os.utime(sys.argv[3], ns=(ns, ns))
+PYTHON
 }
 CUTOFF=$((NOW - FM_REMOTE_JOB_SEQ_CLAIM_REAP_SECONDS))
 for spec in 3:$CUTOFF:0 4:$CUTOFF:5 5:$((CUTOFF + 1)):0 6:$((CUTOFF + 1)):5; do
@@ -42,3 +42,17 @@ for name in 1 00 01 3 4; do
   assert_absent "$FM_REMOTE_JOB_SEQ_CLAIMS/$name" "expired eligible claim $name survived"
 done
 pass "claim sweep preserves numeric-name eligibility and whole-second expiry"
+
+# A host rejecting this touch form must leave claims and marker untouched so the
+# next sweep retries, then recover when touch works again.
+rm -f "$FM_REMOTE_JOB_STATE/.seq-claims-reaped"
+mkdir "$FM_REMOTE_JOB_SEQ_CLAIMS/7"
+fm_touch_epoch 946684800 "$FM_REMOTE_JOB_SEQ_CLAIMS/7"
+touch() { return 1; }
+fm_remote_job_reap_stale "$TMP_ROOT/account" || fail "rejected timestamp sweep failed"
+assert_present "$FM_REMOTE_JOB_SEQ_CLAIMS/7" "rejected timestamp must retain claim"
+assert_absent "$FM_REMOTE_JOB_STATE/.seq-claims-reaped" "rejected timestamp must not advance marker"
+unset -f touch
+fm_remote_job_reap_stale "$TMP_ROOT/account" || fail "retry sweep failed"
+assert_absent "$FM_REMOTE_JOB_SEQ_CLAIMS/7" "retry must reap expired claim"
+pass "claim sweep safely retries when touch rejects fractional ISO time"

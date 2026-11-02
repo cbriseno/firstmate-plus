@@ -17,7 +17,7 @@ No acceptance of a live model session or terminal handoff is implied by the offl
 
 Use Linux with GNU coreutils, or consult [platform setup](docs/platforms.md) for macOS and WSL2 limitations.
 Windows requires WSL2.
-Install dependencies through their upstream distributions before running the doctor.
+Use only dependencies already approved for your environment.
 The offline acceptance environment used Python 3.11.2, Node 22.23.4, Git 2.39.5, Bash 5.2.15, and tmux 3.3a.
 The source supports Python 3.9+ and Bash 3.2+; older combinations were not accepted in this distribution test.
 Use Node 22 LTS or newer and Git 2.39 or newer for this distribution.
@@ -48,7 +48,25 @@ bash bin/fm-doctor.sh --backend tmux
 
 A zero exit checks local command availability and Unix capabilities.
 It does not prove authentication, tool-version compatibility, a working agent session, or live backend operation.
-Read every missing prerequisite and install it before starting a supervisor.
+Resolve missing prerequisites through the administrator before starting a supervisor.
+
+## Required versus optional tools
+
+Run `bash bin/fm-doctor.sh --tools` from the checkout for a read-only inventory of detected tools, their known minimums, factory availability, and affected capabilities.
+The minimum approval request for a supervised local tmux route is Bash 3.2+, Python 3.9+ with POSIX locking, Git, Perl, jq, Node, standard Unix utilities, tmux, a treehouse with durable leases, and one supported agent CLI.
+The inventory marks unknown minimums explicitly; its presence check does not establish policy approval, authentication, or compatibility.
+GitHub tools are needed for GitHub operations, tasks-axi for its backlog, quota-axi for quota-array selection, no-mistakes for that delivery mode, and chrome-devtools-axi for browser work.
+Other backends, agent CLIs, and the extension are conditional; see [configuration](docs/configuration.md).
+Use tools already approved for the managed image; no installation or root access is needed for the inventory.
+A macOS developer-tool shim can require separate administrative approval and is not proof that the underlying tool is available.
+
+## macOS
+
+Linux has been verified for the offline distribution scenario.
+The upstream contract supports macOS with Bash 3.2 and BSD tools, but this distribution is not accepted on macOS until its doctor and tests have run on a Mac.
+No root access or new dependencies are required by this portability change; the managed image must already contain approved tools for the chosen route.
+Set `TMPDIR` to an existing user-writable directory when a different temporary location is needed.
+The native Codex binding remains Linux-only; see [platforms](docs/platforms.md) for other limits.
 
 ## First local project
 

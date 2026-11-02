@@ -1,12 +1,75 @@
 #!/usr/bin/env bash
 # Read-only local prerequisite check, with no installs, network or fleet actions.
-# Usage: bash bin/fm-doctor.sh [--backend <name>]
+# Usage: bash bin/fm-doctor.sh [--backend <name> | --tools]
 # Defaults to normal backend resolution (FM_BACKEND/config/ambient/tmux).
 # Reports command availability, basic Unix capabilities and the selected route;
 # bootstrap remains the owner of tool version/authentication compatibility.
 # Exit 0: prerequisites found (not a live harness/backend certification).
 # Exit 1: missing prerequisite/capability. Exit 2: unsupported platform/options.
 set -eu
+# Inventory mode performs no fleet, authentication, network, or installation work.
+if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
+  printf '%-21s | %-24s | %-12s | %-12s | %s\n' 'Tool (scope)' 'Found version' 'Minimum' 'macOS ships' 'Unavailable if missing'
+  inventory() {
+    local tool=$1 scope=$2 minimum=$3 shipped=$4 effect=$5 version
+    if command -v "$tool" >/dev/null 2>&1; then
+      case "$tool" in
+        tmux) version=$("$tool" -V 2>/dev/null) || version= ;;
+        *) version=$("$tool" --version 2>/dev/null) || version= ;;
+      esac
+      version=${version%%$'\n'*}
+      [ -n "$version" ] || version='present; unknown'
+    else
+      version=missing
+    fi
+    printf '%-21s | %-24.24s | %-12s | %-12s | %s\n' "$tool ($scope)" "$version" "$minimum" "$shipped" "$effect"
+  }
+  inventory bash core 3.2 yes 'shell entry points'
+  inventory python3 core 3.9 'not assured' 'work API and POSIX locking'
+  inventory git core unknown 'shim' 'project and task branches'
+  inventory perl core unknown yes 'text processing'
+  inventory jq core unknown no 'JSON-dependent operations'
+  inventory node core 'unknown' no 'Node-based tooling'
+  inventory ps core unknown yes 'process inspection'
+  for tool in awk basename cat chmod cp cut date dirname find grep head id ln ls mkdir mktemp mv od rm sed sort stat tail touch tr uname; do
+    inventory "$tool" core unknown yes 'shell operations using this utility'
+  done
+  inventory shasum core unknown yes 'home identity (sha256sum is an alternative)'
+  inventory tmux backend unknown no 'tmux backend'
+  inventory treehouse backend 'lease support' no 'isolated tmux worktrees'
+  for tool in zellij paseo rex; do inventory "$tool" backend unknown no "$tool backend"; done
+  inventory herdr backend unknown no 'Herdr backend'
+  inventory orca backend unknown no 'Orca backend'
+  inventory cmux backend unknown no 'cmux backend'
+  inventory gh forge unknown no 'GitHub operations'
+  inventory gh-axi forge 0.1.29 no 'GitHub integration'
+  inventory tasks-axi backlog 0.2.6 no 'tasks-axi backlog'
+  inventory quota-axi quota 0.1.51 no 'quota-array selection'
+  inventory no-mistakes delivery 1.46.0 no 'no-mistakes delivery'
+  inventory chrome-devtools-axi browser unknown no 'browser operations'
+  inventory curl optional unknown yes 'network probes and integrations'
+  inventory ssh optional unknown yes 'remote workers'
+  inventory lsof optional unknown yes 'some teardown process checks'
+  inventory launchctl optional unknown yes 'macOS remote worker service'
+  inventory osascript optional unknown yes 'macOS automation'
+  inventory timeout optional unknown no 'GNU timeout; portable fallback available'
+  inventory sha256sum optional unknown no 'SHA-256 alternative to shasum'
+  inventory openssl optional unknown yes 'optional cryptographic helpers'
+  inventory lavish-axi optional unknown no 'visual review'
+  inventory glab optional unknown no 'GitLab operations'
+  inventory tea optional unknown no 'Forgejo operations'
+  inventory gerrit-axi optional unknown no 'Gerrit operations'
+  inventory shellcheck development 0.11.0 no 'shell lint'
+  inventory actionlint development 1.7.12 no 'workflow lint'
+  inventory codex agent unknown no 'Codex agent'
+  inventory claude agent unknown no 'Claude agent'
+  inventory pi agent unknown no 'Pi agent'
+  for tool in opencode grok kimi cursor gemini muse rovo omp agy devin commandcode polytoken; do
+    inventory "$tool" agent unknown no "$tool agent"
+  done
+  printf '%s\n' 'Extensions and agent-specific helpers are conditional; see docs/configuration.md. Versions marked unknown are not established minimums.'
+  exit 0
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-platform-lib.sh
 . "$SCRIPT_DIR/fm-platform-lib.sh"

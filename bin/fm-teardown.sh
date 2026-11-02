@@ -4106,7 +4106,9 @@ teardown_launch_home_token() {
 }
 LAUNCH_HOME_TOKEN=$(teardown_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
 if [ -n "$LAUNCH_HOME_TOKEN" ] && [ "$KEEP_RUNNING" != 1 ]; then
-  rm -rf "/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+  launch_tmp_root=/tmp
+  [ -z "$TASK_TMP" ] || launch_tmp_root=$(dirname "$TASK_TMP")
+  rm -rf "$launch_tmp_root/fm-$ID+$LAUNCH_HOME_TOKEN"
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1

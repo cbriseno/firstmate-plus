@@ -76,3 +76,11 @@ bash "$ROOT/bin/fm-doctor.sh" --backend tmux > "$TASK_TMP/result" 2>&1 \
   || fail "doctor refused the complete GNU prerequisite fixture: $(cat "$TASK_TMP/result")"
 [ ! -e "$FM_HOME" ] || fail 'doctor changed the operational home'
 printf 'PASS: doctor distinguishes Linux utility prerequisites without runtime mutation (simulated versions)\n'
+
+# The inventory is independent of fleet configuration and performs no writes.
+bash "$ROOT/bin/fm-doctor.sh" --tools > "$TASK_TMP/inventory" || fail 'tools inventory failed'
+for field in 'Found version' 'Minimum' 'macOS ships' 'Unavailable if missing' 'bash (core)' 'no-mistakes (delivery)'; do
+  assert_contains "$(cat "$TASK_TMP/inventory")" "$field" 'inventory must describe its tools and consequences'
+done
+[ ! -e "$FM_HOME" ] || fail 'tools inventory changed the operational home'
+printf 'PASS: tools inventory is read-only and reports tool scope and consequences\n'

@@ -390,6 +390,25 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
 
+test_spawn_respects_tmpdir() {
+  local dir out rc=0 hash
+  dir=$(new_case tmpdir tmproot)
+  add_ship_task "$dir" tmproot claude
+  mkdir -p "$dir/temp space"
+  printf zsh > "$dir/fake/command"
+  out=$(TMPDIR="$dir/temp space" run_spawn "$dir" tmproot --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "relaunch with TMPDIR should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" tmproot tasktmp)" = "$dir/temp space/fm-tmproot" ] || fail 'task temp must use TMPDIR'
+  [ -d "$dir/temp space/fm-tmproot/gotmp" ] || fail 'Go temp must be created under TMPDIR'
+  hash=$(printf '%s' "$dir/home" | shasum -a 256 | awk '{print $1}')
+  [ -d "$dir/temp space/fm-tmproot+$hash" ] || fail 'launch namespace must use TMPDIR'
+  mkdir -p "$dir/other"
+  printf zsh > "$dir/fake/command"
+  out=$(TMPDIR="$dir/other" run_spawn "$dir" tmproot --relaunch --harness claude) || fail "second relaunch failed: $out"
+  [ "$(meta_field "$dir" tmproot tasktmp)" = "$dir/temp space/fm-tmproot" ] || fail 'relaunch must retain its existing temp namespace'
+  pass 'spawn places both temporary namespaces under TMPDIR'
+}
+
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text() {
   local dir out rc
   dir=$(new_case pending-exit rl43)
@@ -2625,7 +2644,8 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
     }
     dir=$HERDR_CASE_DIR
     rm -f "$dir/fake/herdr-stopped"
-    sed -i 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
+    sed -i.bak 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
+    rm -f "$dir/home/state/resume-$registered.meta.bak"
     # Keep the pane's status authority registered to an existing Pi session,
     # while process-info proves that its previous agent has exited.
     printf '{"result":{"agent":{"agent":"%s","agent_status":"idle","agent_session":{"kind":"path","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
@@ -2970,6 +2990,7 @@ test_relaunch_off_opencode_removes_tracked_wiring
 test_exit_and_relaunch_remove_the_dialog_file
 test_exit_removes_the_dialog_file_before_releasing_the_lock
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_spawn_respects_tmpdir
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree

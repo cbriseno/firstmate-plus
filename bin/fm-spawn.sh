@@ -5426,17 +5426,25 @@ agy)
   ;;
 esac
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
+# Per-task temp root: ${TMPDIR:-/tmp}/fm-<id>/ with Go's build temp at gotmp/. Go won't
 # create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
+# Nested so other per-task temp can live alongside
 # later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
 # The root is private (0700) because its path is predictable under a shared
-# /tmp: a root that already exists is reused only as a real directory owned by
+# temporary root: a root that already exists is reused only as a real directory owned by
 # this user and writable by nobody else, then tightened, so no other local user
 # can plant or swap a file in it. The staged launch command lives in a sibling
 # directory namespaced by home identity, not in this shared per-id root.
-TASK_TMP="/tmp/fm-$ID"
+TASK_TMP="${TMPDIR:-/tmp}/fm-$ID"
+# A relaunch keeps its existing namespace so later teardown can still remove
+# all of its task and launch files even if the caller changed TMPDIR.
+if [ "$RELAUNCH" -eq 1 ]; then
+  prior_task_tmp=$(fm_meta_get "$RELAUNCH_META" tasktmp)
+  if [ -n "$prior_task_tmp" ] && { [ -e "$prior_task_tmp" ] || [ -L "$prior_task_tmp" ]; }; then
+    TASK_TMP=$prior_task_tmp
+  fi
+fi
 if (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   [ "$HARNESS" != polytoken ] || SPAWN_TASK_TMP_CREATED=1
 else
@@ -6646,7 +6654,7 @@ fi
 case "$SPAWN_GEN" in
   *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
 esac
-LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+LAUNCH_DIR="$(dirname "$TASK_TMP")/fm-$ID+$LAUNCH_HOME_TOKEN"
 # Pane-scoped override: git in this worker reads our commit-msg strip without
 # rewriting the project's core.hooksPath. GIT_CONFIG_* takes precedence over
 # config files and is inherited by child git processes. Attribution retention
