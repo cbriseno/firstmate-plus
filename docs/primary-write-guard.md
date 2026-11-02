@@ -12,11 +12,13 @@ With `host`, the primary performs simple host-level operations directly and dele
 With `off`, the legacy operational-path carve-outs below remain, but host writes require a worker and host tasks cannot be created or launched.
 Invalid configuration fails closed to the legacy policy.
 
-The host allowance covers reading, writing, editing, moving, and deleting dotfiles, shell configuration, aliases, user configuration, and tools installed under `$HOME`, plus temporary files.
+The host allowance covers reading, writing, editing, moving, and deleting host files wherever the operating system permits, subject to the boundaries below.
 It never grants access to any registered project clone or its linked worktrees, `projects/`, or shared tracked material in this home's checkout.
 Symlink targets are resolved before checking these boundaries.
 Existing narrow captain-approved grants remain available.
-Writes outside `$HOME` require `FM_ALLOW_PRIMARY_WRITE=1`, except for the existing operational and temporary-path carve-outs below.
+Without `FM_ALLOW_PRIMARY_WRITE=1`, writes are refused under `/etc`, `/bin`, `/sbin`, `/boot`, `/dev`, `/proc`, `/sys`, `/usr` except `/usr/local`, `/var/lib`, `/var/db`, `/lib`, `/lib64`, `/System`, `/Library`, `/private/etc`, `/private/var` except `/private/var/folders`, and `/Applications/Utilities`.
+`/private/tmp` remains allowed.
+The operating system already protects system locations from ordinary non-root users; this denylist also protects administrator or root sessions and mistakes.
 The primary never uses `sudo`, `doas`, `su`, or other privilege escalation.
 Recursive deletes refuse `$HOME` itself, `/`, any entire top-level system directory, globs, substitutions, or any target that cannot resolve exactly from the hook environment.
 Secrets must never be printed; the guard rejects recognized reads of `.ssh/`, `.gnupg/`, `.env` files, credential files, private keys, and PEM files through covered read tools and common shell printing commands.
@@ -88,7 +90,9 @@ Shell commands are lexed with the shared classifier in `bin/fm-arm-command-polic
 
 Durable knowledge still follows the ownership rules in [`AGENTS.md`](../AGENTS.md) section 6.
 A relative target resolves against the payload's working directory, tracking `cd` inside a subshell.
-`~`, `$HOME`, and other variables the hook environment defines are expanded.
+`~`, `$HOME`, and `$FM_HOME` are expanded; under `off`, other variables defined in the hook environment retain their legacy expansion.
+In host-mode shell commands, simple literal absolute or home-relative assignments earlier in the same command, including chains and `export`, can resolve later targets.
+Computed assignments and unresolved variables remain refused.
 Under `off`, unresolved targets retain the legacy literal-prefix policy; `host` refuses unresolved writes.
 
 ## Captain-approved operations: grants
@@ -109,7 +113,7 @@ The script header owns the exact usage and record format.
 
 ## Escape hatch
 
-`FM_ALLOW_PRIMARY_WRITE=1` in the session environment permits outside-`$HOME` host targets while retaining host-mode safety rails and project protection.
+`FM_ALLOW_PRIMARY_WRITE=1` in the session environment overrides the system-location denylist while retaining host-mode safety rails and project protection.
 With `off`, it retains the legacy full write override; any other value is ignored.
 Like `FM_ALLOW_SUBAGENT`, it must be present when the harness launches, so no tool call can enable it for the call that follows.
 

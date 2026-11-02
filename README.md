@@ -15,7 +15,7 @@ No acceptance of a live model session or terminal handoff is implied by the offl
 
 ## Direct operations and host tasks
 
-Firstmate can make simple changes to dotfiles, user configuration, and tools in your home directly.
+Firstmate can make simple host changes directly, subject to the system and project boundaries in the direct-operation guide.
 For larger host assignments, a host worker starts in disposable scratch without registering a project or creating an initial commit.
 Run `printf 'off\n' > config/primary-direct-ops` to disable both features.
 See [direct-operation boundaries and host tasks](docs/primary-write-guard.md).

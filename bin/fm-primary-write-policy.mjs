@@ -109,6 +109,7 @@ class Judge {
     this.projectRoots = (options.projectRoots || []).map((root) => canonical(path.resolve(root)));
     this.log = options.auditLog;
     this.tool = options.tool;
+    this.systemRoot = path.resolve(options.systemRoot || "/");
     this.writes = new Set();
     this.commandClass = FILE_TOOLS.has(options.tool) ? "file-edit" : "write";
     this.allowRoots = options.allow.map((root) => canonical(path.resolve(root)));
@@ -165,6 +166,15 @@ class Judge {
     return candidates.some((root) => root.startsWith(prefix) || within(prefix, root));
   }
 
+  systemDenied(target, treeWrite = false) {
+    const root = this.systemRoot;
+    const at = (name) => path.join(root, name);
+    const exceptions = ["usr/local", "private/tmp", "private/var/folders"].map(at);
+    if (exceptions.some((entry) => within(target, entry) || within(target, canonical(entry)))) return false;
+    return ["etc", "bin", "sbin", "boot", "dev", "proc", "sys", "usr", "var/lib", "var/db", "lib", "lib64", "System", "Library", "private/etc", "private/var", "Applications/Utilities"]
+      .map(at).some((entry) => within(target, entry) || within(target, canonical(entry)) || (treeWrite && (within(entry, target) || within(canonical(entry), target))));
+  }
+
   // Returns null to allow, or a deny {code, target}.
   check(raw, cwd, { gitHome = false, recursive = false, treeWrite = false } = {}) {
     const expanded = expandTarget(raw, this.env);
@@ -178,7 +188,7 @@ class Judge {
     if (expanded.partial) {
       if (this.host) return { code: "primary-write", target: raw };
       // Keep the trailing slash or partial component: "/srv/me/.con" must stay
-      // a prefix of "/srv/me/.config", not collapse to "/srv/me".
+      // a prefix of "/srv/me/.config", not collapse to "/home/me".
       const prefix = path.resolve(value) + (value.endsWith("/") ? "/" : "");
       if (this.prefixCanBeAllowed(prefix) || this.prefixCanBeAllowed(canonical(path.resolve(value)))) return null;
       return this.denial(path.resolve(value), raw);
@@ -192,6 +202,7 @@ class Judge {
     // outranks every other allowance, so a temp-dir or home-root allowance can
     // never reach a project by accident.
     if (!gitHome && this.trackedFiles.some((file) => within(target, file) || ((recursive || treeWrite) && within(file, target)))) return this.denial(target, raw);
+    if (this.host && this.env.FM_ALLOW_PRIMARY_WRITE !== "1" && (this.systemDenied(resolved, recursive || treeWrite) || this.systemDenied(target, recursive || treeWrite))) return this.denial(target, raw);
     if (this.grants.some((root) => within(target, root))) {
       this.writes.add(`${target.replace(/[\t\r\n]/g, " ")}\t${this.commandClass}`);
       return null;
@@ -204,7 +215,7 @@ class Judge {
     }
     if (!gitHome && this.homeCheckouts.includes(target)) return this.denial(target, raw);
     if (gitHome && this.homeCheckouts.some((root) => within(target, root)) && !(this.projects && within(target, this.projects))) return null;
-    if (this.host && (within(target, this.userHome) || this.env.FM_ALLOW_PRIMARY_WRITE === "1") && !this.homeCheckouts.some((root) => within(target, root))) {
+    if (this.host && !this.homeCheckouts.some((root) => within(target, root))) {
       this.writes.add(`${target.replace(/[\t\r\n]/g, " ")}\t${recursive ? "recursive-delete" : this.commandClass}`);
       return null;
     }
@@ -367,18 +378,52 @@ class ShellAnalyzer {
     if (lexed.error) return null;
     const { nodes } = splitProgram(lexed.tokens);
     let current = cwd;
-    for (const node of nodes) {
-      const result = this.node(node, current, depth);
-      if (result.denial) return result.denial;
-      current = result.cwd;
+    const previousEnv = this.judge.env;
+    if (this.judge.host) {
+      this.judge.env = { ...previousEnv };
+      if (depth === 0) {
+        for (const key of Object.keys(this.judge.env)) {
+          if (!["HOME", "FM_HOME", "FM_ALLOW_PRIMARY_WRITE"].includes(key)) delete this.judge.env[key];
+        }
+      }
     }
-    return null;
+    try {
+      for (const node of nodes) {
+        const result = this.node(node, current, depth);
+        if (result.denial) return result.denial;
+        current = result.cwd;
+        if (this.judge.host && !lexed.tokens.some((token) => token.type === "op" && ["&&", "||", "|", "&"].includes(token.value))) this.assignments(node);
+      }
+      return null;
+    } finally { this.judge.env = previousEnv; }
+  }
+
+  assignments(tokens) {
+    const words = tokens.filter((token) => token.type === "word");
+    const offset = words[0]?.value === "export" ? 1 : 0;
+    if (words[0]?.value === "for" && words[1]) {
+      delete this.judge.env[words[1].value];
+      return;
+    }
+    if (words[0]?.value === "read" || words[0]?.value === "unset") {
+      for (const word of words.slice(1)) delete this.judge.env[word.value];
+      return;
+    }
+    if (!words.length || tokens.length !== words.length || !words.slice(offset).every((word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word.value))) return;
+    for (const word of words.slice(offset)) {
+      const match = word.value.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+      if (!match || match[1] === "FM_ALLOW_PRIMARY_WRITE") continue;
+      const value = expandTarget(match[2], this.judge.env);
+      if (word.subs.length || value.partial || (word.quoted && (match[2].includes("$") || match[2].startsWith("~"))) || !path.isAbsolute(value.value)) delete this.judge.env[match[1]];
+      else this.judge.env[match[1]] = value.value;
+    }
   }
 
   node(rawTokens, cwd, depth) {
     // The shared lexer reads a bare `{}` (find -exec, xargs -I{}) as an empty
     // brace group; bash treats it as an ordinary word, so restore it as one.
-    const tokens = rawTokens.map((token) => (token.type === "group" && token.kind === "brace" && !token.content.trim()
+    const bodyTokens = rawTokens[0]?.value === "do" ? rawTokens.slice(1) : rawTokens;
+    const tokens = bodyTokens.map((token) => (token.type === "group" && token.kind === "brace" && !token.content.trim()
       ? { type: "word", value: "{}", literal: true, subs: [], quoted: false, unquotedExpansion: true }
       : token));
     const initialCommand = commandPosition(tokens).command;
@@ -442,7 +487,7 @@ class ShellAnalyzer {
 
   checkAll(words, cwd, options) {
     for (const word of words) {
-      if (word.subs.length) {
+      if (word.subs.length || (this.judge.host && word.literal && word.value.includes("$"))) {
         if (this.judge.host) return { code: "primary-write", target: "unresolved target" };
         continue;
       }
@@ -789,7 +834,7 @@ function decision(input) {
 function parseArguments(argv) {
   const result = { tool: "", cwd: "", command: "", paths: [], allow: [], allowFiles: [], allowPrefixes: [], grants: [], protect: [], projects: "", homeCheckouts: [], projectRoots: [] };
   const repeated = { "--project-root": "projectRoots", "--path": "paths", "--allow": "allow", "--allow-file": "allowFiles", "--allow-prefix": "allowPrefixes", "--grant": "grants", "--protect": "protect", "--home-checkout": "homeCheckouts" };
-  const single = { "--host-mode": "hostMode", "--audit-log": "auditLog", "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
+  const single = { "--system-root": "systemRoot", "--host-mode": "hostMode", "--audit-log": "auditLog", "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
     if (!(name in repeated) && !(name in single)) throw new Error(`unknown argument: ${name}`);

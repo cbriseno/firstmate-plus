@@ -424,8 +424,30 @@ test_host_direct_operations() {
   expect_allow "bounded host delete" Bash 'rm -rf ~/.cache/old-tool'
   expect_deny "host still protects project" primary-write-project Write "$PRIMARY/projects/foo/x"
   expect_deny "host still protects tracked file" primary-write Edit "$PRIMARY/AGENTS.md"
+  local system_root="$TMP_ROOT/system-root" target out
+  for target in etc bin sbin boot dev proc sys usr var/lib var/db lib lib64 System Library private/etc private/var Applications/Utilities; do
+    out=$(HOME="$USERHOME" node "$POLICY" --host-mode host --system-root "$system_root" --tool Write --cwd "$TMP_ROOT" --path "$system_root/$target/file")
+    case "$out" in deny$'\t'primary-write$'\t'*) ;; *) fail "system target $target must be denied: $out" ;; esac
+  done
+  for target in opt/tool usr/local/bin/tool private/tmp/file private/var/folders/file; do
+    out=$(HOME="$USERHOME" node "$POLICY" --host-mode host --system-root "$system_root" --tool Write --cwd "$TMP_ROOT" --path "$system_root/$target")
+    [ "$out" = allow ] || fail "system exception $target must be allowed: $out"
+  done
+  out=$(HOME="$USERHOME" FM_ALLOW_PRIMARY_WRITE=1 node "$POLICY" --host-mode host --system-root "$system_root" --tool Write --cwd "$TMP_ROOT" --path "$system_root/etc/file")
+  [ "$out" = allow ] || fail "override must allow denied system target: $out"
   expect_deny "system write" primary-write Bash 'echo x > /etc/hosts'
-  expect_deny "outside HOME write" primary-write Write "$TMP_ROOT/outside-host"
+  expect_allow "outside HOME write" Write "$TMP_ROOT/outside-host"
+  expect_allow "literal variable chain" Bash 'S=~/scratch; D=$S/child; rm -rf "$D"'
+  expect_allow "export variable target" Bash 'export D=~/scratch; touch "$D/file"'
+  expect_deny "variable HOME delete" primary-delete Bash 'H=$HOME; rm -rf "$H"'
+  expect_deny "variable root delete" primary-delete Bash 'R=/; rm -rf "$R"'
+  expect_deny "variable project" primary-write-project Bash "D=$PRIMARY/projects/foo; touch \"\$D\""
+  expect_deny "variable tracked file" primary-write Bash "D=$PRIMARY/AGENTS.md; touch \"\$D\""
+  expect_deny "unresolved assignment" primary-write Bash 'D=$(pwd); touch "$D"'
+  expect_deny "loop variable unresolved" primary-write Bash 'D=~/scratch; for D in /etc; do touch "$D/file"; done'
+  expect_deny "conditional variable unresolved" primary-write Bash 'true && D=~/scratch; touch "$D"'
+  expect_deny "read invalidates assignment" primary-write Bash 'D=~/scratch; read D; touch "$D"'
+  expect_deny "default expansion unresolved" primary-write Bash 'D=${missing:-/tmp/x}; touch "$D"'
   expect_deny "privilege escalation" primary-privilege Bash 'sudo touch ~/.bashrc'
   expect_deny "doas escalation" primary-privilege Bash 'doas true'
   expect_deny "HOME recursive delete" primary-delete Bash 'rm -rf "$HOME"'
