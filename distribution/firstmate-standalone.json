@@ -1,0 +1,179 @@
+{
+  "name": "Firstmate standalone: prerequisites and first local project",
+  "level": 1,
+  "network": false,
+  "tools": [
+    {
+      "name": "bash"
+    },
+    {
+      "name": "sh"
+    },
+    {
+      "name": "git",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "git version 2\\.(?:39|[4-9][0-9])\\."
+    },
+    {
+      "name": "env"
+    },
+    {
+      "name": "dirname"
+    },
+    {
+      "name": "readlink"
+    },
+    {
+      "name": "uname"
+    },
+    {
+      "name": "sed"
+    },
+    {
+      "name": "mkdir"
+    },
+    {
+      "name": "timeout"
+    },
+    {
+      "name": "cat"
+    },
+    {
+      "name": "perl"
+    },
+    {
+      "name": "jq"
+    },
+    {
+      "name": "node",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "v22\\."
+    },
+    {
+      "name": "ps"
+    },
+    {
+      "name": "tmux"
+    },
+    {
+      "name": "gh"
+    },
+    {
+      "name": "gh-axi"
+    },
+    {
+      "name": "tasks-axi"
+    },
+    {
+      "name": "quota-axi"
+    },
+    {
+      "name": "chrome-devtools-axi"
+    },
+    {
+      "name": "treehouse"
+    },
+    {
+      "name": "no-mistakes"
+    },
+    {
+      "name": "python3",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "Python 3\\.(1[1-9]|[2-9][0-9])"
+    },
+    {
+      "name": "awk"
+    }
+  ],
+  "repos": [
+    {
+      "id": "firstmate"
+    }
+  ],
+  "steps": [
+    {
+      "source": "README.md / Install",
+      "cwd": "/work/repos/firstmate",
+      "command": "bash bin/fm-doctor.sh --backend tmux",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "mkdir -p config data projects/example",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "git init -q -b main projects/example",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / First local project; disposable fixture identity comes from the supplied release commit",
+      "cwd": "/work/repos/firstmate",
+      "command": "PUBLIC_GIT_NAME=\"$(git log -1 --format=%an)\" PUBLIC_GIT_EMAIL=\"$(git log -1 --format=%ae)\" bash -c 'git -C projects/example -c user.name=\"${PUBLIC_GIT_NAME:?Set PUBLIC_GIT_NAME}\" -c user.email=\"${PUBLIC_GIT_EMAIL:?Set PUBLIC_GIT_EMAIL}\" commit --quiet --allow-empty -m \"Initialize example project\"'",
+      "check": "git -C projects/example rev-parse --verify HEAD"
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "printf '## In flight\\n\\n## Queued\\n\\n## Done\\n' > data/backlog.md"
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "printf '%s\\n' '- example [local-only] - Local example project' > data/projects.md",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "FM_HOME=\"$PWD\" bash bin/fm-project-mode.sh example",
+      "expect_exit": 0,
+      "check": "test \"$(FM_HOME=\"$PWD\" bash bin/fm-project-mode.sh example)\" = \"local-only off\""
+    },
+    {
+      "source": "distribution/README.md / Standalone producer contract",
+      "cwd": "/work/repos/firstmate",
+      "command": "python3 -c 'from pathlib import Path; p=Path(\"/work/tool-bin\"); p.mkdir(); (p/\"tasks-axi\").symlink_to(\"/opt/runtime/tasks-axi/dist/bin/tasks-axi.js\")'"
+    },
+    {
+      "source": "distribution/README.md / Standalone producer contract",
+      "cwd": "/work/repos/firstmate",
+      "command": "PATH=\"/work/tool-bin:$PATH\" FM_HOME=\"$PWD\" bash bin/fm-tasks-axi.sh work snapshot",
+      "check": "PATH=\"/work/tool-bin:$PATH\" FM_HOME=\"$PWD\" bash bin/fm-tasks-axi.sh work snapshot | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s[\"schema\"]==\"fm-work-snapshot.v1\"; assert len(s[\"projects\"])==1; assert s[\"tasks\"]==[]'"
+    },
+    {
+      "source": "bin/fm-lock-release.sh / Help",
+      "cwd": "/work/repos/firstmate",
+      "command": "bash bin/fm-lock-release.sh --help",
+      "expect_exit": 0
+    },
+    {
+      "source": "docs/notification-command.md / Optional interface",
+      "cwd": "/work/repos/firstmate",
+      "command": "python3 bin/fm-notify.py --home \"$PWD\" --event ready --text \"Example ready\"",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / First local project",
+      "cwd": "/work/repos/firstmate",
+      "command": "python3 -c 'import shutil; from pathlib import Path; assert shutil.which(\"fm-extension\") is None; assert not (Path(\"config\")/\"context-relay.json\").exists()'",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Language and notification commands",
+      "cwd": "/work/repos/firstmate",
+      "command": "printf '%s\\n' es > config/language",
+      "expect_exit": 0,
+      "check": "test \"$(cat config/language)\" = es"
+    }
+  ]
+}

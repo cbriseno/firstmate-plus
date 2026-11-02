@@ -1,0 +1,110 @@
+{
+  "name": "Deck with Firstmate: real producer snapshot and guarded control round trip",
+  "level": 1,
+  "network": false,
+  "tools": [
+    {
+      "name": "bash"
+    },
+    {
+      "name": "sh"
+    },
+    {
+      "name": "git",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "git version 2\\.(?:39|[4-9][0-9])\\."
+    },
+    {
+      "name": "env"
+    },
+    {
+      "name": "dirname"
+    },
+    {
+      "name": "sed"
+    },
+    {
+      "name": "node",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "v22\\."
+    },
+    {
+      "name": "uname"
+    },
+    {
+      "name": "awk"
+    },
+    {
+      "name": "grep"
+    },
+    {
+      "name": "date"
+    },
+    {
+      "name": "mkdir"
+    },
+    {
+      "name": "cat"
+    },
+    {
+      "name": "head"
+    },
+    {
+      "name": "tail"
+    },
+    {
+      "name": "cut"
+    },
+    {
+      "name": "tr"
+    },
+    {
+      "name": "sort"
+    },
+    {
+      "name": "wc"
+    },
+    {
+      "name": "mktemp"
+    },
+    {
+      "name": "mv"
+    },
+    {
+      "name": "rm"
+    },
+    {
+      "name": "jq"
+    },
+    {
+      "name": "python3",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "Python 3\\.(1[1-9]|[2-9][0-9])"
+    },
+    {
+      "name": "perl"
+    }
+  ],
+  "repos": [
+    {
+      "id": "deck"
+    },
+    {
+      "id": "firstmate"
+    }
+  ],
+  "steps": [
+    {
+      "source": "distribution/README.md / Pairwise producer acceptance",
+      "cwd": "/work/repos/firstmate",
+      "command": "python3 distribution/deck-firstmate-contract.py",
+      "timeout": 180
+    }
+  ]
+}

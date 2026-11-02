@@ -1,0 +1,198 @@
+{
+  "name": "Extension with Firstmate: clean pair installation and scoped planning",
+  "level": 1,
+  "network": false,
+  "tools": [
+    {
+      "name": "bash"
+    },
+    {
+      "name": "sh"
+    },
+    {
+      "name": "git"
+    },
+    {
+      "name": "env"
+    },
+    {
+      "name": "dirname"
+    },
+    {
+      "name": "readlink"
+    },
+    {
+      "name": "python3",
+      "version_args": [
+        "--version"
+      ],
+      "expect_version": "Python 3\\.(1[1-9]|[2-9][0-9])"
+    },
+    {
+      "name": "node"
+    },
+    {
+      "name": "sed"
+    },
+    {
+      "name": "uname"
+    },
+    {
+      "name": "awk"
+    },
+    {
+      "name": "cat"
+    },
+    {
+      "name": "mkdir"
+    },
+    {
+      "name": "ps"
+    },
+    {
+      "name": "jq"
+    },
+    {
+      "name": "timeout"
+    },
+    {
+      "name": "mv"
+    },
+    {
+      "name": "rm"
+    },
+    {
+      "name": "date"
+    },
+    {
+      "name": "tr"
+    },
+    {
+      "name": "sleep"
+    },
+    {
+      "name": "ln"
+    },
+    {
+      "name": "rmdir"
+    },
+    {
+      "name": "stat"
+    },
+    {
+      "name": "find"
+    },
+    {
+      "name": "chmod"
+    },
+    {
+      "name": "touch"
+    },
+    {
+      "name": "sort"
+    },
+    {
+      "name": "head"
+    },
+    {
+      "name": "tail"
+    },
+    {
+      "name": "cut"
+    },
+    {
+      "name": "wc"
+    },
+    {
+      "name": "grep"
+    },
+    {
+      "name": "perl"
+    },
+    {
+      "name": "mktemp"
+    }
+  ],
+  "repos": [
+    {
+      "id": "extension"
+    },
+    {
+      "id": "firstmate"
+    }
+  ],
+  "steps": [
+    {
+      "source": "distribution/README.md / Real core capability and lock ownership boundary",
+      "cwd": "/work/repos/firstmate",
+      "command": "python3 -c 'import json,os,subprocess; from pathlib import Path; core=Path('\"'\"'/work/repos/firstmate'\"'\"'); tools=Path('\"'\"'/work/tool-bin'\"'\"'); tools.mkdir(exist_ok=True); (tools/'\"'\"'tasks-axi'\"'\"').symlink_to('\"'\"'/opt/runtime/tasks-axi/dist/bin/tasks-axi.js'\"'\"'); env=dict(os.environ,FM_HOME=str(core),PATH=str(tools)+os.pathsep+os.environ['\"'\"'PATH'\"'\"']); cap=json.loads(subprocess.check_output(['\"'\"'bash'\"'\"',str(core/'\"'\"'bin/fm-tasks-axi.sh'\"'\"'),'\"'\"'work'\"'\"','\"'\"'capabilities'\"'\"'],env=env,text=True)); assert cap['\"'\"'schema'\"'\"']=='\"'\"'fm-work-capabilities.v1'\"'\"' and cap['\"'\"'contract_major'\"'\"']==1 and '\"'\"'set_priority'\"'\"' in cap['\"'\"'ops'\"'\"']; state=core/'\"'\"'state'\"'\"'; state.mkdir(exist_ok=True); lock=state/'\"'\"'.lock'\"'\"'; lock.write_text('\"'\"'99999999\\n'\"'\"'); parent=Path('\"'\"'/work/receipts'\"'\"'); parent.mkdir(); result=subprocess.run(['\"'\"'bash'\"'\"',str(core/'\"'\"'bin/fm-lock-release.sh'\"'\"'),'\"'\"'--authority'\"'\"','\"'\"'offline pair endpoint check'\"'\"','\"'\"'--receipt'\"'\"',str(parent/'\"'\"'outgoing'\"'\"')],env=env,text=True,capture_output=True); assert result.returncode==1 and '\"'\"'lock does not belong to the outgoing harness'\"'\"' in result.stderr,(result.returncode,result.stdout,result.stderr); assert lock.read_text()=='\"'\"'99999999\\n'\"'\"' and not (parent/'\"'\"'outgoing'\"'\"').exists(); lock.unlink(); print(json.dumps(dict(work_contract_major=1,real_lock_release_refuses_unowned_lock=True,lock_preserved=True)))'",
+      "timeout": 60
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension install --home /work/repos/firstmate --harness codex",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension doctor --home /work/repos/firstmate",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension planning set --scope home --home /work/repos/firstmate --mode native",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension planning set --scope project --home /work/repos/firstmate --project /work/repos/extension --mode speckit",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension planning status --home /work/repos/firstmate --project /work/repos/extension",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension planning set --scope project --home /work/repos/firstmate --project /work/repos/extension --mode native",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension planning resolve --home /work/repos/firstmate --project /work/repos/extension",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension relay status --home /work/repos/firstmate",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension doctor --home /work/repos/firstmate --require-relay",
+      "expect_exit": 2
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "python3 -c 'import json,os,subprocess; from pathlib import Path; hooks=json.loads((Path.home()/\".codex/hooks.json\").read_text()); handler=hooks[\"hooks\"][\"SessionStart\"][0][\"hooks\"][0][\"command\"]; p=subprocess.run(handler,shell=True,input=\"{}\",text=True); assert p.returncode==0'",
+      "expect_exit": 0
+    },
+    {
+      "source": "README.md / Guided installation, quick start and uninstall",
+      "cwd": "/work/repos/extension",
+      "command": "bin/fm-extension uninstall",
+      "expect_exit": 0
+    }
+  ]
+}
