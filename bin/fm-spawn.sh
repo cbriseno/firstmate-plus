@@ -2,6 +2,8 @@
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> --host [--path <path>...] [--harness <name>] [--backend <name>]
+#          Uses data/<id>/work without Git; paths must match the brief manifest.
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
@@ -628,7 +630,7 @@
 # also queues that installation's follow-up item, blocked until this task
 # lands, in the same up-front window, and refuses when it cannot
 # (bin/fm-install-followup.sh `ensure` owns the item).
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|host|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
@@ -860,6 +862,9 @@ fm_refuse_if_gate_agent
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
+# shellcheck source=bin/fm-host-task-lib.sh
+. "$SCRIPT_DIR/fm-host-task-lib.sh"
+HOST_PATHS=()
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
@@ -897,6 +902,7 @@ for a in "$@"; do
       ;;
     esac
     case "$want_value" in
+    path) HOST_PATHS+=("$a") ;;
     harness)
       HARNESS_ARG=$a
       HARNESS_SET=1
@@ -946,6 +952,9 @@ for a in "$@"; do
     continue
   fi
   case "$a" in
+  --host) KIND=host; KIND_SET=1 ;;
+  --path) want_value=path ;;
+  --path=*) HOST_PATHS+=("${a#--path=}") ;;
   --scout)
     KIND=scout
     KIND_SET=1
@@ -1907,7 +1916,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   done
   exit "$rc"
 fi
-ID=${POS[0]}
+ID=${POS[0]:-}
 fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id" >&2
   exit 2
@@ -2300,6 +2309,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
     exit 1
   }
+elif [ "$KIND" = host ]; then
+  [ "${#POS[@]}" -eq 1 ] || { echo 'error: --host takes no project; use --harness' >&2; exit 2; }
+  [ "$BASE_BRANCH_SET" -eq 0 ] || { echo 'error: --host has no base branch' >&2; exit 2; }
+  ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
   '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy | devin | commandcode | polytoken)
@@ -3610,12 +3623,34 @@ if [ "$KIND" = secondmate ]; then
   else
     BRIEF="$DATA/$ID/brief.md"
   fi
+elif [ "$KIND" = host ]; then
+  [ "$BACKEND" != orca ] || { echo 'error: backend=orca requires a Git worktree; choose a terminal backend for --host' >&2; exit 1; }
+  [ ! -L "$DATA/$ID/host-paths" ] && [ -f "$DATA/$ID/host-paths" ] || { echo 'error: --host requires an fm-brief.sh --host path manifest' >&2; exit 1; }
+  HOST_DECLARED=()
+  while IFS= read -r host_path; do HOST_DECLARED+=("$host_path"); done < "$DATA/$ID/host-paths"
+  HOST_TARGETS=$(fm_host_paths "${HOST_DECLARED[@]+"${HOST_DECLARED[@]}"}") || exit 1
+  [ "$HOST_TARGETS" = "$(cat "$DATA/$ID/host-paths")" ] || { echo 'error: host path manifest changed resolution' >&2; exit 1; }
+  if [ "${#HOST_PATHS[@]}" -gt 0 ]; then
+    [ "$(fm_host_paths "${HOST_PATHS[@]}")" = "$HOST_TARGETS" ] || { echo 'error: --path disagrees with host brief' >&2; exit 1; }
+  fi
+  for host_path in "${HOST_DECLARED[@]}"; do
+    grep -qxF -- "$host_path" "$DATA/$ID/brief.md" || { echo 'error: host brief must name every authorized path' >&2; exit 1; }
+  done
+  WT="$DATA/$ID/work"
+  if [ "$RELAUNCH" -eq 0 ]; then
+    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
+    mkdir -m 700 "$WT" || exit 1
+  fi
+  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
+  PROJ_ABS=$WT
+  BRIEF="$DATA/$ID/brief.md"
 else
+  [ "${#HOST_PATHS[@]}" -eq 0 ] || { echo 'error: --path requires --host' >&2; exit 2; }
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] &&
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
   git -C "$PROJ_ABS" rev-parse --git-dir >/dev/null 2>&1 &&
   ! git -C "$PROJ_ABS" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "error: spawn refused: project $PROJ_ABS has no commit yet (unborn HEAD), so there is nothing to branch a worktree from; make one commit in the project, for example 'git -C $PROJ_ABS commit --allow-empty -m \"chore: initial commit\"', then spawn again" >&2
@@ -3629,7 +3664,7 @@ fi
 # worker that already holds a place, and a secondmate is not a worker.
 SPAWN_PROJECT_CAPACITY=
 SPAWN_PROJECT_CAPACITY_ANY=
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
     echo "error: could not resolve the root Firstmate home that declares project capacity for $PROJ_ABS" >&2
     exit 1
@@ -3641,7 +3676,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   SPAWN_PROJECT_CAPACITY=$FM_PROJECT_CAPACITY
   SPAWN_PROJECT_CAPACITY_ANY=$FM_PROJECT_CAPACITY_ANY
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] &&
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
   { [ "$BACKEND" != orca ] || [ -n "$SPAWN_PROJECT_CAPACITY_ANY" ]; }; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
@@ -3671,7 +3706,7 @@ fi
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
 }
-if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   HERDR_LIFECYCLE_BRIEF_GUARD=$(fm_config_source_present "$CONFIG/herdr-lifecycle-spawn-guard") || exit 1
   if [ "$HERDR_LIFECYCLE_BRIEF_GUARD" = 1 ]; then
     HERDR_LIFECYCLE_COMMAND=$(perl -ne '
@@ -3955,6 +3990,12 @@ spawn_worktree_isolated() { # <path>
   local path=$1 wt_real wt_top_real wt_git_dir proj_common
   SPAWN_WT_TOP=
   SPAWN_WT_REASON=
+  if [ "$KIND" = host ]; then
+    SPAWN_WT_TOP=$path
+    fm_host_scratch_valid "$path" && return 0
+    SPAWN_WT_REASON='it is not the exact host scratch directory'
+    return 1
+  fi
   wt_real=
   if ! wt_real=$(cd "$path" 2>/dev/null && pwd -P); then
     wt_real=
@@ -5275,7 +5316,7 @@ elif [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -5361,7 +5402,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     SPAWN_SLOT_CLAIMED=1
   fi
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   LANDS_LOCALLY=0
   if [ "$KIND" = ship ]; then
     [ "$MODE" != local-only ] || LANDS_LOCALLY=1
@@ -5405,7 +5446,9 @@ spawn_assert_agent_worktree
 AGY_TRUST_PREREGISTERED=0
 case "$HARNESS" in
 claude*)
-  if [ "$KIND" = secondmate ]; then
+  if [ "$KIND" = host ]; then
+    spawn_trust_args=(--host-task "$WT" "$DATA/$ID")
+  elif [ "$KIND" = secondmate ]; then
     spawn_trust_args=(--secondmate-home "$PROJ_ABS" "$ID")
   else
     spawn_trust_args=("$WT" "$PROJ_ABS")
@@ -5465,6 +5508,7 @@ mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
+  [ "$KIND" != host ] || return 0
   local rel=$1 EXCL
   # git rev-parse --git-path is relative to the repository, not to this
   # process's cwd. A caller sitting in another worktree must not mkdir
@@ -6175,7 +6219,9 @@ EOF
 # External-review ships retain their origin/namespace restriction.
 GIT_HOOKS_DIR="$STATE_REAL/$ID.git-hooks"
 GIT_HOOKS_INSTALLED=0
-if [ "$EXTERNAL_REVIEW" = 1 ]; then
+if [ "$KIND" = host ]; then
+  : # Host tasks have no Git repository or publication lifecycle.
+elif [ "$EXTERNAL_REVIEW" = 1 ]; then
   PUSH_GUARD_FILE="$STATE_REAL/$ID.push-guard"
   guard_args=("$PUSH_GUARD_FILE" "$WT" "$BRANCH" "$(fm_ship_branch_prefix "$BRANCH" "$ID")")
   [ -z "$EXTERNAL_BACKUP_REMOTE" ] || guard_args+=("$EXTERNAL_BACKUP_REMOTE" "$EXTERNAL_BACKUP_PREFIX")
@@ -6208,7 +6254,7 @@ if [ "$KIND" = secondmate ]; then
   MODE=secondmate
   YOLO=off
   : "${SECONDMATE_PROJECTS:=}"
-elif [ "$KIND" = scout ]; then
+elif [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   MODE=
   YOLO=
 fi
@@ -6571,6 +6617,12 @@ case "$LAUNCH" in
     echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant" >&2
     exit 1
   }
+  if [ "$KIND" = host ]; then
+    for host_path in "${HOST_DECLARED[@]}"; do
+      [ -d "$host_path" ] || host_path=$(dirname "$host_path")
+      CLAUDE_ADD_DIRS="$CLAUDE_ADD_DIRS --add-dir $(shell_quote "$host_path")"
+    done
+  fi
   LAUNCH=${LAUNCH//__CLAUDEADDDIRS__/$CLAUDE_ADD_DIRS}
   ;;
 esac
@@ -6749,7 +6801,7 @@ fi
 # ones assigned an isolated worktree; a secondmate runs its own home instead.
 # The id reached a validated bare-slug charset above, so it carries no shell
 # syntax of its own.
-if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
 fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
@@ -6814,6 +6866,11 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     LAUNCH_ENV_PREFIX="$LAUNCH_ENV_PREFIX "'${TRACEPARENT+"TRACEPARENT=$TRACEPARENT"}'
   fi
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
+fi
+if [ "$KIND" = host ]; then
+  # Prevent Git discovery from walking out of ignored scratch into the home.
+  # Applied after env filtering and as an export for compound launch commands.
+  LAUNCH="export GIT_CEILING_DIRECTORIES=$(shell_quote "$DATA/$ID"); $LAUNCH"
 fi
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||

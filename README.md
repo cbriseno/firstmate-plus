@@ -13,6 +13,13 @@ The optional `firstmate-extensions` package owns context-relay automation; this 
 Firstmate works without that package or a web dashboard.
 No acceptance of a live model session or terminal handoff is implied by the offline tests below.
 
+## Direct operations and host tasks
+
+Firstmate can make simple changes to dotfiles, user configuration, and tools in your home directly.
+For larger host assignments, a host worker starts in disposable scratch without registering a project or creating an initial commit.
+Run `printf 'off\n' > config/primary-direct-ops` to disable both features.
+See [direct-operation boundaries and host tasks](docs/primary-write-guard.md).
+
 ## Install
 
 Use Linux with GNU coreutils, or consult [platform setup](docs/platforms.md) for macOS and WSL2 limitations.

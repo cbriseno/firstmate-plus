@@ -42,6 +42,7 @@ make_home() {
   git -C "$dir" add AGENTS.md
   git -C "$dir" commit -q -m init
   mkdir -p "$dir/state" "$dir/data" "$dir/config" "$dir/projects/foo"
+  printf "off\n" > "$dir/config/primary-direct-ops"
   if [ -n "$bin_target" ]; then
     ln -s "$bin_target" "$dir/bin"
   else
@@ -60,7 +61,7 @@ guard_env() {
 run_cli() {
   local home=$1 tool=$2 value=$3 rc=0 flag=--command
   shift 3
-  case "$tool" in Edit|MultiEdit|Write|NotebookEdit) flag=--path ;; esac
+  case "$tool" in Read|Edit|MultiEdit|Write|NotebookEdit) flag=--path ;; esac
   : > "$OUT"; : > "$ERR"
   guard_env "$home" "$@" "$CHECK" --claude --tool "$tool" --cwd "$home" "$flag" "$value" > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
@@ -212,7 +213,7 @@ test_secondmate_carve_outs() {
   printf -- '- mate-a - test mate (home: %s; scope: tests; projects: none; added 2026-01-01)\n' "$mate" > "$PRIMARY/data/secondmates.md"
   expect_allow "main home curates a registered mate's memory" Write "$mate/data/captain.md"
   expect_allow "main home trims a registered mate's backlog" Bash "echo x >> $mate/data/backlog.md"
-  expect_deny "main home cannot write a registered mate's projects" primary-write Write "$mate/projects/foo/x"
+  expect_deny "main home cannot write a registered mate's projects" primary-write-project Write "$mate/projects/foo/x"
   rm -f "$PRIMARY/data/secondmates.md"
   expect_deny "unregistered mate home stays outside" primary-write Write "$mate/data/captain.md"
 
@@ -373,7 +374,7 @@ test_tracked_claude_registration() {
     [ "$rc" -eq 2 ] && [ ! -s "$OUT" ] || fail "tracked Claude $tool registration must deny with empty stdout, got $rc: $(cat "$OUT")"
     count=$((count + 1))
   done
-  for tool in Read Grep Glob; do
+  for tool in Grep Glob; do
     cmd=$(jq -r --arg t "$tool" '[.hooks.PreToolUse[] | select(.matcher as $m | $t | test($m)) | .hooks[].command
       | select(contains("fm-primary-write-pretool-check.sh"))] | first // empty' "$ROOT/.claude/settings.json")
     [ -z "$cmd" ] || fail "read-only Claude tool $tool must not reach the primary write guard"
@@ -414,6 +415,60 @@ test_scripts_are_shellcheck_clean() {
   pass "guard scripts are shellcheck-clean and the policy parses"
 }
 
+test_host_direct_operations() {
+  rm -f "$PRIMARY/config/primary-direct-ops"
+  expect_allow "default host dotfile edit" Edit "$USERHOME/.bashrc"
+  expect_allow "default host config write" Write "$USERHOME/.config/tool.json"
+  expect_allow "home tool install" Bash 'install data/tool ~/.local/bin/tool'
+  expect_allow "host move" Bash 'mv ~/.local/bin/old ~/.local/bin/new'
+  expect_allow "bounded host delete" Bash 'rm -rf ~/.cache/old-tool'
+  expect_deny "host still protects project" primary-write-project Write "$PRIMARY/projects/foo/x"
+  expect_deny "host still protects tracked file" primary-write Edit "$PRIMARY/AGENTS.md"
+  expect_deny "system write" primary-write Bash 'echo x > /etc/hosts'
+  expect_deny "outside HOME write" primary-write Write "$TMP_ROOT/outside-host"
+  expect_deny "privilege escalation" primary-privilege Bash 'sudo touch ~/.bashrc'
+  expect_deny "doas escalation" primary-privilege Bash 'doas true'
+  expect_deny "HOME recursive delete" primary-delete Bash 'rm -rf "$HOME"'
+  expect_deny "root recursive delete" primary-delete Bash 'rm -rf /'
+  expect_deny "system directory recursive delete" primary-delete Bash 'rm -rf /usr'
+  expect_deny "unknown recursive delete" primary-delete Bash 'rm -rf "$unknown_target"'
+  expect_deny "glob recursive delete" primary-delete Bash 'rm -rf ~/.cache/*'
+  expect_deny "substitution recursive delete" primary-delete Bash 'rm -rf "$(pwd)"'
+  expect_deny "find HOME delete" primary-delete Bash 'find "$HOME" -delete'
+  expect_deny "escape retains project boundary" primary-write-project Write "$PRIMARY/projects/foo/x" FM_ALLOW_PRIMARY_WRITE=1
+  expect_deny "escape retains privilege boundary" primary-privilege Bash 'sudo true' FM_ALLOW_PRIMARY_WRITE=1
+  expect_deny "secret cat" primary-secret Bash 'cat ~/.ssh/id_ed25519'
+  expect_deny "secret Read" primary-secret Read "$USERHOME/.env"
+  expect_deny "secret sed" primary-secret Bash 'sed -n 1p ~/.aws/credentials'
+  [ -s "$PRIMARY/state/direct-ops.log" ] || fail "host changes must be audited"
+  grep -F "$USERHOME/.bashrc" "$PRIMARY/state/direct-ops.log" >/dev/null || fail "audit lacks normalized target"
+  mv "$PRIMARY/state/direct-ops.log" "$PRIMARY/state/direct-ops.saved"
+  mkdir "$PRIMARY/state/direct-ops.log"
+  expect_allow "failed audit is nonblocking" Write "$USERHOME/.profile"
+  rmdir "$PRIMARY/state/direct-ops.log"
+  mv "$PRIMARY/state/direct-ops.saved" "$PRIMARY/state/direct-ops.log"
+  local registered="$PRIMARY/projects/registered" linked="$USERHOME/linked-project"
+  fm_git_worktree "$registered" "$linked" host-guard-regression
+  expect_deny "copy into a registered child of HOME" primary-write-project Bash 'cp /tmp/linked-project "$HOME"'
+  expect_deny "move into a registered child of HOME" primary-write-project Bash 'mv ~/.cache/linked-project "$HOME"'
+  expect_deny "rsync over a registered child of HOME" primary-write-project Bash 'rsync -a /tmp/files/ "$HOME"'
+  expect_deny "system directory override" primary-delete Bash 'rm -rf /etc' FM_ALLOW_PRIMARY_WRITE=1
+  expect_deny "registered linked worktree" primary-write-project Write "$linked/file"
+  ln -s "$linked" "$USERHOME/project-link"
+  expect_deny "symlink into linked worktree" primary-write-project Write "$USERHOME/project-link/file"
+  local mate="$USERHOME/registered-mate"
+  make_home "$mate"
+  printf -- '- host-mate - test (home: %s; scope: tests; projects: none; added 2026-01-01)\n' "$mate" > "$PRIMARY/data/secondmates.md"
+  expect_deny "registered mate project under HOME" primary-write-project Write "$mate/projects/foo/x"
+  expect_deny "registered mate tracked file" primary-write Write "$mate/AGENTS.md"
+  expect_allow "registered mate operational data" Write "$mate/data/note"
+  rm -f "$PRIMARY/data/secondmates.md"
+  expect_allow "explicit escape outside HOME" Write "$TMP_ROOT/outside-host" FM_ALLOW_PRIMARY_WRITE=1
+  printf 'off\n' > "$PRIMARY/config/primary-direct-ops"
+  expect_deny "off restores host delegation" primary-write Write "$USERHOME/.bashrc"
+  pass "host operations default on, retain safety rails, audit and honor off"
+}
+
 test_refuses_captain_environment_writes
 test_refuses_project_and_shared_material_writes
 test_allows_operational_paths_and_read_only_work
@@ -426,3 +481,5 @@ test_policy_cli_contract
 test_tracked_claude_registration
 test_tracked_codex_registration
 test_scripts_are_shellcheck_clean
+
+test_host_direct_operations

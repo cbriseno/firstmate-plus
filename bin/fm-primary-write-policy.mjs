@@ -2,28 +2,21 @@
 // Semantic policy for the primary write guard: does this tool call make the
 // PRIMARY firstmate session write outside its private operational paths?
 //
-// A firstmate primary delegates every actionable request to a worker; its own
-// direct writes stay inside its private operational state (AGENTS.md section 1).
-// Nothing enforced that before this guard, so a primary could edit the
-// captain's dotfiles or user configuration itself instead of dispatching a
-// worker. This policy decides one thing: whether each write target of a tool
-// call lies inside the allowed paths the transport passes in. The transport
-// (bin/fm-primary-write-pretool-check.sh) owns primary-home scope, the escape
-// hatch, the allowed-path set, and harness rendering.
-// See docs/primary-write-guard.md for the complete contract, carve-outs, and
-// residual limits.
+// config/primary-direct-ops selects simple host operations or delegation-only
+// writes. The transport owns scope and allowed paths; this policy owns target
+// resolution and the safety decisions. See docs/primary-write-guard.md.
 //
 // Shell lexing is imported from bin/fm-arm-command-policy.mjs, the sole owner
 // of firstmate's shell classification. This policy never evaluates, expands,
 // sources, or runs any byte of the submitted command; it reads lexical command
 // positions, redirection targets, and literal inline-code paths only. Its
-// threat model is agent mistakes, not deliberate obfuscation: a target it
-// cannot resolve to a literal path is allowed unless every completion of its
-// literal prefix is already outside the allowed paths.
+// The threat model is agent mistakes, not deliberate obfuscation. Host mode
+// refuses unresolved writes; off retains the legacy literal-prefix policy.
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { realpathSync, appendFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const FILE_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
@@ -111,6 +104,13 @@ function within(target, root) {
 class Judge {
   constructor(options) {
     this.env = options.env;
+    this.host = options.hostMode === "host";
+    this.userHome = canonical(path.resolve(options.env.HOME || "/nonexistent"));
+    this.projectRoots = (options.projectRoots || []).map((root) => canonical(path.resolve(root)));
+    this.log = options.auditLog;
+    this.tool = options.tool;
+    this.writes = new Set();
+    this.commandClass = FILE_TOOLS.has(options.tool) ? "file-edit" : "write";
     this.allowRoots = options.allow.map((root) => canonical(path.resolve(root)));
     this.allowFiles = options.allowFiles.map((file) => canonical(path.resolve(file)));
     this.protect = options.protect.map((root) => canonical(path.resolve(root)));
@@ -119,7 +119,36 @@ class Judge {
     // canonicalized, the trailing name stem is kept as typed.
     this.allowPrefixes = options.allowPrefixes.map((prefix) => path.join(canonical(path.dirname(path.resolve(prefix))), path.basename(prefix)));
     this.projects = options.projects ? canonical(path.resolve(options.projects)) : "";
-    this.homeCheckouts = options.homeCheckouts.map((root) => canonical(path.resolve(root)));
+    this.homeCheckouts = [...new Set(options.homeCheckouts.map((root) => canonical(path.resolve(root))))];
+    this.trackedFiles = [];
+    if (this.host) {
+      for (const root of this.homeCheckouts) {
+        try {
+          const names = execFileSync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+          this.trackedFiles.push(...names.split("\0").filter(Boolean).map((name) => canonical(path.join(root, name))));
+        } catch { /* A non-repository operational home has no tracked files. */ }
+      }
+    }
+  }
+
+  isProject(target) {
+    return (this.projects && within(target, this.projects)) || this.projectRoots.some((root) => within(target, root));
+  }
+
+  secret(raw, cwd) {
+    const expanded = expandTarget(raw, this.env);
+    const target = canonical(path.resolve(cwd || this.userHome, expanded.value));
+    if (/(?:^|\/)(?:\.ssh|\.gnupg)(?:\/|$)|(?:^|\/)(?:\.env(?:\.[^/]*)?|credentials(?:\.[^/]*)?|id_(?:rsa|ed25519|ecdsa)|[^/]*\.(?:pem|key))$/.test(target)) {
+      return { code: "primary-secret", target };
+    }
+    return null;
+  }
+
+  audit() {
+    if (!this.host || !this.log) return;
+    for (const entry of this.writes) {
+      try { appendFileSync(this.log, `${new Date().toISOString()}\t${this.tool}\t${entry}\n`); } catch { /* best effort */ }
+    }
   }
 
   allowedPath(target) {
@@ -137,15 +166,17 @@ class Judge {
   }
 
   // Returns null to allow, or a deny {code, target}.
-  check(raw, cwd, { gitHome = false } = {}) {
+  check(raw, cwd, { gitHome = false, recursive = false, treeWrite = false } = {}) {
     const expanded = expandTarget(raw, this.env);
     let value = expanded.value;
-    if (!value) return null;
+    if (this.host && recursive && (expanded.partial || !value)) return { code: "primary-delete", target: raw };
+    if (!value) return this.host ? { code: "primary-write", target: raw } : null;
     if (!path.isAbsolute(value)) {
-      if (!cwd) return null;
+      if (!cwd) return this.host ? { code: "primary-write", target: raw } : null;
       value = path.join(cwd, value);
     }
     if (expanded.partial) {
+      if (this.host) return { code: "primary-write", target: raw };
       // Keep the trailing slash or partial component: "/srv/me/.con" must stay
       // a prefix of "/srv/me/.config", not collapse to "/srv/me".
       const prefix = path.resolve(value) + (value.endsWith("/") ? "/" : "");
@@ -155,19 +186,33 @@ class Judge {
     const resolved = path.resolve(value);
     if (DEVICE_FILES.has(resolved) || DEVICE_PREFIXES.some((prefix) => resolved.startsWith(prefix))) return null;
     const target = canonical(resolved);
+    if (this.host && recursive && (target === this.userHome || target === "/" || path.dirname(resolved) === "/" || path.dirname(target) === "/" || ["/etc", "/var", "/bin", "/sbin", "/tmp"].some((root) => target === canonical(root)))) return { code: "primary-delete", target };
     if (this.protect.some((root) => within(target, root))) return { code: "primary-write-grant-record", target };
     // A live captain-approval grant is the only way into a project clone; it
     // outranks every other allowance, so a temp-dir or home-root allowance can
     // never reach a project by accident.
-    if (this.grants.some((root) => within(target, root))) return null;
-    if (this.projects && within(target, this.projects)) return this.denial(target, raw);
-    if (this.allowedPath(target)) return null;
+    if (!gitHome && this.trackedFiles.some((file) => within(target, file) || ((recursive || treeWrite) && within(file, target)))) return this.denial(target, raw);
+    if (this.grants.some((root) => within(target, root))) {
+      this.writes.add(`${target.replace(/[\t\r\n]/g, " ")}\t${this.commandClass}`);
+      return null;
+    }
+    if (this.host && (recursive || treeWrite) && ((this.projects && within(this.projects, target)) || this.projectRoots.some((root) => within(root, target)))) return { code: "primary-write-project", target };
+    if (this.isProject(target)) return this.denial(target, raw);
+    if (this.allowedPath(target)) {
+      this.writes.add(`${target.replace(/[\t\r\n]/g, " ")}\t${this.commandClass}`);
+      return null;
+    }
+    if (!gitHome && this.homeCheckouts.includes(target)) return this.denial(target, raw);
     if (gitHome && this.homeCheckouts.some((root) => within(target, root)) && !(this.projects && within(target, this.projects))) return null;
+    if (this.host && (within(target, this.userHome) || this.env.FM_ALLOW_PRIMARY_WRITE === "1") && !this.homeCheckouts.some((root) => within(target, root))) {
+      this.writes.add(`${target.replace(/[\t\r\n]/g, " ")}\t${recursive ? "recursive-delete" : this.commandClass}`);
+      return null;
+    }
     return this.denial(target, raw);
   }
 
   denial(target, raw) {
-    if (this.projects && within(target, this.projects)) return { code: "primary-write-project", target, raw };
+    if (this.isProject(target)) return { code: "primary-write-project", target, raw };
     return { code: "primary-write", target, raw };
   }
 }
@@ -336,13 +381,19 @@ class ShellAnalyzer {
     const tokens = rawTokens.map((token) => (token.type === "group" && token.kind === "brace" && !token.content.trim()
       ? { type: "word", value: "{}", literal: true, subs: [], quoted: false, unquotedExpansion: true }
       : token));
+    const initialCommand = commandPosition(tokens).command;
+    this.judge.commandClass = basename(initialCommand?.value || "write").replace(/[^A-Za-z0-9_.-]/g, "_");
     const check = (raw, options) => this.judge.check(raw, cwd, options);
     // Redirection targets.
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token.type !== "redir" || token.inlineTarget || INPUT_REDIRECTIONS.has(token.value)) continue;
       const target = tokens[i + 1];
-      if (!target || target.type !== "word" || target.subs.length) continue;
+      if (!target || target.type !== "word") continue;
+      if (target.subs.length) {
+        if (this.judge.host) return { denial: { code: "primary-write", target: "unresolved output target" }, cwd };
+        continue;
+      }
       const denial = check(target.value);
       if (denial) return { denial, cwd };
     }
@@ -360,6 +411,9 @@ class ShellAnalyzer {
       }
     }
     const position = commandPosition(tokens);
+    if (this.judge.host && (position.wrappers.includes("sudo") || ["sudo", "doas", "su", "pkexec"].includes(basename(position.command?.value || "")))) {
+      return { denial: { code: "primary-privilege", target: "privilege escalation" }, cwd };
+    }
     for (const payload of position.wrapperPayloads) {
       const denial = this.program(payload, cwd, depth + 1);
       if (denial) return { denial, cwd };
@@ -388,14 +442,42 @@ class ShellAnalyzer {
 
   checkAll(words, cwd, options) {
     for (const word of words) {
-      if (word.subs.length) continue;
+      if (word.subs.length) {
+        if (this.judge.host) return { code: "primary-write", target: "unresolved target" };
+        continue;
+      }
       const denial = this.judge.check(word.value, cwd, options);
       if (denial) return denial;
     }
     return null;
   }
 
+  destination(destination, sources, cwd) {
+    if (!destination) return null;
+    if (!this.judge.host) return this.checkAll([destination], cwd);
+    const expanded = expandTarget(destination.value, this.judge.env);
+    if (expanded.partial || destination.subs.length || !cwd) return this.checkAll([destination], cwd);
+    const target = path.resolve(cwd, expanded.value);
+    try { if (!statSync(target).isDirectory()) return this.checkAll([destination], cwd); }
+    catch { return this.checkAll([destination], cwd); }
+    for (const source of sources) {
+      const value = expandTarget(source.value, this.judge.env);
+      if (value.partial || source.subs.length) return { code: "primary-write", target: "unresolved copy destination" };
+      // Copying . or a directory's contents can affect any child of target.
+      if (/^(?:\.|\.\.)$|\/\.$/.test(value.value)) return this.judge.check(target, cwd, { treeWrite: true });
+      const denial = this.judge.check(path.join(target, path.basename(value.value)), cwd, { treeWrite: true });
+      if (denial) return denial;
+    }
+    return null;
+  }
+
   command(name, args, cwd, depth, stdinPayloads) {
+    if (this.judge.host && ["cat", "head", "tail", "less", "more", "sed", "awk", "grep", "rg", "bat", "base64", "strings"].includes(name)) {
+      for (const word of operands(args)) {
+        const secret = this.judge.secret(word.value, cwd);
+        if (secret) return secret;
+      }
+    }
     switch (name) {
       case "tee":
         return this.checkAll(operandsSkipping(args, new Set(["output-error"])), cwd);
@@ -404,20 +486,30 @@ class ShellAnalyzer {
       case "ln":
       case "rsync": {
         const targetDir = optionValue(args, "t", "target-directory");
-        if (targetDir) return this.checkAll([targetDir], cwd);
+        if (targetDir) {
+          const sources = operandsSkipping(args, new Set(["t", "target-directory", "m", "o", "g", "mode", "owner", "group"]));
+          return this.destination(targetDir, sources, cwd);
+        }
         const list = operandsSkipping(args, new Set(["m", "o", "g", "S", "mode", "owner", "group", "suffix"]));
         if (name === "install" && args.some((word) => word.value === "-d" || word.value === "--directory")) return this.checkAll(list, cwd);
         if (list.length < 2) return null;
         const destination = list.at(-1);
         if (name === "rsync" && /^[^/]*:/.test(destination.value)) return null;
-        return this.checkAll([destination], cwd);
+        if (name === "rsync" || args.some((word) => word.value === "--parents")) return this.checkAll([destination], cwd, { treeWrite: true });
+        return this.destination(destination, list.slice(0, -1), cwd);
       }
       case "mv": {
         const targetDir = optionValue(args, "t", "target-directory");
-        const list = operandsSkipping(args, new Set(["S", "suffix"]));
-        return this.checkAll(targetDir ? [targetDir, ...list] : list, cwd);
+        const list = operandsSkipping(args, new Set(["S", "suffix", "t", "target-directory"]));
+        const denial = this.checkAll(targetDir ? list : list.slice(0, -1), cwd, { treeWrite: true });
+        if (denial) return denial;
+        return this.destination(targetDir || list.at(-1), targetDir ? list : list.slice(0, -1), cwd);
       }
-      case "rm":
+      case "rm": {
+        const recursive = args.some((word) => /^-[^-]*[rR]/.test(word.value) || word.value === "--recursive");
+        if (this.judge.host && recursive && (!operands(args).length || operands(args).some((word) => word.subs.length))) return { code: "primary-delete", target: "unresolved recursive delete" };
+        return this.checkAll(operands(args), cwd, { recursive });
+      }
       case "rmdir":
       case "unlink":
       case "shred":
@@ -592,7 +684,7 @@ class ShellAnalyzer {
     }
     const expression = args.slice(index);
     if (expression.some((word) => word.value === "-delete")) {
-      const denial = this.checkAll(roots.length ? roots : [{ value: ".", subs: [] }], cwd);
+      const denial = this.checkAll(roots.length ? roots : [{ value: ".", subs: [] }], cwd, { recursive: true });
       if (denial) return denial;
     }
     for (let i = 0; i < expression.length; i += 1) {
@@ -656,15 +748,28 @@ function reasonFor(denial, tool) {
       return `${where}, inside a project clone. The firstmate primary never changes a project itself: ${DISPATCH}. Only a concrete captain-approved project operation (AGENTS.md hard rule 1) may proceed, after recording that approval with bin/fm-primary-write-grant.sh grant.`;
     case "primary-write-grant-record":
       return `${where}, a primary write grant record. Grants are created and revoked only through bin/fm-primary-write-grant.sh.`;
+    case "primary-delete": return `Refused unsafe or unresolved recursive delete: ${denial.target}.`;
+    case "primary-privilege": return "The primary never uses sudo or privilege escalation.";
+    case "primary-secret": return `Secrets must never be printed: ${denial.target}.`;
     default:
-      return `${where}, outside this home's private operational paths (state/, data/, config/, .lavish/, a temp dir). The firstmate primary does not do the work itself - not project work, and not changes to the captain's shell, dotfiles, user configuration, or installed tools either: ${DISPATCH}. Do not route around this refusal with another tool; docs/primary-write-guard.md owns the carve-outs.`;
+      return `${where}, outside the permitted direct-operation paths: ${DISPATCH}. See docs/primary-write-guard.md.`;
   }
 }
 
 function decision(input) {
   const judge = new Judge(input);
   let denial = null;
-  if (FILE_TOOLS.has(input.tool)) {
+  if (input.tool === "Read" && judge.host) {
+    for (const target of input.paths) { denial = judge.secret(target, input.cwd); if (denial) break; }
+  } else if (input.tool === "HostPath") {
+    for (const raw of input.paths) {
+      const expanded = expandTarget(raw, input.env);
+      const target = canonical(path.resolve(expanded.value));
+      if (/[\r\n\t]/.test(raw) || expanded.partial || !path.isAbsolute(expanded.value) || judge.isProject(target) || judge.homeCheckouts.some((root) => within(target, root) || within(root, target))) {
+        denial = { code: "primary-write", target: raw }; break;
+      }
+    }
+  } else if (FILE_TOOLS.has(input.tool)) {
     for (const target of input.paths) {
       denial = judge.check(target, input.cwd);
       if (denial) break;
@@ -677,14 +782,14 @@ function decision(input) {
       if (denial) break;
     }
   }
-  if (!denial) return { decision: "allow" };
+  if (!denial) { judge.audit(); return { decision: "allow" }; }
   return { decision: "deny", code: denial.code, reason: reasonFor(denial, input.tool) };
 }
 
 function parseArguments(argv) {
-  const result = { tool: "", cwd: "", command: "", paths: [], allow: [], allowFiles: [], allowPrefixes: [], grants: [], protect: [], projects: "", homeCheckouts: [] };
-  const repeated = { "--path": "paths", "--allow": "allow", "--allow-file": "allowFiles", "--allow-prefix": "allowPrefixes", "--grant": "grants", "--protect": "protect", "--home-checkout": "homeCheckouts" };
-  const single = { "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
+  const result = { tool: "", cwd: "", command: "", paths: [], allow: [], allowFiles: [], allowPrefixes: [], grants: [], protect: [], projects: "", homeCheckouts: [], projectRoots: [] };
+  const repeated = { "--project-root": "projectRoots", "--path": "paths", "--allow": "allow", "--allow-file": "allowFiles", "--allow-prefix": "allowPrefixes", "--grant": "grants", "--protect": "protect", "--home-checkout": "homeCheckouts" };
+  const single = { "--host-mode": "hostMode", "--audit-log": "auditLog", "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
     if (!(name in repeated) && !(name in single)) throw new Error(`unknown argument: ${name}`);
@@ -712,9 +817,12 @@ if (invokedDirectly()) {
     const args = parseArguments(process.argv.slice(2));
     const result = decision({ ...args, env: process.env });
     if (result.decision === "allow") {
-      process.stdout.write("allow\n");
+      if (args.tool === "HostPath") {
+        for (const raw of args.paths) process.stdout.write(canonical(path.resolve(expandTarget(raw, process.env).value)) + "\n");
+      } else process.stdout.write("allow\n");
     } else {
       process.stdout.write(`deny\t${result.code}\t${result.reason}\n`);
+      if (args.tool === "HostPath") process.exitCode = 2;
     }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);

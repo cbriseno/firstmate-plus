@@ -1,19 +1,36 @@
 # Primary write guard
 
-This document is the authoritative human-readable contract for the guard that stops a firstmate primary from doing work itself.
+This document is the authoritative human-readable contract for the guard for primary direct operations and host tasks.
 `bin/fm-primary-write-policy.mjs` is the single decision owner for each write target.
 `bin/fm-primary-write-pretool-check.sh` is the harness transport: it owns primary-home scope, the allowed-path set, the escape hatch, and harness rendering.
 `bin/fm-primary-write-grant.sh` owns the captain-approval grants that let one approved operation through.
 
-## Why this exists
+## Direct operations and host tasks
 
-[`AGENTS.md`](../AGENTS.md) section 1 makes firstmate a supervisor: it delegates every actionable request to a worker, and its own direct writes stay inside its private operational state.
-Before this guard, the only written boundary was hard rule 1, which covers projects, and no mechanism enforced even that.
-On 2026-10-29 a primary added a shell alias to the captain's `~/.bash_aliases` and wrote a plugin's user configuration file itself, instead of registering the request and dispatching a worker the captain could watch.
-Nothing refused either write, because neither target was a project.
+`config/primary-direct-ops` accepts `host` (the default when absent) or `off`.
+With `host`, the primary performs simple host-level operations directly and delegates project work and substantial engineering.
+With `off`, the legacy operational-path carve-outs below remain, but host writes require a worker and host tasks cannot be created or launched.
+Invalid configuration fails closed to the legacy policy.
 
-Delegating is also what keeps the primary's context window for supervision; every file the primary edits itself spends that context on implementation.
-The guard therefore sits on the tool surface, before the write happens, and its refusal names the dispatch path.
+The host allowance covers reading, writing, editing, moving, and deleting dotfiles, shell configuration, aliases, user configuration, and tools installed under `$HOME`, plus temporary files.
+It never grants access to any registered project clone or its linked worktrees, `projects/`, or shared tracked material in this home's checkout.
+Symlink targets are resolved before checking these boundaries.
+Existing narrow captain-approved grants remain available.
+Writes outside `$HOME` require `FM_ALLOW_PRIMARY_WRITE=1`, except for the existing operational and temporary-path carve-outs below.
+The primary never uses `sudo`, `doas`, `su`, or other privilege escalation.
+Recursive deletes refuse `$HOME` itself, `/`, any entire top-level system directory, globs, substitutions, or any target that cannot resolve exactly from the hook environment.
+Secrets must never be printed; the guard rejects recognized reads of `.ssh/`, `.gnupg/`, `.env` files, credential files, private keys, and PEM files through covered read tools and common shell printing commands.
+
+Every allowed host-changing tool call appends a UTC timestamp, tool name, normalized target, and command class to `state/direct-ops.log` for each detected target.
+This is a pre-execution authorization audit, not proof that the operation succeeded.
+Audit failures do not block the operation, and neither command text nor file contents are logged.
+
+A host task uses `bin/fm-brief.sh <id> --host --path <absolute-or-HOME-relative-path>` with repeatable `--path`, then `bin/fm-spawn.sh <id> --host [--harness <name>]`.
+The scaffold records canonical outside paths in its brief and a private path manifest; launch revalidates both, and optional spawn `--path` arguments must match that manifest.
+Paths into this checkout, `projects/`, or the linked worktrees of its clones are refused.
+The worker starts in a fresh non-repository `data/<id>/work` with a Git discovery ceiling at its task directory, follows the usual status, card, and steering-inbox protocols, and reports its verified result without a delivery mode, branch, or merge.
+Teardown validates that exact scratch directory and removes only scratch and task runtime records, leaving authorized outside paths untouched.
+Terminal backends use their existing launch path; Orca requires a Git worktree and therefore refuses host tasks explicitly.
 
 ## Purpose and boundary
 
@@ -26,7 +43,7 @@ A refusal means dispatch a worker; the deny text says so, and routing around it 
 
 The guard fires only in a genuine primary home, using `fm_primary_scope_matches` from `bin/fm-primary-scope-lib.sh`, the predicate the [delegation guard](subagent-guard.md) and the turn-end guard share.
 A plain firstmate checkout and a marked secondmate home are in scope.
-A linked task worktree, which is the shape `bin/fm-spawn.sh` hands every crewmate and scout, is out of scope, so workers are never affected.
+A linked task worktree or a non-repository host-task scratch directory is out of scope, so workers are never affected.
 A non-firstmate repo is out of scope, and any failure to confirm the home is inert rather than a block.
 
 ## Allowed paths
@@ -45,7 +62,7 @@ Each carve-out is a firstmate operation the contract keeps legitimate.
 | `git checkout` and `git switch` on the home's own checkout | The sanctioned worktree-tangle restore in `bootstrap-diagnostics`. |
 
 Commands that only invoke guarded fleet scripts, such as `bin/fm-spawn.sh` or `bin/fm-pr-merge.sh`, are never refused, because the guard judges only the command line's own write shapes and those scripts write in their own processes.
-Their redirections are judged like any other, so `bin/fm-brief.sh ... > data/<id>/brief.md` is allowed and the same redirect into a dotfile is not.
+Their redirections are judged like any other, so `bin/fm-brief.sh ... > data/<id>/brief.md` is allowed and a redirect into a dotfile follows the configured host policy.
 
 `FM_PRIMARY_WRITE_TEMP_DIRS`, a colon-separated list, replaces the temp-directory set for tests and specialized setup.
 
@@ -53,11 +70,12 @@ Their redirections are judged like any other, so `bin/fm-brief.sh ... > data/<id
 
 | Code | Meaning |
 | --- | --- |
-| `primary-write` | The target is outside every allowed path: the captain's shell, dotfiles, user configuration, installed tools' files, system files, or the firstmate repo's tracked material. |
-| `primary-write-project` | The target is inside the projects directory with no live grant for it. |
+| `primary-write` | The target is outside permitted paths, unresolved under host policy, or shared checkout material. |
+| `primary-write-project` | The target is inside projects or a registered clone worktree, without a live grant. |
+| `primary-delete`, `primary-privilege`, `primary-secret` | A host safety rail refused the operation. |
 | `primary-write-grant-record` | The target is a grant record, which only `bin/fm-primary-write-grant.sh` writes. |
 
-File tools are judged by their target path: Claude `Edit`, `MultiEdit`, `Write`, and `NotebookEdit`, and Codex `apply_patch` (every `Add File`, `Update File`, `Delete File`, and `Move to` path).
+Write tools are judged by their target path: Claude `Edit`, `MultiEdit`, `Write`, and `NotebookEdit`, and Codex `apply_patch` (every `Add File`, `Update File`, `Delete File`, and `Move to` path).
 Shell commands are lexed with the shared classifier in `bin/fm-arm-command-policy.mjs` and judged at these shapes:
 
 - output redirections, including heredocs into a file;
@@ -68,10 +86,10 @@ Shell commands are lexed with the shared classifier in `bin/fm-arm-command-polic
 - inline interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, and heredoc stdin) that calls a common write API on a literal path;
 - nested programs: subshells, brace groups, command substitutions, `bash -c` and other shell payloads, `eval`, `find -exec` and `-delete`, and `xargs`.
 
-Harness-private files outside the home, such as a harness's own memory directory, are refused like any other outside path, because durable knowledge belongs in the home's `data/` records ([`AGENTS.md`](../AGENTS.md) section 6).
+Durable knowledge still follows the ownership rules in [`AGENTS.md`](../AGENTS.md) section 6.
 A relative target resolves against the payload's working directory, tracking `cd` inside a subshell.
 `~`, `$HOME`, and other variables the hook environment defines are expanded.
-A target the guard cannot resolve, such as `"$tmp"` from `mktemp`, is allowed unless its literal prefix already rules out every allowed path, so `~/.config/$NAME` is still refused.
+Under `off`, unresolved targets retain the legacy literal-prefix policy; `host` refuses unresolved writes.
 
 ## Captain-approved operations: grants
 
@@ -86,12 +104,13 @@ A grant names one path, stores the captain's words, lives 30 minutes by default 
 Project add, create, and removal intake use the same grant for the clone path ([`project-management`](../.agents/skills/project-management/SKILL.md)).
 A grant may also cover an untracked path inside the home's own checkout, or that checkout's repository-local exclude file, for firstmate-owned local material such as a stow-approved local skill.
 The script refuses everything else: a path outside the home, a tracked file, the whole home, `.git` internals other than the exclude file, and the whole projects directory.
-The captain's personal environment is therefore never grantable; those changes go to a worker.
+The captain's personal environment uses the configured host allowance or a host worker rather than project grants.
 The script header owns the exact usage and record format.
 
 ## Escape hatch
 
-`FM_ALLOW_PRIMARY_WRITE=1` in the session environment allows every write, and any other value is ignored.
+`FM_ALLOW_PRIMARY_WRITE=1` in the session environment permits outside-`$HOME` host targets while retaining host-mode safety rails and project protection.
+With `off`, it retains the legacy full write override; any other value is ignored.
 Like `FM_ALLOW_SUBAGENT`, it must be present when the harness launches, so no tool call can enable it for the call that follows.
 
 ## Residual limits
@@ -101,12 +120,12 @@ These writes are not refused:
 
 - a script file the primary runs (`bash /tmp/x.sh`, `python3 tool.py`), and any program that writes through its own logic, including editors and package managers such as `npm install -g` or `brew install`;
 - inline interpreter code whose target path is computed rather than a literal, or written through an API outside the recognized set;
-- a target built from a command substitution (`> "$(echo ~)/.bashrc"`) or a variable assigned earlier in the same command;
+- under `off`, a target built from a command substitution or a variable assigned earlier in the same command;
 - `>|` clobber redirections, `crontab`, `systemctl --user`, and other configuration tools;
 - untokenizable shell syntax, which fails open like the cd-guard;
 - any harness not wired below, and any future write tool name outside the Claude matcher.
 
-Package installs stay unrefused on purpose: `bootstrap-diagnostics` directs the primary to run firstmate's own printed tool upgrades, and a captain's tool install still goes to a worker under the contract.
+Package installs stay unrefused on purpose: `bootstrap-diagnostics` directs the primary to run firstmate's own printed tool upgrades, and simple user-home tool installation is permitted by the host contract.
 
 ## Transport and output
 
@@ -124,7 +143,7 @@ The output contract is identical to [`cd-guard.md`](cd-guard.md):
 
 | Harness | Entry | Status |
 | --- | --- | --- |
-| Claude | `.claude/settings.json` PreToolUse: the `Bash` group and a `^(Edit\|MultiEdit\|Write\|NotebookEdit)$` group, each passing `--claude` | Wired and live-verified. |
+| Claude | `.claude/settings.json` PreToolUse: the `Bash` group and a `^(Read\|Edit\|MultiEdit\|Write\|NotebookEdit)$` group, each passing `--claude` | Bash and edit transports live-verified below; the Read route is covered by offline tests. |
 | Codex | `.codex/hooks.json` PreToolUse group matching `^(Bash\|apply_patch)$`, anchored from `pwd -P` like the cd-guard entry | Wired and live-verified; Codex fires PreToolUse for `apply_patch` with the patch in `tool_input.command`. An updated home shows Codex's hook-review dialog once for the new hook ([Codex reference](../.agents/skills/harness-adapters/references/harness/codex.md#hook-trust)). |
 | Grok, OpenCode, Pi, pi-signed, omp, Cursor, Kimi | Their shell hook surfaces carry the cd-guard, but their file-edit tool names and this guard's behavior there are unverified | Not wired. |
 
@@ -134,6 +153,8 @@ A Cursor-delivered duplicate of the tracked Claude settings stands down through 
 Wiring another harness means enumerating its file-edit tool names, adding its adapter entry, and repeating the live check below on that harness.
 
 ## Live validation record, 2026-10-29
+
+This transport record predates the host default; its outside-write refusals describe the `off` policy.
 
 Harness versions:
 

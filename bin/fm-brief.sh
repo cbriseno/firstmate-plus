@@ -2,7 +2,7 @@
 # Scaffold a crewmate brief or persistent secondmate charter at
 # data/<task-id>/brief.md under the active firstmate home.
 # For ordinary tasks, the standard Setup/Rules/Definition-of-done contract is
-# filled in. Ship and scout `# Task` sections have two subsections Firstmate
+# filled in. Ship, scout, and host `# Task` sections have two subsections Firstmate
 # fills before dispatch: `{TASK}` under `## Captain's intent` (the captain's
 # own ask plus the context needed to read it, including the substance of any
 # report, decision, or PR the ask refers to, without added speaker labels or
@@ -16,6 +16,7 @@
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
+#        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -212,6 +213,10 @@ fi
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 KIND=ship
+HOST_PATHS=()
+PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
+# shellcheck source=bin/fm-host-task-lib.sh
+. "$SCRIPT_DIR/fm-host-task-lib.sh"
 HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
@@ -236,6 +241,7 @@ for a in "$@"; do
       --*) echo "error: --$want_value requires a value" >&2; exit 1 ;;
     esac
     case "$want_value" in
+      path) HOST_PATHS+=("$a") ;;
       mode) MODE=$a; MODE_SET=1 ;;
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
       base-branch) BASE_BRANCH=$a; BASE_BRANCH_SET=1 ;;
@@ -249,6 +255,9 @@ for a in "$@"; do
     continue
   fi
   case "$a" in
+    --host) KIND=host ;;
+    --path) want_value=path ;;
+    --path=*) HOST_PATHS+=("${a#--path=}") ;;
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
@@ -337,7 +346,7 @@ elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ]; then
   exit 1
 fi
 if [ "$BASE_BRANCH_SET" -eq 1 ]; then
-  if [ "$KIND" = secondmate ] || [ -z "$BASE_BRANCH" ]; then
+  if [ "$KIND" = host ] || [ "$KIND" = secondmate ] || [ -z "$BASE_BRANCH" ]; then
     echo "error: --base-branch takes a branch name and applies only to ship and scout briefs" >&2
     exit 1
   fi
@@ -383,7 +392,13 @@ if [ "$KIND" = ship ] && [ "$MODE" != local-only ] && [ "$PROJECT_DIR_SET" -eq 1
       ;;
   esac
 fi
-ID=${POS[0]}
+ID=${POS[0]:-}
+fm_task_id_creation_valid "$ID" || { echo 'error: invalid task id' >&2; exit 2; }
+if [ "$KIND" = host ]; then
+  [ "${#POS[@]}" -eq 1 ] || { echo 'error: --host takes no project' >&2; exit 2; }
+elif [ "${#HOST_PATHS[@]}" -gt 0 ]; then
+  echo 'error: --path requires --host' >&2; exit 2
+fi
 BRANCH="$BRANCH_PREFIX$ID"
 if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
   echo "error: --branch-prefix and task id must form a valid git branch (got '$BRANCH')" >&2
@@ -463,7 +478,10 @@ IFS= read -r -d '' CARD_RULE <<EOF || true
 EOF
 CARD_RULE=${CARD_RULE%$'\n'}
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
-PROGRESS_CONTRACT=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID")
+PROGRESS_CONTRACT=
+if [ "$KIND" != secondmate ]; then
+  PROGRESS_CONTRACT=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID")
+fi
 
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are
@@ -616,7 +634,7 @@ fi
 exit 0
 fi
 
-REPO=${POS[1]}
+REPO=${POS[1]:-host}
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
@@ -719,6 +737,47 @@ if [ -n "$BASE_BRANCH" ]; then
 Base branch: $BASE_BRANCH"
 else
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
+fi
+
+if [ "$KIND" = host ]; then
+  HOST_TARGETS=$(fm_host_paths "${HOST_PATHS[@]+"${HOST_PATHS[@]}"}") || exit 1
+  printf '%s\n' "$HOST_TARGETS" > "$DATA/$ID/host-paths"
+  cat > "$BRIEF" <<EOF
+You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+
+$TASK_SECTION
+
+# Setup
+$HERDR_SECTION
+
+Host task: $ID
+Working directory: $DATA/$ID/work
+Verify pwd -P is exactly this scratch directory before doing anything.
+This directory is not a Git repository; do not create a branch, commit, push, or merge.
+
+# Authorized outside paths
+Only the exact paths below and their descendants may be changed outside your scratch directory and task records.
+$HOST_TARGETS
+
+# Rules
+Use working, needs-decision, blocked, paused, done, or failed; report only meaningful phase changes.
+A decision above your scope requires needs-decision and stopping for firstmate.
+Close any keyed decision or blocker only with a resolved line carrying that exact key.
+Report status with numeric Unix timestamps using:
+\`$STATUS_APPEND\`
+$CARD_RULE
+$CREWMATE_PAUSE_INSTRUCTIONS
+$CREWMATE_OBSTACLE_INSTRUCTIONS
+$INBOX_SECTION
+
+# Definition of done
+Complete the requested host operation, verify its result, and write $DATA/$ID/report.md.
+Append done with a numeric at stamp only when the requested operation is complete.
+Teardown removes scratch only; it never removes the authorized outside paths.
+EOF
+  append_brief_include
+  echo "scaffolded: $BRIEF (host; replace {TASK} and {FIRSTMATE_SPEC})"
+  exit 0
 fi
 
 if [ "$KIND" = scout ]; then

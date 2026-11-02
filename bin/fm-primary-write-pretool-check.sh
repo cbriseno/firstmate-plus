@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
-# PreToolUse guard against the firstmate primary doing work itself.
+# PreToolUse guard for primary host operations and delegated project writes.
 #
-# AGENTS.md section 1: firstmate delegates every actionable request to a worker,
-# including changes to the captain's personal environment, and its own direct
-# writes stay inside its private operational state, the guarded fleet scripts,
-# and hard rule 1's captain-approved project operations. Before this guard
-# nothing enforced that outside project clones, so a primary could edit the
-# captain's shell aliases or a plugin's user configuration itself instead of
-# dispatching a worker the captain can watch. This guard refuses such a write
-# before it runs and names the dispatch path instead.
+# config/primary-direct-ops defaults to host; off retains delegation-only writes.
+# See docs/primary-write-guard.md for the host operations and safety rails.
 # bin/fm-primary-write-policy.mjs is the sole owner of the per-target decision;
 # this wrapper scopes the guard to a genuine primary home, owns the escape
 # hatch and the allowed-path set, acquires the harness payload, and renders the
@@ -21,7 +15,7 @@
 #   bin/fm-primary-write-pretool-check.sh --tool <name> [--command <cmd>] [--path <file>] [--cwd <dir>] [--claude]
 #
 # Stdin mode reads .tool_name, .cwd, and .tool_input (Claude and Codex), or
-# .toolName and .toolInput. Guarded tools: Bash (.command), Edit, MultiEdit,
+# .toolName and .toolInput. Guarded tools: Bash (.command), Read, Edit, MultiEdit,
 # and Write (.file_path), NotebookEdit (.notebook_path), and Codex apply_patch
 # (.command holding the patch). Every other tool allows without classification.
 # CLI mode is for tests and future adapters that already hold the fields.
@@ -68,9 +62,10 @@ Usage: fm-primary-write-pretool-check.sh [--tool <name> [--command <cmd>] [--pat
 
 With no --tool, reads a PreToolUse-style JSON payload on stdin (Claude/Codex
 tool_name, cwd, and tool_input).
-Denies a write by the firstmate primary outside its private operational paths:
-state/, data/, config/, .lavish/, a temp dir, or a live captain-approval grant
-from bin/fm-primary-write-grant.sh. Names the worker dispatch path instead.
+Allows simple host operations under HOME by default (config/primary-direct-ops=host).
+With off, allows only private operational paths and live captain-approval grants.
+Project paths and shared tracked files still require a worker; host mode also
+refuses privilege escalation, unsafe recursive deletion, and recognized secret reads.
 Fires only in a genuine firstmate primary home; it is a silent no-op in a
 crewmate/scout task worktree or any non-firstmate repo.
 Exits 0 to allow and 2 to deny. Set FM_ALLOW_PRIMARY_WRITE=1 in the session
@@ -115,7 +110,7 @@ if [ "$TOOL_SET" -eq 0 ]; then
 fi
 
 case "$TOOL" in
-  Edit|MultiEdit|Write|NotebookEdit) [ -n "$FILE_PATH" ] || exit 0 ;;
+  Read|Edit|MultiEdit|Write|NotebookEdit) [ -n "$FILE_PATH" ] || exit 0 ;;
   Bash|apply_patch) [ -n "$CMD" ] || exit 0 ;;
   *) exit 0 ;;
 esac
@@ -138,7 +133,7 @@ if [ "$TOOL" = "Bash" ]; then
       PREFILTER=${PREFILTER//\'/}
       PREFILTER=${PREFILTER//$'\n'/ }
       PREFILTER=${PREFILTER//$'\r'/ }
-      STEMS='tee|cp|mv|install|ln|rsync|rm|rmdir|unlink|shred|touch|mkdir|truncate|chmod|chown|chgrp|sed|dd|curl|wget|git|apply_patch|eval|xargs|find|bash|sh|zsh|dash|ksh|python[0-9.]*|node|nodejs|bun|deno|perl|ruby'
+      STEMS='sudo|doas|su|pkexec|cat|head|tail|less|more|awk|grep|rg|bat|base64|strings|tee|cp|mv|install|ln|rsync|rm|rmdir|unlink|shred|touch|mkdir|truncate|chmod|chown|chgrp|sed|dd|curl|wget|git|apply_patch|eval|xargs|find|bash|sh|zsh|dash|ksh|python[0-9.]*|node|nodejs|bun|deno|perl|ruby'
       [[ " $PREFILTER " =~ (^|[^A-Za-z0-9_.-])($STEMS)([^A-Za-z0-9_-]|$) ]] || exit 0
       ;;
   esac
@@ -146,7 +141,7 @@ fi
 
 # The single deliberate escape hatch, unforgeable in-session for the same
 # reason as FM_ALLOW_SUBAGENT: it must be present when the harness launches.
-[ "${FM_ALLOW_PRIMARY_WRITE:-}" != "1" ] || exit 0
+# Host-mode escape relaxes outside-HOME targets, not the safety rails.
 
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)} || exit 0
 FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}
@@ -168,11 +163,21 @@ command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
 
 [ -n "$CWD" ] || CWD=$PWD
-ARGS=(--tool "$TOOL" --cwd "$CWD" --projects "$PROJECTS"
+DIRECT_OPS=host
+if [ -e "$CONFIG/primary-direct-ops" ]; then
+  DIRECT_OPS=$(tr -d '[:space:]' < "$CONFIG/primary-direct-ops" 2>/dev/null) || DIRECT_OPS=off
+fi
+[ "$DIRECT_OPS" = host ] || DIRECT_OPS=off
+if [ "$DIRECT_OPS" = off ] && [ "${FM_ALLOW_PRIMARY_WRITE:-}" = 1 ]; then exit 0; fi
+ARGS=(--host-mode "$DIRECT_OPS" --audit-log "$STATE/direct-ops.log" --tool "$TOOL" --cwd "$CWD" --projects "$PROJECTS"
   --home-checkout "$FM_ROOT" --home-checkout "$FM_HOME"
   --protect "$STATE/primary-write-grants"
   --allow "$STATE" --allow "$DATA" --allow "$CONFIG"
   --allow-file "$FM_HOME/.env" --allow-file "$FM_ROOT/.env")
+# Registered clones live under projects/; protect their linked worktrees too.
+# shellcheck source=bin/fm-host-task-lib.sh
+. "$SCRIPT_DIR/fm-host-task-lib.sh"
+while IFS= read -r line; do ARGS+=(--project-root "$line"); done < <(fm_host_project_roots "$PROJECTS")
 for home in "$FM_HOME" "$FM_ROOT"; do
   for dir in state data config .lavish; do
     ARGS+=(--allow "$home/$dir")
@@ -195,6 +200,8 @@ if [ -f "$DATA/secondmates.md" ]; then
     secondmate_registry_parse_line "$line" 2>/dev/null || continue
     [ "${SECONDMATE_REGISTRY_REMOTE:-0}" = 0 ] || continue
     case "${SECONDMATE_REGISTRY_HOME:-}" in /*) ;; *) continue ;; esac
+    ARGS+=(--home-checkout "$SECONDMATE_REGISTRY_HOME")
+    while IFS= read -r project_root; do ARGS+=(--project-root "$project_root"); done < <(fm_host_project_roots "$SECONDMATE_REGISTRY_HOME/projects")
     for dir in state data config; do
       ARGS+=(--allow "$SECONDMATE_REGISTRY_HOME/$dir")
     done

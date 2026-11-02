@@ -10,6 +10,8 @@
 #
 # Usage: fm-claude-trust.sh <worktree> <project>
 #        fm-claude-trust.sh --secondmate-home <home> <id>
+#        fm-claude-trust.sh --host-task <scratch> <task-data-dir>
+#          Trusts only the real, non-repository task-data-dir/work directory.
 #        fm-claude-trust.sh --lab-home <home>
 #   <worktree>  the isolated task worktree this spawn launches into
 #   <project>   the primary checkout that worktree belongs to
@@ -187,6 +189,7 @@ unset CDPATH \
 usage() {
   echo "usage: fm-claude-trust.sh <worktree> <project>" >&2
   echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
+  echo "       fm-claude-trust.sh --host-task <scratch> <task-data-dir>" >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
   exit 2
 }
@@ -195,6 +198,15 @@ usage() {
 # names what the argument was expected to be so every shared refusal below reads
 # correctly in both modes.
 case "${1:-}" in
+  --host-task)
+    [ "$#" -eq 3 ] || usage
+    MODE=host-task
+    TARGET_ARG=$2
+    HOST_TASK_DATA=$3
+    SUB_ID=
+    PROJ_ARG=
+    SCOPE_NOUN="host task scratch"
+    ;;
   --secondmate-home)
     [ "$#" -eq 3 ] || usage
     MODE=secondmate-home
@@ -328,6 +340,12 @@ if [ "$MODE" = worktree ]; then
     [ -n "$CANON_GIT_DIR" ] && [ "$CANON_GIT_DIR" = "$PROJ_COMMON" ] \
       || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
   fi
+elif [ "$MODE" = host-task ]; then
+  [ ! -L "$HOST_TASK_DATA" ] && [ ! -L "$TARGET_ARG" ] || refuse 'host scratch cannot be a symlink'
+  HOST_DATA_REAL=$(real_dir "$HOST_TASK_DATA") || refuse 'host task data is missing'
+  [ "$TARGET_REAL" = "$HOST_DATA_REAL/work" ] && [ ! -e "$TARGET_REAL/.git" ] \
+    && [ -f "$HOST_DATA_REAL/host-paths" ] && [ -f "$HOST_DATA_REAL/brief.md" ] \
+    || refuse 'host scratch must be the task data work directory with its brief and path manifest'
 elif [ "$MODE" = lab-home ]; then
   LAB_MARKER="$TARGET_REAL/$FM_GATE_LAB_MARKER"
   [ ! -L "$LAB_MARKER" ] || refuse "'$LAB_MARKER' is a symlink; a lab home carries the marker as a regular file"

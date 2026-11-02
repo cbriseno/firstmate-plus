@@ -2184,7 +2184,7 @@ validate_worktree_teardown_safety() {
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
-    secondmate|scout) return 0 ;;
+    secondmate|scout|host) return 0 ;;
   esac
 
   if ! dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null); then
@@ -3635,6 +3635,12 @@ remove_secondmate_registry_entry() {
   return "$rc"
 }
 
+# A host task owns only its exact scratch directory, never its outside targets.
+if [ "$KIND" = host ]; then
+  # shellcheck source=bin/fm-host-task-lib.sh
+  . "$SCRIPT_DIR/fm-host-task-lib.sh"
+  fm_host_scratch_valid "$WT" || { echo 'REFUSED: host task scratch path is unsafe' >&2; exit 1; }
+fi
 require_exclusive_task_worktree_slot || exit 1
 require_owned_task_worktree_slot || exit 1
 
@@ -3893,6 +3899,9 @@ if [ "$KEEP_RUNNING" = 1 ]; then
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
     remove_harness_worktree_wiring "$WT"
   fi
+elif [ "$KIND" = host ]; then
+  fm_host_scratch_valid "$WT" || { echo 'REFUSED: host scratch changed before cleanup' >&2; exit 1; }
+  rm -rf -- "$WT"
 elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
@@ -4195,7 +4204,7 @@ if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" != retain ]; then
     printf 'warning: cleanup closed %s, but automatic moot-call retirement needs sweep-moot retry\n' "$ID" >&2
   fi
 fi
-if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+if [ "$KIND" = ship ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 # A secondmate retirement may remove the home containing an overridden control

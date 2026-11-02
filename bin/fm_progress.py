@@ -292,6 +292,7 @@ def contract(home, task_id, data=None):
     template = """At the start, write a short honest plan with phase and progress to {input_path}, then publish it with:
 `{command}`
 Example ship input: {"phase":"implementation","card_status":"Implementation in progress","progress":{"steps":[{"label":"Implementation","state":"active"},{"label":"Affected checks","state":"todo"},{"label":"Branch ready","state":"todo","gate":"branch-ready"},{"label":"Integration","state":"todo","gate":"integrated"}]}}.
+For host tasks use phase=implementation with operation, verification, and report steps only; there is no branch, merge, or delivery gate.
 For a scout use phase=investigation and only its actual research/report steps; add installed activation only when it is in scope.
 The input file is task scratch; never write presentation.json, which is the owner's validated output.
 Update and republish phase, card_status and steps together after each status report and verified milestone, before a validation wait, after promotion/rebase/resume/handoff, and before readiness; unchanged steps are honest when work continues without a completed milestone.
