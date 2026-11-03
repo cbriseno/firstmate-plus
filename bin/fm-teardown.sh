@@ -203,6 +203,9 @@
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
 #                       [--residual "<what is left>" [--keep-running]]
+#        fm-teardown.sh <task-id> --repair-missing-record
+#   --repair-missing-record closes only an orphan backlog row whose metadata
+#   is absent, without cleaning endpoints or files. Captain-held rows refuse.
 #   --residual closes delivered work whose only remaining reason to stay open
 #   is something kept alive to protect it or a real-world check that may never
 #   happen. It runs every ordinary gate unchanged and, before the first
@@ -522,11 +525,13 @@ LEGACY_RECORD_GIVEN=0
 RESIDUAL=
 RESIDUAL_GIVEN=0
 KEEP_RUNNING=0
+REPAIR_MISSING_RECORD=0
 shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
+    --repair-missing-record) REPAIR_MISSING_RECORD=1 ;;
     --residual)
       [ "$#" -ge 2 ] || { echo "error: --residual needs the one-line text of what is left" >&2; exit 2; }
       RESIDUAL=$2
@@ -669,6 +674,31 @@ CONTROL_LOCK_HELD=1
 # down a worktree (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
 FM_LOCK_LOG_PREFIX=teardown
+
+if [ "$REPAIR_MISSING_RECORD" = 1 ]; then
+  [ -z "$FORCE" ] && [ "$LEGACY_RECORD_GIVEN" = 0 ] && [ "$RESIDUAL_GIVEN" = 0 ] || {
+    echo 'error: --repair-missing-record must be used alone' >&2; exit 2;
+  }
+  fm_backlog_record_parent_authorized "$META" "task record" "$STATE" || exit 1
+  META_LOCK=$(fm_meta_lock_path "$META") || exit 1
+  fm_lock_acquire_wait "$META_LOCK"
+  META_LOCK_HELD=1
+  if [ -e "$META" ] || [ -L "$META" ]; then
+    echo 'error: row-only repair requires absent task metadata; nothing was changed' >&2
+    exit 1
+  fi
+  fm_backlog_row_probe "$DATA" "$ID" || {
+    echo "error: cannot read orphan backlog row: $FM_BACKLOG_ROW_ERROR" >&2; exit 1;
+  }
+  [ "$FM_BACKLOG_ROW_HOLD_KIND" != captain ] || {
+    echo 'error: row-only repair cannot close a captain-held task' >&2; exit 1;
+  }
+  fm_backlog_done "$DATA" "$ID" || {
+    echo "error: row-only repair failed: $FM_BACKLOG_TRANSITION_ERROR" >&2; exit 1;
+  }
+  echo "teardown: repaired orphan backlog row $ID; no endpoints or files were cleaned"
+  exit 0
+fi
 
 fm_backlog_record_present "$META" "task record" "$STATE" || {
   echo "error: teardown refused: $FM_BACKLOG_TRANSITION_ERROR" >&2

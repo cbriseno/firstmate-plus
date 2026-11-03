@@ -60,6 +60,20 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
     check(task(snapshot(),'a')['updated']['precision']=='unknown','created never used for updated')
     check(not (home/'data/work-structure.json').exists(),'reads never create structure')
     import fcntl
+    import threading
+    for args, body in [(['update','a','--priority','1'], None),
+                       (['presentation','a','--card-status','Contention recovered'], None),
+                       (['work','apply'], dict(op('set_priority','task:a',value=1),request_id='contention-retry-0001'))]:
+        if body:
+            body['expected_rev']=snapshot()['rev']
+        with (home/'data/.work.lock').open('w') as held:
+            fcntl.flock(held,fcntl.LOCK_EX)
+            release=threading.Thread(target=lambda: (time.sleep(.3), fcntl.flock(held,fcntl.LOCK_UN)))
+            release.start()
+            result=cli(*args,payload=body,raw=body is None)
+            release.join()
+            check(body is None or result['state']=='applied','ordinary writers recover from short contention')
+    baseline=(home/'data/backlog.md').read_bytes()
     busyop=op('set_priority','task:a',value=4)|{'request_id':'busy-test-00000001'}
     with (home/'data/.work.lock').open('w') as held:
         fcntl.flock(held,fcntl.LOCK_EX)

@@ -4876,6 +4876,21 @@ test_own_autonomous_run_is_left_alone() {
   pass "a task-owned autonomous running step is left alone rather than aborted"
 }
 
+test_missing_record_row_repair() {
+  local case_dir rc=0
+  case_dir=$(make_case missing-record-repair)
+  seed_backlog_in_flight "$case_dir"
+  write_meta "$case_dir" local-only ship
+  rm -- "$case_dir/state/task-x1.meta"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" 'missing metadata still refuses ordinary teardown'
+  run_teardown "$case_dir" --repair-missing-record > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail 'explicit missing-record repair failed'
+  assert_equals 'done' "$(backlog_row_state "$case_dir")" 'orphan row closed'
+  assert_present "$case_dir/wt" 'row-only repair preserves worktree'
+  pass 'missing metadata permits explicit row-only repair'
+}
+
 test_leaked_worktree_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-process-reap)
@@ -5874,6 +5889,7 @@ test_empty_status_after_abort_refuses_unconfirmed
 test_not_found_status_after_abort_confirms_completion
 test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
+test_missing_record_row_repair
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group

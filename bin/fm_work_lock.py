@@ -4,11 +4,12 @@ import argparse
 import fcntl
 import os
 from pathlib import Path
+import random
 import sys
 import time
 
 
-def acquire(data, wait_seconds=0):
+def acquire(data, wait_seconds=5):
     path = Path(data) / '.work.lock'
     if Path(data).is_symlink() or path.is_symlink():
         raise ValueError('unsafe work lock path')
@@ -34,7 +35,7 @@ def acquire(data, wait_seconds=0):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise
-                time.sleep(min(0.05, remaining))
+                time.sleep(min(random.uniform(0.025, 0.075), remaining))
     except BaseException:
         os.close(fd)
         raise
@@ -44,7 +45,7 @@ def acquire(data, wait_seconds=0):
 if __name__ == '__main__':
     try:
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument('--wait-seconds', type=float, default=0)
+        parser.add_argument('--wait-seconds', type=float, default=5)
         parser.add_argument('data')
         parser.add_argument('command', nargs=argparse.REMAINDER)
         args = parser.parse_args()
@@ -54,6 +55,9 @@ if __name__ == '__main__':
         os.set_inheritable(fd, True)
         env = dict(os.environ, FM_WORK_OWNER_FD=str(fd))
         os.execvpe(args.command[0], args.command, env)
+    except BlockingIOError as exc:
+        print('work mutation busy: ' + str(exc), file=sys.stderr)
+        sys.exit(1)
     except (OSError, ValueError) as exc:
-        print('work mutation busy or unsafe: ' + str(exc), file=sys.stderr)
+        print('work mutation unsafe: ' + str(exc), file=sys.stderr)
         sys.exit(1)
