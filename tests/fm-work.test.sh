@@ -569,5 +569,11 @@ exit 1
     check(r['state']=='received' and 'Worker liveness cannot be confirmed.' in r['pending_reason'],'unverified backend cannot confirm pause')
     meta.unlink()
     check(cli('work','request-status','--request-id',r['request_id'])['state']=='received','missing metadata alone cannot prove worker death')
+    for args, warning in [(['add','host-task','Host task'],True),
+                          (['create','scoped-task','Project task','--repo=alpha'],False)]:
+        added=subprocess.run(wrapper+args,env=env,text=True,capture_output=True)
+        check(added.returncode==0 and (len(added.stderr.splitlines())==1 if warning else not added.stderr),'only projectless creation warns once')
+    projectless=task(snapshot(),'host-task')
+    check(all(projectless[k] is None for k in ('parent','project','subproject','repository_project')),'host task projects stay null')
     print('PASS: %d work owner behavioral assertions'%checks)
 PY

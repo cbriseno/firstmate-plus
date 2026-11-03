@@ -75,6 +75,15 @@ TMP_ROOT=$(fm_test_tmproot fm-teardown-tests)
 REAL_GIT_FOR_TEST=$(command -v git)
 export REAL_GIT_FOR_TEST
 REAL_PS_FOR_TEST=$(command -v ps)
+export FM_TEST_NATIVE_PS="$REAL_PS_FOR_TEST"
+REAL_PS_FOR_TEST="$TMP_ROOT/isolated-ps"
+cat > "$REAL_PS_FOR_TEST" <<'SH'
+#!/usr/bin/env bash
+# A disposable teardown must never sweep real remote workers.
+[ "${1:-}" != -u ] || exit 0
+exec "${FM_TEST_NATIVE_PS:?}" "$@"
+SH
+chmod +x "$REAL_PS_FOR_TEST"
 export REAL_PS_FOR_TEST
 REAL_LSOF_FOR_TEST=$(command -v lsof)
 export REAL_LSOF_FOR_TEST
@@ -91,6 +100,7 @@ make_case() {
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
+  cp "$REAL_PS_FOR_TEST" "$fakebin/ps"
 
   # Mocks for the post-check teardown steps. Refuse logic exits before these
   # run; the ALLOW cases need them so the script can complete cleanly.
@@ -4892,10 +4902,21 @@ test_missing_record_row_repair() {
 }
 
 test_leaked_worktree_process_is_reaped() {
-  local case_dir rc pid
+  local case_dir rc pid server service_ok=0 i
   case_dir=$(make_case leaked-process-reap)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
+  ( cd "$case_dir/wt" && exec python3 -c 'import socket,time,pathlib; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); pathlib.Path("listener-ready").touch(); time.sleep(300)' ) &
+  server=$!
+  for i in {1..50}; do
+    [ ! -f "$case_dir/wt/listener-ready" ] || break
+    sleep 0.1
+  done
+  [ -f "$case_dir/wt/listener-ready" ] || fail 'temporary listener did not start'
+  # Keep the landed-work check focused on the real fixture commit.
+  git -C "$case_dir/wt" add listener-ready
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -qm 'service fixture'
+  git -C "$case_dir/wt" push -q origin HEAD
 
   # A backgrounded, disowned process rooted (by cwd) under the task's own
   # worktree - the same shape the observed incident's leaked `go test`
@@ -4910,6 +4931,11 @@ test_leaked_worktree_process_is_reaped() {
   rc=0
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
+  kill -0 "$server" 2>/dev/null && service_ok=1
+  kill "$server" 2>/dev/null || true
+  wait "$server" 2>/dev/null || true
+  assert_equals 1 "$service_ok" 'listening service survives teardown'
+  assert_grep 'leaves service process' "$case_dir/stderr" 'service preservation warns'
   expect_code 0 "$rc" "leaked-process-reap: teardown should still succeed"
   if kill -0 "$pid" 2>/dev/null; then
     kill -KILL "$pid" 2>/dev/null || true

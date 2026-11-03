@@ -262,11 +262,14 @@ class Owner:
                     label=group.get('label', repo))
 
     def display_membership(self, task_id):
-        project = 'project:' + str(self.rows[task_id].get('repo'))
+        repo = self.rows[task_id].get('repo')
+        project = 'project:' + repo if repo else None
         sub = self.structure['membership'].get(task_id)
         if sub:
             node = self.hierarchy(sub)
             return (sub, None) if node['kind'] == 'project' else (node['parent'], sub)
+        if project is None:
+            return None, None
         node = self.hierarchy(project)
         return (node['parent'], project) if node['kind'] == 'subproject' else (project, None)
 
@@ -300,7 +303,8 @@ class Owner:
         if self.logical_layout():
             project, sub = self.display_membership(task_id)
             return [key for key in (sub, project) if key]
-        return [k for k in ['project:' + str(self.rows[task_id].get('repo')), self.structure['membership'].get(task_id)] if k]
+        repo = self.rows[task_id].get('repo')
+        return [k for k in ['project:' + repo if repo else None, self.structure['membership'].get(task_id)] if k]
 
     def edges(self):
         edges = []
@@ -542,7 +546,7 @@ class Owner:
             project, subproject = self.display_membership(task_id)
             tasks.append(dict(runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
                 alias=self.aliases.alias('task:' + task_id), kind='task', parent=subproject or project,
-                project=project, subproject=subproject, repository_project='project:' + str(row.get('repo')),
+                project=project, subproject=subproject, repository_project='project:' + row['repo'] if row.get('repo') else None,
                 title=p.get('card_title') or row['title'], reason=(task_pause or hold or inherited or {}).get('reason'), state=state,
                 priority=priority(row.get('priority')), pause=dict(own=task_pause or hold, condition=hold if task_pause else None, inherited=inherited, safe_point=safe, request_id=request_id),
                 blocked_by=blocks, frees=dict(direct=[], chain_count=0), root_blocker=next((b['ref'] for b in blocks if b['open']), None),

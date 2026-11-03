@@ -13,6 +13,7 @@
 # starts from the backlog root instead. `--report` stays as given: tasks-axi
 # stores it verbatim as a link, which lifecycle transitions record relative to
 # that same root.
+# Adding without --repo warns once and remains valid for projectless host work.
 #
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
@@ -442,6 +443,11 @@ case "${1:-}" in
 esac
 case "${1:-}" in
   add|create)
+    repo_or_help=0
+    for arg in "${ARGS[@]}"; do
+      case "$arg" in --repo|--repo=*|-h|--help) repo_or_help=1 ;; esac
+    done
+    [ "$repo_or_help" = 1 ] || echo 'warning: no --repo supplied; task will have no project (valid for host work)' >&2
     python3 "$SCRIPT_DIR/fm_work_lock.py" "$CREATION_DATA" \
       python3 "$SCRIPT_DIR/fm_delivery.py" create-task "$CREATION_DATA" -- tasks-axi ${ARGS[@]+"${ARGS[@]}"}
     exit $?
