@@ -682,6 +682,12 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm'
+else
+  SIMPLICITY_LINE=''
+fi
+
 # One shared string keeps the ship and scout infrastructure rule identical.
 # Rule 2 governs file edits, so it does not prohibit pool administration.
 # The secondmate charter deliberately omits this rule because a secondmate
@@ -790,6 +796,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+$SIMPLICITY_LINE
 
 $HERDR_SECTION
 
@@ -863,6 +870,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+$SIMPLICITY_LINE
 
 $HERDR_SECTION
 

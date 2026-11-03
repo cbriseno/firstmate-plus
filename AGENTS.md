@@ -392,6 +392,18 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 ## 11. Crewmate briefs
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
+
+## Simplicity rules (captain-approved 2026-11-03)
+The captain's work is not financial or irreversible by default; favor the simplest thing that runs, test it live, and fix what actually fails.
+1. Automating a manual procedure: write its manual steps first and implement exactly those steps in that order. Any code, protocol or mechanism that maps to no step needs the captain's approval before it is written.
+2. Run the real flow end to end once, as small as possible, before adding tests, checks or abstractions. Each later layer must answer a failure seen in that real run (cite the log).
+3. After two integration failures with different causes, stop patching: reread the manual procedure, list what the design added beyond it, and remove or defer everything it does not need.
+4. Add no hash, ledger, receipt, package, acknowledgement or other control layer for a hypothetical risk; note the risk in one line. Allow a control only after harm actually happened, or when the action is irreversible, money, credentials or security.
+5. Before proposing any control, state its worst case: reversible and local means fix and move on; costly but recoverable means one cheap check; irreversible means the smallest layer that covers it.
+6. Delete or merge before adding: a rule or gate with more than 5 exceptions is rewritten from its purpose, not extended.
+7. An automatic block counts only attempts that really executed something, prints in one line how a human skips it, and is never invalidated by unrelated code changes.
+8. Do only what was asked; when it is done and checked, stop and report. Mention extra ideas in one line at the end. State estimated net lines before coding and stop to justify if the real diff exceeds 2x the estimate or 300 lines for a small task.
+`bin/fm-brief.sh` adds a one-line reference to these rules in ship and scout briefs.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
 `bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, and the string's self-sufficiency rule.

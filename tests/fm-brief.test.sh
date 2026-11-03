@@ -472,6 +472,7 @@ test_pr_based_dod_requires_non_draft() {
     FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$mode: brief was not scaffolded"
+    assert_grep 'Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm' "$brief" "$mode: brief missing simplicity-rules reference"
     if [ "$mode" = local-only ]; then
       assert_no_grep "isDraft" "$brief" "$mode: a branch-only delivery must not require a non-draft PR"
       continue
@@ -1154,6 +1155,7 @@ test_scout_and_secondmate_scaffold() {
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
+  assert_grep 'Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm' "$brief" "scout brief missing simplicity-rules reference"
   assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
   assert_grep 'Continue independent authorized work' "$brief" 'an optional obstacle parks the whole scout'
   assert_grep 'stop the whole task only when no such work remains' "$brief" 'scout lacks a whole-task stop boundary'
