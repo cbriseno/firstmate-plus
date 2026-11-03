@@ -294,6 +294,18 @@ fail() {
   exit 2
 }
 
+# Help is read-only: bypass the creation owner and its transaction lock.
+case "${1:-}" in
+  add|create)
+    for arg in "${@:2}"; do
+      case "$arg" in
+        --) break ;;
+        -h|--help) exec tasks-axi "$1" --help ;;
+      esac
+    done
+    ;;
+esac
+
 case "${1:-}" in
   progress-contract)
     [ "$#" -eq 2 ] || fail 'progress-contract requires one exact task id'

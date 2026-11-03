@@ -37,6 +37,11 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         global counter
         counter += 1
         return cli('work','apply',payload=dict(o,request_id='test-request-%08d'%counter))
+    for flag in ('--help', '-h'):
+        help_result = subprocess.run(wrapper+['add','help-fixture',flag], env=env, text=True, capture_output=True)
+        check(help_result.returncode == 0 and 'usage:' in help_result.stdout.lower(), 'add help succeeds')
+        check(not list((home/'data').glob('.task-creation-*')), 'help creates no journal')
+        check(not (home/'data/help-fixture').exists(), 'help creates no receipt')
     for key in ('a','b','c','unset'):
         cli('add',key,key+' task','--repo','alpha',raw=True)
     cli('update','a','--priority','1',raw=True)

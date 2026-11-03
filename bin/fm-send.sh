@@ -154,7 +154,7 @@
 # appends the closing resolved line to that status file, so the captain-facing
 # OPEN DECISIONS record closes at answer time and never depends on the busy
 # worker writing a matching resolved line. For ordinary keys the payload is
-# "resolved [key=<key>]: answered: <capped excerpt>" before the emission-time
+# "resolved [key=<key>]: answered via steer" before the emission-time
 # handling owned by bin/fm-classify-lib.sh. A reserved key
 # (pending-reply-* today; bin/fm-classify-lib.sh's reserved-key guard) is
 # closed with the owning library's vocabulary note
@@ -580,16 +580,18 @@ fm_send_hold_resolved_id() { # <task-id> <decision-key>
   return 1
 }
 
-# Close-note body for --resolve-key. Ordinary keys keep answered: <excerpt>.
+# Close-note body for --resolve-key; answer text remains in the private inbox.
 # A pending-reply-* key uses the owning library's vocabulary so the reserved-key
 # fold actually closes it (fm_pending_reply_close_note_for_key).
-fm_send_resolve_close_note() { # <key> <excerpt>
-  local k=$1 excerpt=$2 owned
-  if owned=$(fm_pending_reply_close_note_for_key "$k" "$RESOLVE_TASK_ID" operator-resolve-key "$excerpt"); then
+fm_send_resolve_close_note() { # <key>
+  local k=$1 owned
+  if owned=$(fm_pending_reply_close_note_for_key "$k" "$RESOLVE_TASK_ID" operator-resolve-key); then
     printf '%s' "$owned"
     return 0
   fi
-  printf 'answered: %s' "$excerpt"
+  printf 'answered via steer'
+  if [ -n "${INBOX_RECORD:-}" ]; then printf ' inbox=%s' "${INBOX_RECORD##*/}"; fi
+  if [ -n "${PENDING_REPLY_CORR:-}" ]; then printf ' corr=%s' "$PENDING_REPLY_CORR"; fi
 }
 
 if [ -n "$FIRE_AND_FORGET_ID" ]; then
@@ -666,9 +668,8 @@ if [ -n "$RESOLVE_KEYS" ]; then
   # the close record stays inside the cap this refusal cites.
   RESOLVE_CLOSE_MAX=$((FM_LINE_CAP_DEFAULT - $(status_stamp_width)))
   [ "$RESOLVE_CLOSE_MAX" -ge 0 ] || RESOLVE_CLOSE_MAX=0
-  resolve_excerpt=$(printf '%s' "$*" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
-    probe=$(fm_send_resolve_close_note "$k" "$resolve_excerpt")
+    probe=$(fm_send_resolve_close_note "$k")
     if ! _fm_decision_key_transition_allowed "$k" "$probe"; then
       echo "error: --resolve-key '$k' cannot take effect: this key is reserved for its owning library, and this send cannot produce a close note that library's fold will accept. Refusing rather than writing a silent no-op; nothing was sent." >&2
       exit 1
@@ -696,10 +697,9 @@ fi
 # or a worker line the fold read but never listed, leave the watcher's wake
 # path untouched.
 fm_send_close_resolved_keys() { # <answer-text>
-  local note=$1 k close_note append_rc still manual_close_cmd close_lines=() i=0
-  note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
+  local k close_note append_rc still manual_close_cmd close_lines=() i=0
   for k in $RESOLVE_STATUS_KEYS; do
-    close_note=$(fm_send_resolve_close_note "$k" "$note")
+    close_note=$(fm_send_resolve_close_note "$k")
     fm_cap_line_var "resolved [key=$k]: $close_note" "$RESOLVE_CLOSE_MAX"
     close_lines+=("$FM_LINE_CAP_LINE")
   done
