@@ -15,7 +15,6 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
     for name in ('data','state','config'):
         (home / name).mkdir()
     (home / 'data/projects.md').write_text('- alpha [local-only +yolo] - Private project\n- alpha-public [local-only +yolo install=alpha] - Public project\n- empty [local-only] - Empty project\n')
-    (home / 'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
     env = {k:v for k,v in os.environ.items() if not k.startswith('FM_') and not k.startswith('TASKS_AXI_')}
     env.update(FM_HOME=str(home), FM_LIVE='0')
     wrapper = ['bash',str(root / 'bin/fm-tasks-axi.sh')]
@@ -28,6 +27,13 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         global checks
         assert value, message
         checks += 1
+    missing = subprocess.run(wrapper+['work','snapshot'], env=env, text=True, capture_output=True)
+    check(json.loads(missing.stdout)['state'] == 'rejected' and 'backlog' in missing.stdout and 'create it' in missing.stdout, 'missing backlog gives actionable guidance')
+    (home / 'data/backlog.md').symlink_to(home / 'missing')
+    unsafe = subprocess.run(wrapper+['work','snapshot'], env=env, text=True, capture_output=True)
+    check(json.loads(unsafe.stdout)['state'] in ('failed', 'rejected') and 'create it' not in unsafe.stdout, 'unsafe backlog is rejected')
+    (home / 'data/backlog.md').unlink()
+    (home / 'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
     def snapshot(): return cli('work','snapshot')
     def task(s, key): return next(t for t in s['tasks'] if t['key']=='task:'+key)
     def op(name,target,**kw):

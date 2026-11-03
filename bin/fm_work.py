@@ -150,7 +150,10 @@ class Owner:
         refuse(os.environ.get('TASKS_AXI_BACKEND', config.get('backend', 'markdown')) != 'markdown', 'not_local_home', tr('This backend only supports read access in Deck.'))
         cfg = config.get('markdown') or {}
         self.backlog_path = cfg.get('path') or 'data/backlog.md'
-        self.backlog_text = read_text(self.home, self.backlog_path)
+        try:
+            self.backlog_text = read_text(self.home, self.backlog_path)
+        except FileNotFoundError:
+            refuse(True, 'owner_failed', tr('Missing backlog {path}; create it with In flight, Queued and Done sections before opening the board.').format(path=self.backlog_path))
         rows = canonical_read({'text': self.backlog_text})
         self.rows = {r['id']: r for r in rows}
         self.current_ids = set(self.rows)

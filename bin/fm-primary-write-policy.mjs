@@ -635,6 +635,10 @@ class ShellAnalyzer {
         endOfOptions = true;
         continue;
       }
+      if (!endOfOptions && value === "-i" && args[i + 1]?.value === "") {
+        i += 1;
+        continue;
+      }
       if (!endOfOptions && /^--(?:expression|file)$/.test(value)) {
         scriptFromOption = true;
         i += 1;

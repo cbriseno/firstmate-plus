@@ -420,6 +420,10 @@ test_host_direct_operations() {
   expect_allow "default host dotfile edit" Edit "$USERHOME/.bashrc"
   expect_allow "default host config write" Write "$USERHOME/.config/tool.json"
   expect_allow "home tool install" Bash 'install data/tool ~/.local/bin/tool'
+  expect_allow "BSD sed empty suffix" Bash "sed -i '' 's/\$/x/' $USERHOME/.profile"
+  expect_allow "sed attached suffix" Bash "sed -i.bak 's/\$/x/' $USERHOME/.profile"
+  expect_allow "sed explicit expression" Bash "sed -i '' -e 's/\$/x/' $USERHOME/.profile"
+  expect_deny "sed calculated target" primary-write Bash 'sed -i "" s/a/b/ "$(target)"'
   expect_allow "host move" Bash 'mv ~/.local/bin/old ~/.local/bin/new'
   expect_allow "bounded host delete" Bash 'rm -rf ~/.cache/old-tool'
   expect_deny "host still protects project" primary-write-project Write "$PRIMARY/projects/foo/x"
