@@ -284,7 +284,7 @@ install_hooks() {
     echo "error: worktree is not a directory: $wt" >&2
     return 1
   }
-  git -C "$wt" rev-parse --is-inside-work-tree >/dev/null || {
+  git -C "$wt" config --local --list >/dev/null 2>&1 || {
     echo "error: not a git worktree: $wt" >&2
     return 1
   }

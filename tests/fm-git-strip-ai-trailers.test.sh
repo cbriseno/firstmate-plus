@@ -259,15 +259,14 @@ test_unresolvable_project_hookspath_still_refuses() {
   make_repo "$repo"
   printf 'note\n' >>"$repo/README.md"
   git -C "$repo" add README.md
+  git -C "$repo" config core.hooksPath '~fm-no-such-user-6171/hooks'
   hooks="$TMP_ROOT/hooks-unresolvable"
   "$STRIP" install "$hooks" "$repo" || fail "install should succeed with an unresolvable core.hooksPath"
   head=$(git -C "$repo" rev-parse HEAD)
-  git -C "$repo" config core.hooksPath '~fm-no-such-user-6171/hooks'
   err=$(with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: unresolvable hooksPath' 2>&1) &&
     fail "a commit succeeded although the repository's hooks directory cannot be resolved"
-  assert_contains "$err" "failed to expand user dir" "the refusal did not name the invalid hook path"
+  assert_contains "$err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
   assert_equals 1 "$(printf '%s\n' "$err" | grep -c 'failed to expand user dir')" "git's lookup error was not shown exactly once"
-  git -C "$repo" config --unset-all core.hooksPath
   assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit still moved HEAD"
   pass "an unresolvable project core.hooksPath still refuses the commit"
 }
@@ -284,9 +283,8 @@ test_valueless_project_hookspath_still_refuses() {
   printf '[core]\n\thooksPath\n' >>"$repo/.git/config"
   err=$(with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: valueless hooksPath' 2>&1) &&
     fail "a commit succeeded although core.hooksPath has no value"
-  assert_contains "$err" "core.hookspath" "the refusal did not name the invalid hook setting"
+  assert_contains "$err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
   assert_equals 1 "$(printf '%s\n' "$err" | grep -c "missing value for 'core.hookspath'")" "git's lookup error was not shown exactly once"
-  git -C "$repo" config --unset-all core.hooksPath
   assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit still moved HEAD"
   pass "a valueless project core.hooksPath still refuses the commit"
 }
@@ -508,8 +506,12 @@ test_inherited_hookspath_env_does_not_decide_the_chain
 test_project_hook_generated_after_install_still_runs
 test_pane_hookspath_does_not_reroute_another_repository
 test_empty_project_hookspath_runs_no_repository_hook
-test_unresolvable_project_hookspath_still_refuses
-test_valueless_project_hookspath_still_refuses
+if [ "$(printf '%s\n' 2.40 "$(git version | cut -d' ' -f3)" | sort -V | head -n 1)" = 2.40 ]; then
+  test_unresolvable_project_hookspath_still_refuses
+  test_valueless_project_hookspath_still_refuses
+else
+  printf '%s\n' 'skip - Git < 2.40 rejects invalid hooksPath before the hook can run'
+fi
 test_repository_pre_push_runs_on_every_override_channel
 test_git_c_override_still_strips_and_chains_commit_hooks
 test_repository_hook_keeps_inherited_git_config
