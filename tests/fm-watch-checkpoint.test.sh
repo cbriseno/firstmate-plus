@@ -532,7 +532,7 @@ test_unchanged_queue_is_not_reannounced_on_ordinary_start() {
   local home out pid i
   home=$(make_home unchanged-queue)
   out="$home/out.txt"
-  append_wake "$home/state" check progress-reconciliation 'check: progress reconciliation required' || fail "append failed"
+  append_wake "$home/state" check decision:worker 'check: pending worker decision' || fail "append failed"
   FM_HOME="$home" FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 5 >"$out" 2>&1
   assert_contains "$(cat "$out")" 'check: rearm-resurface' "initial recovery missing"
   fm_test_track_watcher_state "$home/state"
@@ -549,7 +549,7 @@ test_unchanged_queue_is_not_reannounced_on_ordinary_start() {
   kill -TERM "$pid"
   wait "$pid" 2>/dev/null || true
   assert_not_contains "$(cat "$out")" 'check: rearm-resurface' "unchanged queue reannounced"
-  append_wake "$home/state" check changed 'check: new evidence' || fail "new append failed"
+  append_wake "$home/state" check captain-note:new 'check: new unread captain note' || fail "new append failed"
   FM_HOME="$home" FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 5 >"$out" 2>&1
   assert_contains "$(cat "$out")" 'check: rearm-resurface' "new queue state did not wake"
   pass "unchanged pending rows stay quiet across ordinary starts; new rows still wake"

@@ -1054,16 +1054,10 @@ _fm_recovery_marker_reopen_announced() {
     return 0
   fi
   case "$FM_RECOVERY_MARKER_TOKEN" in
-    announced:*)
-      # Old wait/progress reminders need no second recovery announcement.
-      # Other rows still recover an interrupted handling turn.
+    announced:handling:*)
+      # A restarted handling turn may have been interrupted. Downtime rows were
+      # already announced; only a durable append makes that episode pending again.
       if [ -s "$FM_WAKE_QUEUE" ] \
-        && { [ "${FM_RECOVERY_MARKER_TOKEN#announced:downtime:}" = "$FM_RECOVERY_MARKER_TOKEN" ] \
-          || awk -F '\t' '
-            !($3 == "check" && $4 == "progress-reconciliation") \
-              && !($3 == "stale" && $5 ~ /\(paused [0-9]+s, awaiting external - declared (pause,|paused\))/) { actionable=1 }
-            END { exit !actionable }
-          ' "$FM_WAKE_QUEUE"; } \
         && ! _fm_recovery_marker_write_locked "$marker" downtime ""; then
         fm_lock_release "$lock"
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
