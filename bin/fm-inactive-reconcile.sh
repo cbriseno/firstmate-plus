@@ -86,13 +86,15 @@
 # path share the same receipt store.
 # In a main home, a presentation-stage record is acknowledged by fm-wake-drain
 # only after its corresponding inactive-outcome wake is handled.
+# A pending main-home presentation is reminded at most once every four hours;
+# acknowledgement stops reminders. A new terminal ledger event is independent.
 # A receipt is intentionally independent of .hb-surfaced-* bookkeeping.
 #
 # New fm-terminal-outcome.v1 receipts contain schema, fingerprint, task_id,
 # incarnation, state, outcome_key, origin, phase, pr, created_epoch, and
-# notice_emitted, plus optional status_head and ledger_claim fields. The
-# inactive-path fingerprint binds only the spawn incarnation, task id, terminal
-# state, and PR text, never the child's last status line, so a child that keeps
+# notice_emitted, plus optional status_head, presentation_epoch, and ledger_claim fields. The
+# inactive-path fingerprint binds the spawn incarnation, task id, terminal
+# state, and PR text, plus the terminal ledger event in a main home, so a child that keeps
 # appending routine prose after one terminal outcome yields at most one parent
 # event across scans and restarts; the last line is retained in status_head as
 # evidence. The ledger-path fingerprint instead binds the incarnation, task id,
@@ -288,8 +290,16 @@ queue_notice_once() { # <record> <key> <payload>
 }
 
 queue_presentation() { # <record> <fingerprint> <payload>
-  local record=$1 fingerprint=$2 payload=$3
-  publish_actionable "inactive-outcome:$fingerprint" "$payload"
+  local record=$1 fingerprint=$2 payload=$3 now last rc=0
+  now=$(reconcile_now)
+  last=$(record_value "$record" presentation_epoch)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "$last" -eq 0 ] || [ "$((now - last))" -ge 14400 ] || return 1
+  publish_actionable "inactive-outcome:$fingerprint" "$payload" || rc=$?
+  if [ "$rc" -eq 0 ] || { [ "$rc" -eq 1 ] && [ "$last" -eq 0 ]; }; then
+    record_field_set "$record" presentation_epoch "$now" || return 2
+  fi
+  return "$rc"
 }
 
 last_activity_age() { # <meta> <status> <turn-ended>
@@ -523,7 +533,7 @@ report_child() { # <id>
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind terminal identity state_rc=0
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -557,11 +567,14 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   esac
   pr=$(pr_for_task "$meta")
   incarnation=$(meta_incarnation "$meta")
-  # The receipt identity binds structured fields only: a persistent child that
-  # keeps appending routine prose after one terminal outcome must not mint a
-  # fresh parent event per sentence. The last line stays in the record as
-  # status_head evidence.
-  fingerprint=$(sha256_text "$incarnation|$id|$state|$pr")
+  # Routine prose must not mint a fresh outcome per sentence. A main home's
+  # new terminal ledger event is distinct from the preceding presentation.
+  # The last line also stays in the record as status_head evidence.
+  identity="$incarnation|$id|$state|$pr"
+  if [ -z "$self" ] && terminal=$(child_terminal_ledger_line "$status"); then
+    identity="$identity|$terminal"
+  fi
+  fingerprint=$(sha256_text "$identity")
   if [ -n "$self" ]; then
     outcome_key="inactive-outcome-$self-$id-$state"
   else

@@ -176,6 +176,31 @@ test_main_direct_terminal_presentation_receipt() {
   pass "main direct terminal presentation has a durable receipt"
 }
 
+test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes() {
+  local now out
+  make_world main-reminder
+  write_child "$MAIN" child 'done: first result'
+  now=$(date +%s)
+  out=$(FM_INACTIVE_RECONCILE_NOW="$now" FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup)
+  assert_contains "$out" 'actionable:' "the first terminal outcome did not wake"
+  # A consumed queue row with its presentation still pending must not re-wake
+  # on every scan; the existing receipt retains the reminder clock.
+  : > "$MAIN/state/.wake-queue"
+  out=$(FM_INACTIVE_RECONCILE_NOW="$((now + 1500))" FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup)
+  [ -z "$out" ] || fail "unchanged terminal outcome repeated after 25 minutes: $out"
+  out=$(FM_INACTIVE_RECONCILE_NOW="$((now + 14400))" FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup)
+  assert_contains "$out" 'actionable:' "a pending presentation was never reminded after four hours"
+  : > "$MAIN/state/.wake-queue"
+  printf 'done: second result\n' >> "$MAIN/state/child.status"
+  age "$MAIN/state/child.status"
+  out=$(FM_INACTIVE_RECONCILE_NOW="$((now + 14401))" FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup)
+  assert_contains "$out" 'actionable:' "a new terminal event was suppressed by the old reminder clock"
+  : > "$MAIN/state/.wake-queue"
+  out=$(FM_INACTIVE_RECONCILE_NOW="$((now + 15900))" FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup)
+  [ -z "$out" ] || fail "the second terminal outcome repeated without a change: $out"
+  pass "pending main outcomes remind after hours while a new terminal event wakes immediately"
+}
+
 # Away-posture regression: a branch-actor drain that consumes an
 # inactive-outcome check row must retire its terminal-outcome receipt exactly
 # like a main ack does. The 2026-09-25 away window on the supervision host
@@ -1144,6 +1169,7 @@ test_idle_in_flight_call_that_cannot_open_is_reported_once() {
 }
 
 test_main_direct_terminal_presentation_receipt
+test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published
 test_delivered_ledger_done_skips_git_gate
