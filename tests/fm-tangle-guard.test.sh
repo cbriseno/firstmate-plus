@@ -52,9 +52,15 @@ test_lib_classification() {
     [ "$out" = "$expect" ] || fail "$label: expected tangle='$expect', got '$out'"
   done <<'ROWS'
 on the default branch is healthy|default||
-on a feature branch is the tangle|feature|fm/readme-restructure-d3|fm/readme-restructure-d3
+local overlay is healthy|feature|local|
+on a feature branch is the tangle|feature|fm/x|fm/x
 detached HEAD on default is healthy (worktrees, secondmate homes)|detached||
 ROWS
+  git -C "$repo" checkout -q local
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$repo" branch -q -D main
+  out=$(fm_primary_tangle_branch "$repo" || true)
+  [ "$out" = local ] || fail "local without the default branch must be tangled: $out"
   # A non-git directory is not a tangle and must not error.
   out=$(fm_primary_tangle_branch "$TMP_ROOT" || true)
   [ -z "$out" ] || fail "non-git dir wrongly reported a tangle: '$out'"
@@ -74,6 +80,10 @@ test_guard_banner() {
 
   out=$(run_guard "$repo")
   assert_not_contains "$out" "WORKTREE TANGLE" "guard alarmed while primary was on main"
+
+  git -C "$repo" checkout -q -b local
+  out=$(run_guard "$repo")
+  assert_not_contains "$out" "WORKTREE TANGLE" "guard alarmed on local overlay"
 
   git -C "$repo" checkout -q --detach
   out=$(run_guard "$repo")

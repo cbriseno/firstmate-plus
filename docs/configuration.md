@@ -1803,7 +1803,7 @@ An absent required tool with an automated install path reports `MISSING:` with i
 
 **Checkout diagnostics**
 
-Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
+Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a tangled branch (see [worktree tangle detection](architecture.md#worktrees-not-branches-in-your-checkout)); follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 
 **Project refresh at startup**

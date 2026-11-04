@@ -11,8 +11,8 @@
 # stranding the primary on a feature branch (e.g. fm/readme-restructure-d3).
 #
 # fm_primary_tangle_branch detects exactly that and nothing else: a NAMED,
-# non-default branch checked out in the given root. It is deliberately silent for
-# every legitimate state - the primary on its default branch, and detached HEAD,
+# non-default branch other than a valid local overlay in the given root. It is silent for
+# every legitimate state - the primary on its default branch or local overlay, and detached HEAD,
 # which is how every linked worktree and secondmate home legitimately sits on the
 # default branch. Detached HEAD on the default is fine; a feature branch in a
 # primary checkout is the alarm.
@@ -36,7 +36,7 @@ fm_default_branch() {
 }
 
 # If the git checkout at <root> is tangled - on a NAMED branch that is not its
-# default branch - echo the offending branch name and return 0. For every healthy
+# default branch or a local overlay - echo the offending branch name and return 0. For every healthy
 # state (not a git work tree, detached HEAD, or already on the default branch)
 # echo nothing and return 1. Detached HEAD is how linked worktrees and secondmate
 # homes legitimately sit, so they never trip this; only a feature branch checked
@@ -48,6 +48,7 @@ fm_primary_tangle_branch() {
   [ -n "$cur" ] || return 1
   default=$(fm_default_branch "$root") || return 1
   [ "$cur" = "$default" ] && return 1
+  if [ "$cur" = local ] && git -C "$root" show-ref --verify --quiet "refs/heads/$default"; then return 1; fi
   printf '%s\n' "$cur"
   return 0
 }
