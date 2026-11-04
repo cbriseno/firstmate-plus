@@ -72,7 +72,7 @@
 #      own under the shared ancestry-or-trusted-id verdict exits with a read-only
 #      diagnostic instead of blocking a session that cannot repair supervision
 #      without stealing ownership;
-#   3. otherwise wait briefly (FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, default 800ms)
+#   3. otherwise wait briefly (FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, default 30000ms)
 #      for the auto-arm to claim this home (a live OPEN generation claim in the
 #      state/.claude-autoarm-epoch ledger - fm_autoarm_claim_open - or a legacy
 #      build's lock-holding claim under the legacy abandonment proof) or to
@@ -102,10 +102,10 @@ GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
 CURSOR_MODE=0
-SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
+SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-30000}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
-case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; esac
+case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=30000 ;; esac
 case "$EPOCH_FRESH" in ''|*[!0-9]*|0) EPOCH_FRESH=15 ;; esac
 case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
 
@@ -528,8 +528,10 @@ failure_episode_verified() {
   esac
 }
 
+# Bound elapsed time too: predicate work can dominate the poll sleeps under load.
+sync_deadline=$((SECONDS + (SYNC_WAIT_MS + 999) / 1000))
 i=0
-while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
+while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ] && [ "$SECONDS" -lt "$sync_deadline" ]; do
   if autoarm_owns_recovery; then
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
       fm_failure_episode_reset "$STATE" || exit 2

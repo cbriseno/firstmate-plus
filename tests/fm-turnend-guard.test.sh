@@ -2027,25 +2027,39 @@ test_hook_claude_mode_allow_resets_budget() {
 }
 
 test_hook_claude_mode_waits_for_late_claim() {
-  local dir helper out status holder
+  local dir helper out status open_status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-wait")
   : > "$dir/state/task1.meta"
-  (
-    sleep 0.4
-    sleep 60 &
-    record_autoarm_owner "$dir" $!
-    printf '%s\n' $! > "$dir/holder.pid"
-    wait
-  ) &
+  printf '%s\n' "$$" > "$dir/state/.lock"
+  # Publish a genuine generation after the old 800ms window, with a reachable owner.
+  FM_STATE_OVERRIDE="$dir/state" bash -c '
+    sleep 5
+    . "$1"
+    fm_autoarm_claim_next "$FM_STATE_OVERRIDE" 300 || exit 1
+    while :; do sleep 0.1; done
+  ' _ "$dir/bin/fm-wake-lib.sh" &
   helper=$!
-  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 run_hook_claude "$dir" false); status=$?
-  holder=$(cat "$dir/holder.pid" 2>/dev/null || true)
-  kill "$holder" 2>/dev/null || true
+  out=$(run_hook_claude "$dir" false); status=$?
+  FM_STATE_OVERRIDE="$dir/state" bash -c '. "$1"; fm_autoarm_claim_open "$FM_STATE_OVERRIDE" 300' \
+    _ "$dir/bin/fm-wake-lib.sh"; open_status=$?
   kill "$helper" 2>/dev/null || true
   wait "$helper" 2>/dev/null || true
-  expect_code 0 "$status" "--claude must wait briefly for a late auto-arm claim instead of forcing a continuation"
+  expect_code 0 "$open_status" "the delayed generation must really be open when the guard returns"
+  expect_code 0 "$status" "the default wait must accept a slow claim without forcing a continuation"
   [ -z "$out" ] || fail "--claude late-claim wait produced output: $out"
-  pass "fm-turnend-guard --claude: bounded claim wait avoids a token-consuming forced continuation"
+  assert_absent "$dir/state/.turnend-claude-blocks" "late recovery consumed the block budget"
+  pass "fm-turnend-guard --claude: default wait accepts a slow open generation"
+}
+
+test_hook_claude_mode_default_wait_blocks_absent_autoarm() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-default-absent")
+  : > "$dir/state/task1.meta"
+  out=$(run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "the default wait must still block without a watcher or auto-arm"
+  assert_contains "$out" 'TURN WOULD END BLIND' "the absent-autoarm alarm disappeared"
+  assert_contains "$out" 'Stop-owned auto-arm did not claim' "the absent-autoarm diagnosis disappeared"
+  pass "fm-turnend-guard --claude: default wait keeps genuine missing supervision loud"
 }
 
 test_hook_claude_mode_secondmate_reblocks_like_primary() {
@@ -2382,6 +2396,7 @@ test_hook_claude_mode_fail_open_requires_notice_and_failure_epoch
 test_hook_claude_mode_away_mode_never_uses_stop_autoarm_fail_open
 test_hook_claude_mode_allow_resets_budget
 test_hook_claude_mode_waits_for_late_claim
+test_hook_claude_mode_default_wait_blocks_absent_autoarm
 test_hook_claude_mode_secondmate_reblocks_like_primary
 test_hook_away_daemon_allows_between_watcher_cycles
 test_hook_away_daemon_allows_over_dead_watcher_lock
