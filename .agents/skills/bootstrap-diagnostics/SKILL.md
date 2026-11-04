@@ -10,7 +10,7 @@ metadata:
 
 # bootstrap-diagnostics
 
-Handle each printed line as below, before dispatching work that depends on it.
+Handle each printed line as below, before dispatching work that depends on it; delegate diagnosis beyond the small or trivial response under `AGENTS.md` section 1.
 The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header; this playbook owns the response to actionable lines.
 The session-start rules in `session-start-recovery` still bind: detect, then consent, then install or upgrade - never change a tool the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
 When any diagnostic needs captain attention, report the plain consequence and requested action using `AGENTS.md` section 9's captain-facing translation contract; do not name the diagnostic label unless the captain needs to paste it into a command or issue.

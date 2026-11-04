@@ -138,6 +138,7 @@ Conciseness is still your job - lean on the auto-split only when the answer trul
 
 Do not attach an image for prose.
 Images are only for actual visual artifacts - a generated illustration, a screenshot, a diagram - never a substitute for writing the answer.
+Delegate their creation and any iterative discussion under `AGENTS.md` section 9, then relay the worker's concise result within the public-safety limits above.
 
 ## Procedure
 

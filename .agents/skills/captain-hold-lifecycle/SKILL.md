@@ -11,12 +11,12 @@ metadata:
 
 A decision is not a separate thing: it is simply a task waiting on the captain.
 The one primitive is an ordinary backlog task held for the captain through `bin/fm-captain-hold.sh hold`; its identity is the task id, and that wrapper owns the deterministic mechanics this policy relies on.
-The agent performs the semantic inventory because scripts must not infer captain calls from report prose, visual-review artifacts, terminal output, or chat.
+The originating worker performs the semantic inventory under `AGENTS.md` section 1 and returns the concise result; scripts must not infer captain calls from report prose, visual-review artifacts, terminal output, or chat.
 
 ## Policy
 
 Every unresolved question that belongs to the captain and is discovered while producing, reading, presenting, or ending an investigation or visual review must be carried by a captain-held task in the authoritative backlog of the home that owns the originating work before that work or review may be treated as complete.
-For a Lavish board-backed handoff, pass the reply through `bin/fm-procevent-lavish.sh arm --agent-reply-file` before appending the status; the adapter owns version-specific acceptance ordering.
+For a Lavish board-backed handoff, the hosting worker passes its reply through the crew-hosted contract before appending status; `AGENTS.md` section 9 owns delegation and the adapter owns version-specific acceptance ordering.
 Prefer holding the work item the question gates over minting a new row; create a new task only when no work item exists to hold.
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
 Keep the reason a short plain summary, and put the card the captain answers in the structured hold fields: `--context`, `--question`, one `--option` per choice, `--recommended`, and `--link` to the report.
@@ -54,7 +54,7 @@ An unbound source and a key that names no captain-held task both simply feed not
 One answer value is reserved and closes nothing: `reconcile` means "go re-check reality", never "the captain answered", so the shared intake refuses it from every channel and creates nothing.
 A bound captured source uses a separate seam: its adapter omits reconcile from keyed answers and emits the selected task id through `reconciles`, the generic runner feeds that into `reconcile-requests`, and the intake verifies the source binding and the local captain-held task before filing the durable board request.
 A remote-secondmate card whose task is absent from the main backlog therefore remains announced but cannot create a main-home request; owner-aware request and mutation routing to the authoritative secondmate home is a separate follow-up.
-That board-created request is yours to work off in the turn that receives it: `bin/fm-captain-hold.sh reconcile close <id> --evidence-file <path>` records the EVIDENCE and closes a moot call, while `reconcile note <id> --note-file <path>` annotates a genuinely active call and leaves it held.
+Delegate that board-created re-check to the hosting worker and apply or delegate its resulting disposition: `bin/fm-captain-hold.sh reconcile close <id> --evidence-file <path>` records the EVIDENCE and closes a moot call, while `reconcile note <id> --note-file <path>` annotates a genuinely active call and leaves it held.
 Both outcomes refuse unless that task still has the pending request created by the captain's board selection, so neither is a standalone way to mutate a captain call.
 A normal captain answer also retires any pending request because the call is settled, including close, release, and idempotent replay paths.
 A retirement failure makes the command fail without reversing the already-durable answer, close, or note, and `reconcile list` keeps the surviving request visible for retry.

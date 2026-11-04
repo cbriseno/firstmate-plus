@@ -15,6 +15,7 @@ metadata:
 Sweep this session for durable knowledge and open-work record state that exist only in conversation, then leave the next session with a compact current operating map rather than an accumulating journal.
 Memory entries are tiered and decay between passes, and stale material retires to a cold archive instead of being deleted.
 This skill writes only through the existing Firstmate ownership and write boundaries.
+Keep a trivial session-fact capture direct; delegate audits, multi-file review, and extensive rewriting with the relevant visible facts under `AGENTS.md` section 1.
 
 ## Memory tiers and entry markers
 

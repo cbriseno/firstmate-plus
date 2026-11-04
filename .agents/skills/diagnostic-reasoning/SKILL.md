@@ -11,7 +11,7 @@ metadata:
 
 Use this procedure before scoping a reported bug and before acting on a diagnostic report.
 This skill is the single owner of Firstmate's bug-diagnosis reasoning procedure.
-Firstmate applies it when briefing delegated investigation and evaluating the resulting evidence, without taking over project-specific investigation itself.
+The subordinate performs this procedure and returns its result and concise evidence summary; firstmate uses that summary to scope or route work under `AGENTS.md` section 1.
 
 ## Establish the observed behavior
 

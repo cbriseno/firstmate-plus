@@ -17,12 +17,8 @@ Firstmate registers a source, keeps working, and is woken when that process comp
 ## Arming a source
 
 Use the adapter, not the generic runner, for a real source.
-Before either Lavish arm form below, open the artifact with `lavish-axi` so its saved session can route the listener; the [operating contract](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns the prerequisite and refusal boundary.
-For a Lavish review artifact firstmate owns:
-
-```sh
-bin/fm-procevent-lavish.sh arm <artifact.html>
-```
+Delegate every Lavish artifact to a scout or ship under `AGENTS.md` section 9.
+The hosting worker opens it with `lavish-axi` before arming; the [operating contract](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns the prerequisite and refusal boundary.
 
 A worker-owned board uses `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and re-arms with its reply after each nonterminal round; the existing handled marker is the acknowledgement.
 Arm it once, then re-arm only when a round is actually waiting: arming again with nothing to acknowledge is refused.
@@ -113,6 +109,7 @@ The crew-hosted recovery ordering and arm-and-acknowledge rule are owned by the 
   A task-owned empty terminal round instead reaches its owner's steering inbox for conclusion, as the crew-hosted contract requires.
   A board close carrying a real answer, and every other result, still wakes its owner unchanged.
   Never read the absence of a wake as proof a review is still open; ask the source, not the queue.
+: Route any legacy firstmate-owned Lavish capture to a hosting worker, preserving its exact result and pending acknowledgement; do not attend the discussion in the primary.
 : A Lavish wake whose source id matches `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"` is a bearings board result; load the `bearings` skill's board-wake handling regardless of which answer kinds the result contains.
 : A `when` wake carries the watch's one terminal captured outcome and may be re-announced until handled: `bin/fm-procevent-when.sh classify <result-file>` returns `fired` (relay the success and its output); `action-failed` (relay the captured error and decide recovery); `condition-error`, `never-true`, or `rejected` (the watch stopped safely without acting - report why and decide whether to re-arm); or `ambiguous` (the action was claimed but its outcome was never captured - verify its effect manually before anything else). Every `when` outcome is terminal and the action is never retried automatically, so after handling and the generic acknowledgement above, run `bin/fm-procevent-when.sh retire <name>` to clean the watch's private records before any re-arm.
 : A `quota` wake carries one terminal quota-check outcome: `bin/fm-procevent-quota.sh classify <result-file>` returns `low`, `exhausted`, `error`, or `unknown`. Report the provider and captured quota state, decide whether the active work should continue or move, then use the generic acknowledgement above. Re-arm explicitly if continued monitoring is needed.
@@ -129,7 +126,7 @@ The crew-hosted recovery ordering and arm-and-acknowledge rule are owned by the 
 
 `unattended Lavish board` (queue keys `procevent:<source-id>:unattended:<episode>:<reminder>`)
 : This is a coverage warning, not captured feedback; do not invent a result path or acknowledge a round from this wake.
-: Follow the payload's ownership evidence: recover or steer the hosting worker, verify an open round is being handled, or arm a firstmate-owned board through this adapter.
+: Follow the payload's ownership evidence: recover or steer the hosting worker, verify an open round is being handled, or dispatch a worker to re-host an unowned or legacy firstmate-owned board under the crew-hosted contract.
 : Keep the existing crew-hosted acknowledgement, reply, terminal, and answer contracts; the [operating contract](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns discovery and its boundaries.
 : A coverage-unavailable warning instead requires the scan named in its payload to diagnose the discovery failure.
 
