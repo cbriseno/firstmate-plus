@@ -526,3 +526,60 @@ test_quiet_close_leaves_a_retired_episode_retired
 test_quiet_close_keeps_a_handling_episode_open_without_reannouncing
 test_stop_before_the_bound_still_publishes_downtime
 test_supervision_loop_lands_each_delivery_on_one_wake
+
+# Exercise the ordinary watcher start, which used to reopen the same old queue.
+test_unchanged_queue_is_not_reannounced_on_ordinary_start() {
+  local home out pid i
+  home=$(make_home unchanged-queue)
+  out="$home/out.txt"
+  append_wake "$home/state" check progress-reconciliation 'check: progress reconciliation required' || fail "append failed"
+  FM_HOME="$home" FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 5 >"$out" 2>&1
+  assert_contains "$(cat "$out")" 'check: rearm-resurface' "initial recovery missing"
+  fm_test_track_watcher_state "$home/state"
+  FM_HOME="$home" FM_CHECK_INTERVAL=999999 FM_POLL=1 \
+    bash "$ROOT/bin/fm-watch.sh" >"$out" 2>&1 &
+  pid=$!
+  wait_for_checkpoint_lock "$home" || fail "ordinary watcher did not start"
+  i=0
+  while [ "$i" -lt 30 ]; do
+    is_live_non_zombie "$pid" || fail "unchanged queue reannounced: $(cat "$out")"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -TERM "$pid"
+  wait "$pid" 2>/dev/null || true
+  assert_not_contains "$(cat "$out")" 'check: rearm-resurface' "unchanged queue reannounced"
+  append_wake "$home/state" check changed 'check: new evidence' || fail "new append failed"
+  FM_HOME="$home" FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 5 >"$out" 2>&1
+  assert_contains "$(cat "$out")" 'check: rearm-resurface' "new queue state did not wake"
+  pass "unchanged pending rows stay quiet across ordinary starts; new rows still wake"
+}
+
+test_progress_notice_changes_once_per_obligation_state() {
+  local home out status
+  home=$(make_home progress-state)
+  out="$home/out.txt"
+  printf '## In flight\n\n- [ ] worker - Worker\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  printf 'kind=scout\n' > "$home/state/worker.meta"
+  printf 'working: assignment started\n' > "$home/state/worker.status"
+  # Keep the signal scan from preempting the slow progress check.
+  FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_wake_status_mark_current "$2" "$2/worker.status"' _ "$ROOT" "$home/state"
+  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 10 >"$out" 2>&1
+  assert_contains "$(cat "$out")" 'check: progress reconciliation required' "initial obligation missing"
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" >"$home/drain.txt" 2>"$home/drain.err"
+  ack_presented_wakes "$home" "$home/drain.err" || fail "could not acknowledge the progress notice"
+  status=0
+  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 3 >"$out" 2>&1 || status=$?
+  expect_code 124 "$status" "unchanged obligation checkpoint"
+  assert_not_contains "$(cat "$out")" 'progress reconciliation required' "unchanged obligation repeated"
+  : > "$home/state/worker.status"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_wake_status_mark_current "$2" "$2/worker.status"' _ "$ROOT" "$home/state"
+  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 3 >"$out" 2>&1 || true
+  printf 'working: assignment resumed\n' > "$home/state/worker.status"
+  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 10 >"$out" 2>&1
+  assert_contains "$(cat "$out")" 'check: progress reconciliation required' "returned obligation did not wake"
+  pass "progress wakes once per obligation state and returns after that state clears"
+}
+
+test_unchanged_queue_is_not_reannounced_on_ordinary_start
+test_progress_notice_changes_once_per_obligation_state

@@ -408,6 +408,8 @@ Snapshots settle pending pauses when their worker is confirmed gone, preserving 
 Progress combines explicit semantic steps with gate bindings verified by existing delivery owners; missing, legacy and stale declarations remain distinguishable from a current measurement.
 [`fm-tasks-axi.sh` help](../bin/fm-tasks-axi.sh) owns the checkpoint, phase, replay, reconciliation and bounded publication contract; card text never renews a milestone measurement.
 The existing watcher and wake-drain surface missed checkpoint obligations without model polling; an unchanged honest checkpoint may retain the same completed count.
+A launch with no worker status beyond its recorded spawn boundary yet owes no checkpoint, because startup dialogs can still prevent the assignment from beginning.
+The watcher announces each changed obligation set once; the drain keeps outstanding obligations inspectable until an honest checkpoint clears them.
 Branch readiness, integration and installed activation are separate facts; local checks and installed acceptance remain explicit declarations where no trusted instrument exists.
 Normalization uses the work owner's dry-run manifest, expected source values, exact backup and guarded rollback; it never merges project identities or removes work.
 The hierarchy mode can promote an existing subproject to a logical project root independently of repository routing, retaining canonical keys, aliases, stored task membership and original control protections.

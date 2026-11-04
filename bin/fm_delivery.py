@@ -772,6 +772,10 @@ def progress_check(home):
             if task_id in policy.rows and policy.progress_reporting_held(task_id):
                 continue
             status = home / 'state' / (task_id + '.status')
+            # Spawn records the prior log boundary before startup dialogs.
+            start = re.search(r'^status_start_bytes=([0-9]+)$', raw, re.M)
+            if not status.exists() or status.stat().st_size <= (int(start[1]) if start else 0):
+                continue
             newest = max(meta.stat().st_mtime, status.stat().st_mtime if status.exists() else 0)
             if time.time() - newest < max(0, grace):
                 continue

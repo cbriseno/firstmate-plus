@@ -51,6 +51,13 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         text = cli('progress-check')
         check(isinstance(text, str), text)
         return {line.split(':', 1)[0]:line for line in text.splitlines()}
+    (home / 'state/startup.meta').write_text('kind=scout\n')
+    (home / 'state/startup.status').touch()
+    check('startup' not in notices(), 'startup dialog with empty status owes no worker checkpoint')
+    prior = 'working: previous worker attempt\n'
+    (home / 'state/relaunch.meta').write_text('kind=scout\nstatus_start_bytes=%d\n' % len(prior))
+    (home / 'state/relaunch.status').write_text(prior)
+    check('relaunch' not in notices(), 'relaunch dialog does not inherit the prior attempt reporting obligation')
     for name in names:
         (home / 'state' / (name + '.meta')).write_text('kind=scout\n')
         (home / 'state' / (name + '.status')).write_text(

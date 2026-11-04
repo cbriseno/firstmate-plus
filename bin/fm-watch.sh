@@ -1435,6 +1435,7 @@ _wedge_cap_rollback() {
 # without a scoped declaration keep the timestamp body. Shared by the
 # declared-pause absorb and the wedge deferrals so their cadences cannot drift
 # apart; each caller owns its own marker and reason.
+# A scoped recheck already pending for the same declaration is not appended again.
 # Returns without waking while either the absorb or the throttle is inside the
 # window; wake() itself exits the cycle, exactly as it does inline. An optional
 # <min-age> replaces the cadence as the absorb-age gate for one call (0 lets a
@@ -1442,6 +1443,11 @@ _wedge_cap_rollback() {
 # throttle keeps the cadence between repeats.
 resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age]
   local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS}
+  # Keep one pending recheck per declaration; acknowledgement permits its long cadence again.
+  if [ -n "$scope" ] && [ "$(cat "$throttle" 2>/dev/null || true)" = "$scope" ] \
+    && fm_wake_queued_keys stale | grep -Fxq "$win"; then
+    return 0
+  fi
   if [ -z "$scope" ] || [ ! -e "$throttle" ] \
     || [ "$(cat "$throttle" 2>/dev/null || true)" = "$scope" ]; then
     [ "$age" -ge "$min_age" ] || return 0
@@ -3623,10 +3629,13 @@ while :; do
     # durable queue. No extra watcher, agent polling or inferred substeps.
     progress_obligations=$(FM_HOME="$FM_HOME" FM_SIGNAL_GRACE="$SIGNAL_GRACE" \
       "$SCRIPT_DIR/fm-tasks-axi.sh" progress-check 2>/dev/null) || progress_obligations=
-    if [ -n "$progress_obligations" ]; then
-      if ! fm_wake_queued_keys check | grep -Fxq progress-reconciliation; then
+    progress_changed=0
+    if [ "$progress_obligations" != "$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)" ]; then
+      if [ -n "$progress_obligations" ]; then
         fm_wake_append check progress-reconciliation "check: progress reconciliation required: $progress_obligations" || exit 1
+        progress_changed=1
       fi
+      printf '%s' "$progress_obligations" > "$STATE/.progress-reconciliation" || exit 1
     fi
     rejected_checks=
     contribution_check_output=
@@ -3753,7 +3762,7 @@ EOF
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"
     fi
-    if [ -n "$progress_obligations" ]; then
+    if [ "$progress_changed" -eq 1 ]; then
       wake "check: progress reconciliation required"
     fi
   fi
