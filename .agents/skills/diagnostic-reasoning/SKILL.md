@@ -45,6 +45,9 @@ Compare the final explanation against the proven path and show why the proposed 
 
 A diagnosis brief should ask for the reproduction, trigger/mask/symptom separation, divergent and proven path comparison, relevant history, smallest counterfactual, and disconfirming evidence in the report.
 A diagnostic report should distinguish observed facts from hypotheses and state any unresolved uncertainty that could change the recommended scope.
+Before accepting "not reproduced", require a brief coverage matrix for relevant runtime/device variants, environment, time or zone, account/data state, and trigger path.
+Mark each dimension tested, excluded with a reason, or unknown, and name the untested dimensions that limit the negative result.
+Scale coverage to the reported defect rather than mechanically testing every combination.
 Before acting on the report, verify that its claimed cause explains the end-user reproduction and the proven path without relying on an untested masking condition.
 If a load-bearing element is missing, route a focused follow-up investigation instead of treating confidence or implementation detail as proof.
 A diagnosis or implementation-ready recommendation is evidence, not authorization to change code.
