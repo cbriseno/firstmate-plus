@@ -651,6 +651,9 @@
 #   identity is owned by the parent home that holds its task metadata, while the
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
+# FM_SPAWN_EXTENSION is an optional trusted shell file, empty by default.
+# It may define fm_spawn_extension for publisher-check, git-hook-args and launch.
+# git-hook-args may append to strip_args; launch may update LAUNCH.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -674,6 +677,12 @@ esac
 
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+
+fm_spawn_extension() { :; }
+if [ -n "${FM_SPAWN_EXTENSION:-}" ]; then
+  # shellcheck source=/dev/null
+  . "$FM_SPAWN_EXTENSION"
+fi
 
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
@@ -3898,6 +3907,7 @@ if [ "$KIND" = ship ]; then
         exit 1
       fi
     fi
+    fm_spawn_extension publisher-check external || exit 1
   fi
   # Self-repository publication gate (bin/fm-role-lib.sh): a ship task whose
   # project is firstmate's own repository may launch a publishing contract only
@@ -6227,6 +6237,7 @@ elif [ "$EXTERNAL_REVIEW" = 1 ]; then
   [ -z "$EXTERNAL_BACKUP_REMOTE" ] || guard_args+=("$EXTERNAL_BACKUP_REMOTE" "$EXTERNAL_BACKUP_PREFIX")
   strip_args=()
   [ "$KEEP_AI_TRAILERS" = 0 ] || strip_args=(--no-strip)
+  fm_spawn_extension git-hook-args || exit 1
   { "$FM_ROOT/bin/fm-git-push-guard.sh" write "${guard_args[@]}" \
     && "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh" install "${strip_args[@]+"${strip_args[@]}"}" \
       --push-guard "$PUSH_GUARD_FILE" "$GIT_HOOKS_DIR" "$WT"; } || {
@@ -6237,6 +6248,7 @@ elif [ "$EXTERNAL_REVIEW" = 1 ]; then
 else
   strip_args=()
   [ "$KEEP_AI_TRAILERS" = 0 ] || strip_args+=(--no-strip)
+  fm_spawn_extension git-hook-args || exit 1
   "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh" install "${strip_args[@]+"${strip_args[@]}"}" "$GIT_HOOKS_DIR" "$WT" || {
     echo "error: could not install the git hooks for $ID" >&2
     exit 1
@@ -6744,6 +6756,7 @@ fi
 # kill switch below it is an export statement, so it survives a compound raw
 # launch and the launch-env-allowlist `env -i` wrapper.
 LAUNCH="export FM_TASK_INBOX=$(shell_quote "$STATE_REAL/$ID.inbox"); $LAUNCH"
+fm_spawn_extension launch || exit 1
 LAUNCH="export COMPACT_ADVISER_DISABLE=1; $LAUNCH"
 # When the live-harness gate has exported DISABLE_AUTOUPDATER into this spawn's
 # own environment, carry it into the launch command text so Claude Code's

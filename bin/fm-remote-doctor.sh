@@ -231,7 +231,7 @@ resolve_launch_agent_shell() {
   user=$(id -un 2>/dev/null || true)
   if [ -n "$user" ] && command -v dscl >/dev/null 2>&1 && command -v perl >/dev/null 2>&1; then
     raw=$(perl -e '$SIG{ALRM} = sub { exit 124 }; alarm 2; exec @ARGV' \
-      dscl . -read "/srv/$user" UserShell 2>/dev/null || true)
+      dscl . -read "/Users/$user" UserShell 2>/dev/null || true)
     shell=$(printf '%s\n' "$raw" | awk '
       /^UserShell:[[:space:]]+/ {
         sub(/^UserShell:[[:space:]]+/, "")

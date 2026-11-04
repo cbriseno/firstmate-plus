@@ -2456,10 +2456,15 @@ task_pid_list_contains() {  # <pid-list> <pid>
 }
 
 task_process_is_service() {  # <pid>
+  local command
   if command -v lsof >/dev/null 2>&1 \
      && lsof -nP -a -p "$1" -iTCP -sTCP:LISTEN -t 2>/dev/null | grep -Fxq "$1"; then
     return 0
   fi
+  command=$(ps -p "$1" -o args= 2>/dev/null) || return 1
+  case " $command " in
+    *' web/serve.py managed '*|*'/web/serve.py managed '*) return 0 ;;
+  esac
   return 1
 }
 
@@ -2543,7 +2548,7 @@ reap_task_backend_process_group() {  # <label>
 }
 
 # Reap every process rooted (by cwd) under this task's own worktree or tasktmp
-# except TCP listeners, which warn and stay alive.
+# except TCP listeners and Deck managed instances, which warn and stay alive.
 # - both unique per task and never shared - before either is removed. TERM
 # first, then KILL after a short grace period for anything still alive; a
 # process that exits on its own between the two passes is simply absent from

@@ -628,6 +628,10 @@
     {
       "path": "distribution/README.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/public-export.md",
+      "audience": "operator-current"
     }
   ]
 }

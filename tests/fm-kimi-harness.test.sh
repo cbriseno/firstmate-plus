@@ -297,7 +297,7 @@ EOF
 test_kimi_launch_then_send_is_verified() {
   local id rec out rc launch pointer brief_real meta task_tmp launch_dir launch_file launch_base
   id="kimi-success-z1-$$"
-  task_tmp="/tmp/fm-$id"
+  task_tmp="${TMPDIR:-/tmp}/fm-$id"
   KIMI_RUNTIME_TASK_TMP=$task_tmp
   rm -rf "$task_tmp"
   rec=$(make_spawn_case success "$id")
@@ -371,12 +371,12 @@ kimi_launch_dir() {
   else
     fail "test needs shasum or sha256sum"
   fi
-  printf '/tmp/fm-%s+%s' "$id" "$hash"
+  printf '%s/fm-%s+%s' "${TMPDIR:-/tmp}" "$id" "$hash"
 }
 
 kimi_typed_launch_file() {
   local log=$1 src
-  src=$(grep -o "\. '/tmp/fm-[^']*'" "$log" | tail -1)
+  src=$(grep -o "\. '[^']*/fm-[^']*'" "$log" | tail -1)
   src=${src#". '"}
   src=${src%"'"}
   [ -n "$src" ] || fail "spawn did not type a staged launch source line"
@@ -386,7 +386,7 @@ kimi_typed_launch_file() {
 test_kimi_spawn_refuses_shared_task_temp_root() {
   local id rec out rc task_tmp launch_dir launch_file stale_file
   id="kimi-sharedtmp-z1-$$"
-  task_tmp="/tmp/fm-$id"
+  task_tmp="${TMPDIR:-/tmp}/fm-$id"
   KIMI_RUNTIME_TASK_TMP=$task_tmp
   rm -rf "$task_tmp"
   mkdir "$task_tmp"
@@ -651,7 +651,7 @@ test_kimi_teardown_removes_pointer_and_registry_token() {
   read_spawn_record "$rec"
   launch_dir=$(kimi_launch_dir "$id" "$HOME_DIR")
   KIMI_RUNTIME_LAUNCH_DIR=$launch_dir
-  foreign_dir="/tmp/fm-$id+zzzzzzzz"
+  foreign_dir="${TMPDIR:-/tmp}/fm-$id+zzzzzzzz"
   out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
   rc=$?
   expect_code 0 "$rc" "Kimi spawn should succeed before teardown"

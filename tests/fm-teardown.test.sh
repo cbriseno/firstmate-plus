@@ -4902,10 +4902,14 @@ test_missing_record_row_repair() {
 }
 
 test_leaked_worktree_process_is_reaped() {
-  local case_dir rc pid server service_ok=0 i
+  local case_dir rc pid server managed service_ok=0 managed_ok=0 i
   case_dir=$(make_case leaked-process-reap)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
+  mkdir -p "$case_dir/wt/web"
+  printf 'import time; time.sleep(300)\n' > "$case_dir/wt/web/serve.py"
+  ( cd "$case_dir/wt" && exec python3 web/serve.py managed ) &
+  managed=$!
   ( cd "$case_dir/wt" && exec python3 -c 'import socket,time,pathlib; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); pathlib.Path("listener-ready").touch(); time.sleep(300)' ) &
   server=$!
   for i in {1..50}; do
@@ -4914,7 +4918,7 @@ test_leaked_worktree_process_is_reaped() {
   done
   [ -f "$case_dir/wt/listener-ready" ] || fail 'temporary listener did not start'
   # Keep the landed-work check focused on the real fixture commit.
-  git -C "$case_dir/wt" add listener-ready
+  git -C "$case_dir/wt" add web/serve.py listener-ready
   git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -qm 'service fixture'
   git -C "$case_dir/wt" push -q origin HEAD
 
@@ -4932,9 +4936,11 @@ test_leaked_worktree_process_is_reaped() {
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   kill -0 "$server" 2>/dev/null && service_ok=1
-  kill "$server" 2>/dev/null || true
-  wait "$server" 2>/dev/null || true
+  kill -0 "$managed" 2>/dev/null && managed_ok=1
+  kill "$server" "$managed" 2>/dev/null || true
+  wait "$server" "$managed" 2>/dev/null || true
   assert_equals 1 "$service_ok" 'listening service survives teardown'
+  assert_equals 1 "$managed_ok" 'managed service survives teardown'
   assert_grep 'leaves service process' "$case_dir/stderr" 'service preservation warns'
   expect_code 0 "$rc" "leaked-process-reap: teardown should still succeed"
   if kill -0 "$pid" 2>/dev/null; then

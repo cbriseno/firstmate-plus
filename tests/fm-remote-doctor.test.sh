@@ -227,7 +227,7 @@ SH
 set -u
 [ "${FM_FAKE_DSCL_FAIL:-0}" != 1 ] || exit 1
 [ "${FM_FAKE_DSCL_HANG:-0}" != 1 ] || exec /bin/sleep 30
-if [ "${1:-}" = . ] && [ "${2:-}" = -read ] && [ "${4:-}" = UserShell ]; then
+if [ "${1:-}" = . ] && [ "${2:-}" = -read ] && [ "${3:-}" = "/Users/$(id -un)" ] && [ "${4:-}" = UserShell ]; then
   count_file="$FM_FAKE_STATE/dscl-count"
   count=$(cat "$count_file" 2>/dev/null || printf 0)
   count=$((count + 1))

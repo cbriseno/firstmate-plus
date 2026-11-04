@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "include": [
+    ".agents/",
+    ".claude/",
+    ".codex/",
+    ".cursor/",
+    ".github/",
+    ".greptile/",
+    ".grok/",
+    ".omp/",
+    ".opencode/",
+    ".pi/",
+    ".gitattributes",
+    ".gitignore",
+    ".no-mistakes.yaml",
+    ".tasks.toml",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "GROK_BOT.md",
+    "LICENSE",
+    "README.md",
+    "VISION.md",
+    "assets/",
+    "bin/",
+    "docs/",
+    "skills/",
+    "tests/"
+  ],
+  "exclude": [
+    ".env",
+    ".env.*",
+    "*/.env",
+    "*/.env.*",
+    "config/*",
+    "data/*",
+    "state/*",
+    "projects/*",
+    ".no-mistakes/*",
+    ".lavish/*",
+    ".tools/*",
+    "scratchpad*",
+    ".fm-secondmate-home",
+    ".fm-secondmate-parent",
+    "*/__pycache__/*",
+    "*.pyc",
+    ".claude/settings.local.json",
+    ".codex/config.toml",
+    ".DS_Store",
+    "*/.DS_Store"
+  ],
+  "required": [
+    "LICENSE",
+    "AGENTS.md",
+    "README.md",
+    "bin/fm-session-start.sh"
+  ],
+  "strip_managed_agents_blocks": [
+    "private-extension"
+  ]
+}
