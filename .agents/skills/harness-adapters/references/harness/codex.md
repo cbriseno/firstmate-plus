@@ -18,18 +18,28 @@ Verified on 2026-06-11 with codex-cli 0.139.0 unless a fact gives a newer versio
 | Marker | None; identity comes from ancestry, and `../../../bin/fm-harness.sh` is what keeps a retained foreign `CLAUDECODE` from renaming it. Verified on 2026-09-01 with codex-cli 0.152.0: the pane process is the `node` npm shim and the native `codex` binary runs as its foreground child, so a tool subprocess reaches the native name directly while the shim itself is identified from its script path. |
 
 A directory trust dialog appears on the first run for a repository root: "Do you trust the contents of this directory?"
-Accept it with Enter and verify the instructions begin processing.
+With the scoped operator approval required by `references/common/control-and-recovery.md`, accept the displayed directory-trust choice with Enter, then inspect for the separate hook-review dialog before verifying the instructions begin processing.
 The decision persists for the repository, so later worktrees of the same project skip it.
 
 ## Hook trust
 
 A second dialog, "Hooks need review - N hooks are new or changed", appears whenever the machine's `~/.codex/hooks.json` or a project's own `.codex/hooks.json` carries a hook Codex has not persisted trust for.
-It is unanswerable rather than merely inconvenient: its selection starts on "Review hooks", which is neither trusting nor declining, and Firstmate's key plane carries Enter, Escape and Ctrl-C with no arrow navigation.
+Its initial selection is "Review hooks", which is neither trusting nor declining.
+For the hook-review dialog observed on macOS, Down then Enter selected the acceptance path successfully; inspect the highlighted choice before Enter, because a different dialog or version may have a different ordering.
+Use that sequence only with operator approval covering the displayed hooks, through a backend that supports arrow keys; the supervisor cannot grant this security consent itself.
+If the choice or approval is unclear, leave the dialog for the operator rather than sending blind keys.
 Writing Codex's own trust store to pre-accept it would manufacture an operator consent that was never given.
 So crewmate and scout launches request that Codex disable its hook layer (`bin/fm-spawn.sh`'s launch template owns the flag), which is the opposite of `--dangerously-bypass-hook-trust` - that flag RUNS the untrusted hooks.
 A managed policy can override the requested disablement, so a worker can still encounter a policy-provided hook or its review; Firstmate does not modify the operator's Codex settings to bypass either outcome.
 A crewmate loses nothing: its turn-end signal is the `-c notify=` program on the same launch, and the Firstmate hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
-A secondmate is a primary in its own home and keeps its hooks, so an unanswerable modal there is still possible and is the operator's own hook review to settle.
+A secondmate is a primary in its own home and keeps its hooks, so hook review there can also require the operator's scoped consent.
+
+## Fresh host-task folders
+
+A projectless host worker starts in a new nonrepository scratch folder, so repository trust reused by later worktrees does not establish approval for that folder.
+Inspect directory trust and hook review separately before treating launch as assignment progress, using the corresponding sequences above only within recorded operator approval.
+Standing approval must cover the new folder scope and the actual hooks; a new task or supervisor decision does not broaden it.
+Do not prewrite Codex trust records or weaken managed policy to make startup appear ready.
 
 ## Skill popup
 
