@@ -444,6 +444,8 @@ test_not_open_key_refuses_before_send() {
     "$SEND" t4 --resolve-key mistyped "the answer" >/dev/null 2>"$err"; rc=$?
   [ "$rc" -ne 0 ] || fail "a not-open key should refuse"
   assert_contains "$(cat "$err")" "--resolve-key 'mistyped'" "the refusal should name the bad key"
+  assert_contains "$(cat "$err")" "firstmate owns steering" "the refusal should name the steering owner"
+  assert_contains "$(cat "$err")" "Next: inspect that task's OPEN DECISIONS" "the refusal should give one next action"
   assert_contains "$(cat "$err")" "nothing was sent" "the refusal should state nothing was sent"
   [ ! -s "$log" ] || fail "a refused answer still typed text: $(cat "$log")"
   [ ! -d "$home/state/t4.inbox" ] || fail "a refused answer still enqueued an inbox record"

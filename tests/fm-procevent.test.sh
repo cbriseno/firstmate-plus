@@ -1340,6 +1340,8 @@ if PATH="$REARM_BIN:$PATH" FM_HOME="$HREARM" \
 fi
 assert_contains "$(cat "$REARM_ROOT/idle-rearm.err")" "worker-11" \
   "the refused idle re-arm did not name the task that already holds the board"
+assert_contains "$(cat "$REARM_ROOT/idle-rearm.err")" "Next: leave the existing listener armed" \
+  "the refused idle re-arm did not name the valid next action"
 touch "$REARM_ROOT/release"
 PATH="$REARM_BIN:$PATH" pe "$HREARM" start "$rearm_id" >/dev/null 2>&1 || true
 wait_for "$REARM_ROOT/replies" || fail "the listener never posted the reply it was armed with"

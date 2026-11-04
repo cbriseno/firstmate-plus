@@ -604,7 +604,7 @@ cmd_register_task() {
   done < <(source_pending "$id")
   if [ "$adopting" -eq 0 ] && [ "$pending_rounds" -eq 0 ]; then
     fm_procevent_source_lock_release "$id"
-    die "cannot re-arm source $id: task $task already holds this board and no captured round is waiting to be acknowledged"
+    die "cannot re-arm source $id: owner is task $task; no captured round is waiting to be acknowledged. Next: leave the existing listener armed and wait for its next captured feedback round"
   fi
   # Each generation stages its reply under its own path, so nothing a failed
   # re-arm does can reach the reply the prior registration still references.
