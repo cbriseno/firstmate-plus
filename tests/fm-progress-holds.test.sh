@@ -109,6 +109,12 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
     with status.open('a') as stream:
         stream.write('resolved [key=review]: approved\nworking: resumed\n')
     check('active' in notices(), 'resolved decision restores missed-checkpoint wake')
+    inbox = home / 'state/active.inbox'
+    (inbox / 'handled').mkdir(parents=True)
+    (inbox / '001.msg').write_text('from-firstmate\n\nRefresh the checkpoint\n')
+    check('active' not in notices(), 'pending steer prevents another progress wake')
+    (inbox / '001.msg').rename(inbox / 'handled/001.msg')
+    check('active' in notices(), 'handled steer with missing progress still requires action')
     cli('presentation', 'active', '--presentation-file', str(draft))
     with status.open('a') as stream:
         stream.write('working: next boundary just after publication\n')

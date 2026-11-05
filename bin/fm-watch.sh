@@ -584,6 +584,8 @@ inbox_steer_check() {  # <window> <task>
       return 0
       ;;
   esac
+  # A live worker waiting for its own decision already has a status signal.
+  [ "$(status_worker_wait_verb "$STATE/$task.status")" != needs-decision ] || return 0
   watcher_capture "$backend" "$w" 40 "$(window_label "$w")" || WATCHER_CAPTURE=
   tail40=$WATCHER_CAPTURE
   if window_is_busy "$w" "$tail40"; then
@@ -591,8 +593,6 @@ inbox_steer_check() {  # <window> <task>
     if ! count=$(fm_task_inbox_record_busy "$STATE" "$task" "$rec"); then
       [ -f "$rec" ] || return 0
       reason="stale: $w (steering-inbox busy bookkeeping unwritable: ${rec%/*}/.busy-state cannot be written while $rec stays unhandled; inspect the inbox directory)"
-    elif [ "$count" -ge "$(fm_task_inbox_busy_max)" ]; then
-      reason="stale: $w (unread firstmate instruction: stuck-busy after $count consecutive busy-deferred due doorbells; $rec stays unhandled and no doorbell was typed; inspect the worker)"
     else
       return 0
     fi
@@ -2564,14 +2564,13 @@ stale_wait_record() {  # <window-key>
 captain_call_stale_bound() {  # <window-key> <task>
   local key=$1 task=$2
   STALE_WAIT_DECLARATION=
-  # An open decision already has its signal wake. Bound stale to one sighting
-  # for this declaration while authoritative state still confirms the wait.
+  # An open decision already has its signal wake; pane churn adds no work
+  # while authoritative state still confirms the wait.
   if status_has_open_needs_decision "$STATE/$task.status"; then
     case "$("$FM_CREW_STATE_BIN" "$task" 2>/dev/null)" in
       'state: parked '*)
         STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
-        [ "$(cat "$STATE/.paused-resurfaced-$key" 2>/dev/null || true)" = "$STALE_WAIT_DECLARATION" ]
-        return ;;
+        return 0 ;;
     esac
   fi
   task_captain_call_open "$task" || return 1

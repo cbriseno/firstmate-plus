@@ -785,10 +785,12 @@ def progress_check(home):
                 continue
             if view['evidence']['freshness'] != 'current':
                 # The status fold owns decision closure; a current worker
-                # question owes an answer before another progress checkpoint.
+                # question or pending steer precedes another checkpoint request.
                 wait = run_progress_probe(['bash', '-c',
-                    '. "$1/fm-classify-lib.sh"; [ "$(status_worker_wait_verb "$2")" = needs-decision ]',
-                    'progress-check', str(BIN), str(status)], 2)
+                    '. "$1/fm-classify-lib.sh"; . "$1/fm-task-inbox-lib.sh"; '
+                    '[ "$(status_worker_wait_verb "$2")" = needs-decision ] || '
+                    'fm_task_inbox_oldest_unhandled "$3" "$4" >/dev/null',
+                    'progress-check', str(BIN), str(status), str(home / 'state'), task_id], 2)
                 if wait.returncode == 0:
                     continue
                 lines.append(task_id + ': ' + view['evidence']['freshness'] + ' ('

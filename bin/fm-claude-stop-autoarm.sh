@@ -69,7 +69,8 @@
 #     to this generation.
 #     To this hook it is an arm that also takes away-posture wakes itself and
 #     ends its own park before the hook timeout with a "supervision-host:"
-#     line, which is actionable here like a wake line; its rewake banner
+#     line; empty rearm closes are acknowledged and reparked here, while
+#     the park boundary still renews the hook before its timeout. Its banner
 #     carries every "supervision-host:" line the host printed, in order, while
 #     its wake lines keep the arm's eight-line cap. A "supervision-host stood
 #     down:" close exits 0 silently, and a host that died without a close is
@@ -407,6 +408,11 @@ if fm_supervision_host_enabled "$CONFIG" claude; then
   HOST_MODE=1
   ACTIONABLE_RE='^(signal:|stale:|check:|heartbeat($|:)|supervision-host:)'
 fi
+# Empty recoveries may restart the host, but never extend this hook's park.
+HOST_PARK_SECONDS=${FM_SUPERVISION_HOST_PARK_SECONDS:-27000}
+case "$HOST_PARK_SECONDS" in ''|0*|*[!0-9]*) HOST_PARK_SECONDS=27000 ;; esac
+[ "$HOST_PARK_SECONDS" -lt 28800 ] 2>/dev/null || HOST_PARK_SECONDS=27000
+HOST_DEADLINE=$((SECONDS + HOST_PARK_SECONDS))
 attempt=0
 while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   # A superseded owner must not start or attach another watcher or mutate any
@@ -420,7 +426,9 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   OUT=$(mktemp "$STATE/.claude-autoarm-output.XXXXXX") || OUT=
   if [ "$HOST_MODE" -eq 1 ]; then
     HOST_RC=0
-    FM_SUPERVISION_HOST_AUTOARM_GEN=$MY_GEN FM_SUPERVISION_HOST_OWNER_PID=$$ \
+    HOST_REMAINING=$((HOST_DEADLINE - SECONDS))
+    [ "$HOST_REMAINING" -gt 0 ] || HOST_REMAINING=1
+    FM_SUPERVISION_HOST_PARK_SECONDS=$HOST_REMAINING FM_SUPERVISION_HOST_AUTOARM_GEN=$MY_GEN FM_SUPERVISION_HOST_OWNER_PID=$$ \
       FM_SUPERVISION_HOST_PRIMARY=claude FM_GUARD_GRACE="$GRACE" \
       "$SCRIPT_DIR/fm-supervision-host.sh" park >"${OUT:-/dev/null}" 2>&1 || HOST_RC=$?
   else
@@ -438,6 +446,25 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   ACTIONABLE=0
   if [ -n "$OUT" ]; then
     grep -Eq "$ACTIONABLE_RE" "$OUT" 2>/dev/null && ACTIONABLE=1
+  fi
+  # A mechanical close with no queued work needs only acknowledgement and
+  # another park. Keep this in the hook so it costs no model turn.
+  if [ "$ACTIONABLE" -eq 1 ] && [ "${HOST_RC:-0}" -eq 0 ] \
+    && ! grep -E "$ACTIONABLE_RE" "$OUT" | grep -Ev '^check: rearm-resurface$' >/dev/null; then
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || break
+    QUIET_CLOSE=0
+    if [ ! -s "$FM_WAKE_QUEUE" ] && fm_autoarm_still_owner "$STATE" "$MY_GEN" \
+      && fm_recovery_marker_snapshot "$STATE/.watcher-down" \
+      && fm_recovery_marker_ack "$STATE/.watcher-down" "${FM_RECOVERY_MARKER_TOKEN##*:}"; then
+      QUIET_CLOSE=1
+    fi
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    if [ "$QUIET_CLOSE" -eq 1 ]; then
+      rm -f -- "$OUT"
+      OUT=
+      attempt=0
+      continue
+    fi
   fi
   [ "$ACTIONABLE" -eq 1 ] && break
   if [ "$HOST_MODE" -eq 1 ]; then

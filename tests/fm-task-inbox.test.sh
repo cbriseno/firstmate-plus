@@ -716,19 +716,17 @@ busy_case() {
 }
 
 test_watcher_waits_on_busy_pane() {
-  local dir wakes
+  local dir
   dir=$(busy_case busywait)
   busy_steer_check "$dir"
   [ ! -s "$dir/state/.wake-queue" ] || fail "first busy deferral must wait"
   busy_steer_check "$dir"
-  grep -q 'stuck-busy' "$dir/state/.wake-queue" \
-    || fail "consecutive busy deferrals did not escalate across watcher restart"
+  [ ! -s "$dir/state/.wake-queue" ] || fail "busy deferrals woke firstmate across restart"
   [ ! -s "$dir/send.log" ] || fail "busy escalation typed into the pane"
-  wakes=$(wc -l < "$dir/state/.wake-queue")
   busy_steer_check "$dir"
-  [ "$(wc -l < "$dir/state/.wake-queue")" = "$wakes" ] || fail "busy escalation repeated"
+  [ ! -s "$dir/state/.wake-queue" ] || fail "busy deferral repeated a wake"
   [ -f "$dir/state/t1.inbox/001.msg" ] || fail "busy escalation lost the steer"
-  pass "watcher: busy deferrals survive restart, escalate once at the bound, and never type"
+  pass "watcher: busy deferrals stay silent across restarts and never type"
 }
 
 test_watcher_busy_budget_resets_on_ring_and_ack() {
@@ -786,13 +784,14 @@ test_watcher_successor_busy_reset_failure_surfaces() {
   [ "$mode" != busy ] || capture="$dir/busy.capture"
   for check in 1 2 3; do
     busy_steer_check "$dir" "$capture"
-    if [ "$mode" = busy ] && [ "$check" = 1 ]; then
+    if [ "$mode" = busy ]; then
       [ ! -s "$dir/state/.wake-queue" ] || fail "successor inherited its predecessor's busy count"
       continue
     fi
     [ "$(wc -l < "$dir/state/.wake-queue" 2>/dev/null | tr -d ' ')" = 1 ] \
       || fail "$mode successor must surface once, including check $check"
   done
+  [ "$mode" != busy ] || return 0
   [ "$(cat "$dir/state/t1.inbox/.escalated")" = "${rec##*/}" ] \
     || fail "reset failure did not mark the successor as escalated"
   case "$mode" in
@@ -845,12 +844,11 @@ test_watcher_busy_limit_validation() {
     [ ! -s "$dir/state/.wake-queue" ] || fail "busy limit '$limit' escalated early at $check"
   done
   busy_steer_check "$dir" "$dir/busy.capture" "$limit"
-  grep -q "stuck-busy after $expected consecutive" "$dir/state/.wake-queue" 2>/dev/null \
-    || fail "busy limit '$limit' did not escalate at $expected"
+  [ ! -s "$dir/state/.wake-queue" ] || fail "busy limit escalated legitimate work"
   busy_steer_check "$dir" "$dir/busy.capture" "$limit"
-  [ "$(wc -l < "$dir/state/.wake-queue" | tr -d ' ')" = 1 ] || fail "busy limit '$limit' repeated escalation"
+  [ ! -s "$dir/state/.wake-queue" ] || fail "busy limit repeated escalation"
   [ ! -s "$dir/send.log" ] || fail "busy limit '$limit' typed into the pane"
-  pass "watcher: busy limit '$limit' escalates exactly once at $expected"
+  pass "watcher: busy limit '$limit' cannot turn working into a stuck verdict"
 }
 
 test_watcher_retry_ignores_busy_reset_failure() {
@@ -891,6 +889,10 @@ test_watcher_successor_escalation_stays_quiet() {
     unwritable) mkdir "$dir/state/t1.inbox/.busy-state" ;;
   esac
   FM_FAKE_TMUX_AGENT="$agent" FM_FAKE_TMUX_MISSING="$missing" busy_steer_check "$dir"
+  if [ "$mode" = busy ]; then
+    [ ! -s "$dir/state/.wake-queue" ] || fail "busy successor escalated"
+    return 0
+  fi
   grep -qF "$rec" "$dir/state/.wake-queue" || fail "$mode successor did not escalate"
   for check in 1 2 3; do
     FM_FAKE_TMUX_AGENT="$agent" FM_FAKE_TMUX_MISSING="$missing" busy_steer_check "$dir"
@@ -930,8 +932,7 @@ test_watcher_nonbusy_attempt_resets_busy_streak() {
   busy_steer_check "$dir"
   [ ! -s "$dir/state/.wake-queue" ] || fail "$mode non-busy delivery did not reset the busy streak"
   busy_steer_check "$dir"
-  grep -q 'stuck-busy after 2 consecutive' "$dir/state/.wake-queue" \
-    || fail "$mode fresh busy streak did not escalate at the bound"
+  [ ! -s "$dir/state/.wake-queue" ] || fail "fresh busy streak escalated"
   [ "$(cut -f2 "$dir/state/t1.inbox/.ring-state")" = 1 ] \
     || fail "$mode busy checks changed the ordinary attempt ladder"
   [ -f "$dir/state/t1.inbox/001.msg" ] || fail "$mode lost the unhandled instruction"
@@ -1065,11 +1066,14 @@ test_watcher_holds_retry_while_the_worker_decides() {
   inbox_lib "$state" fm_task_inbox_mark_retry "$state" t1 "$fire"
   age_path "$state/t1.inbox/.retry-ring"
   printf 'needs-decision [key=pick]: ship alpha or beta?\n' > "$state/t1.status"
+  inbox_lib "$state" fm_task_inbox_write "$state" t1 "checkpoint while waiting" >/dev/null
   steer_check_once "$dir"
   steer_check_once "$dir"
+  [ ! -s "$state/.wake-queue" ] || fail "decision wait queued a stale wake"
   [ ! -s "$log" ] || fail "the retry rang a worker waiting on its own decision:"$'\n'"$(cat "$log")"
   [ -e "$state/t1.inbox/.retry-ring" ] || fail "the held retry lost its mark"
 
+  mv "$state/t1.inbox/002.msg" "$state/t1.inbox/handled/"
   printf 'resolved [key=pick]: alpha\n' >> "$state/t1.status"
   steer_check_once "$dir"
   steer_check_once "$dir"

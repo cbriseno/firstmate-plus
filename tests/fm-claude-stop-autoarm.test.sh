@@ -1673,8 +1673,24 @@ write_host_fixture() {
   {
     printf '#!/usr/bin/env bash\n'
     printf 'echo "$$" >> "$FM_HOME/state/host-ran"\n'
+    cat <<'SH'
+printf '%s\n' "${FM_SUPERVISION_HOST_PARK_SECONDS:-}" >> "$FM_HOME/state/host-bounds"
+SH
     printf 'printf "gen=%%s owner=%%s primary=%%s mode=%%s\\n" "${FM_SUPERVISION_HOST_AUTOARM_GEN:-}" "${FM_SUPERVISION_HOST_OWNER_PID:-}" "${FM_SUPERVISION_HOST_PRIMARY:-}" "${1:-}" > "$FM_HOME/state/host-env"\n'
     case "$kind" in
+      rearm)
+        cat <<'SH'
+if [ "$(wc -l < "$FM_HOME/state/host-ran")" -gt 1 ]; then
+  cp "$FM_HOME/state/.watcher-down" "$FM_HOME/state/quiet-ack"
+  printf 'pending:downtime:actual-generation\n' > "$FM_HOME/state/.watcher-down"
+  printf 'signal: fixture.status\n'
+  exit 0
+fi
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+sleep 1
+printf 'check: rearm-resurface\n'
+SH
+        ;;
       boundary)
         printf "printf 'pending:downtime:fixture-generation\\n' > \"\$FM_HOME/state/.watcher-down\"\n"
         printf 'touch "$FM_HOME/state/.last-watcher-beat"\n'
@@ -1769,16 +1785,24 @@ test_host_absent_flag_runs_the_host() {
 
 test_host_boundary_rewakes_with_the_host_line() {
   local dir out status
-  dir=$(make_primary_dir "$TMP_ROOT/host-boundary")
+  dir=$(make_primary_dir "$TMP_ROOT/host-${1:-boundary}")
   mkdir -p "$dir/config"
   rm -f "$dir/config/supervision-host-off"
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" actionable
-  write_host_fixture "$dir" boundary
+  write_host_fixture "$dir" "${1:-boundary}"
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   expect_code 2 "$status" "a host cycle boundary must rewake main"
   assert_contains "$out" "firstmate watcher wake" "the host close must carry the wake banner"
-  assert_contains "$out" "supervision-host: cycle boundary - fixture" "the rewake must carry the host's line"
+  if [ "${1:-boundary}" = rearm ]; then
+    assert_not_contains "$out" 'rearm-resurface' 'empty recovery must stay in the hook'
+    assert_contains "$out" 'signal: fixture.status' 'real work must still reach main'
+    assert_contains "$(cat "$dir/state/quiet-ack")" 'acked:downtime:fixture-generation' 'empty recovery was not acknowledged'
+    [ "$(wc -l < "$dir/state/host-ran")" -eq 2 ] || fail 'empty recovery did not repark'
+    [ "$(head -1 "$dir/state/host-bounds")" -gt "$(tail -1 "$dir/state/host-bounds")" ] || fail 'recovery extended the hook deadline'
+  else
+    assert_contains "$out" "supervision-host: cycle boundary - fixture" "the hook must renew before its hard timeout"
+  fi
   [ ! -e "$dir/state/arm-ran" ] || fail "an opted-in home ran the plain arm instead of the host"
   [ "$(epoch_outcome "$dir")" = rewake ] || fail "a host boundary must record outcome=rewake, got: $(epoch_outcome "$dir")"
   [ "$(sed -n 's/^.* mode=//p' "$dir/state/host-env")" = park ] || fail "the host was not run in park mode: $(cat "$dir/state/host-env")"
@@ -1788,6 +1812,12 @@ test_host_boundary_rewakes_with_the_host_line() {
     || fail "the host was not bound to the hook's generation: $(cat "$dir/state/host-env") vs $(head -n 1 "$dir/state/.claude-autoarm-epoch")"
   [ "$(sed -n 's/^.* owner=\([0-9]*\) .*$/\1/p' "$dir/state/host-env")" = "$(epoch_field "$dir" owner_pid)" ] \
     || fail "the host was not bound to the hook's owner pid: $(cat "$dir/state/host-env")"
+  rm -f -- "$dir/state/host-ran"
+  printf '1\t1\tcheck\tfixture\tcheck: actual result\n' > "$dir/state/.wake-queue"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "queued work must rewake main on its first park"
+  [ "$(wc -l < "$dir/state/host-ran")" -eq 1 ] || fail "queued work was silently reparked"
+  assert_contains "$(cat "$dir/state/.wake-queue")" 'check: actual result' "queued result was consumed"
   pass "auto-arm: an opted-in home runs the host bound to its generation, and a host line rewakes like a wake"
 }
 
@@ -2063,6 +2093,7 @@ test_long_poll_grace_reaches_arm_wrapper
 test_host_off_flag_keeps_the_arm
 test_host_absent_flag_runs_the_host
 test_host_boundary_rewakes_with_the_host_line
+test_host_boundary_rewakes_with_the_host_line rearm
 test_host_handback_under_away_record_is_not_a_return
 test_host_handback_beside_a_quiet_record_carries_no_away_note
 test_plain_arm_banner_keeps_its_wake_line_cap
