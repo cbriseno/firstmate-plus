@@ -739,6 +739,58 @@ test_turn_ended_provably_working_absorbed() {
 # reports its final turn-end with no captain-relevant status and no running
 # pipeline, so the wake must surface instead of being absorbed.
 
+test_classified_turnend_uses_stale_grace() {
+  local dir state out window pid verb
+  for verb in paused working; do
+    dir=$(make_case "classified-turnend-$verb"); state="$dir/state"; out="$dir/out"
+    window='test:fm-task'
+    printf '%s: waiting for review until 2099-01-01T00:00Z\n' "$verb" > "$state/task.status"
+    prime_status_seen "$state" "$state/task.status"
+    printf 'window=%s\nkind=ship\nharness=codex\n' "$window" > "$state/task.meta"
+    printf 'idle worker\n' > "$dir/pane"
+    : > "$state/task.turn-ended"
+    watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE='state: unknown' \
+      FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane" FM_STALE_ESCALATE_SECS=999999
+    pid=$!
+    wait_for_absorbed "$state" "$pid" 'absorbed benign signal:' \
+      || { reap "$pid"; fail "classified turn-end woke immediately: $(cat "$out")"; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'empty turn-end queued a wake'; }
+    if [ "$verb" = working ]; then
+      wait_for_exit "$pid" 100 || { reap "$pid"; fail 'undeclared stop never surfaced'; }
+      grep -F 'stale: test:fm-task' "$out" >/dev/null || fail 'undeclared stop skipped stale grace'
+      ack_stopped_cycle "$state" || fail 'cannot acknowledge stopped worker'
+      watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_TMUX_WINDOW="$window" \
+        FM_FAKE_TMUX_CAPTURE="$dir/pane" FM_STALE_ESCALATE_SECS=999999
+      pid=$!
+    else
+      printf 'another turn' >> "$state/task.turn-ended"
+      set_mtime "$(( $(date +%s) - 2 ))" "$state/task.status"
+    fi
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail 'unchanged worker woke again'; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'unchanged worker queued another wake'; }
+    reap "$pid"
+  done
+  pass 'classified turn-end stays silent; undeclared stop surfaces once after stale grace'
+}
+
+test_new_status_with_turnend_surfaces() {
+  local dir state out pid verb verdict
+  for verb in working needs-decision blocked 'done' failed paused; do
+    dir=$(make_case "turnend-new-$verb"); state="$dir/state"; out="$dir/out"
+    printf 'working: old event\n' > "$state/task.status"
+    prime_status_seen "$state" "$state/task.status"
+    printf '%s: new event\n' "$verb" >> "$state/task.status"
+    : > "$state/task.turn-ended"
+    verdict='state: working · source: pane · harness busy'
+    [ "$verb" != working ] || verdict='state: unknown'
+    watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
+    pid=$!
+    wait_for_exit "$pid" 100 || { reap "$pid"; fail "new $verb was swallowed"; }
+    grep -F "$state/task.status" "$state/.wake-queue" >/dev/null || fail "new $verb not queued"
+  done
+  pass 'new status lines still surface with a coalesced turn-end'
+}
+
 test_turn_ended_not_working_surfaced() {
   local dir state fakebin out drain_out pid
   dir=$(make_case turn-ended-stopped); state="$dir/state"; fakebin="$dir/fakebin"
@@ -5450,6 +5502,8 @@ test_secondmate_status_routine_absorbed_routed_surfaced_classifier
 test_provably_working_signal_absorbed
 test_turn_ended_provably_working_absorbed
 test_turn_ended_not_working_surfaced
+test_classified_turnend_uses_stale_grace
+test_new_status_with_turnend_surfaces
 test_turn_ended_churning_pane_absorbed
 test_turn_ended_churn_resets_prior_stale_classification
 test_turn_ended_churn_resets_wedge_state_before_stale_poll

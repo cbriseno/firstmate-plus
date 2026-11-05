@@ -2999,6 +2999,25 @@ EOF
   [ "$linger" -le 0 ] || sleep "$linger"
 }
 
+# A mechanical turn-end or timestamp-only status change adds nothing when the
+# worker's log was already classified. Pane staleness still surfaces an
+# undeclared stop after its existing stable-poll grace, once per unchanged pane.
+# Missing/unreadable logs retain the ordinary signal-grace fallback.
+signal_statuses_already_classified() {  # <signal-file> ...
+  local f status size
+  [ "$#" -gt 0 ] || return 1
+  for f in "$@"; do
+    case "$f" in
+      *.turn-ended) status="${f%.turn-ended}.status" ;;
+      *.status) status=$f ;;
+      *) return 1 ;;
+    esac
+    [ -f "$status" ] && [ -r "$status" ] && [ ! -L "$status" ] || return 1
+    size=$(_fm_status_file_size "$status") || return 1
+    [ "$size" -gt 0 ] && [ "$(fm_wake_signal_seen_size "$STATE" "$status")" -eq "$size" ] || return 1
+  done
+}
+
 # 0 when any signaled status file carries a captain-relevant event in the bytes
 # appended since this watcher last classified it. The start offset is the
 # classified-position field in that file's .seen-* marker, and fm-classify-lib.sh's
@@ -3008,9 +3027,9 @@ EOF
 # hiding the `needs-decision`, `blocked`, `failed`, or `done` event that arrived
 # just before it: the .seen-* marker advances either way, so an event absorbed
 # here is never re-read. Non-.status arguments (.turn-ended markers, which carry
-# no verb) are skipped. A 1 here is NOT "benign" on its own: a no-verb signal,
-# including a newly declared captain hold, still needs the authoritative working
-# proof or the eligible opt-in bare turn-end pane-churn proof before it is benign.
+# no verb) are skipped. A 1 here is NOT "benign" on its own: a no-verb signal
+# still needs an already-classified log, authoritative working proof, or the
+# eligible opt-in bare turn-end pane-churn proof before it is benign.
 # Also populates FM_SIGNAL_NEEDS_DECISION_FILES (space-separated status-file
 # paths) with exactly the files whose newly classified span carries one of the
 # decision-owned classes defined by the status-span contract, so the caller can
@@ -3043,7 +3062,9 @@ signal_files_actionable() {  # <status-file> ...
     if [ "$needs_decision" -eq 1 ]; then
       FM_SIGNAL_NEEDS_DECISION_FILES="${FM_SIGNAL_NEEDS_DECISION_FILES} ${f}"
     fi
-    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ]; then
+    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ] \
+      || { [ "$endpoint" -gt "$(fm_wake_signal_seen_size "$STATE" "$f")" ] \
+        && status_is_paused "$(last_status_line "$f")"; }; then
       found=0
     fi
   done
@@ -3804,8 +3825,8 @@ EOF
     #   - any status file gained a captain-relevant event since it was last
     #     classified (its whole new span, not merely its last line);
     #   - or it is a no-verb wake (a bare turn-end, a working: note) with no
-    #     positive evidence the crew is still executing - the crew stopped its turn
-    #     with no actively-running pipeline and no busy pane, so it may be done
+    #     already-classified log or positive evidence the crew is still executing:
+    #     with no actively-running pipeline or busy pane, it may be done
     #     (even via an interactive menu that wrote no done: status), waiting on a
     #     decision, or wedged. Absorbing such a turn-end is exactly the
     #     swallowed-finish this change guards against.
@@ -3814,10 +3835,10 @@ EOF
     # alone, a pane that rendered something since the previous poll
     # (signal_turnend_panes_churned) - the only proof available to a harness whose
     # busy state has no verified semantic source, bounded so it cannot defer that
-    # task's turn-ends forever. Absorb stays evidence-driven: with neither proof the
-    # wake surfaces exactly as before.
+    # task's turn-ends forever. Without a classified log or either proof, the
+    # wake surfaces after the signal grace as before.
     # Actionable -> enqueue, advance .seen-* markers, exit. Benign (a no-verb wake
-    # whose crew is still executing) in always-on mode -> advance the markers so it
+    # with no new status or whose crew is still executing) -> advance markers so it
     # will not re-fire, log, and keep blocking without enqueuing. Both evidence
     # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
     # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
@@ -3839,7 +3860,8 @@ EOF
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      || { ! signal_statuses_already_classified $files \
+        && ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
