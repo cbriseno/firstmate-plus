@@ -1681,6 +1681,74 @@ move_case_to_pool_slot() {
   printf '%s\n' "$dest"
 }
 
+test_scout_backup_restores_local_changes() {
+  local case_dir backup rc variant
+  for variant in committed mixed; do
+    case_dir=$(make_case "scout-backup-$variant")
+    write_meta "$case_dir" local-only scout
+    prepare_scout_teardown "$case_dir"
+    wt_commit_file "$case_dir" fix.txt original
+    if [ "$variant" = mixed ]; then
+      printf 'local fix\n' > "$case_dir/wt/fix.txt"
+      printf '\000\001new binary\n' > "$case_dir/wt/new file.bin"
+      seed_nested_clone_and_scratch "$case_dir" "$case_dir/wt"
+    fi
+    add_treehouse_clean_fd "$case_dir"
+    rc=0
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code 0 "$rc" "scout backup: teardown failed: $(cat "$case_dir/stderr")"
+    backup=$(find "$case_dir/data/task-x1" -maxdepth 1 -type d -name 'worktree-backup.*')
+    assert_present "$backup/changes.patch" "scout backup: missing patch"
+    assert_grep "$backup" "$case_dir/stdout" "scout backup: recovery location not printed"
+    assert_grep 'restore: bash' "$case_dir/stdout" "scout backup: recovery command not printed"
+    # Remove the task's only committed copy too; recovery must start at the recorded base.
+    git -C "$case_dir/wt" reset --hard -q origin/main
+    bash "$backup/restore.sh" "$case_dir/restored" > "$case_dir/restore.log" 2>&1 \
+      || fail "scout backup: recovery failed: $(cat "$case_dir/restore.log")"
+    if [ "$variant" = mixed ]; then
+      [ "$(cat "$case_dir/restored/fix.txt")" = 'local fix' ] || fail "scout backup: fix lost"
+      printf '\000\001new binary\n' > "$case_dir/expected.bin"
+      cmp "$case_dir/expected.bin" "$case_dir/restored/new file.bin" || fail "scout backup: new bytes lost"
+      assert_grep payload "$case_dir/restored/scratch-clone/payload.txt" "scout backup: nested clone lost"
+    else
+      assert_grep original "$case_dir/restored/fix.txt" "scout backup: committed fix lost"
+    fi
+    [ "$(git -C "$case_dir/restored" rev-parse HEAD)" = "$(cat "$backup/base")" ] \
+      || fail "scout backup: wrong base"
+  done
+  pass "scout backup reapplies committed and local changes, new binary files, and nested clones"
+}
+
+test_scout_backup_failure_preserves_worktree() {
+  local case_dir force rc before
+  for force in normal force; do
+    case_dir=$(make_case "scout-backup-failure-$force")
+    write_meta "$case_dir" local-only scout
+    prepare_scout_teardown "$case_dir"
+    wt_commit_file "$case_dir" fix.txt original
+    printf 'local fix\n' > "$case_dir/wt/fix.txt"
+    printf 'new evidence\n' > "$case_dir/wt/new.txt"
+    before=$(git -C "$case_dir/wt" status --porcelain)
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$case_dir/fakebin/tar"
+    printf '#!/usr/bin/env bash\ntouch "%s"\n' "$case_dir/returned" > "$case_dir/fakebin/treehouse"
+    chmod +x "$case_dir/fakebin/tar" "$case_dir/fakebin/treehouse"
+    rc=0
+    if [ "$force" = force ]; then
+      run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    else
+      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    fi
+    expect_code 1 "$rc" "scout backup failure must refuse cleanup"
+    assert_grep 'scout backup failed' "$case_dir/stderr" "scout backup failure was silent"
+    assert_absent "$case_dir/returned" "scout backup failure returned worktree"
+    assert_present "$case_dir/state/task-x1.meta" "scout backup failure removed records"
+    [ "$(git -C "$case_dir/wt" status --porcelain)" = "$before" ] || fail "scout backup failure changed index"
+    assert_grep 'local fix' "$case_dir/wt/fix.txt" "scout backup failure lost tracked changes"
+    assert_grep 'new evidence' "$case_dir/wt/new.txt" "scout backup failure lost untracked file"
+  done
+  pass "backup failure retains scout worktree and records, including under --force"
+}
+
 test_scout_nested_clone_returns_with_no_untracked_entries() {
   local case_dir wt rc
   case_dir=$(make_case scout-nested-clean)
@@ -1796,7 +1864,7 @@ SH
 }
 
 test_forced_secondmate_child_scout_nested_clone_returns_clean() {
-  local case_dir home child_wt rc
+  local case_dir home child_wt rc backup
   case_dir=$(make_case secondmate-child-nested-clean)
   write_meta "$case_dir" local-only secondmate
   home="$case_dir/secondmate-home"
@@ -1825,6 +1893,9 @@ test_forced_secondmate_child_scout_nested_clone_returns_clean() {
   assert_absent "$child_wt/scratch.txt" "secondmate-child-nested-clean: scratch file survived return"
   assert_no_grep "lost this slot" "$case_dir/stderr" \
     "secondmate-child-nested-clean: a clean child return was reported as a lost slot"
+  backup=$(find "$case_dir/data/task-x1/children/child-scout" -maxdepth 1 -type d -name 'worktree-backup.*')
+  bash "$backup/restore.sh" "$case_dir/restored-child" >/dev/null 2>&1 || fail "child scout backup cannot restore"
+  assert_grep payload "$case_dir/restored-child/scratch-clone/payload.txt" "child scout backup lost its clone"
   pass "a forced secondmate teardown returns a child scout copy with a nested clone clean"
 }
 
@@ -5864,6 +5935,8 @@ test_dirty_worktree_refuses
 test_untracked_only_refusal_diagnostic
 test_tracked_edit_refusal_diagnostic
 test_mixed_refusal_diagnostic
+test_scout_backup_restores_local_changes
+test_scout_backup_failure_preserves_worktree
 test_scout_nested_clone_returns_with_no_untracked_entries
 test_ship_nested_clone_is_refused_and_bytes_stay
 test_dirty_return_warns_which_slot_was_lost

@@ -1152,6 +1152,9 @@ test_scout_and_secondmate_scaffold() {
   brief="$BRIEF_HOME/data/brief-scout-q6/brief.md"
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
+  assert_grep 'include the applied diff (including new files), commands to reproduce, and the result' "$brief" \
+    "scout diagnosis must leave reviewable and reproducible evidence"
+  assert_no_grep 'report is the only thing that survives' "$brief" "scout brief denies recoverable backups"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"

@@ -803,8 +803,8 @@ $HERDR_SECTION
 # Setup
 $SETUP_BASE
 This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
-The report is the only thing that survives, so anything worth keeping must be in it.
+The worktree is your laboratory - install, run, edit, and make scratch commits freely; the worktree is discarded at teardown after changed work is backed up.
+Teardown preserves local changes in a recoverable backup; the report must still stand alone for review.
 
 # Rules
 1. Never push to any remote and never open a PR.
@@ -835,6 +835,7 @@ $WAIT_BLOCK$INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
+For a diagnosis with local changes, include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.

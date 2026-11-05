@@ -1,6 +1,6 @@
 ---
 name: scout-completion
-description: Load when a scout reports completion, presents a visual artifact for iteration, or is being considered for promotion to implementation.
+description: Load when a scout reports completion, presents a visual artifact for iteration, is being considered for promotion to implementation, or the captain asks to review or continue a closed scout.
 user-invocable: false
 metadata:
   internal: true
@@ -9,6 +9,7 @@ metadata:
 # Scout outcome and promotion
 
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; relay its concise findings and decision summary, make sure the card's summary states them in one or two plain sentences in the captain's language (`bin/fm-tasks-axi.sh presentation <id> --summary`), record the report as the Done artifact, and re-evaluate the queue.
+When the captain asks to review or continue a closed scout, have a worker restore its backup into a new copy using the recovery command printed by `bin/fm-teardown.sh`, then inspect or continue the preserved changes instead of repeating the investigation.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 For every visual report or iterative discussion, retain the scout as host under `AGENTS.md` section 9 and the crew-hosted Lavish board contract in `docs/configuration.md`; it creates, hosts, and iterates the artifact and returns the resulting decision.

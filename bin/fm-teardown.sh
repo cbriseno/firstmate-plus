@@ -78,7 +78,9 @@
 # for the common case where there is no remote at all.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
-# product. Teardown proceeds only once the report exists and the shared
+# product. Changed scouts are backed up under data/<id>/worktree-backup.*
+# before cleanup; restore with `bash <backup>/restore.sh <new-copy>`. A failed
+# backup refuses cleanup, even with --force. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
 # A scratch copy (kind=scout) and a --force run discard untracked content.
 # Treehouse's return resets with `git clean -fd`, which never deletes a nested
@@ -2178,6 +2180,42 @@ report_worktree_dirt() {
   ' >&2
 }
 
+# Preserve the net diff from the base, including new files, before scratch is erased.
+# The untracked archive also retains nested clones, which Git patches represent only as gitlinks.
+teardown_backup_scout() {
+  local WT=${1:-$WT} PROJ=${2:-$PROJ} BASE_BRANCH=${3-$BASE_BRANCH} backup_id=${4:-$ID}
+  local name base head dirty backup repo
+  name=${BASE_BRANCH:-}
+  [ -n "$name" ] || name=$(default_branch) || return 1
+  base=$(git -C "$WT" merge-base HEAD "refs/remotes/origin/$name" 2>/dev/null) \
+    || base=$(git -C "$WT" merge-base HEAD "$name") || return 1
+  head=$(git -C "$WT" rev-parse HEAD) || return 1
+  dirty=$(git -C "$WT" status --porcelain --untracked-files=all) || return 1
+  [ "$head" != "$base" ] || [ -n "$dirty" ] || return 0
+  mkdir -p "$DATA/$backup_id" || return 1
+  backup=$(mktemp -d "$DATA/$backup_id/worktree-backup.XXXXXX") || return 1
+  repo=$(git -C "$WT" remote get-url origin 2>/dev/null) || repo=$PROJ
+  printf '%s\n' "$base" > "$backup/base" || return 1
+  printf '%s\n' "$repo" > "$backup/repository" || return 1
+  GIT_INDEX_FILE="$backup/index" git -C "$WT" read-tree HEAD || return 1
+  GIT_INDEX_FILE="$backup/index" git -C "$WT" add -A -- . || return 1
+  GIT_INDEX_FILE="$backup/index" git -C "$WT" diff --cached --binary "$base" -- > "$backup/changes.patch" || return 1
+  git -C "$WT" ls-files --others --exclude-standard -z > "$backup/untracked.paths" || return 1
+  tar -C "$WT" -cf "$backup/untracked.tar" --null -T "$backup/untracked.paths" || return 1
+  cat > "$backup/restore.sh" <<'RESTORE' || return 1
+#!/usr/bin/env bash
+set -eu
+backup=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+dest=${1:?usage: restore.sh <new-copy>}
+git clone --no-checkout -- "$(cat "$backup/repository")" "$dest"
+git -C "$dest" checkout --detach "$(cat "$backup/base")"
+[ ! -s "$backup/changes.patch" ] || git -C "$dest" apply --binary "$backup/changes.patch"
+tar -C "$dest" -xf "$backup/untracked.tar"
+RESTORE
+  rm -f -- "$backup/index" "$backup/untracked.paths" || return 1
+  printf 'Scout backup: %s; restore: bash %q <new-copy>\n' "$backup" "$backup/restore.sh"
+}
+
 # Scratch and --force copies are scrubbed before Treehouse return. See the
 # script header for why `git clean -fd` is not enough and why a dirty return
 # is not reported as clean.
@@ -3613,6 +3651,9 @@ cleanup_firstmate_home_children() {
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        if [ "$child_kind" = scout ]; then
+          teardown_backup_scout "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
+        fi
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       fi
@@ -3632,6 +3673,9 @@ cleanup_firstmate_home_children() {
         require_owned_worktree_slot_record "$child_id" "$child_wt" || return 1
       else
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        if [ "$child_kind" = scout ]; then
+          teardown_backup_scout "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
+        fi
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.opencode/plugins/fm-busy-state.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
@@ -3827,6 +3871,10 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       exit 1
     fi
   fi
+fi
+
+if [ "$KIND" = scout ] && [ "$KEEP_RUNNING" != 1 ] && teardown_owns_worktree && [ -d "$WT" ]; then
+  teardown_backup_scout || { echo 'REFUSED: scout backup failed; worktree and task records retained.' >&2; exit 1; }
 fi
 
 # A Herdr close may reposition shared workspace order, so the whole
