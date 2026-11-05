@@ -129,6 +129,20 @@ SH
   touch "$SW/feedback"
   pe "$SW/home" reconcile >/dev/null
   wait_for "$SW/home/state/procevent-inbox/$scan_id.1.result" || fail "discovery fixture did not capture a worker round"
+  cat > "$SW/bin/crew-state" <<'SH'
+#!/usr/bin/env bash
+cat "$SCAN_CREW_STATE"
+SH
+  chmod +x "$SW/bin/crew-state"
+  export FM_CREW_STATE_BIN="$SW/bin/crew-state" SCAN_CREW_STATE="$SW/crew-state"
+  printf 'state: working · source: pane · handling feedback\n' > "$SCAN_CREW_STATE"
+  prior_count=$(grep -Fc "procevent:$scan_id:unattended:" "$SW/home/state/.wake-queue")
+  scan >/dev/null
+  advance_scan 301
+  scan >/dev/null
+  [ "$(grep -Fc "procevent:$scan_id:unattended:" "$SW/home/state/.wake-queue")" = "$prior_count" ] \
+    || fail "working round owner woke supervision"
+  printf 'state: stopped · source: pane · agent exited\n' > "$SCAN_CREW_STATE"
   scan >/dev/null
   advance_scan 300
   scan >/dev/null

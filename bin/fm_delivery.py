@@ -776,14 +776,24 @@ def progress_check(home):
             start = re.search(r'^status_start_bytes=([0-9]+)$', raw, re.M)
             if not status.exists() or status.stat().st_size <= (int(start[1]) if start else 0):
                 continue
-            newest = max(meta.stat().st_mtime, status.stat().st_mtime if status.exists() else 0)
+            view = read_presentation(home, task_id, verify=False)['lifecycle']
+            reported = view['evidence'].get('reported_at')
+            checkpoint_time = dt.datetime.strptime(reported, '%Y-%m-%dT%H:%M:%SZ').replace(
+                tzinfo=dt.timezone.utc).timestamp() if reported else 0
+            newest = max(meta.stat().st_mtime, status.stat().st_mtime, checkpoint_time)
             if time.time() - newest < max(0, grace):
                 continue
-            view = read_presentation(home, task_id, verify=False)['lifecycle']
             if view['evidence']['freshness'] != 'current':
+                # The status fold owns decision closure; a current worker
+                # question owes an answer before another progress checkpoint.
+                wait = run_progress_probe(['bash', '-c',
+                    '. "$1/fm-classify-lib.sh"; [ "$(status_worker_wait_verb "$2")" = needs-decision ]',
+                    'progress-check', str(BIN), str(status)], 2)
+                if wait.returncode == 0:
+                    continue
                 lines.append(task_id + ': ' + view['evidence']['freshness'] + ' ('
                              + ', '.join(view['evidence']['reasons']) + ')')
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             lines.append(task_id + ': progress unavailable (' + str(exc) + ')')
     return lines
 

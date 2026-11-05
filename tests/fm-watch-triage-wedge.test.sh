@@ -21,6 +21,33 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-watch-triage-wedge-tests)
 
+test_parked_decision_stale_wakes_once_per_episode() {
+  local dir state window key round mode
+  dir=$(make_case parked-decision); state="$dir/state"
+  window=test:fm-parked; key=test_fm-parked
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
+  printf 'needs-decision [key=review]: captain reviews the board\n' > "$state/parked.status"
+  printf '%s' "$(seen_sig "$state/parked.status")" > "$state/.seen-parked_status"
+  printf '#!/usr/bin/env bash\necho "state: parked · source: status-log · captain review"\n' > "$dir/fakebin/fm-crew-state.sh"
+  for round in 1 2 3; do
+    printf 'parked, elapsed %ss' "$round" > "$dir/pane.txt"
+    mode=absorb; [ "$round" -ne 1 ] || mode='exit'
+    parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" "$window" "$mode" \
+      || fail "decision stale did not honor its episode on round $round: $(cat "$dir/watch.out")"
+    if [ "$round" -eq 1 ]; then ack_stopped_cycle "$state" || fail "decision wake acknowledgement failed"; fi
+    set_mtime "$(( $(date +%s) - 2000 ))" "$state/.paused-resurfaced-$key"
+  done
+  printf 'resolved [key=review]: approved\nworking: resumed\n' >> "$state/parked.status"
+  printf '%s' "$(seen_sig "$state/parked.status")" > "$state/.seen-parked_status"
+  printf '#!/usr/bin/env bash\necho "state: stopped · source: pane · agent exited"\n' > "$dir/fakebin/fm-crew-state.sh"
+  printf 'stopped after approval' > "$dir/pane.txt"
+  parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" "$window" exit \
+    || fail "stopped worker without an open decision did not wake"
+  pass "parked decision stales wake once; stopped workers without decisions still wake"
+}
+
+test_parked_decision_stale_wakes_once_per_episode
+
 # --- a live worker parked on a declared wait: pane churn must not re-alarm ----
 # The 2026-08/09 alarm loop, in both observed forms - a worker parked on the
 # CAPTAIN (captain-held, five consecutive alarms) and one parked on the PIPELINE

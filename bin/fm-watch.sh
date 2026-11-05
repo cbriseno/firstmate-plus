@@ -2564,6 +2564,16 @@ stale_wait_record() {  # <window-key>
 captain_call_stale_bound() {  # <window-key> <task>
   local key=$1 task=$2
   STALE_WAIT_DECLARATION=
+  # An open decision already has its signal wake. Bound stale to one sighting
+  # for this declaration while authoritative state still confirms the wait.
+  if status_has_open_needs_decision "$STATE/$task.status"; then
+    case "$("$FM_CREW_STATE_BIN" "$task" 2>/dev/null)" in
+      'state: parked '*)
+        STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
+        [ "$(cat "$STATE/.paused-resurfaced-$key" 2>/dev/null || true)" = "$STALE_WAIT_DECLARATION" ]
+        return ;;
+    esac
+  fi
   task_captain_call_open "$task" || return 1
   STALE_WAIT_DECLARATION=$(captain_call_declaration "$task" "$CAPTAIN_CALL_IDENTITY")
   away_record_present && return 0

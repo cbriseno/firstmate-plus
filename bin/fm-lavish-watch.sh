@@ -14,8 +14,8 @@
 # with a reminder every 300 seconds until coverage returns or the session ends
 # with no queued feedback. Bounds are observation times plus the watcher cadence.
 # An open worker round is covered by its immutable captured result, not another
-# listener: after the same grace, ask firstmate to verify the worker is handling
-# it and re-arms when finished. Never acknowledge it or re-arm on its behalf.
+# listener while its worker is provably working; otherwise after the same grace,
+# ask firstmate to verify it. Never acknowledge it or re-arm on its behalf.
 # A listener claim is structural process-event evidence, not a Lavish CLI label.
 # This deliberately also detects unmanaged polls without a verified wake path.
 # No poll, reply, open, end, takeover, answer intake or task lifecycle operation
@@ -41,6 +41,8 @@ if [ "$1" = scan ]; then
   . "$SCRIPT_DIR/fm-pr-lib.sh"
   # shellcheck source=bin/fm-wake-lib.sh
   . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-classify-lib.sh
+  . "$SCRIPT_DIR/fm-classify-lib.sh"
   (umask 077; mkdir -p "$watch_dir") || exit 1
   [ -d "$watch_dir" ] && [ ! -L "$watch_dir" ] || exit 1
   fm_lock_acquire_wait "$watch_dir/.lock" || exit 1
@@ -149,6 +151,11 @@ while IFS=$'\t' read -r id task artifact; do
   owner=$(printf '%s\n' "$sources" | awk -v id="$id" '$1 == id { print $3; exit }')
   case "$owner" in
     live|task:*/listening) rm -f -- "$marker"; continue ;;
+    task:*/round-open)
+      owner_task=${owner#task:}; owner_task=${owner_task%/round-open}
+      if crew_is_provably_working "$owner_task"; then
+        rm -f -- "$marker"; continue
+      fi ;;
   esac
   since=$now last=0 nonce="$now-$RANDOM$RANDOM"
   if [ -f "$marker" ]; then

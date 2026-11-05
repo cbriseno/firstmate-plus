@@ -7,7 +7,7 @@ set -euo pipefail
 command -v tasks-axi >/dev/null || { printf 'SKIP: tasks-axi required\n'; exit 0; }
 export FM_LIVE=0
 python3 - "$ROOT" <<'PY'
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, subprocess, sys, tempfile, time
 root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
     home = pathlib.Path(tmp)
@@ -102,5 +102,25 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
           'active and paused-background missed checkpoints remain actionable')
     check(all(not (home / 'data' / name / 'presentation.json').exists() for name in ('parked', 'captain', 'layered')),
           'held legacy declarations remain unmeasured and untouched')
+    status = home / 'state/active.status'
+    with status.open('a') as stream:
+        stream.write('needs-decision [key=review]: captain reviews the board\n')
+    check('active' not in notices(), 'open captain decision owes no progress wake')
+    with status.open('a') as stream:
+        stream.write('resolved [key=review]: approved\nworking: resumed\n')
+    check('active' in notices(), 'resolved decision restores missed-checkpoint wake')
+    cli('presentation', 'active', '--presentation-file', str(draft))
+    with status.open('a') as stream:
+        stream.write('working: next boundary just after publication\n')
+    old = time.time() - 60
+    for path in (status, home / 'state/active.meta'):
+        os.utime(path, (old, old))
+    env['FM_SIGNAL_GRACE'] = '30'
+    check('active' not in notices(), 'just-published checkpoint retains existing grace')
+    (home / 'state/new.meta').write_text('kind=scout\n')
+    (home / 'state/new.status').write_text('working: just launched\n')
+    check('new' not in notices(), 'just-launched worker retains existing grace')
+    env['FM_SIGNAL_GRACE'] = '0'
+    check('active' in notices() and 'new' in notices(), 'expired grace preserves real reporting obligations')
     print('PASS: %d progress hold public-path assertions' % checks)
 PY
