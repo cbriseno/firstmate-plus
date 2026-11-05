@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Actionable progress notices respect the existing work owner's holds while
-# active workers and ordinary paused validation/background waits still report.
+# active workers still report and standing declared waits stay quiet.
 set -euo pipefail
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
     protected = ['data/backlog.md', 'data/work-structure.json', 'data/work-aliases.json']
     baseline = {path:(home / path).read_bytes() for path in protected}
     first = notices()
-    check(set(first) == {'active', 'background'}, ('held records suppressed; active/waiting kept', first))
+    check(set(first) == {'active'}, ('held records and declared waits suppressed; active kept', first))
     check(all((home / path).read_bytes() == value for path,value in baseline.items()),
           'notice read preserves all holds, groups, aliases and backlog bytes')
     check(all(not (home / 'data' / name / 'presentation.json').exists() for name in names),
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
     # A real owner resume removes the hold. The obligation now resurfaces,
     # without sending anything to a worker or altering the remaining holds.
     apply('clear_pause', 'task:resumed')
-    check(set(notices()) == {'active', 'background', 'resumed'}, 'legitimate resumed task owes its initial checkpoint')
+    check(set(notices()) == {'active', 'resumed'}, 'legitimate resumed task owes its initial checkpoint')
     apply('clear_pause', 'project:held')
     check('inherited' in notices(), 'cleared inherited hold restores reporting obligation')
     draft = home / 'current-input.json'
@@ -98,8 +98,15 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         with (home / 'state' / (name + '.status')).open('a') as stream:
             stream.write(verb + ' [at=1793511000]: next real reporting boundary\n')
     current = notices()
-    check(set(current) == {'active', 'background'} and all('stale' in line for line in current.values()),
-          'active and paused-background missed checkpoints remain actionable')
+    check(set(current) == {'active'} and all('stale' in line for line in current.values()),
+          'active missed checkpoints remain actionable; paused background stays quiet')
+    background = home / 'state/background.status'
+    with background.open('a') as stream:
+        stream.write('resolved [key=other]: unrelated answer\n')
+    check('background' not in notices(), 'unrelated resolution preserves the declared pause')
+    with background.open('a') as stream:
+        stream.write('working: validation finished; resumed\n')
+    check('background' in notices(), 'resumed background without checkpoint must report')
     check(all(not (home / 'data' / name / 'presentation.json').exists() for name in ('parked', 'captain', 'layered')),
           'held legacy declarations remain unmeasured and untouched')
     status = home / 'state/active.status'
@@ -107,10 +114,27 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         stream.write('needs-decision [key=review]: captain reviews the board\n')
     check('active' not in notices(), 'open captain decision owes no progress wake')
     with status.open('a') as stream:
+        stream.write('resolved [key=review]: old board answered\n'
+                     'needs-decision [key=review]: new board ready\n')
+    check('active' not in notices(), 'resolved then needs-decision reopens the board wait')
+    handled = home / 'state/active.inbox/handled'
+    handled.mkdir(parents=True)
+    answer = handled / '000.msg'
+    answer.write_text('old board steer acknowledged after new board publication\n')
+    newer = status.stat().st_mtime + 1
+    os.utime(answer, (newer, newer))
+    check('active' not in notices(), 'handled steer cannot close a reopened durable decision')
+    with status.open('a') as stream:
+        stream.write('resolved [key=other]: unrelated answer\n')
+    check('active' not in notices(), 'reopened board decision survives unrelated resolution')
+    with status.open('a') as stream:
+        stream.write('working: board remains under review\n')
+    check('active' not in notices(), 'open decision survives later worker progress')
+    with status.open('a') as stream:
         stream.write('resolved [key=review]: approved\nworking: resumed\n')
     check('active' in notices(), 'resolved decision restores missed-checkpoint wake')
     inbox = home / 'state/active.inbox'
-    (inbox / 'handled').mkdir(parents=True)
+    (inbox / 'handled').mkdir(parents=True, exist_ok=True)
     (inbox / '001.msg').write_text('from-firstmate\n\nRefresh the checkpoint\n')
     check('active' not in notices(), 'pending steer prevents another progress wake')
     (inbox / '001.msg').rename(inbox / 'handled/001.msg')
