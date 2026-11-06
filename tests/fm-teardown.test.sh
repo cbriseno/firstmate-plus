@@ -1010,11 +1010,46 @@ test_teardown_manual_backend_leaves_the_backlog_to_the_operator() {
   pass "teardown honors config/backlog-backend=manual and still finishes cleanly"
 }
 
+test_empty_commits_preserve_teardown_safety() {
+  local mode kind case_dir rc expected before
+  for mode in local-only direct-PR; do
+    for kind in empty content tracked staged untracked; do
+      case_dir=$(make_case "empty-$mode-$kind")
+      write_meta "$case_dir" "$mode" ship
+      case "$kind" in
+        content) wt_commit_file "$case_dir" feature.txt unlanded ;;
+        tracked|staged)
+          wt_commit_file "$case_dir" feature.txt landed
+          git -C "$case_dir/wt" push -q origin fm/task-x1
+          ;;
+      esac
+      wt_commit "$case_dir" "Record first delivery"
+      wt_commit "$case_dir" "Record second delivery"
+      case "$kind" in
+        tracked|staged) printf '%s\n' edit > "$case_dir/wt/feature.txt" ;;
+        untracked) printf '%s\n' scratch > "$case_dir/wt/scratch.txt" ;;
+      esac
+      [ "$kind" != staged ] || git -C "$case_dir/wt" add feature.txt
+      before=$(git -C "$case_dir/wt" status --porcelain)
+      expected=1
+      [ "$kind" != empty ] || expected=0
+      rc=0
+      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+      expect_code "$expected" "$rc" "$mode/$kind: empty commits must not hide content or dirt: $(cat "$case_dir/stderr")"
+      if [ "$expected" = 1 ]; then
+        assert_present "$case_dir/state/task-x1.meta" "$mode/$kind: refused teardown removed metadata"
+        [ "$before" = "$(git -C "$case_dir/wt" status --porcelain)" ] || fail "$mode/$kind: teardown changed work"
+      fi
+    done
+  done
+  pass "empty commits allow teardown without weakening content, tracked, staged or untracked refusals"
+}
+
 test_local_only_truly_unpushed_refuses() {
   local case_dir rc
   case_dir=$(make_case truly-unpushed)
   write_meta "$case_dir" local-only ship
-  wt_commit "$case_dir" "unpushed work"
+  wt_commit_file "$case_dir" feature.txt unlanded "unpushed work"
   # No fork, no push to origin, not merged into main.
 
   set +e
@@ -1175,6 +1210,7 @@ test_squash_merged_pr_allows_replayed_unpushed_patch() {
   git -C "$case_dir/wt" push -q origin "$parent_head:refs/heads/fm/task-x1"
   git -C "$case_dir/project" fetch -q origin fm/task-x1
   wt_commit_file "$case_dir" feature.txt hello "add feature"
+  wt_commit "$case_dir" "Record delivery"
   append_pr_meta_url "$case_dir"
   pr_head=$(land_equivalent_patch_on_origin_branch "$case_dir" pr-head feature.txt hello "add feature")
   add_gh_pr_merged_for_head "$case_dir" "$pr_head"
@@ -2801,7 +2837,7 @@ test_local_only_force_overrides_unpushed() {
   local case_dir rc
   case_dir=$(make_case force-override)
   write_meta "$case_dir" local-only ship
-  wt_commit "$case_dir" "unpushed work"
+  wt_commit_file "$case_dir" feature.txt unlanded "unpushed work"
 
   set +e
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
@@ -5909,6 +5945,7 @@ test_residual_is_not_filed_when_teardown_refuses_unlanded_work
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_closes_a_gitlab_task_with_its_merge_request_url_as_a_note
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
+test_empty_commits_preserve_teardown_safety
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
