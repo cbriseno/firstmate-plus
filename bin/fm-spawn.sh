@@ -6319,7 +6319,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen spawned_at status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen process_scope spawned_at status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -6360,6 +6360,7 @@ preserve_relaunch_meta() {
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
+  [ "$KIND" = secondmate ] || echo "process_scope=$STATE_REAL/$ID:$SPAWN_GEN"
   # Original attempt boundary, never reconstructed from the incarnation token.
   printf 'spawned_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # Same-second relaunches must not inherit a declaration already in this log.
@@ -6834,6 +6835,9 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
     LAUNCH="unset TRACEPARENT; $LAUNCH"
   fi
 fi
+if [ "$KIND" != secondmate ]; then
+  LAUNCH="export FM_WORKER_PROCESS_SCOPE=$(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN"); $LAUNCH"
+fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH_ENV_PREFIX='/usr/bin/env -i'
   # A configured Orca source replaces destination expansion of allowlisted
@@ -6884,6 +6888,11 @@ if [ "$KIND" = host ]; then
   # Prevent Git discovery from walking out of ignored scratch into the home.
   # Applied after env filtering and as an export for compound launch commands.
   LAUNCH="export GIT_CEILING_DIRECTORIES=$(shell_quote "$DATA/$ID"); $LAUNCH"
+fi
+# The wrapper owns temporary processes across all harnesses and backends,
+# including children that detach or clear their environment on Linux.
+if [ "$KIND" != secondmate ]; then
+  LAUNCH="env FM_WORKER_PROCESS_SCOPE=$(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") python3 $(shell_quote "$FM_ROOT/bin/fm-worker-processes.py") run $(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") $(shell_quote "$LAUNCH")"
 fi
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||

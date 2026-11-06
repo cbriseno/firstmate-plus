@@ -892,6 +892,66 @@ test_relaunch_only_flags_are_rejected_on_other_verbs() {
 
 # --- 5. lifecycle states ----------------------------------------------------
 
+test_worker_resource_cleanup() {
+  local dir out rc
+  dir=$(new_case resources)
+  add_task "$dir" t1 claude
+  printf 'spawn_gen=test\nprocess_scope=%s/state/t1:test\n' "$dir/home" >> "$dir/home/state/t1.meta"
+  # The helper uses only disposable real children, including a detached child
+  # that clears its environment on Linux (the browser MCP failure mode).
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'worker cleanup fixture failed'
+import os, pathlib, shlex, subprocess, sys, time
+root, directory = map(pathlib.Path, sys.argv[1:])
+tool = root / 'bin/fm-worker-processes.py'
+scope = f'{directory}/home/state/t1:test'
+fixture = directory / 'children.py'
+fixture.write_text('''import os,subprocess,sys,time
+from pathlib import Path
+env={} if sys.platform=='linux' else os.environ.copy()
+child=subprocess.Popen(['sleep','60'],env=env,start_new_session=True)
+Path(sys.argv[1]).write_text(str(child.pid))
+if len(sys.argv)>2: time.sleep(60)
+''')
+def launch(scope, path, hold=False):
+    command = shlex.join([sys.executable, str(fixture), str(path)] + (['hold'] if hold else []))
+    return subprocess.Popen([sys.executable,str(tool),'run',scope,command],
+                            env=dict(os.environ,FM_WORKER_PROCESS_SCOPE=scope))
+def ready(path):
+    for _ in range(100):
+        if path.exists(): return
+        time.sleep(.1)
+    raise AssertionError('fixture did not launch')
+natural = launch(scope, directory/'natural.pid')
+assert natural.wait(timeout=15)==0
+pid=int((directory/'natural.pid').read_text())
+try: os.kill(pid,0)
+except ProcessLookupError: pass
+else: raise AssertionError('automatic close leaked its detached child')
+worker=launch(scope,directory/'worker.pid',True)
+other=launch(scope+'-other-home',directory/'other.pid',True)
+for path in ['worker.pid','other.pid']: ready(directory/path)
+(directory/'wrappers').write_text(f'{worker.pid} {other.pid}')
+PY
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "already-stopped exit must reclaim resources: $out"
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'worker resource ownership regression'
+import os,pathlib,subprocess,sys
+root,directory=map(pathlib.Path,sys.argv[1:])
+def alive(pid):
+    result=subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True)
+    return bool(result.stdout.strip()) and not result.stdout.strip().startswith('Z')
+worker,other=map(int,(directory/'wrappers').read_text().split())
+try:
+    assert not alive(worker), 'exit leaked wrapper'
+    assert not alive(int((directory/'worker.pid').read_text())), 'exit leaked child'
+    assert alive(other), 'exit touched another scope'
+    assert alive(int((directory/'other.pid').read_text())), 'exit touched another child'
+finally:
+    os.kill(other,15)
+PY
+  pass "worker return and already-stopped exit reclaim detached resources without touching another scope"
+}
+
 test_already_stopped_exit_is_idempotent() {
   local dir out rc
   dir=$(new_case idempotent)
@@ -1315,6 +1375,7 @@ test_interrupt_and_exit_lock_before_task_state_resolution
 test_verb_allowlist_is_closed
 test_resume_is_refused_with_its_reason
 test_relaunch_only_flags_are_rejected_on_other_verbs
+test_worker_resource_cleanup
 test_already_stopped_exit_is_idempotent
 test_missing_tmux_endpoint_refuses_rather_than_claiming_a_stop
 test_interrupt_refuses_when_no_agent_runs

@@ -3,6 +3,18 @@
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
+## Worker temporary processes
+
+The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.
+On 2026-11-06, Linux with Python 3.11.2, chrome-devtools-axi 0.1.44 and Chrome 148.0.7778.178 ran a private worker that opened a Python HTTP server and headless browser.
+The wrapper captured 21 processes including the detached bridge, MCP, Chrome, telemetry and crashpad, then returned `exit 0 captured 21 survivors {}`.
+The common spawn path was inspected for tmux, Herdr, Zellij, Orca, cmux, Paseo and Rex; it wraps ship, scout and host commands after environment filtering and leaves secondmate launches unchanged.
+Harness command templates retain their existing bytes inside the wrapper; ownership uses kernel process relationships rather than vendor names or rendered output.
+The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-control-relaunch.test.sh tests/fm-spawn-compact-adviser-disable.test.sh tests/fm-teardown.test.sh`.
+It exercises automatic close, explicit exit, teardown, separate ownership scopes and both launch environment modes.
+macOS was inspected but not executed in that verification; its detached-child limitation is documented in the implementation header.
+No Herdr lifecycle command was run for this verification.
+
 ## Unattended Lavish board supervision
 
 Historical machine-specific probe transcripts are not distributed.

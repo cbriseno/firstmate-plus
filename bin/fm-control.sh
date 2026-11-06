@@ -35,7 +35,8 @@
 #   exit       Stop the agent, preserving its terminal endpoint, worktree, and
 #              every uncommitted change. Interrupts first when the task reads
 #              busy, then submits the harness's exit command. Postcondition:
-#              the backend's recovery-grade classifier reports the agent gone.
+#              the backend's recovery-grade classifier reports the agent gone,
+#              then fm-worker-processes.py reclaims its temporary processes.
 #              Already-stopped is success (idempotent). An endpoint that reads
 #              `missing` (or, on Rex, `unreadable`, which is how a stopped Rex
 #              server reads without starting it) is put through the control
@@ -671,7 +672,7 @@ retire_busy_incarnation() {
 
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped`, `endpoint-gone`, or `stopped`.
-do_exit() {
+do_exit_agent() {
   local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed dialog
   require_state_verified_backend exit
   state=$(agent_state)
@@ -812,6 +813,15 @@ do_exit() {
   # orphaned generation survives the agent that produced it.
   retire_busy_incarnation
   printf 'stopped'
+}
+
+# Every successful exit path, including an already absent agent, reclaims its
+# worker incarnation before relaunch can publish a replacement.
+do_exit() {
+  local result
+  result=$(do_exit_agent) || return $?
+  python3 "$SCRIPT_DIR/fm-worker-processes.py" cleanup-meta "$META" >&2 || return $?
+  printf '%s' "$result"
 }
 
 # --- transactional relaunch -------------------------------------------------

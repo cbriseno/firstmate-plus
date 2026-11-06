@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Own a worker's temporary processes, independently of its terminal backend.
+
+Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND
+       python3 fm-worker-processes.py cleanup-meta STATE/TASK.meta
+
+Spawn records process_scope=STATE/TASK:spawn_gen and runs this wrapper with
+FM_WORKER_PROCESS_SCOPE set to that value, after environment filtering.
+Linux uses a child subreaper: even double-forked children that clear their
+environment stay below the wrapper. Other platforms use inherited identity
+plus live descendants; detached children that also strip identity can escape.
+TERM, a two-second grace, then KILL precede verification. Zombies are reaped
+by the wrapper. No process-name, cwd, session-wide, or cross-home matching.
+Python 3 is required on the common worker launch and cleanup path.
+"""
+
+import ctypes
+import os
+from pathlib import Path
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+KEY = b"FM_WORKER_PROCESS_SCOPE="
+
+
+def environment(pid):
+    try:
+        if sys.platform == "linux":
+            return Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        if sys.platform == "darwin":
+            # KERN_PROCARGS2 supplies argv/env boundaries; ps eww flattens them.
+            mib = (ctypes.c_int * 3)(1, 49, pid)
+            data = ctypes.create_string_buffer(1024 * 1024)
+            size = ctypes.c_size_t(len(data))
+            if ctypes.CDLL(None).sysctl(mib, 3, data, ctypes.byref(size), None, 0):
+                return []
+            raw = data.raw[:size.value]
+            argc = struct.unpack_from("i", raw)[0]
+            offset = raw.index(b"\0", 4) + 1
+            while raw[offset] == 0:
+                offset += 1
+            for _ in range(argc):
+                offset = raw.index(b"\0", offset) + 1
+            return raw[offset:].split(b"\0")
+    except (OSError, ValueError, IndexError):
+        return []
+    raise RuntimeError(f"unsupported process ownership platform: {sys.platform}")
+
+
+def snapshot():
+    probe = subprocess.Popen(["ps", "-axo", "pid=,ppid=,uid=,stat=,lstart="],
+                             stdout=subprocess.PIPE, text=True)
+    rows = probe.communicate()[0]
+    if probe.returncode:
+        raise RuntimeError("cannot snapshot worker processes")
+    return {int(p): (int(parent), stamp) for p, parent, uid, state, stamp in
+            (line.split(None, 4) for line in rows.splitlines())
+            if int(uid) == os.getuid() and int(p) != probe.pid and not state.startswith("Z")}
+
+
+def owned(scope, root=None):
+    rows = snapshot()
+    selected = {pid for pid in rows if KEY + os.fsencode(scope) in environment(pid)}
+    if root is not None:
+        selected.add(root)
+    while True:
+        expanded = selected | {pid for pid, (parent, _) in rows.items() if parent in selected}
+        if expanded == selected:
+            break
+        selected = expanded
+    return {pid: rows[pid][1] for pid in selected if pid in rows and pid != os.getpid()}
+
+
+def cleanup(scope, root=None):
+    # Keep descendants captured before TERM even if a parent exits first.
+    tracked = owned(scope, root)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        current = snapshot()
+        for pid, stamp in tracked.items():
+            if pid in current and current[pid][1] == stamp:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + (2 if sig == signal.SIGTERM else 1)
+        while time.monotonic() < deadline:
+            current = snapshot()
+            tracked = {p: s for p, s in tracked.items() if p in current and current[p][1] == s}
+            tracked.update(owned(scope, root))
+            if not tracked:
+                return
+            time.sleep(0.1)
+    raise RuntimeError(f"worker processes still alive: {sorted(tracked)}")
+
+
+def run(scope, command):
+    if sys.platform == "linux":
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
+            raise OSError(ctypes.get_errno(), "cannot enable worker child subreaper")
+    elif sys.platform != "darwin":
+        raise RuntimeError(f"unsupported worker platform: {sys.platform}")
+    # Terminal SIGINT belongs to the interactive harness; HUP/TERM close scope.
+    signal.signal(signal.SIGINT, lambda *_: None)
+    def stop(sig, _frame):
+        raise SystemExit(128 + sig)
+    signal.signal(signal.SIGHUP, stop)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        child = subprocess.Popen(["/bin/sh", "-c", command])
+        return child.wait()
+    finally:
+        # Do not interrupt cleanup a second time while terminal teardown runs.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        cleanup(scope, os.getpid())
+        if sys.platform == "linux":
+            try:
+                while os.waitpid(-1, os.WNOHANG)[0]:
+                    pass
+            except ChildProcessError:
+                pass
+
+
+def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "run":
+        scope = sys.argv[2]
+        if os.environ.get(KEY[:-1].decode()) != scope:
+            raise RuntimeError("worker scope missing from launch environment")
+        return run(scope, sys.argv[3])
+    if len(sys.argv) == 3 and sys.argv[1] == "cleanup-meta":
+        path = Path(sys.argv[2])
+        meta = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+        scope = meta.get("process_scope")
+        if scope:
+            if scope != f"{path.parent.resolve()}/{path.stem}:{meta.get('spawn_gen', '')}":
+                raise RuntimeError("worker scope does not match task metadata")
+            cleanup(scope)
+        return 0
+    raise SystemExit(__doc__)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

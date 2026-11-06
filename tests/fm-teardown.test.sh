@@ -5023,6 +5023,30 @@ test_leaked_worktree_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving"
 }
 
+test_scoped_resource_is_reaped() {
+  local case_dir rc=0 pid borrowed scope
+  case_dir=$(make_case scoped-resource)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  scope="$case_dir/state/task-x1:test"
+  printf 'spawn_gen=test\nprocess_scope=%s\n' "$scope" >> "$case_dir/state/task-x1.meta"
+  env FM_WORKER_PROCESS_SCOPE="$scope" sleep 300 &
+  pid=$!
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  borrowed=$!
+  sleep 0.3
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" "$borrowed" 2>/dev/null || true
+    fail 'scoped resource survived teardown'
+  fi
+  kill -0 "$borrowed" 2>/dev/null || fail 'scoped teardown touched an unowned process'
+  kill "$borrowed" 2>/dev/null || true
+  wait "$pid" "$borrowed" 2>/dev/null || true
+  expect_code 0 "$rc" 'scoped teardown succeeds'
+  pass 'teardown reclaims worker scope outside the worktree and preserves unowned processes inside it'
+}
+
 test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-tasktmp-reap)
@@ -5996,6 +6020,7 @@ test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_missing_record_row_repair
 test_leaked_worktree_process_is_reaped
+test_scoped_resource_is_reaped
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal

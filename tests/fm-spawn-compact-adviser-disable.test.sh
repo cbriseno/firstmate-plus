@@ -382,6 +382,24 @@ SH
   pass "a compound raw launch-command still starts its agent with the compact-adviser switch on"
 }
 
+test_launch_exports_process_scope() {
+  local filtered rec seen expected
+  for filtered in absent enabled; do
+    rec=$(make_case "scope-$filtered" codex scope-a1)
+    read_case "$rec"
+    [ "$filtered" != enabled ] || : > "$HOME_DIR/config/launch-env-allowlist"
+    run_case_spawn scope-a1 "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null \
+      || fail 'scope launch failed'
+    install_env_probe "$FAKEBIN_DIR" codex FM_WORKER_PROCESS_SCOPE
+    seen=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG")
+    expected=$(sed -n 's/^process_scope=//p' "$HOME_DIR/state/scope-a1.meta")
+    [ -n "$expected" ] || fail 'spawn omitted process ownership'
+    assert_equals "$expected" "$seen" 'agent inherits its recorded scope after environment filtering'
+  done
+  pass 'worker ownership survives both launch environment modes'
+}
+
+test_launch_exports_process_scope
 test_ship_allowlist_absent
 test_ship_allowlist_enabled
 test_launch_command_carries_the_switch_without_the_pane_export
