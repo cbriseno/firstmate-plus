@@ -87,6 +87,47 @@ expect_allow() {
   [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "$label allow wrote output: $(cat "$OUT" "$ERR")"
 }
 
+test_stale_index_lock() {
+  guard_env "$PRIMARY" python3 - "$CHECK" "$PRIMARY" <<'PYTEST'
+import os, pathlib, subprocess, sys, time
+check, home = sys.argv[1:]
+lock = pathlib.Path(home) / '.git/index.lock'
+
+def guard(command, expected):
+    result = subprocess.run(['bash', check, '--claude', '--tool', 'Bash',
+                             '--cwd', home, '--command', command], capture_output=True)
+    assert result.returncode == expected, (command, result.stderr)
+
+command = f'rm -- "{lock}"'
+try:
+    lock.touch()
+    os.utime(lock, (time.time() - 700,) * 2)
+    guard(command, 0)
+    subprocess.run(['rm', '--', str(lock)], check=True)
+    assert not lock.exists()
+    lock.write_text('busy')
+    os.utime(lock, (time.time() - 700,) * 2)
+    guard(command, 2)
+    lock.write_text('')
+    guard(command, 2)
+    os.utime(lock, (time.time() - 700,) * 2)
+    with subprocess.Popen(['git', 'hash-object', '--stdin'], stdin=subprocess.PIPE,
+                          stdout=subprocess.DEVNULL) as git:
+        try:
+            guard(command, 2)
+        finally:
+            git.terminate()
+            git.wait()
+    for denied in [f'rm -- "{lock}.other"', f'rm -f -- "{lock}"',
+                   f'rm -- "{lock}" "{home}/AGENTS.md"', f'touch "{lock}"']:
+        guard(denied, 2)
+finally:
+    lock.unlink(missing_ok=True)
+PYTEST
+  [ "$?" -eq 0 ] || fail "stale index lock recovery"
+  pass "only an empty stale home index lock without a live git process may be removed"
+}
+
 test_refuses_captain_environment_writes() {
   local c
   while IFS= read -r c; do
@@ -495,6 +536,7 @@ test_host_direct_operations() {
   pass "host operations default on, retain safety rails, audit and honor off"
 }
 
+test_stale_index_lock
 test_refuses_captain_environment_writes
 test_refuses_project_and_shared_material_writes
 test_allows_operational_paths_and_read_only_work

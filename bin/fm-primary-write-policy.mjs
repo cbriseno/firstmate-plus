@@ -15,8 +15,8 @@
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { realpathSync, appendFileSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { realpathSync, appendFileSync, statSync, lstatSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const FILE_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
@@ -108,6 +108,7 @@ class Judge {
     this.userHome = canonical(path.resolve(options.env.HOME || "/nonexistent"));
     this.projectRoots = (options.projectRoots || []).map((root) => canonical(path.resolve(root)));
     this.log = options.auditLog;
+    this.staleIndexLock = options.staleIndexLock;
     this.tool = options.tool;
     this.systemRoot = path.resolve(options.systemRoot || "/");
     this.writes = new Set();
@@ -551,6 +552,20 @@ class ShellAnalyzer {
         return this.destination(targetDir || list.at(-1), targetDir ? list : list.slice(0, -1), cwd);
       }
       case "rm": {
+        // Only this exact single-file deletion may recover an orphaned home index.
+        const lock = this.judge.staleIndexLock;
+        if (lock && args.length === 2 && args[0].value === "--" && args[1].value === lock && !args[1].subs.length) {
+          try {
+            const info = lstatSync(lock);
+            if (realpathSync(lock) === lock && info.isFile() && info.size === 0 && Date.now() - info.mtimeMs > 600000) {
+              const git = spawnSync("pgrep", ["-x", "git"], { stdio: "ignore" });
+              if (git.status === 1 && !git.error) {
+                this.judge.writes.add(`${lock.replace(/[\t\r\n]/g, " ")}\trm`);
+                return null;
+              }
+            }
+          } catch { /* Missing or unreadable locks retain the ordinary refusal. */ }
+        }
         const recursive = args.some((word) => /^-[^-]*[rR]/.test(word.value) || word.value === "--recursive");
         if (this.judge.host && recursive && (!operands(args).length || operands(args).some((word) => word.subs.length))) return { code: "primary-delete", target: "unresolved recursive delete" };
         return this.checkAll(operands(args), cwd, { recursive });
@@ -838,7 +853,7 @@ function decision(input) {
 function parseArguments(argv) {
   const result = { tool: "", cwd: "", command: "", paths: [], allow: [], allowFiles: [], allowPrefixes: [], grants: [], protect: [], projects: "", homeCheckouts: [], projectRoots: [] };
   const repeated = { "--project-root": "projectRoots", "--path": "paths", "--allow": "allow", "--allow-file": "allowFiles", "--allow-prefix": "allowPrefixes", "--grant": "grants", "--protect": "protect", "--home-checkout": "homeCheckouts" };
-  const single = { "--system-root": "systemRoot", "--host-mode": "hostMode", "--audit-log": "auditLog", "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
+  const single = { "--stale-index-lock": "staleIndexLock", "--system-root": "systemRoot", "--host-mode": "hostMode", "--audit-log": "auditLog", "--tool": "tool", "--cwd": "cwd", "--command": "command", "--projects": "projects" };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
     if (!(name in repeated) && !(name in single)) throw new Error(`unknown argument: ${name}`);

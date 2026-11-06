@@ -170,7 +170,7 @@ fi
 [ "$DIRECT_OPS" = host ] || DIRECT_OPS=off
 if [ "$DIRECT_OPS" = off ] && [ "${FM_ALLOW_PRIMARY_WRITE:-}" = 1 ]; then exit 0; fi
 ARGS=(--host-mode "$DIRECT_OPS" --audit-log "$STATE/direct-ops.log" --tool "$TOOL" --cwd "$CWD" --projects "$PROJECTS"
-  --home-checkout "$FM_ROOT" --home-checkout "$FM_HOME"
+  --home-checkout "$FM_ROOT" --home-checkout "$FM_HOME" --stale-index-lock "$FM_HOME/.git/index.lock"
   --protect "$STATE/primary-write-grants"
   --allow "$STATE" --allow "$DATA" --allow "$CONFIG"
   --allow-file "$FM_HOME/.env" --allow-file "$FM_ROOT/.env")

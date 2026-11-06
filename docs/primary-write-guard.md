@@ -61,6 +61,7 @@ Each carve-out is a firstmate operation the contract keeps legitimate.
 | `state/`, `data/`, and `config/` of every local secondmate home registered in `data/secondmates.md` | The main home curates a mate's memory files and charter (secondmate-provisioning, stow). |
 | In a secondmate home, its parent channel resolved by `bin/fm-parent-channel-lib.sh` | A mate reports judgement by appending there. |
 | A live grant from `bin/fm-primary-write-grant.sh` | Hard rule 1's captain-approved operations; see below. |
+| `rm -- <home>/.git/index.lock` when it is a regular empty file older than ten minutes and `pgrep -x git` finds no process | Recover an orphaned index lock; all other `.git` writes retain the ordinary policy. |
 | `git checkout` and `git switch` on the home's own checkout | The sanctioned worktree-tangle restore in `bootstrap-diagnostics`. |
 
 Commands that only invoke guarded fleet scripts, such as `bin/fm-spawn.sh` or `bin/fm-pr-merge.sh`, are never refused, because the guard judges only the command line's own write shapes and those scripts write in their own processes.
