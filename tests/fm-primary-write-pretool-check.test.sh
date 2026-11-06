@@ -88,7 +88,7 @@ expect_allow() {
 }
 
 test_stale_index_lock() {
-  guard_env "$PRIMARY" python3 - "$CHECK" "$PRIMARY" <<'PYTEST'
+  if ! guard_env "$PRIMARY" python3 - "$CHECK" "$PRIMARY" <<'PYTEST'
 import os, pathlib, subprocess, sys, time
 check, home = sys.argv[1:]
 lock = pathlib.Path(home) / '.git/index.lock'
@@ -124,7 +124,9 @@ try:
 finally:
     lock.unlink(missing_ok=True)
 PYTEST
-  [ "$?" -eq 0 ] || fail "stale index lock recovery"
+  then
+    fail "stale index lock recovery"
+  fi
   pass "only an empty stale home index lock without a live git process may be removed"
 }
 
