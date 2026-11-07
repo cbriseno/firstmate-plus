@@ -75,7 +75,8 @@
 # leftovers from tracked edits and list at most ten non-exempt untracked paths.
 # Commits whose tree equals their first parent's carry no work to preserve.
 # All modes also accept commits reachable from the local default branch or the
-# local integration branch declared by fm-local-branch-lib.sh.
+# local integration branch declared by fm-local-branch-lib.sh, including patches
+# git cherry recognizes as equivalent on those branches or their remote copies.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Changed scouts are backed up under data/<id>/worktree-backup.*
@@ -1727,15 +1728,34 @@ commits_with_content() {
 
 # Exclude every legitimate integration destination, never arbitrary task branches.
 unlanded_commits() {
-  local branch refs=()
-  branch=$(default_branch) && refs+=("refs/heads/$branch")
+  local branch refs=() branches=() remote_refs
+  branch=$(default_branch) && branches+=("$branch")
   branch=$(fm_local_integration_branch "$PROJ") || return 1
-  refs+=("refs/heads/$branch")
+  branches+=("$branch")
+  remote_refs=$(git -C "$WT" for-each-ref --format="%(refname)" refs/remotes/) || return 1
+  for branch in "${branches[@]}"; do
+    refs+=("refs/heads/$branch")
+    while IFS= read -r ref; do
+      case "$ref" in refs/remotes/*/"$branch") refs+=("$ref") ;; esac
+    done <<< "$remote_refs"
+  done
   local existing=() ref
   for ref in "${refs[@]}"; do
     git -C "$WT" show-ref --verify --quiet "$ref" && existing+=("$ref")
   done
-  commits_with_content "$@" HEAD --not --remotes ${existing[@]+"${existing[@]}"}
+  local commits equivalent="" cherry line commit
+  commits=$(commits_with_content "$@" HEAD --not --remotes ${existing[@]+"${existing[@]}"}) || return 1
+  [ -n "$commits" ] || return 0
+  for ref in ${existing[@]+"${existing[@]}"}; do
+    cherry=$(git -C "$WT" cherry "$ref" HEAD) || return 1
+    equivalent="$equivalent
+$(printf '%s\n' "$cherry" | sed -n 's/^- //p')"
+  done
+  while IFS= read -r line; do
+    commit=$(git -C "$WT" rev-parse --verify "${line%% *}^{commit}") || return 1
+    printf '%s\n' "$equivalent" | grep -qxF "$commit" && continue
+    printf '%s\n' "$line"
+  done <<< "$commits"
 }
 
 unpushed_patches_are_in_pr_head() {

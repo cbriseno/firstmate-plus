@@ -1079,6 +1079,54 @@ test_local_integration_branch_safety() {
   pass "declared integration branches allow landed work and preserve content and dirt refusals"
 }
 
+test_patch_equivalent_integration_safety() {
+  local mode kind case_dir ref original rc expected before
+  for mode in local-only direct-PR; do
+    for kind in main local configured remote different unrelated extra tracked staged untracked; do
+      case_dir=$(make_case "patch-$mode-$kind")
+      write_meta "$case_dir" "$mode" ship
+      wt_commit_file "$case_dir" feature.txt delivered "original patch"
+      original=$(git -C "$case_dir/wt" rev-parse HEAD)
+      ref=main
+      case "$kind" in
+        local) ref=local ;;
+        configured)
+          ref=integration
+          git -C "$case_dir/project" config firstmate.localBranch "$ref" ;;
+        unrelated) ref=feature ;;
+      esac
+      git -C "$case_dir/project" checkout -q -B "$ref" "$original^"
+      printf '%s\n' delivered > "$case_dir/project/feature.txt"
+      [ "$kind" != different ] || printf '%s\n' different > "$case_dir/project/feature.txt"
+      git -C "$case_dir/project" add feature.txt
+      git -C "$case_dir/project" -c user.name=t -c user.email=t@t commit -qm 'replayed patch'
+      [ "$original" != "$(git -C "$case_dir/project" rev-parse HEAD)" ] || fail "fixture reused original hash"
+      if [ "$kind" = remote ]; then
+        git -C "$case_dir/project" update-ref refs/remotes/origin/main HEAD
+        git -C "$case_dir/project" checkout -q --detach
+        git -C "$case_dir/project" branch -f main "$original^"
+      fi
+      case "$kind" in
+        extra) wt_commit_file "$case_dir" extra.txt unlanded ;;
+        tracked|staged) printf '%s\n' edit > "$case_dir/wt/feature.txt" ;;
+        untracked) printf '%s\n' scratch > "$case_dir/wt/scratch.txt" ;;
+      esac
+      [ "$kind" != staged ] || git -C "$case_dir/wt" add feature.txt
+      before=$(git -C "$case_dir/wt" status --porcelain)
+      expected=1
+      case "$kind" in main|local|configured|remote) expected=0 ;; esac
+      rc=0
+      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+      expect_code "$expected" "$rc" "$mode/$kind patch equivalence: $(cat "$case_dir/stderr")"
+      if [ "$expected" = 1 ]; then
+        assert_present "$case_dir/state/task-x1.meta" "refusal removed metadata"
+        [ "$before" = "$(git -C "$case_dir/wt" status --porcelain)" ] || fail "refusal changed work"
+      fi
+    done
+  done
+  pass "equivalent integration patches allow cleanup while different patches and dirt refuse"
+}
+
 test_local_only_truly_unpushed_refuses() {
   local case_dir rc
   case_dir=$(make_case truly-unpushed)
@@ -5956,6 +6004,7 @@ test_status_archive_nested_secondmate_children() {
 }
 
 test_local_integration_branch_safety
+test_patch_equivalent_integration_safety
 test_status_archive_opt_in
 test_status_archive_nested_secondmate_children
 test_status_archive_missing_status_noop
