@@ -656,7 +656,7 @@ fm_procevent_claim_capture_reservation_remove_locked() {
 
 # fm_procevent_claim_generation_gone_locked
 # True only when the loaded claim's owner is stale and the process group it led
-# independently has no members left. The separate group check also covers a
+# independently has no non-zombie members. The separate group check covers a
 # reused live pid whose identity differs while the old generation survives.
 # A live matched owner (state 0), an unreadable identity (state 2), and a
 # crashed leader with a still-live ambiguous group (state 3) all return false.
@@ -705,12 +705,19 @@ fm_procevent_claim_capture_reservation_reclaim_locked() {
 }
 
 # fm_procevent_group_alive <pid>
-# True while any process remains in the runner's numeric process group. A runner
-# starts as its own group leader, but after that leader exits a same-numbered
-# group may be reused, so group presence prevents proving the generation gone.
+# True while any non-zombie process remains in the runner's numeric group.
+# A reused group with live members still prevents reclaim; zombie-only groups
+# cannot poll and must not strand a source. Failed inspection preserves it.
 fm_procevent_group_alive() {
+  local members
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 -"$1" 2>/dev/null
+  kill -0 -"$1" 2>/dev/null || return 1
+  members=$(LC_ALL=C ps -e -o pgid= -o stat= 2>/dev/null) || return 0
+  [ -n "$members" ] || return 0
+  printf '%s\n' "$members" | awk -v group="$1" '
+    $1 == group && $2 !~ /^[ZX]/ { alive = 1 }
+    END { exit !alive }
+  '
 }
 
 # fm_procevent_pid_state <pid> <identity>

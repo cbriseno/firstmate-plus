@@ -53,6 +53,139 @@ wait_for() {  # <file> [tries]
   return 1
 }
 
+# A zombie holder used to wedge both repair and coverage discovery forever.
+# Retain real unreaped children, including a runner, rather than faking ps.
+python3 - "$ROOT" "$TMP_ROOT/zombies" "$BLOCKER" <<'PY' || fail "zombie listener recovery"
+import os
+import pathlib
+import signal
+import subprocess as sp
+import sys
+import time
+
+root, lab, blocker = map(pathlib.Path, sys.argv[1:])
+(lab / "state").mkdir(parents=True)
+env = dict(os.environ, FM_HOME=str(lab), FM_STATE_OVERRIDE=str(lab / "state"),
+           FM_PROCEVENT_CLAIM_ROOT=str(lab / "claims"), FM_PROCEVENT_OWNER_CHECK_SECONDS="1")
+pe = str(root / "bin/fm-procevent.sh")
+source = "zombie-recovery"
+children, groups, guards = [], [], []
+
+def run(*args, timeout=15):
+    return sp.check_output(args, env=env, text=True, stderr=sp.STDOUT, timeout=timeout)
+
+def wait_for(test):
+    for _ in range(200):
+        if test():
+            return
+        time.sleep(.1)
+    raise AssertionError("fixture condition did not arrive")
+
+def zombie(p):
+    return run("ps", "-o", "stat=", "-p", str(p.pid)).strip().startswith("Z")
+
+try:
+    run(pe, "register", "lavish", source, "--", "bash", "-c",
+        'printf ready > "$1"; shift; exec "$@"', "_", str(lab / "started"),
+        str(blocker), str(lab / "release"),
+        "status: feedback", "prompts[1]{tag,prompt}:", "  message,recovered")
+    with (lab / "runner.log").open("w") as log:
+        runner = sp.Popen(["bash", "-c", 'export FM_PROCEVENT_RUNNER_GROUP=$$; exec "$@"',
+                           "_", pe, "_start", source], env=env, stdout=log, stderr=log,
+                          start_new_session=True)
+    children.append(runner)
+    groups.append(runner.pid)
+    wait_for(lambda: (lab / "started").exists())
+    # The guard is our runner's exact generation; never match another test's guard.
+    needle = f"{pe} _owner-watchdog {source} {runner.pid} "
+    def find_guard():
+        for row in run("ps", "-e", "-o", "pid=", "-o", "args=").splitlines():
+            pid, _, args = row.strip().partition(" ")
+            if needle in args:
+                guards.append(int(pid))
+                return True
+        return False
+    wait_for(find_guard)
+    os.killpg(runner.pid, signal.SIGKILL)
+    wait_for(lambda: zombie(runner))
+    # Leave a second zombie owning the same source's lock, as in the incident.
+    holder = sp.Popen(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; fm_lock_try_acquire "$2"',
+                       "_", str(root), str(lab / "claims/zombie-recovery.lock")], env=env)
+    children.append(holder)
+    wait_for(lambda: zombie(holder))
+    for proc_root in ("/proc", str(lab / "no-proc")):
+        fallback = dict(env, FM_PROC_ROOT_OVERRIDE=proc_root)
+        dead = sp.run(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; fm_pid_alive "$2"',
+                       "_", str(root), str(holder.pid)], env=fallback)
+        assert dead.returncode == 1, "zombie is still considered live"
+    assert "none" in run(pe, "list", timeout=5), "zombie-only group still owns source"
+    assert "started=1" in run(pe, "reconcile", timeout=15), "dead listener did not recover"
+    (lab / "release").touch()
+    result = lab / "state/procevent-inbox/zombie-recovery.1.result"
+    wait_for(result.exists)
+    queue = lab / "state/.wake-queue"
+    wait_for(lambda: queue.exists() and "procevent lavish zombie-recovery 1" in queue.read_text())
+    assert "recovered" in result.read_text()
+
+    # A genuinely live lock holder must remain untouched. Reconciliation must
+    # time out, reject concurrent work, and let discovery report uncertainty.
+    live_holder = sp.Popen(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; '
+        'fm_lock_try_acquire "$2" || exit 1; touch "$3"; '
+        'while [ ! -e "$4" ]; do sleep .1; done; fm_lock_release "$2"',
+        "_", str(root), str(lab / "claims/zombie-recovery.lock"),
+        str(lab / "held"), str(lab / "unlock")], env=env)
+    children.append(live_holder)
+    wait_for(lambda: (lab / "held").exists())
+    bounded = dict(env, FM_PROCEVENT_RECONCILE_SECONDS="3")
+    job = sp.Popen([pe, "reconcile"], env=bounded, text=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+    children.append(job)
+    singleton = lab / "state/.procevent-reconcile.lock"
+    wait_for(lambda: (singleton / "pid").exists())
+    worker_pid = (singleton / "pid").read_text().strip()
+    alias = lab / "state-alias"
+    alias.symlink_to(lab / "state", target_is_directory=True)
+    alias_env = dict(bounded, FM_STATE_OVERRIDE=str(alias))
+    duplicate = sp.check_output([pe, "reconcile"], env=alias_env, text=True, timeout=3)
+    assert "already running" in duplicate, duplicate
+    assert "uncertain" in run(pe, "list", timeout=3)
+    output = job.communicate(timeout=10)[0]
+    assert job.returncode == 124 and "exceeded" in output, output
+    assert not singleton.is_symlink() and not singleton.exists(), "singleton lock leaked"
+    status = run("ps", "-e", "-o", "pid=", "-o", "stat=")
+    assert all(row.split()[0] != worker_pid or row.split()[1].startswith("Z")
+               for row in status.splitlines() if row.split()), "timed-out worker survived"
+    assert live_holder.poll() is None, "deadline killed the independent lock holder"
+    # The watcher previously discarded reconcile failures and then blocked in
+    # discovery. Its ordinary durable coverage wake must now reach the owner.
+    (lab / "state/.last-check").touch()
+    (lab / "state/home-summary.json").write_text("{}")
+    watcher_env = dict(bounded, FM_POLL="1", FM_HEARTBEAT="999999",
+                       FM_HOME_SUMMARY_INTERVAL="999999", LAVISH_AXI_STATE_DIR=str(lab / "lavish"))
+    watcher = sp.check_output([str(root / "bin/fm-watch.sh")], env=watcher_env,
+                              text=True, stderr=sp.STDOUT, timeout=15)
+    assert "unattended Lavish board" in watcher, watcher
+    assert "reconciliation failed or exceeded" in queue.read_text()
+    (lab / "unlock").touch()
+    live_holder.wait(timeout=5)
+    assert "reconciled:" in run(pe, "reconcile"), "next cycle did not recover"
+finally:
+    (lab / "unlock").touch()
+    for pid in groups:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    for child in children:
+        child.wait(timeout=5)
+    for pid in guards:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    sp.run([pe, "retire", source], env=env, stdout=sp.DEVNULL, stderr=sp.DEVNULL, timeout=15)
+PY
+pass "zombie locks and zombie-only groups recover and deliver captured feedback"
+
 # Discovery must work before any registration, independently of agent memory.
 # The clock stub advances only this private scan, avoiding timing sleeps.
 (

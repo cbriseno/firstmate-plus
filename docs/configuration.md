@@ -2554,6 +2554,11 @@ On every cycle, the watcher's `reconcile`:
 - Restarts a source whose owner is gone.
 - Stops this home's runner if its registration disappeared unexpectedly.
 
+Reconciliation admits one active run per physical state root; concurrent callers return immediately, and the existing bounded-execution helper stops a stalled run without stopping its detached listeners.
+The command header owns its deadline and override.
+A failed run becomes a coverage diagnostic through the existing watcher wake queue, and the next cycle retries.
+Source listing never waits on a busy source lock, so a stalled reconciliation cannot also block the unattended-board scan.
+
 In supported steady state, a home with no registered source runs nothing, generates no state, and keeps its ordinary cadence.
 
 **Suppress only adapter-confirmed no-op results**
@@ -2635,6 +2640,9 @@ Ownership is machine-wide per canonical source, because separate homes can share
 - Each claim binds its caller-reported home and runner PID to a process identity, unique claim generation, exact registration-file generation, and resolved state-root identity.
 - Registration, acquisition, replacement, retirement, and generation-bound release are serialized at one machine-wide boundary per source.
 - A live identity-matched owner is never displaced, and release removes only the exact generation the caller acquired.
+- Positively identified zombies are terminated processes, even while `kill -0` still succeeds: they cannot retain source locks or keep an owner guard alive.
+- Group membership below means non-zombie members; a zombie-only group permits normal reconciliation, while surviving polling children and failed process inspection still preserve ownership.
+  `tests/fm-lavish-watch.test.sh` reproduces zombie source-lock and runner recovery with real unreaped processes, including the portable `ps` fallback.
 
 **Prove ownership before stopping a runner**
 

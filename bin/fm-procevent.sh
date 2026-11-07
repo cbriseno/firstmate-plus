@@ -127,7 +127,12 @@
 # extension-bind
 #            Serialize tracked binding publication against extension resolution,
 #            registration publication, and retirement in this home.
+# Reconcile is single-flight per physical state root. Concurrent calls return
+# immediately. FM_PROCEVENT_RECONCILE_SECONDS bounds one run (default 60, 1-3600
+# whole seconds), plus a 2s termination grace. A timeout returns 124 and the next
+# watcher cycle retries; no source registration or captured result is discarded.
 # list       Show registered sources, owners, and pending captured results.
+#            A busy source lock reports uncertain instead of blocking discovery.
 #
 # Terminal knowledge is adapter-owned. This runner never inspects a result and
 # never names an adapter-specific status: built-ins keep the existing
@@ -231,7 +236,7 @@
 #
 # Ownership is machine-wide per canonical source, because separate Firstmate
 # homes can share one underlying source store. A live owner is never displaced;
-# only a claim whose stale owner and independently absent process group prove
+# only a claim whose stale owner and group with no non-zombie members prove
 # its whole generation gone is reclaimed. A crashed leader or reused pid whose
 # process group still has members cannot relax ownership cleanup. Reconcile
 # signals only a live identity-matched runner group and otherwise keeps the
@@ -1687,7 +1692,31 @@ stranded_leaderless_detail() {  # <source-id>
   printf '%s' "its runner died and its polling child may still be attached to the source's session, so reconcile preserves that claim and starts no replacement, and nothing automatic will touch that group. Verify whether anything is still polling $1; once that process group is empty, the next reconcile reclaims the source on its own."
 }
 
+# Bound the existing reconciliation, including lock waits and adapter calls.
+# The child owns the singleton lock, so an interrupted caller cannot release
+# it while reconciliation is still running. Detached listeners keep their own
+# groups and survive this operation's deadline.
+cmd_reconcile_bounded() {
+  local bound=${FM_PROCEVENT_RECONCILE_SECONDS:-60} status
+  case "$bound" in ''|0*|*[!0-9]*) die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600" ;; esac
+  [ "$bound" -le 3600 ] || die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600"
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$SCRIPT_DIR/fm-timeout-lib.sh"
+  (fm_exec_timed "$bound" 2 bash "$SCRIPT_DIR/fm-procevent.sh" _reconcile)
+  status=$?
+  if fm_timed_out "$status"; then
+    printf 'error: process-event reconciliation exceeded %ss; next cycle retries\n' "$bound" >&2
+    return 124
+  fi
+  return "$status"
+}
+
 cmd_reconcile() {
+  if ! fm_lock_try_acquire "$STATE/.procevent-reconcile.lock"; then
+    printf 'reconcile: already running (pid=%s)\n' "${FM_LOCK_HELD_PID:-unknown}"
+    return 0
+  fi
+  trap 'fm_lock_release "$STATE/.procevent-reconcile.lock"' EXIT
   local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
@@ -2039,7 +2068,7 @@ stop_runner_pid() {  # <pid> <identity>
   signal_state=$?
   [ "$signal_state" -eq 0 ] || return "$signal_state"
   while [ "$i" -lt 20 ]; do
-    kill -0 -"$pid" 2>/dev/null || return 0
+    fm_procevent_group_alive "$pid" || return 0
     sleep 0.1
     i=$((i + 1))
   done
@@ -2048,7 +2077,7 @@ stop_runner_pid() {  # <pid> <identity>
   [ "$signal_state" -eq 0 ] || return "$signal_state"
   i=0
   while [ "$i" -lt 20 ]; do
-    kill -0 -"$pid" 2>/dev/null || return 0
+    fm_procevent_group_alive "$pid" || return 0
     sleep 0.1
     i=$((i + 1))
   done
@@ -2416,26 +2445,28 @@ cmd_list() {
     adapter=$(read_adapter "$id" 2>/dev/null || echo '?')
     kind=$(source_kind "$id" 2>/dev/null || true)
     task=$(source_owner_task "$id" 2>/dev/null || true)
-    fm_procevent_source_lock_acquire "$id" || continue
-    fm_procevent_claim_state_locked "$id"
-    claim_state=$?
-    # A stale claim whose process group still has members is exactly as
-    # undisplaceable as the leaderless group state 3 already reports, and a
-    # reused PID reaches it through state 1 rather than state 3. Reporting that
-    # as `none` reads like an idle source waiting to be started, which is the
-    # reassuring answer this whole surface gave while a board collected nothing.
-    case "$claim_state" in
-      0) owner=live ;;
-      1)
-        owner=none
-        if fm_procevent_claim_undisplaceable_locked "$id"; then
-          owner=orphaned
-        fi
-        ;;
-      3) owner=orphaned ;;
-      *) owner=uncertain ;;
-    esac
-    fm_procevent_source_lock_release "$id"
+    owner=uncertain
+    if fm_procevent_source_lock_try_acquire "$id"; then
+      fm_procevent_claim_state_locked "$id"
+      claim_state=$?
+      # A stale claim whose process group still has members is exactly as
+      # undisplaceable as the leaderless group state 3 already reports, and a
+      # reused PID reaches it through state 1 rather than state 3. Reporting that
+      # as `none` reads like an idle source waiting to be started, which is the
+      # reassuring answer this whole surface gave while a board collected nothing.
+      case "$claim_state" in
+        0) owner=live ;;
+        1)
+          owner=none
+          if fm_procevent_claim_undisplaceable_locked "$id"; then
+            owner=orphaned
+          fi
+          ;;
+        3) owner=orphaned ;;
+        *) owner=uncertain ;;
+      esac
+      fm_procevent_source_lock_release "$id"
+    fi
     pending=$(fm_procevent_pending "$STATE" | grep -c "/$id\." || true)
     if [ "$kind" = task-owned ] && [ -n "$task" ]; then
       if [ "$pending" -gt 0 ]; then
@@ -2555,7 +2586,8 @@ case "${1-}" in
   ensure-listening)   shift; cmd_ensure_listening "$@" ;;
   _start)             shift; cmd_start "$@" ;;
   _owner-watchdog)    shift; cmd_owner_watchdog "$@" ;;
-  reconcile)          shift; cmd_reconcile "$@" ;;
+  reconcile)          shift; cmd_reconcile_bounded "$@" ;;
+  _reconcile)         shift; cmd_reconcile "$@" ;;
   classify)           shift; cmd_classify "$@" ;;
   handled)            shift; cmd_handled "$@" ;;
   retire)             shift; cmd_retire "$@" ;;

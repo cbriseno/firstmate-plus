@@ -66,12 +66,23 @@ else
   fm_epoch_seconds_to() { printf -v "$1" '%s' "$(date +%s)"; }
 fi
 
+# A zombie retains its PID but cannot hold a lock or run a listener. Treat only
+# positively observed exit states as dead; an unreadable state stays uncertain.
 fm_pid_alive() {
-  local pid=$1
+  local pid=$1 stat proc_root
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null || return 1
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  if [ -r "$proc_root/$pid/stat" ] && IFS= read -r stat < "$proc_root/$pid/stat"; then
+    stat=${stat##*)}
+  else
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null) || stat=
+  fi
+  stat=${stat#"${stat%%[![:space:]]*}"}
+  case "$stat" in Z*|X*) return 1 ;; esac
+  return 0
 }
 
 fm_pid_identity() {

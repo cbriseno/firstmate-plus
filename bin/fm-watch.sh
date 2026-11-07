@@ -3611,7 +3611,10 @@ while :; do
   # only republishes results already captured durably and restarts a source
   # whose owner is gone. It is a no-op with nothing registered.
   if [ -d "$STATE/procevent" ]; then
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1 || true
+    if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1; then
+      fm_wake_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
+        "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
+    fi
   fi
   # Publication without registration is invisible to the generic runner.
   # Discover only this home's boards, including those whose worker has gone,
