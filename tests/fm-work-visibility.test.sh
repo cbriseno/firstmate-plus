@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-visibility-') as tmp:
     env={k:v for k,v in os.environ.items() if not k.startswith(('FM_','TASKS_AXI_'))};env.update(FM_HOME=str(home),FM_LIVE='0',PYTHONDONTWRITEBYTECODE='1')
     def cli(*args,body=None,raw=False):
         p=subprocess.run(['bash',str(root/'bin/fm-tasks-axi.sh'),*args],env=env,text=True,capture_output=True,input=json.dumps(body) if body is not None else None)
-        assert p.returncode==0,(args,p.stdout,p.stderr)
+        assert p.returncode==0 or args[:2]==('work','dispatch-check'),(args,p.stdout,p.stderr)
         return p.stdout if raw else json.loads(p.stdout)
     def check(value,message):
         global checks
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-visibility-') as tmp:
     check(change['operations']==[] and change['kind']=='project-metadata','metadata mode has no task operations')
     wanted=copy.deepcopy(baseline);wanted['groups']['project:alpha']['visibility']='unknown'
     check(change['structure']==wanted,'exact diff changes only declared visibility')
-    tampered=copy.deepcopy(change);tampered['structure']['freeze']['except'].append('unexpected')
+    tampered=copy.deepcopy(change);tampered['structure']['freeze']={'except':[], 'reason':'Not authorized by metadata', 'resumed':{}}
     check(cli('work','normalize-apply','--request-id','visibility-tamper-0001',body=tampered)['code']=='invalid_value','reject unrelated freeze changes')
     check(structure()==baseline,'tampered plan writes nothing')
     result=cli('work','normalize-apply','--request-id','visibility-upgrade-0001',body=change)
@@ -73,6 +73,33 @@ with tempfile.TemporaryDirectory(prefix='fm-work-visibility-') as tmp:
     cli('work','apply',body=op('set_priority','project:alpha',value=0))
     check(cli('work','normalize-rollback','--request-id','visibility-upgrade-0002')['code']=='stale_revision','rollback preserves subsequent owner structure changes')
     check(project('alpha')['priority']['own']==0,'later project priority remains')
+    # Historical interpretation stays in the existing normalization owner.
+    cli('add','legacy-free','Legacy inherited only','--repo','unclear',raw=True)
+    cli('add','legacy-held','Legacy own hold','--repo','unclear',raw=True)
+    cli('hold','legacy-held','--kind','external','--reason','Other owner',raw=True)
+    saved=structure();saved['freeze']={'except':[], 'reason':'Original stop with unresolved future scope', 'resumed':{}}
+    (home/'data/work-structure.json').write_text(json.dumps(saved))
+    scoped=home/'scope.json'
+    scoped.write_text(json.dumps({'schema':'fm-work-freeze-scope.v1','tasks':['legacy-held'],'include_future':False,'authority':'Disposable original instruction: pause legacy-held only.'}))
+    freeze_plan=cli('work','normalize-plan','--freeze-scope','--map',str(scoped))
+    check(structure()==saved,'dry-run never changes historical pauses')
+    check([v['task'] for v in freeze_plan['impact']['released']]==['legacy-free'],'list isolates inherited-only releases')
+    check(any(v['task']=='legacy-held' and v['hold']['kind']=='external' for v in freeze_plan['impact']['preserved']),'independent external hold is explicit and preserved')
+    freeze_bytes=(home/'data/backlog.md').read_bytes()
+    forged=copy.deepcopy(freeze_plan);forged['structure']['groups']['project:alpha']['priority']=3
+    check(cli('work','normalize-apply','--request-id','freeze-forged-0001',body=forged)['code']=='invalid_value','scope cannot change unrelated controls')
+    applied=cli('work','normalize-apply','--request-id','freeze-approved-0001',body=freeze_plan)
+    check(applied['state']=='applied' and cli('work','dispatch-check','--task','legacy-free')['allowed'],'approved inherited release is applied by owner')
+    cli('add','future-free','New unrelated task','--repo','unclear',raw=True)
+    check(cli('work','dispatch-check','--task','future-free')['allowed'],'finite scope excludes future work')
+    check((home/'data/backlog.md').read_text().count('Other owner')==1,'external hold remains after new work')
+    scoped.write_text(json.dumps({'schema':'fm-work-freeze-scope.v1','tasks':[],'include_future':True,'authority':'Disposable explicit global stop including future work.'}))
+    future_plan=cli('work','normalize-plan','--freeze-scope','--map',str(scoped))
+    check(cli('work','normalize-apply','--request-id','freeze-future-00001',body=future_plan)['state']=='applied','explicit future stop is supported')
+    cli('add','future-stopped','Future global scope','--repo','unclear',raw=True)
+    check(cli('work','dispatch-check','--task','future-stopped')['code']=='invalid_value','explicit future stop remains effective')
+    stale=copy.deepcopy(future_plan)
+    check(cli('work','normalize-apply','--request-id','freeze-stale-000001',body=stale)['code']=='stale_revision','new arrival invalidates stale migration')
     poisoned=structure();poisoned['groups']['project:alpha']['visibility']='secret';(home/'data/work-structure.json').write_text(json.dumps(poisoned))
     check(cli('work','snapshot')['code']=='invalid_value','invalid stored metadata fails closed')
     print('PASS: %d explicit visibility owner assertions'%checks)

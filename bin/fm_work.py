@@ -208,7 +208,10 @@ class Owner:
             refuse(not isinstance(s.get(field), typ), 'owner_failed', tr('Invalid structure: ') + field)
         freeze = s.get('freeze')
         refuse(freeze is not None and (not isinstance(freeze, dict) or not isinstance(freeze.get('except'), list)
-               or not plain(freeze.get('reason'), 500) or not isinstance(freeze.get('resumed', {}), dict)), 'owner_failed', tr('Invalid freeze.'))
+               or not plain(freeze.get('reason'), 500) or not isinstance(freeze.get('resumed', {}), dict)
+               or ('tasks' in freeze and (not isinstance(freeze['tasks'], list)
+                   or any(not isinstance(i, str) or not ID.fullmatch(i) for i in freeze['tasks'])))
+               or ('include_future' in freeze and type(freeze['include_future']) is not bool)), 'owner_failed', tr('Invalid freeze.'))
         for key, group in s['groups'].items():
             refuse(not isinstance(group, dict), 'owner_failed', tr('Invalid group.'))
             repo = group.get('repo')
@@ -378,7 +381,7 @@ class Owner:
                 return dict(from_=key, **pause) | {'from': key}
         freeze = self.structure.get('freeze')
         resumed = set((freeze or {}).get('resumed', {}))
-        if freeze and task_id not in freeze['except'] and not resumed.intersection(self.ancestors(task_id) + ['task:' + task_id]):
+        if freeze and ('tasks' not in freeze or freeze.get('include_future') or task_id in freeze['tasks']) and task_id not in freeze['except'] and not resumed.intersection(self.ancestors(task_id) + ['task:' + task_id]):
             return {'from': 'freeze', 'reason': freeze['reason']}
         return None
 
@@ -951,10 +954,34 @@ class Owner:
         return {i: dict(hold=self.current_hold(i), inherited=self.inherited(i), blockers=self.blockers(i))
                 for i in self.rows}
 
-    def normalization_plan(self, source, additions, metadata_only=False, hierarchy_only=False):
+    def normalization_plan(self, source, additions, metadata_only=False, hierarchy_only=False, freeze_scope=False):
         """Dry run from current sources. A manifest is data, never shell text."""
         structure = copy.deepcopy(self.structure)
         operations, conflicts = [], []
+        if freeze_scope:
+            refuse(not isinstance(source, dict) or source.get('schema') != 'fm-work-freeze-scope.v1'
+                   or set(source) != {'schema', 'tasks', 'include_future', 'authority'}
+                   or not isinstance(source['tasks'], list) or type(source['include_future']) is not bool
+                   or not plain(source['authority'], 2000)
+                   or any(not isinstance(i, str) or i not in self.rows for i in source['tasks'])
+                   or len(source['tasks']) != len(set(source['tasks'])), 'invalid_value', tr('Explicit freeze scope and original authority are required.'))
+            freeze = structure.get('freeze')
+            refuse(not freeze, 'invalid_value', tr('There is no historical freeze to interpret.'))
+            before = {i: self.inherited(i) for i in self.current_ids}
+            freeze.update(tasks=sorted(source['tasks']), include_future=source['include_future'])
+            self.structure = structure
+            released, preserved = [], []
+            for i in sorted(self.current_ids):
+                if not before[i] and not self.current_hold(i) and i not in structure.get('task_pauses', {}):
+                    continue
+                controls = dict(task=i, hold=self.current_hold(i), task_pause=structure.get('task_pauses', {}).get(i),
+                                inherited=self.inherited(i), dependencies=self.blockers(i), safe_point=self.safe_point(i)[0])
+                kept = controls['hold'] or controls['task_pause'] or controls['inherited'] or any(b['open'] for b in controls['dependencies'])
+                (preserved if kept else released).append(controls)
+            return dict(schema='fm-work-normalization-manifest.v1', kind='freeze-scope', home=str(self.home),
+                        expected=self.normalization_fingerprint(), structure=structure, operations=[], conflicts=[],
+                        freeze_source=source, impact=dict(released=released, preserved=preserved, resumes_workers=False),
+                        unassigned=[], active=copy.deepcopy(freeze['except']))
         if hierarchy_only:
             protections = self.protections()
             refuse(not isinstance(source, dict) or source.get('schema') != 'fm-work-hierarchy.v1'
@@ -1063,9 +1090,8 @@ class Owner:
                     if current != op['value']:
                         operations.append(dict(task=task['id'], field='card_title', before=current, after=op['value']))
         active = additions.get('active', [])
-        refuse(not active or any(i not in self.current_ids for i in active), 'invalid_value', tr('Normalization requires explicit, existing active tasks.'))
-        structure['freeze'] = dict(resumed=structure.get('freeze', {}).get('resumed', {}), except_=active, reason=tr('Only explicitly approved tasks may proceed.'))
-        structure['freeze']['except'] = structure['freeze'].pop('except_')
+        refuse(any(i not in self.current_ids for i in active), 'invalid_value', tr('Active tasks must exist.'))
+        # Organizing metadata grants no pause authority and preserves existing pauses.
         # Preserve notes/flags as evidence, without turning a removal candidate into deletion.
         structure['review'] = dict(source_schema=source['schema'], captured_at=source.get('captured_at'),
             tasks=[dict(id=t['id'], note=t.get('captain_note'), flags=t.get('flags', [])) for t in source['tasks']],
@@ -1093,6 +1119,11 @@ class Owner:
             return existing
         refuse(bool(manifest.get('conflicts')), 'stale_revision', tr('Resolve dry-run conflicts before applying.'))
         refuse(manifest['expected'] != self.normalization_fingerprint(), 'stale_revision', tr('A source changed since the dry run.'))
+        if manifest.get('kind') == 'freeze-scope':
+            before_structure = copy.deepcopy(self.structure)
+            projected = self.normalization_plan(manifest['freeze_source'], {}, freeze_scope=True)
+            self.structure = before_structure
+            refuse(projected != manifest, 'invalid_value', tr('The manifest changes fields outside the explicit freeze scope.'))
         if manifest.get('kind') == 'hierarchy':
             before_structure = copy.deepcopy(self.structure)
             before_invariants = self.hierarchy_invariants()
@@ -1207,6 +1238,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['capabilities', 'snapshot', 'preview', 'apply', 'request-status', 'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--runtime', action='store_true', help='Include full bounded crew reconciliation in addition to fresh endpoint liveness.')
+    parser.add_argument('--freeze-scope', action='store_true', help='Interpret a historical freeze with explicit authority; dry run only until normalize-apply.')
     parser.add_argument('--metadata-only', action='store_true', help='Plan only explicit project visibility; preserve all other structure and task fields.')
     parser.add_argument('--hierarchy-only', action='store_true', help='Plan only the owner display hierarchy; preserve canonical routing and every control field.')
     parser.add_argument('--ref', help='Canonical identity or persistent short alias within the explicit home.')
@@ -1244,14 +1276,14 @@ def main():
                 result = dict(home=str(owner.home), key=key, alias=owner.aliases.alias(key),
                               available=key in owner.keys(), task_id=key[5:] if key.startswith('task:') else None)
             elif args.verb == 'normalize-plan':
-                refuse(args.hierarchy_only and args.metadata_only, 'invalid_value', tr('Choose one normalization mode.'))
+                refuse(sum((args.hierarchy_only, args.metadata_only, args.freeze_scope)) > 1, 'invalid_value', tr('Choose one normalization mode.'))
                 with open(args.map, encoding='utf-8') as stream:
                     source = json.load(stream)
                 additions = {}
-                if not args.metadata_only and not args.hierarchy_only:
+                if not args.metadata_only and not args.hierarchy_only and not args.freeze_scope:
                     with open(args.additions, encoding='utf-8') as stream:
                         additions = json.load(stream)
-                result = owner.normalization_plan(source, additions, metadata_only=args.metadata_only, hierarchy_only=args.hierarchy_only)
+                result = owner.normalization_plan(source, additions, metadata_only=args.metadata_only, hierarchy_only=args.hierarchy_only, freeze_scope=args.freeze_scope)
             elif args.verb == 'normalize-apply':
                 result = owner.normalization_apply(json.load(sys.stdin), args.request_id)
             elif args.verb == 'normalize-rollback':

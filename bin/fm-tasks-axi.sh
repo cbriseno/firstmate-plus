@@ -149,6 +149,14 @@
 #   work normalize-plan --map FILE --additions FILE   Read-only current-source manifest.
 #   work normalize-plan --metadata-only --map FILE   Only project visibility, zero task operations.
 #   work normalize-plan --hierarchy-only --map FILE  Only declared owner display topology.
+#   work normalize-plan --freeze-scope --map FILE    Dry-run explicit historical scope.
+# Freeze map: {schema:"fm-work-freeze-scope.v1", tasks:[existing IDs],
+# include_future:boolean, authority:"original instruction/reference or pending proposal"}.
+# Named tasks are finite; include_future=true is only for an explicit future stop.
+# Legacy freezes remain restricted until their owner approves this migration.
+# Plan impact lists released/preserved controls; no worker receives continuation.
+# Approve the exact list before normalize-apply; replan if current sources change.
+# The normal backup/rollback path owns this structure-only atomic mutation.
 # Hierarchy map: {schema: "fm-work-hierarchy.v1", groups: [{key, before, after}]}.
 # Each before/after is {kind, parent, label}; kind=project requires parent=null,
 # kind=subproject requires an existing group projected as a root project parent.
@@ -199,7 +207,7 @@
 # retaining the reservation ledger and receipt; never delete/recycle allocations.
 # normalize-plan additions are {groups: [stable group declarations], membership:
 # {task_id: subproject_key}, active: [explicit approved implementation task ids]}.
-# The active list freezes all other open tasks without inventing membership.
+# The active list is descriptive; normalization never creates or broadens pauses.
 # Partial migrations keep their backup/receipt and refuse automatic replay.
 # Presentation file input also accepts progress: {steps: [{label: 1..80 chars,
 # state: done|active|todo}]}, 1..30 authored steps; null clears the declaration.
