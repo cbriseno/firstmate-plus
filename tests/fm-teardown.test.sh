@@ -1045,6 +1045,40 @@ test_empty_commits_preserve_teardown_safety() {
   pass "empty commits allow teardown without weakening content, tracked, staged or untracked refusals"
 }
 
+test_local_integration_branch_safety() {
+  local mode kind case_dir rc expected ref
+  for mode in local-only direct-PR; do
+    for kind in local configured unrelated content tracked staged untracked; do
+      case_dir=$(make_case "integration-$mode-$kind")
+      write_meta "$case_dir" "$mode" ship
+      wt_commit_file "$case_dir" private.txt private "private layer"
+      ref=local
+      if [ "$kind" = configured ]; then
+        ref=integration
+        git -C "$case_dir/project" config firstmate.localBranch "$ref"
+      fi
+      [ "$kind" != unrelated ] || ref=feature
+      git -C "$case_dir/project" update-ref "refs/heads/$ref" "$(git -C "$case_dir/wt" rev-parse HEAD)"
+      case "$kind" in
+        content) wt_commit_file "$case_dir" extra.txt unlanded ;;
+        tracked|staged) printf 'edit\n' > "$case_dir/wt/private.txt" ;;
+        untracked) printf 'scratch\n' > "$case_dir/wt/scratch.txt" ;;
+      esac
+      [ "$kind" != staged ] || git -C "$case_dir/wt" add private.txt
+      expected=1
+      case "$kind" in local|configured) expected=0 ;; esac
+      rc=0
+      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+      expect_code "$expected" "$rc" "$mode/$kind integration safety: $(cat "$case_dir/stderr")"
+      if [ "$expected" = 1 ]; then
+        assert_present "$case_dir/state/task-x1.meta" "refusal removed metadata"
+        assert_present "$case_dir/wt/private.txt" "refusal removed private work"
+      fi
+    done
+  done
+  pass "declared integration branches allow landed work and preserve content and dirt refusals"
+}
+
 test_local_only_truly_unpushed_refuses() {
   local case_dir rc
   case_dir=$(make_case truly-unpushed)
@@ -5921,6 +5955,7 @@ test_status_archive_nested_secondmate_children() {
   pass "forced secondmate retirement preserves two descendant levels and refuses linked child directories"
 }
 
+test_local_integration_branch_safety
 test_status_archive_opt_in
 test_status_archive_nested_secondmate_children
 test_status_archive_missing_status_noop

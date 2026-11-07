@@ -74,9 +74,8 @@
 # Uncommitted changes are never landed; dirty refusals distinguish untracked-only
 # leftovers from tracked edits and list at most ten non-exempt untracked paths.
 # Commits whose tree equals their first parent's carry no work to preserve.
-# local-only projects additionally accept work merged into the local default
-# branch (firstmate performs that merge after configured approval) as a fallback
-# for the common case where there is no remote at all.
+# All modes also accept commits reachable from the local default branch or the
+# local integration branch declared by fm-local-branch-lib.sh.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Changed scouts are backed up under data/<id>/worktree-backup.*
@@ -383,6 +382,7 @@ for _teardown_source in \
   fm-tasks-axi-lib.sh \
   fm-backlog-transition-lib.sh \
   fm-timeout-lib.sh \
+  fm-local-branch-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
   fm-lock-lib.sh \
@@ -1533,6 +1533,9 @@ elif [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
   PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
 fi
 
+# shellcheck source=bin/fm-local-branch-lib.sh
+. "$SCRIPT_DIR/fm-local-branch-lib.sh"
+
 default_branch() {
   local ref branch
   ref=$(git -C "$PROJ" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
@@ -1720,6 +1723,19 @@ commits_with_content() {
     git -C "$WT" diff --quiet "$commit^" "$commit" -- 2>/dev/null && continue
     printf '%s\n' "$line"
   done <<< "$commits"
+}
+
+# Exclude every legitimate integration destination, never arbitrary task branches.
+unlanded_commits() {
+  local branch refs=()
+  branch=$(default_branch) && refs+=("refs/heads/$branch")
+  branch=$(fm_local_integration_branch "$PROJ") || return 1
+  refs+=("refs/heads/$branch")
+  local existing=() ref
+  for ref in "${refs[@]}"; do
+    git -C "$WT" show-ref --verify --quiet "$ref" && existing+=("$ref")
+  done
+  commits_with_content "$@" HEAD --not --remotes ${existing[@]+"${existing[@]}"}
 }
 
 unpushed_patches_are_in_pr_head() {
@@ -2268,7 +2284,7 @@ validate_worktree_teardown_safety() {
   fi
   dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' || true)
 
-  if ! unpushed_raw=$(commits_with_content --oneline HEAD --not --remotes 2>/dev/null); then
+  if ! unpushed_raw=$(unlanded_commits --oneline 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
       return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
     fi
@@ -2280,7 +2296,7 @@ validate_worktree_teardown_safety() {
 
   if [ -n "$unpushed" ] && [ "$MODE" = local-only ]; then
     DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; return 1; }
-    if ! unmerged_raw=$(commits_with_content --oneline HEAD --not "$DEFAULT" 2>/dev/null); then
+    if ! unmerged_raw=$(unlanded_commits --oneline 2>/dev/null); then
       if worktree_safety_blocked_by_lock "commits not on $DEFAULT"; then
         return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
       fi
