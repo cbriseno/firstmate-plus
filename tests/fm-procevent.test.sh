@@ -149,6 +149,17 @@ count_results() {  # <home> <source-id>
   printf '%s\n' "$n"
 }
 
+# A detached runner can remain unreaped under the harness subreaper after it
+# terminates. Observe kernel state independently of the production helper.
+process_executing() {  # <pid>
+  local state
+  kill -0 "$1" 2>/dev/null || return 1
+  state=$(ps -p "$1" -o stat= 2>/dev/null || true)
+  state=${state#"${state%%[![:space:]]*}"}
+  case "$state" in Z*|X*) return 1 ;; esac
+  return 0
+}
+
 wait_for() {  # <file> [tries]
   local f=$1 n=${2:-100}
   for _ in $(seq 1 "$n"); do [ -s "$f" ] && return 0; sleep 0.1; done
@@ -1824,8 +1835,8 @@ runner_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/shared-src.claim" 2>/dev/null
 [ -n "$runner_pid" ] || fail "no runner pid recorded for the blocked source"
 kill -0 "$runner_pid" 2>/dev/null || fail "the blocked runner is not live before retirement"
 pe "$HA" retire shared-src >/dev/null
-for _ in $(seq 1 40); do kill -0 "$runner_pid" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$runner_pid" 2>/dev/null && fail "retire left the blocked runner alive"
+for _ in $(seq 1 40); do process_executing "$runner_pid" || break; sleep 0.1; done
+process_executing "$runner_pid" && fail "retire left the blocked runner alive"
 assert_absent "$FM_PROCEVENT_CLAIM_ROOT/shared-src.claim" "retire releases the claim"
 pass "retiring a never-completing source stops its runner and its blocked child"
 
@@ -1848,8 +1859,8 @@ fi
 rm -f "$HZ/state/procevent/orphan-src.source"
 out=$(pe "$HZ" reconcile)
 assert_contains "$out" "stopped=1" "reconcile stops a runner whose registration was removed"
-for _ in $(seq 1 40); do kill -0 "$orphan_pid" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$orphan_pid" 2>/dev/null && fail "reconcile left an orphaned runner alive"
+for _ in $(seq 1 40); do process_executing "$orphan_pid" || break; sleep 0.1; done
+process_executing "$orphan_pid" && fail "reconcile left an orphaned runner alive"
 pass "reconcile reaps a runner whose source registration is gone"
 
 # --- a stale claim is reclaimable, a live one is not ------------------------
