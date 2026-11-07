@@ -519,3 +519,15 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
+
+## Controlled coordinator pilot
+
+Verified 2026-11-07 on Linux, Bash 5.2, Python 3.11 and Claude Code 2.1.319.
+The native pilot used Haiku 5.5, low effort and auto mode: one scout produced the technical report, applied an inbox correction, and the coordinator returned identical report bytes after restart.
+A direct scratch-directory operation also ran while the worker was active.
+The coordinator is mechanical; there is no primary-model solution or rewrite channel.
+Refresh the portable ownership, pending-outcome and transition-alarm proof with `env -u FM_TASK_ID FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-claude-coordinator.test.sh --jobs 1`.
+The measured run printed `host failover seconds: 4.92` and `PASS: controlled routing, exact worker report, bounded operation, pending outcome, transition alarms, host recovery, unread continuation and cleanup`.
+The counterfactual omitting only outcome presentation failed on the same interface with an empty attention list despite the stored obligation.
+The native run required an explicit, directory-scoped approval of its external instruction import; the repository does not override client consent.
+This proves the controlled application's Linux lifetime only; native free chat, macOS execution and recovery after application SIGKILL or machine shutdown remain unverified.

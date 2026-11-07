@@ -111,6 +111,10 @@ fm_harness_process_matches() {  # <comm> <args>
     case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
     return 0
   fi
+  # The opt-in controlled application is a session owner, not a tool shell.
+  case "$base:$args" in
+    [pP]ython*:"${args%% *} ${BASH_SOURCE[0]%/*}/fm-claude-coordinator.py "*) return 0 ;;
+  esac
   argv0=${args%% *}
   if name=$(fm_harness_path_name "$comm") || name=$(fm_harness_path_name "$argv0"); then
     case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac

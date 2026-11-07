@@ -5,6 +5,9 @@
 #
 # Usage:
 #   fm-supervision-host.sh park [--restart]
+#   fm-supervision-host.sh stop
+# stop verifies session ownership, then stops only the identity-recorded host,
+# arms, engine and detached successor through the same activation/cleanup owner.
 #
 # A primary's arm owner runs this in place of bin/fm-watch-arm.sh when the home
 # runs the host (by default on Claude, by config/supervision-host elsewhere,
@@ -197,6 +200,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-afk-contract.sh"
 
 FIRST_ARM_RESTART=0
+STOP_ONLY=0
 case "${1:-}" in
   park)
     case "$#:${2:-}" in
@@ -205,6 +209,7 @@ case "${1:-}" in
       *) echo "usage: fm-supervision-host.sh park [--restart]" >&2; exit 2 ;;
     esac
     ;;
+  stop) [ "$#" -eq 1 ] || exit 2; STOP_ONLY=1 ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "usage: fm-supervision-host.sh park [--restart]" >&2; exit 2 ;;
 esac
@@ -1068,6 +1073,14 @@ trap 'exit 129' HUP
 trap 'exit 143' TERM
 trap 'exit 130' INT
 activate || { echo "supervision-host stood down: the host record could not be written"; exit 0; }
+if [ "$STOP_ONLY" -eq 1 ]; then
+  if [ -n "$LEFT_ARM" ]; then
+    IFS="$(printf '\t')" read -r left_pid left_identity < "$LEFT_RECORD" || exit 1
+    stop_recorded "$left_pid" "$left_identity" 10
+    rm -f "$LEFT_RECORD"
+  fi
+  exit 0
+fi
 log_line "start	gen=$GEN	primary=$PRIMARY"
 
 # The first cycle.

@@ -17,7 +17,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert run().returncode==0
     args,event=json.loads(receipt.read_text()); assert args==['ready',event['text']]
     assert not (home/'unwanted').exists()
+    override=home/'override.json';override.write_bytes(config.read_bytes())
     config.write_text('{'); assert run().returncode==2
+    assert run('--command-file',str(override)).returncode==0
+    assert run('--command-file','relative.json').returncode==2
     config.write_text(json.dumps(['missing-notification-executable'])); assert run().returncode==1
     config.write_text(json.dumps([sys.executable,'-c','import time; time.sleep(10)'])); assert run().returncode==1
     env=dict(os.environ,FM_HOME=str(home),PYTHONPATH=str(root/'bin')); env.pop('FM_LANGUAGE',None)

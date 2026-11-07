@@ -10,3 +10,5 @@ A five-second deadline bounds the consumer call; a failed or unavailable command
 The caller must keep notification text free of secrets and must not treat a successful consumer exit as device delivery.
 Task transitions do not implicitly invoke this command; an operator-owned integration chooses the events to forward.
 `tests/fm-notification-command.test.sh` verifies absence, literal arguments, invalid configuration, failure, deadline, and installation language selection without sending an external notification.
+
+The executable also accepts a command file for one invocation, without editing installation configuration; its help owns that option.

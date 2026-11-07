@@ -431,3 +431,24 @@ The four suites share their stub engine and fixtures through `tests/supervision-
 | `tests/fm-host-mirror-live-e2e.test.sh` | Proves the Claude and Cursor mirror writers against the real harnesses; opt-in because it spends tokens. |
 
 [verification/supervision.md](verification/supervision.md#supervision-host) records the dated live results.
+
+## Controlled Claude coordinator pilot
+
+The opt-in application in [fm-claude-coordinator.py](../bin/fm-claude-coordinator.py) receives original requests and corrections, dispatches through the existing owners, and publishes the task owner's report without a model rewrite.
+Its executable help owns the JSON-line interface and concrete launch parameters.
+The coordinator is mechanical and accepts only supported operation verbs, without a primary model, shell, free helper arguments, or alternate chat channel.
+The application retains the original technical content for the Claude worker and publishes that worker's report.
+This changes the application interface and does not constrain an ordinary native chat session.
+
+The application owns the existing host beside foreground operations, instead of waiting for a Stop hook.
+[The health module](../bin/fm_coordinator_health.py) combines the existing watcher identity check with pending-obligation age and registered listener coverage.
+Degradation remains visible in the terminal title, every response, and the application's current health record.
+Only degradation and recovery transitions reach the existing [optional notification command](notification-command.md); a configured integration owns delivery and device receipt remains unknown.
+No client settings, permissions, safeguards, merge authority, or discard authority change on entering this mode.
+
+The initial direct-operation surface is directory creation within the selected task's scratch space and status inspection.
+Arbitrary host shell commands, project reads, arbitrary helpers, and result paths are unavailable in the coordinator.
+This loss of native-chat capability is deliberate and measured, not universal host-operation coverage.
+The current pilot has no root beyond its application process: application SIGKILL, machine shutdown, and unavailable external notification transport need an operator-owned process manager or integration.
+Native chats and other clients retain their existing continuity paths.
+[Runtime verification](verification/runtime-backends.md) records the measured client and refresh entry points.

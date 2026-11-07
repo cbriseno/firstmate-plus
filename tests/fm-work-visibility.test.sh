@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-visibility-') as tmp:
     check(structure()==saved,'dry-run never changes historical pauses')
     check([v['task'] for v in freeze_plan['impact']['released']]==['legacy-free'],'list isolates inherited-only releases')
     check(any(v['task']=='legacy-held' and v['hold']['kind']=='external' for v in freeze_plan['impact']['preserved']),'independent external hold is explicit and preserved')
-    freeze_bytes=(home/'data/backlog.md').read_bytes()
+    check(any(v['task']=='unit' and v['inherited'] for v in freeze_plan['impact']['preserved']),'independent group pause remains visible in the proposed migration')
     forged=copy.deepcopy(freeze_plan);forged['structure']['groups']['project:alpha']['priority']=3
     check(cli('work','normalize-apply','--request-id','freeze-forged-0001',body=forged)['code']=='invalid_value','scope cannot change unrelated controls')
     applied=cli('work','normalize-apply','--request-id','freeze-approved-0001',body=freeze_plan)
