@@ -214,10 +214,10 @@ fm_procevent_launch_floor_seconds() {
 # How long reconcile waits for a runner it just detached to prove it took the
 # source's claim. Confirmation reads durable evidence, so a healthy launch
 # settles on the first poll and only a launch not yet proved spends the
-# window. The default stays well below FM_POLL because bin/fm-watch.sh runs
-# reconcile once per supervision cycle, and every launch of a cycle shares ONE
+# window. Cold startup under load can exceed three seconds. bin/fm-watch.sh
+# runs reconcile once per cycle, and every launch of that cycle shares ONE
 # window rather than taking a window each.
-FM_PROCEVENT_LAUNCH_CONFIRM_DEFAULT_SECONDS=3
+FM_PROCEVENT_LAUNCH_CONFIRM_DEFAULT_SECONDS=15
 FM_PROCEVENT_LAUNCH_CONFIRM_MIN_SECONDS=1
 FM_PROCEVENT_LAUNCH_CONFIRM_MAX_SECONDS=600
 

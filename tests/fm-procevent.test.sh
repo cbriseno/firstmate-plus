@@ -151,13 +151,13 @@ count_results() {  # <home> <source-id>
 
 # A detached runner can remain unreaped under the harness subreaper after it
 # terminates. Observe kernel state independently of the production helper.
-process_executing() {  # <pid>
-  local state
-  kill -0 "$1" 2>/dev/null || return 1
-  state=$(ps -p "$1" -o stat= 2>/dev/null || true)
-  state=${state#"${state%%[![:space:]]*}"}
-  case "$state" in Z*|X*) return 1 ;; esac
-  return 0
+process_executing() {  # <pid-or-negative-group>
+  local rows
+  rows=$(ps -e -o pid= -o pgid= -o stat= 2>/dev/null) || return 0
+  printf '%s\n' "$rows" | awk -v spec="$1" '
+    (spec > 0 ? $1 == spec : $2 == -spec) && $3 !~ /^[ZX]/ { found = 1 }
+    END { exit !found }
+  '
 }
 
 wait_for() {  # <file> [tries]
@@ -1937,7 +1937,8 @@ cat > "$ORPHAN_BLOCKER" <<'SH'
 printf 'started\n' >> "$1"
 if [ -s "$3" ]; then
   IFS= read -r old_group < "$3"
-  if kill -0 "-$old_group" 2>/dev/null; then
+  if ps -e -o pgid= -o stat= | awk -v group="$old_group" '
+      $1 == group && $2 !~ /^[ZX]/ { alive = 1 } END { exit !alive }'; then
     printf 'overlap\n' > "$4"
   fi
 fi
@@ -1955,8 +1956,8 @@ case "$orphan_leader" in ''|*[!0-9]*) fail "could not read the runner leader pid
 printf '%s\n' "$orphan_leader" > "$ORPHAN_GROUP"
 
 kill -KILL "$orphan_leader" 2>/dev/null || fail "could not kill the runner leader"
-for _ in $(seq 1 50); do kill -0 "$orphan_leader" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$orphan_leader" 2>/dev/null && fail "the runner leader survived SIGKILL"
+for _ in $(seq 1 50); do process_executing "$orphan_leader" || break; sleep 0.1; done
+process_executing "$orphan_leader" && fail "the runner leader survived SIGKILL"
 kill -0 -"$orphan_leader" 2>/dev/null || fail "fixture invalid: the owned child group did not survive the leader"
 
 orphan_out=$(pe "$HG" reconcile)
@@ -2006,8 +2007,8 @@ assert_contains "$orphan_again" "uncertain=1" \
 kill -0 -"$orphan_leader" 2>/dev/null \
   || fail "announcing the strand signalled the leaderless process group"
 kill -KILL -"$orphan_leader" 2>/dev/null || true
-for _ in $(seq 1 50); do kill -0 -"$orphan_leader" 2>/dev/null || break; sleep 0.1; done
-kill -0 -"$orphan_leader" 2>/dev/null && fail "could not clean up the leaderless fixture group"
+for _ in $(seq 1 50); do process_executing -"$orphan_leader" || break; sleep 0.1; done
+process_executing -"$orphan_leader" && fail "could not clean up the leaderless fixture group"
 pe "$HG" retire orphan-src >/dev/null
 pass "an ambiguous leaderless group is preserved without replacement"
 
@@ -2058,9 +2059,9 @@ case "$sr_leader" in ''|*[!0-9]*) fail "could not read the state-root fixture le
 
 kill -KILL -"$sr_leader" 2>/dev/null || true
 kill -KILL "$sr_leader" 2>/dev/null || true
-for _ in $(seq 1 50); do kill -0 -"$sr_leader" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$sr_leader" 2>/dev/null && fail "the state-root fixture leader survived SIGKILL"
-kill -0 -"$sr_leader" 2>/dev/null && fail "fixture invalid: the owned group outlived the whole generation"
+for _ in $(seq 1 50); do process_executing -"$sr_leader" || break; sleep 0.1; done
+process_executing "$sr_leader" && fail "the state-root fixture leader survived SIGKILL"
+process_executing -"$sr_leader" && fail "fixture invalid: the owned group outlived the whole generation"
 # Drift the live state root away from what the claim recorded.
 chmod 750 "$HSR/state" || fail "could not drift the state-root identity"
 
@@ -2258,7 +2259,7 @@ wait "$sr5_start_pid" \
   || fail "start failed after reclaiming the undrifted claim: $(cat "$TMP_ROOT/reused-plain-start.out")"
 assert_contains "$(cat "$TMP_ROOT/reused-plain-start.out")" "captured:" \
   "the reclaiming start did not capture the source's result"
-for _ in $(seq 1 50); do kill -0 -"$sr5_leader" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 50); do process_executing -"$sr5_leader" || break; sleep 0.1; done
 pe "$HSR5" retire reused-plain-src >/dev/null 2>&1 || true
 pass "start reclaims a reused-pid claim whose leftovers can still be tidied"
 
@@ -2672,8 +2673,8 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # claim - so the sweep would race that exit and see one source or two depending
 # on which won.
 kill -KILL -"$sweep_pid_two" 2>/dev/null || true
-for _ in $(seq 1 50); do kill -0 "$sweep_pid_two" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$sweep_pid_two" 2>/dev/null \
+for _ in $(seq 1 50); do process_executing "$sweep_pid_two" || break; sleep 0.1; done
+process_executing "$sweep_pid_two" \
   && fail "the claim-only sweep fixture runner did not stop"
 assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" \
   "a killed runner leaves its owned claim behind for the sweep"
@@ -2685,8 +2686,8 @@ assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep preflight 
 out=$(pe "$HM" sweep-home)
 assert_contains "$out" "swept: attempted=2" "home sweep retires registrations and owned claim-only sources"
 for sweep_pid in "$sweep_pid_one" "$sweep_pid_two"; do
-  for _ in $(seq 1 40); do kill -0 "$sweep_pid" 2>/dev/null || break; sleep 0.1; done
-  kill -0 "$sweep_pid" 2>/dev/null && fail "home sweep left a runner alive"
+  for _ in $(seq 1 40); do process_executing "$sweep_pid" || break; sleep 0.1; done
+  process_executing "$sweep_pid" && fail "home sweep left a runner alive"
 done
 assert_absent "$HM/state/procevent/sweep-one.source" "home sweep removes registrations"
 assert_absent "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep releases the first claim"
@@ -2800,7 +2801,7 @@ done
 sleep 0.2
 [ "$(wc -c < "$staged" | tr -d ' ')" -le 100 ] || fail "live staging exceeded the configured output bound"
 pe "$HG" retire noisy-src >/dev/null
-kill -0 "$noisy_child" 2>/dev/null && fail "TERM-resistant source child survived runner retirement"
+process_executing "$noisy_child" && fail "TERM-resistant source child survived runner retirement"
 assert_absent "$staged" "retirement removes the tracked partial staging file"
 pass "live output stays bounded and retirement reaps the whole source group"
 
@@ -2906,8 +2907,8 @@ SH
         "proved escalation releases its claim after $post_term_case identity"
       ;;
   esac
-  for _ in $(seq 1 50); do kill -0 -"$POST_TERM_RUNNER" 2>/dev/null || break; sleep 0.1; done
-  kill -0 -"$POST_TERM_RUNNER" 2>/dev/null && fail "the post-TERM fixture group survived: $post_term_case"
+  for _ in $(seq 1 50); do process_executing -"$POST_TERM_RUNNER" || break; sleep 0.1; done
+  process_executing -"$POST_TERM_RUNNER" && fail "the post-TERM fixture group survived: $post_term_case"
   pe "$HPOST_TERM" retire post-term-src >/dev/null
   pass "stop $post_term_case evidence preserves the proved-stop boundary"
 done
@@ -3630,7 +3631,7 @@ pe_register "$HPACE" lavish pace-src -- "$FAST_SOURCE" "$PACE_LOG" >/dev/null
 FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=3600 pe "$HPACE" start pace-src > "$TMP_ROOT/replacement-pacing.out" 2>&1 &
 PACE_START_PID=$!
 pace_deadline=$((SECONDS + 4))
-while kill -0 "$PACE_START_PID" 2>/dev/null; do
+while process_executing "$PACE_START_PID"; do
   if [ "$SECONDS" -ge "$pace_deadline" ]; then
     pe "$HPACE" retire pace-src >/dev/null 2>&1 || true
     wait "$PACE_START_PID" 2>/dev/null || true
@@ -3704,7 +3705,7 @@ printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$ROLLBACK_STAMP"
 FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=3600 pe "$HROLLBACK" start rollback-src > "$TMP_ROOT/rollback.out" 2>&1 &
 ROLLBACK_START_PID=$!
 rollback_deadline=$((SECONDS + 4))
-while kill -0 "$ROLLBACK_START_PID" 2>/dev/null; do
+while process_executing "$ROLLBACK_START_PID"; do
   if [ "$SECONDS" -ge "$rollback_deadline" ]; then
     pe "$HROLLBACK" retire rollback-src >/dev/null 2>&1 || true
     wait "$ROLLBACK_START_PID" 2>/dev/null || true
@@ -3744,7 +3745,7 @@ pe_register "$HRECREATED" lavish recreated-src -- \
 FM_PROCEVENT_OWNER_LEASE_SECONDS=30 FM_PROCEVENT_OWNER_CHECK_SECONDS=1 \
   pe "$HRECREATED" reconcile >/dev/null
 recreated_deadline=$((SECONDS + 8))
-while kill -0 "$RECREATED_RUNNER_PID" 2>/dev/null; do
+while process_executing "$RECREATED_RUNNER_PID"; do
   [ "$SECONDS" -lt "$recreated_deadline" ] \
     || fail "a fresh lease at a recreated state path preserved the old runner"
   sleep 0.1
@@ -3833,7 +3834,7 @@ DETACHED_RUNNER_PID=$(cat "$HDETACHED/state/procevent/detached-attached-src.runn
 kill "$DETACHED_START_PID"
 wait "$DETACHED_START_PID" 2>/dev/null || true
 detached_deadline=$((SECONDS + 8))
-while kill -0 "$DETACHED_RUNNER_PID" 2>/dev/null; do
+while process_executing "$DETACHED_RUNNER_PID"; do
   if [ "$SECONDS" -ge "$detached_deadline" ]; then
     pe "$HDETACHED" retire detached-attached-src >/dev/null 2>&1 || true
     fail "an orphaned attached-start keeper preserved its owner's lease"
@@ -3880,8 +3881,8 @@ kill -0 -"$REUSED_GROUP_RUNNER" 2>/dev/null \
 rm -f "$REUSED_GROUP_MARKER"
 PATH="$REUSED_GROUP_BIN:$PATH" FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-reused-group-proc" \
   pe "$HREUSED_GROUP" retire reused-runner-group-src >/dev/null
-for _ in $(seq 1 50); do kill -0 -"$REUSED_GROUP_RUNNER" 2>/dev/null || break; sleep 0.1; done
-kill -0 -"$REUSED_GROUP_RUNNER" 2>/dev/null \
+for _ in $(seq 1 50); do process_executing -"$REUSED_GROUP_RUNNER" || break; sleep 0.1; done
+process_executing -"$REUSED_GROUP_RUNNER" \
   && fail "retirement left the group alive once runner identity was unambiguous"
 pass "a detected ambiguous reused-PID group is not signalled"
 
@@ -3978,7 +3979,7 @@ orphan_pe() {  # <home> <command...>
 wait_gone() {  # <pid-or-group-spec> [tries]
   local spec=$1 n=${2:-160}
   for _ in $(seq 1 "$n"); do
-    kill -0 "$spec" 2>/dev/null || return 0
+    process_executing "$spec" || return 0
     sleep 0.1
   done
   return 1
@@ -4025,7 +4026,7 @@ keep_owner_present() { orphan_pe "$HKEEP" reconcile >/dev/null 2>&1 || true; sle
 orphan_bound=$((PROOF_DETECT_BOUND + PROOF_PROMPT_STOP))
 deadline=$((SECONDS + orphan_bound + PROOF_LOAD_SLACK))
 orphan_started=$SECONDS
-while kill -0 -"$ORPHAN_PID" 2>/dev/null; do
+while process_executing -"$ORPHAN_PID"; do
   [ "$SECONDS" -lt "$deadline" ] \
     || fail "a listener whose owning session was gone kept its process group running for $((SECONDS - orphan_started))s, against a documented bound of ${orphan_bound}s"
   keep_owner_present
@@ -4033,7 +4034,7 @@ done
 # The descendant goes down with the same group signal, so it needs no bound of
 # its own beyond the slack that covers a loaded host.
 deadline=$((SECONDS + PROOF_LOAD_SLACK))
-while kill -0 "$ORPHAN_DESCENDANT" 2>/dev/null; do
+while process_executing "$ORPHAN_DESCENDANT"; do
   [ "$SECONDS" -lt "$deadline" ] \
     || fail "a listener whose owning session was gone left a descendant running"
   keep_owner_present
@@ -4116,7 +4117,7 @@ wait_for "$TMP_ROOT/stop-retry-marker.descendant" \
 RETRY_DESCENDANT=$(cat "$TMP_ROOT/stop-retry-marker.descendant")
 
 deadline=$((SECONDS + 60))
-while kill -0 -"$RETRY_PID" 2>/dev/null; do
+while process_executing -"$RETRY_PID"; do
   [ "$SECONDS" -lt "$deadline" ] \
     || fail "the guard gave up on an expired runner after a stop it could not prove"
   sleep 0.5
@@ -4220,10 +4221,10 @@ PL
     sleep 0.05
   done
   proof_survivor=0
-  kill -0 "$PROOF_CHILD" 2>/dev/null && proof_survivor=1
+  process_executing "$PROOF_CHILD" && proof_survivor=1
   proof_reaped=0
   for _ in $(seq 1 100); do
-    if ! kill -0 "$PROOF_CHILD" 2>/dev/null; then proof_reaped=1; break; fi
+    if ! process_executing "$PROOF_CHILD"; then proof_reaped=1; break; fi
     sleep 0.1
   done
   [ -z "$PROOF_RELEASE" ] || touch "$PROOF_RELEASE"
@@ -4283,7 +4284,7 @@ GUARD_CHILD=$(cat "$TMP_ROOT/proof-guard.child")
 guard_bound=$((PROOF_DETECT_BOUND + PROOF_STOP_CEILING))
 deadline=$((SECONDS + guard_bound + PROOF_LOAD_SLACK))
 guard_started=$SECONDS
-while kill -0 -"$GUARD_PID" 2>/dev/null; do
+while process_executing -"$GUARD_PID"; do
   [ "$SECONDS" -lt "$deadline" ] \
     || fail "the guard exceeded its bound: still holding the group after $((SECONDS - guard_started))s, against a documented bound of ${guard_bound}s"
   sleep 0.5
@@ -4402,7 +4403,7 @@ bound_reference=$(cat "$HBOUND/state/procevent/.owner-lease") \
   || fail "the bound fixture recorded no owner lease to measure against"
 [ "$bound_reference" = "$(cat "$BOUND_STATE/reference" 2>/dev/null)" ] \
   || fail "the bound fixture did not synchronize its lease to an observed guard read"
-while kill -0 -"$BOUND_PID" 2>/dev/null; do
+while process_executing -"$BOUND_PID"; do
   [ "$(mono_since "$bound_reference" | cut -d. -f1)" -lt "$bound_deadline_s" ] \
     || fail "the guard exceeded its bound: group still running $(mono_since "$bound_reference")s after the last owner activity, against a documented bound of ${bound_total}s (lease term ${bound_lease_term}s + one ${BOUND_CHECK_SECONDS}s check interval + ${PROOF_PROMPT_STOP}s stop)"
   sleep 0.2
@@ -4612,7 +4613,7 @@ wait_for "$TMP_ROOT/crash-leader.descendant" \
   || fail "the crash-fixture listener's child never spawned its own descendant"
 kill -KILL "$CRASH_PID" 2>/dev/null || fail "the crash fixture could not stop its own leader"
 deadline=$((SECONDS + 10))
-while kill -0 "$CRASH_PID" 2>/dev/null; do
+while process_executing "$CRASH_PID"; do
   [ "$SECONDS" -lt "$deadline" ] || fail "the crash fixture's leader never died"
   sleep 0.1
 done

@@ -71,7 +71,7 @@ pe = str(root / "bin/fm-procevent.sh")
 source = "zombie-recovery"
 children, groups, guards = [], [], []
 
-def run(*args, timeout=15):
+def run(*args, timeout=45):
     return sp.check_output(args, env=env, text=True, stderr=sp.STDOUT, timeout=timeout)
 
 def wait_for(test):
@@ -106,8 +106,11 @@ try:
                 return True
         return False
     wait_for(find_guard)
-    os.killpg(runner.pid, signal.SIGKILL)
+    runner.kill()
     wait_for(lambda: zombie(runner))
+    assert "orphaned" in run(pe, "list"), "a live polling child lost ownership"
+    assert "uncertain=1" in run(pe, "reconcile"), "an unproved live group was replaced"
+    os.killpg(runner.pid, signal.SIGKILL)
     # Leave a second zombie owning the same source's lock, as in the incident.
     holder = sp.Popen(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; fm_lock_try_acquire "$2"',
                        "_", str(root), str(lab / "claims/zombie-recovery.lock")], env=env)
@@ -119,7 +122,7 @@ try:
                        "_", str(root), str(holder.pid)], env=fallback)
         assert dead.returncode == 1, "zombie is still considered live"
     assert "none" in run(pe, "list", timeout=5), "zombie-only group still owns source"
-    assert "started=1" in run(pe, "reconcile", timeout=15), "dead listener did not recover"
+    assert "started=1" in run(pe, "reconcile", timeout=45), "dead listener did not recover"
     (lab / "release").touch()
     result = lab / "state/procevent-inbox/zombie-recovery.1.result"
     wait_for(result.exists)
@@ -168,6 +171,33 @@ try:
     (lab / "unlock").touch()
     live_holder.wait(timeout=5)
     assert "reconciled:" in run(pe, "reconcile"), "next cycle did not recover"
+
+    run(pe, "retire", source)
+    # Bounded simulated load: postpone only each isolated source process's
+    # exec, without stressing the host or delaying the timeout helper itself.
+    slow_bin = lab / "slow-bin"
+    slow_bin.mkdir()
+    real_bash = run("bash", "-c", "command -v bash").strip()
+    shim = slow_bin / "bash"
+    shim.write_text('#!/bin/sh\n[ "${2-}" != _start ] || sleep 6\n'
+                    'exec "$FM_TEST_REAL_BASH" "$@"\n')
+    shim.chmod(0o755)
+    slow_env = dict(env, PATH=str(slow_bin) + os.pathsep + env["PATH"],
+                    FM_TEST_REAL_BASH=real_bash)
+    slow_env.pop("FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS", None)
+    for label, override, expected in (("short", "3", 1), ("default", None, 0)):
+        slow_id = "slow-" + label
+        run(pe, "register", "lavish", slow_id, "--", "/bin/echo", "status: ended")
+        selected = dict(slow_env)
+        if override:
+            selected["FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS"] = override
+        cold = sp.run([pe, "reconcile"], env=selected, text=True, stdout=sp.PIPE,
+                      stderr=sp.STDOUT, timeout=30)
+        print("simulated startup:", label, cold.returncode, cold.stdout.strip())
+        assert cold.returncode == expected, cold.stdout
+        assert ("failed=1" if expected else "failed=0") in cold.stdout, cold.stdout
+        wait_for(lambda: (lab / ("state/procevent-inbox/" + slow_id + ".1.result")).exists())
+        run(pe, "retire", slow_id)
 finally:
     (lab / "unlock").touch()
     for pid in groups:
