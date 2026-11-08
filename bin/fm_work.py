@@ -533,8 +533,9 @@ class Owner:
                 state = 'waiting_' + hold.get('kind', 'external')
             else:
                 state = 'ready'
+            control_keys = self.ancestors(task_id) + ['task:' + task_id]
             control_times = [time_value(r['at'], 'work.control') for r in self.request_records()
-                             if r.get('phase') == 'verified' and r['operation']['target'] in self.ancestors(task_id) + ['task:' + task_id]
+                             if r.get('phase') == 'verified' and r['operation']['target'] in control_keys
                              and r['operation']['op'] != 'request_removal']
             hold_stamp = re.search(r'^Captain hold set:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
             hold_set = hold_stamp[1] if hold_stamp else None
@@ -609,16 +610,20 @@ class Owner:
         for t in tasks:
             if t['root_blocker']:
                 t['root_blocker'] = root_blocker(t['root_blocker'], {t['key']})
+        reverse_deps = {}
+        for task in tasks:
+            for ref in dict.fromkeys(b['ref'] for b in task['blocked_by']):
+                reverse_deps.setdefault(ref, []).append(task['key'])
         for t in tasks:
-            direct = [a['key'] for a in tasks if any(b['ref'] == t['key'] for b in a['blocked_by'])]
+            direct = reverse_deps.get(t['key'], [])
             seen = set(direct)
             pending = list(direct)
             while pending:
                 key = pending.pop()
-                for child in tasks:
-                    if child['key'] not in seen and any(b['ref'] == key for b in child['blocked_by']):
-                        seen.add(child['key'])
-                        pending.append(child['key'])
+                for child in reverse_deps.get(key, []):
+                    if child not in seen:
+                        seen.add(child)
+                        pending.append(child)
             t['frees'] = dict(direct=direct, chain_count=len(seen))
         groups = []
         for key in sorted((set('project:' + r for r in self.projects) | set(self.structure['groups'])) - {k for k in self.structure['groups'] if k.startswith('req:')}):

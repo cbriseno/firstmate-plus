@@ -28,6 +28,44 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         global checks
         assert value, message
         checks += 1
+    # Historical graphs remain readable, including duplicates and invalid edges.
+    with tempfile.TemporaryDirectory(prefix='fm-work-graph-') as graph_tmp:
+        graph_home = pathlib.Path(graph_tmp)
+        for name in ('data','state','config','data/work-requests'):
+            (graph_home/name).mkdir(parents=True, exist_ok=True)
+        (graph_home/'data/projects.md').write_text('- alpha [local-only] - Graph fixture\n')
+        for n, (target, phase, operation) in enumerate([
+                ('task:a','verified','set_priority'), ('project:alpha','verified','set_priority'),
+                ('task:a','pending','set_priority'), ('task:a','verified','request_removal'),
+                ('task:absent','verified','set_priority')]):
+            record = dict(at='%d-01-01T00:00:00Z'%(2020+n), phase=phase,
+                          operation=dict(target=target, op=operation))
+            (graph_home/'data/work-requests'/('%d.json'%n)).write_text(json.dumps(record))
+        for label, edges, expected in [
+                ('chain', {'b':['a'], 'c':['b'], 'd':['a','c']}, {'a':(['b','d'],3), 'b':(['c'],2), 'c':(['d'],1)}),
+                ('diamond', {'b':['a'], 'c':['a'], 'd':['b','c']}, {'a':(['b','c'],3), 'b':(['d'],1), 'c':(['d'],1)}),
+                ('duplicates', {'b':['a','a'], 'c':['a','b','a']}, {'a':(['b','c'],2), 'b':(['c'],1)}),
+                ('cycle', {'a':['b'], 'b':['a'], 'c':['b']}, {'a':(['b'],3), 'b':(['a','c'],3)}),
+                ('unknown', {'a':['absent'], 'b':['a'], 'd':['absent']}, {'a':(['b'],1)}),
+                ('closed', {'b':['a'], 'c':['b'], 'd':['a','c']}, {'a':(['b','d'],3), 'b':(['c'],2), 'c':(['d'],1)})]:
+            (graph_home/'data/backlog.md').write_text('## Queued\n'+''.join(
+                '- [ ] %s - Task %s (repo: alpha)\n'%(i,i) for i in 'abcd' if label!='closed' or i!='a')+
+                '\n## Done\n'+('- [x] a - Task a (repo: alpha)\n' if label=='closed' else ''))
+            structure = dict(schema='fm-work-structure.v1', groups={}, membership={}, order=[], edge_meta={},
+                mixed_edges=[dict(target='task:'+i, ref='task:'+dep, by='firstmate') for i, deps in edges.items() for dep in deps])
+            (graph_home/'data/work-structure.json').write_text(json.dumps(structure))
+            result = subprocess.run(wrapper+['work','snapshot'], env=dict(env, FM_HOME=str(graph_home)), text=True, capture_output=True)
+            check(result.returncode==0, label+': public snapshot succeeds: '+result.stderr)
+            projected = {t['key'][5:]:t for t in json.loads(result.stdout)['tasks']}
+            for i in 'abcd':
+                direct, count = expected.get(i, ([],0))
+                check(projected[i]['frees']==dict(direct=['task:'+d for d in direct],chain_count=count), label+': frees '+i)
+                check(projected[i]['updated']['value']=='2021-01-01T00:00:00Z', label+': verified ancestor control timestamp '+i)
+            if label=='closed':
+                check(not projected['b']['blocked_by'][0]['open'] and projected['b']['root_blocker'] is None,
+                      'closed dependencies still contribute to frees without blocking readiness')
+            if label=='unknown':
+                check(projected['b']['root_blocker']=='task:absent', 'missing blocker remains visible through chain')
     missing = subprocess.run(wrapper+['work','snapshot'], env=env, text=True, capture_output=True)
     check(json.loads(missing.stdout)['state'] == 'rejected' and 'backlog' in missing.stdout and 'create it' in missing.stdout, 'missing backlog gives actionable guidance')
     (home / 'data/backlog.md').symlink_to(home / 'missing')
