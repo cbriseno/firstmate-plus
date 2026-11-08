@@ -377,7 +377,7 @@ class ShellAnalyzer {
     // an ordinary agent write always tokenizes, and a false block on a
     // firstmate-owned record write is worse than a missed exotic shape.
     if (lexed.error) return null;
-    const { nodes } = splitProgram(lexed.tokens);
+    const { nodes, separators } = splitProgram(lexed.tokens);
     let current = cwd;
     const previousEnv = this.judge.env;
     if (this.judge.host) {
@@ -389,17 +389,22 @@ class ShellAnalyzer {
       }
     }
     try {
-      for (const node of nodes) {
+      for (const [index, node] of nodes.entries()) {
         const result = this.node(node, current, depth);
         if (result.denial) return result.denial;
         current = result.cwd;
-        if (this.judge.host && !lexed.tokens.some((token) => token.type === "op" && ["&&", "||", "|", "&"].includes(token.value))) this.assignments(node);
+        // An assignment persists for later list elements unless it ran in a
+        // pipeline stage or background subshell, or may have been skipped
+        // because it follows && or ||.
+        const before = separators[index - 1], after = separators[index];
+        const unsure = ["|", "|&", "&"].includes(after) || ["|", "|&", "||", "&&"].includes(before);
+        if (this.judge.host) this.assignments(node, unsure);
       }
       return null;
     } finally { this.judge.env = previousEnv; }
   }
 
-  assignments(tokens) {
+  assignments(tokens, unsure = false) {
     const words = tokens.filter((token) => token.type === "word");
     const offset = words[0]?.value === "export" ? 1 : 0;
     if (words[0]?.value === "for" && words[1]) {
@@ -415,7 +420,7 @@ class ShellAnalyzer {
       const match = word.value.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
       if (!match || match[1] === "FM_ALLOW_PRIMARY_WRITE") continue;
       const value = expandTarget(match[2], this.judge.env);
-      if (word.subs.length || value.partial || (word.quoted && (match[2].includes("$") || match[2].startsWith("~"))) || !path.isAbsolute(value.value)) delete this.judge.env[match[1]];
+      if (unsure || word.subs.length || value.partial || (word.quoted && (match[2].includes("$") || match[2].startsWith("~"))) || !path.isAbsolute(value.value)) delete this.judge.env[match[1]];
       else this.judge.env[match[1]] = value.value;
     }
   }

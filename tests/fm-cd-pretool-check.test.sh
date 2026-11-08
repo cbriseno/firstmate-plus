@@ -107,6 +107,12 @@ matrix_case B27 deny 'command -- cd projects/foo'
 
 # ALLOW: not a persistent top-level cwd change (scoped, data, or non-cd).
 matrix_case A01 allow 'git -C projects/foo status'
+# A cd that stays inside the home and outside its projects/ clones.
+matrix_case A_H1 allow 'cd data/report && cat x.md'
+matrix_case A_H2 allow 'cd state; grep x y.status'
+matrix_case A_H3 allow 'cd "$FM_HOME" && ls'
+matrix_case B_H1 deny 'cd projects && ls'
+matrix_case B_H2 deny 'cd data/../projects/foo'
 matrix_case A02 allow 'cat /abs/path/file'
 matrix_case A03 allow 'ls projects/foo'
 matrix_case A04 allow 'echo "cd projects/foo"'

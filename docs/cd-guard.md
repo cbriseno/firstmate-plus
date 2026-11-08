@@ -47,6 +47,7 @@ The guard **allows** everything else, including these safe scoped forms that mus
 - A `cd` behind a forking or exec'ing wrapper (`env`, `sudo`, `nohup`, `timeout`, `gtimeout`, `exec`), which runs in a child and never persists (and generally just fails, since `cd` is a builtin with no external program).
 - A path-qualified external command named `cd`, `command`, or `builtin`, such as `./cd`, `/usr/bin/cd`, `./command`, `/usr/bin/command`, or `./builtin`, because it runs as a child process and cannot change the parent shell's cwd.
 - A `command` query such as `command -v cd`, `command -V cd`, or a clustered form such as `command -pv cd`, because it reports command resolution without executing the named builtin.
+- A `cd` or `pushd` whose single literal target stays inside the home and outside its `projects/` clones - the home itself, `data/`, `state/`, or `$FM_HOME`/`$CLAUDE_PROJECT_DIR` as the leading component - because it cannot place a later firstmate-owned command inside a project clone; `cd -`, `cd`, `cd ..` out of the home, and any unresolved target stay blocked.
 - The token `cd` appearing as data: quoted text (`echo "cd projects/foo"`), a comment, a substring of another word (`cdk`, `abcd`, `record`), a `printf` payload, or any later argument word.
 
 An absolute-path `cd` is blocked on purpose: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.

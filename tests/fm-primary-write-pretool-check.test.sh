@@ -538,7 +538,19 @@ test_host_direct_operations() {
   pass "host operations default on, retain safety rails, audit and honor off"
 }
 
+test_assignments_across_list_operators() {
+  rm -f "$PRIMARY/config/primary-direct-ops"
+  expect_allow "assignment before &&" Bash "S=$PRIMARY/data/stage && mkdir -p \$S"
+  expect_allow "assignment before a && chain" Bash "S=$PRIMARY/data/stage && mkdir -p \$S && rm -rf \$S/x"
+  expect_deny "assignment after && stays unresolved" primary-delete Bash "cd $PRIMARY && S=$PRIMARY/data/stage; rm -rf \$S/x"
+  expect_deny "assignment after || stays unresolved" primary-delete Bash "true || S=$PRIMARY/data/stage; rm -rf \$S/x"
+  expect_deny "assignment in a pipeline stays unresolved" primary-delete Bash "S=$PRIMARY/data/stage | cat; rm -rf \$S/x"
+  printf 'off\n' > "$PRIMARY/config/primary-direct-ops"
+  pass "literal assignments resolve across && and ; but not after || or in a pipeline"
+}
+
 test_stale_index_lock
+test_assignments_across_list_operators
 test_refuses_captain_environment_writes
 test_refuses_project_and_shared_material_writes
 test_allows_operational_paths_and_read_only_work
