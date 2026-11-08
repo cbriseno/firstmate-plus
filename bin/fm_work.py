@@ -673,7 +673,7 @@ class Owner:
         return dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
                     subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, requests=request_groups, sigue=sigue, rev=self.rev, history_sources=self.history_sources,
                     pause_controls=pauses, events=[e for r in sorted(controls, key=lambda r: r.get('at_ns', 0)) for e in r.get('events', [])],
-                    crew=self.capacity() if controls else None,
+                    crew=self.capacity(),
                     aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized'))
 
     @staticmethod

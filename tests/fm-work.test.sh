@@ -56,6 +56,11 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
     cli('hold','b','--kind','parked','--reason','Individual',raw=True)
     baseline=(home/'data/backlog.md').read_bytes()
     check(len(snapshot()['projects'])==3,'all registered including empty/public')
+    (home/'config/lane-capacity').write_text('3\n')
+    initial=snapshot()
+    check(initial['pause_controls']==[] and initial['crew']['agents_running']==0 and initial['crew']['agents_cap']==3,
+          'crew capacity is published before any signal record exists')
+    (home/'config/lane-capacity').unlink()
     check(task(snapshot(),'unset')['priority']['own'] is None,'unset preserved')
     check(task(snapshot(),'a')['progress'] is None,'unknown progress')
     check(task(snapshot(),'a')['updated']['precision']=='unknown','created never used for updated')
