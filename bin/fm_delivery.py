@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 from fm_progress import (PHASES, GATES, reconcile as reconcile_progress, checkpoint, validate_record,
                          contract, sources as progress_sources, observed_run, code_head,
@@ -636,11 +637,14 @@ def read_presentation(home, task_id, data=None, verify=True):
             raise ValueError('invalid presentation declaration identity')
         fields = presentation_fields(value['presentation'])
         dt.datetime.strptime(value['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
+        occurrence = value.get('outcome_occurrence', 'legacy:' + value['observed_at']) if fields.get('outcome') else None
+        if occurrence is not None and not plain_line(occurrence, 128):
+            raise ValueError('invalid outcome occurrence')
         record = value.get('progress_record')
         if record is not None:
             validate_record(record)
         view, _ = reconcile_progress(home, task_id, fields, record, read_text, verify)
-        return dict(presentation=dict(empty, **fields), progress_record=record, lifecycle=view,
+        return dict(presentation=dict(empty, **fields), outcome_occurrence=occurrence, progress_record=record, lifecycle=view,
                     evidence=dict(source=value['source'], observed_at=value['observed_at'],
                                   current_state=False, path=path, available=True))
     except FileNotFoundError:
@@ -913,6 +917,11 @@ def presentation(home, args):
             raise ValueError('--repair requires an invalid existing declaration')
         stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         fields = dict(current['presentation'], **patch)
+        occurrence = current.get('outcome_occurrence')
+        if not fields.get('outcome'):
+            occurrence = None
+        elif not occurrence or any(fields.get(k) != current['presentation'].get(k) for k in ('summary', 'outcome')):
+            occurrence = str(uuid.uuid4())
         record = current.get('progress_record')
         if record and current.get('lifecycle', {}).get('gates'):
             record = dict(record, gates=current['lifecycle']['gates'])
@@ -940,7 +949,8 @@ def presentation(home, args):
                           head=code_head(meta), gates=view['gates'])
         fields['progress'] = view['progress']
         value = dict(schema='fm-task-presentation.v1', home=str(home), id=args.task,
-                     presentation=fields, progress_record=record, source='task.owner.declaration', observed_at=stamp)
+                     presentation=fields, outcome_occurrence=occurrence, progress_record=record,
+                     source='task.owner.declaration', observed_at=stamp)
         fd, temp = tempfile.mkstemp(prefix='.presentation.', dir=folder)
         try:
             with os.fdopen(fd, 'w') as stream:

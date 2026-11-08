@@ -572,7 +572,7 @@ class Owner:
                 recorded_answers=self.answers_by_origin.get(task_id, []),
                 progress=progress, declared_progress=declared_progress, progress_evidence=lifecycle['evidence'],
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],
-                request=p.get('request'), outcome=p.get('outcome'),
+                request=p.get('request'), outcome=p.get('outcome'), outcome_occurrence=authored.get('outcome_occurrence'),
                 created=task_creation(self.data, row) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
                 completed=time_value(receipt['value'], 'completion') if receipt else time_value(row.get('closed'), 'backlog.closed') if row['state'] == 'done' else None,
                 rev=self.rev))
@@ -1059,6 +1059,34 @@ class Owner:
         complete = not (pending or failed or unconfirmed)
         return dict(state='applied' if complete else 'received', request_id=request_id, exited=exited, pending=pending, failed=failed, unconfirmed=unconfirmed, errors=errors,
                     event='pause.confirmed' if complete else 'pause.unconfirmed' if unconfirmed else None)
+
+    def review_outcome(self, payload):
+        refuse(set(payload) != {'target', 'occurrence', 'review', 'expected_review'}
+               or not isinstance(payload.get('target'), str)
+               or not plain(payload.get('occurrence'), 128)
+               or payload.get('review') not in ('needed', 'done')
+               or payload.get('expected_review') not in ('needed', 'done'),
+               'invalid_value', 'Review requires target, occurrence, review and expected_review.')
+        target = self.aliases.resolve(payload['target'])
+        refuse(not target.startswith('task:') or target[5:] not in self.rows,
+               'unknown_target', 'Unknown task.')
+        task_id = target[5:]
+        authored = self.presentations[task_id]
+        refuse((authored.get('evidence') or {}).get('available') is False, 'owner_failed', 'Invalid presentation declaration.')
+        outcome = authored['presentation'].get('outcome')
+        refuse(not outcome or outcome.get('review') not in ('needed', 'done'), 'no_outcome', 'No reviewable outcome.')
+        refuse(payload['occurrence'] != authored.get('outcome_occurrence'), 'stale_occurrence', 'The result has changed. Refresh before reviewing.')
+        refuse(payload['expected_review'] != outcome['review'], 'review_conflict', 'The review mark has changed. Refresh before reviewing.')
+        path = authored['evidence']['path']
+        value = self.read(path)
+        value['presentation']['outcome']['review'] = payload['review']
+        value['outcome_occurrence'] = authored['outcome_occurrence']
+        value['observed_at'] = now()
+        self.atomic(path, value)
+        return dict(ok=True, state='applied', target=target, occurrence=authored['outcome_occurrence'],
+                    outcome=value['presentation']['outcome'],
+                    undo=dict(target=target, occurrence=authored['outcome_occurrence'],
+                              review=outcome['review'], expected_review=payload['review']))
 
     def control_event(self, record, event, **fields):
         events = record.setdefault('events', [])
@@ -1569,7 +1597,7 @@ class Owner:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['capabilities', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
-        'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue',
+        'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review',
         'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Request display order: activity or persisted manual order.')
     parser.add_argument('--runtime', action='store_true', help='Include full bounded crew reconciliation in addition to fresh endpoint liveness.')
@@ -1589,11 +1617,12 @@ def main():
         owner.include_runtime = args.runtime
         owner.request_sort = args.order
         if args.verb == 'capabilities':
-            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.7', ops=OPS,
+            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.8', ops=OPS,
+                          outcome_controls=['outcome.review'],
                           signals=['pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue'],
                           features=['progress', 'safe_point', 'group_dependencies', 'manual_order', 'priority_unset',
                                     'stable_aliases', 'normalized_hierarchy', 'logical_project_roots', 'question_provenance', 'removal_consultation',
-                                    'progress_checkpoints', 'progress_phases', 'verified_progress_gates', 'worker_liveness', 'pause_reconciliation'])
+                                    'progress_checkpoints', 'progress_phases', 'verified_progress_gates', 'worker_liveness', 'pause_reconciliation', 'outcome_review'])
         else:
             if args.verb in ('snapshot', 'apply', 'request-status', 'close', 'reconcile', 'assign', 'normalize-apply', 'normalize-rollback', 'aliases-init') or '.' in args.verb or (owner.home / ALIAS_PATH).exists() or owner.env.get('FM_WORK_OWNER_FD'):
                 lock = owner.lock()
@@ -1679,15 +1708,19 @@ def main():
                 refuse(len(payload) > 65536, 'invalid_value', tr('Request too large.'))
                 op = json.loads(payload)
                 refuse(not isinstance(op, dict), 'invalid_value', tr('A JSON object is required.'))
-                if '.' in args.verb:
+                if '.' in args.verb and args.verb != 'outcome.review':
                     op['target'] = op.get('target', op.get('scope'))
                     op['expected_rev'] = op.get('expected_rev', op.get('rev'))
                 for field in ('target', 'on', 'before', 'after'):
+                    if args.verb == 'outcome.review':
+                        break
                     if op.get(field) is not None:
                         if op.get('op') == 'move' and isinstance(op[field], str) and op[field] in owner.request_keys():
                             continue
                         op[field] = owner.aliases.resolve(op[field])
-                if '.' in args.verb:
+                if args.verb == 'outcome.review':
+                    result = owner.review_outcome(op)
+                elif '.' in args.verb:
                     op['scope'] = op['target']
                     result = owner.signal(args.verb, op)
                 elif args.verb == 'preview':
@@ -1698,7 +1731,7 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Refusal as exc:
-        print(json.dumps(dict(request_id=locals().get('op', {}).get('request_id', args.request_id), state='conflict' if exc.code == 'stale_revision' else 'rejected', code=exc.code, message=str(exc), **exc.details), ensure_ascii=False))
+        print(json.dumps(dict(request_id=locals().get('op', {}).get('request_id', args.request_id), state='conflict' if exc.code in ('stale_revision', 'stale_occurrence', 'review_conflict') else 'rejected', code=exc.code, message=str(exc), **exc.details), ensure_ascii=False))
         return 1 if args.verb == 'dispatch-check' else 0
     except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired) as exc:
         print(json.dumps(dict(state='failed', code='owner_failed', message=str(exc)), ensure_ascii=False))

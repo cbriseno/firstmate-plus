@@ -65,6 +65,62 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
     check(task(snapshot(),'a')['progress'] is None,'unknown progress')
     check(task(snapshot(),'a')['updated']['precision']=='unknown','created never used for updated')
     check(not (home/'data/work-structure.json').exists(),'reads never create structure')
+    # Review is a shared presentation mark, independent of task/decision closure.
+    capabilities=cli('work','capabilities')
+    check('outcome.review' in capabilities['outcome_controls'] and 'outcome_review' in capabilities['features'],
+          'shared review is advertised')
+    result_file=home/'result-input.json'
+    result_file.write_text(json.dumps(dict(summary='Resultado listo',card_status='Para revisar',
+        request=dict(id='review-request',label='Entregar resultado',project='alpha'),
+        outcome=dict(role='partial',review='needed'),
+        progress=dict(steps=[dict(label='Resultado',state='done')]),phase='implementation')))
+    published=cli('presentation','a','--presentation-file',str(result_file))
+    result_task=task(snapshot(),'a')
+    occurrence=result_task['outcome_occurrence']
+    check(occurrence==published['outcome_occurrence'],'publication and snapshot share occurrence')
+    review=dict(target=result_task['alias'] or 'task:a',occurrence=occurrence,review='done',expected_review='needed')
+    before=json.loads((home/'data/a/presentation.json').read_text())
+    reviewed=cli('work','outcome.review',payload=review)
+    check(reviewed['ok'] and reviewed['state']=='applied','review applies through public verb')
+    after=json.loads((home/'data/a/presentation.json').read_text())
+    expected=copy.deepcopy(before)
+    expected['presentation']['outcome']['review']='done'
+    expected['observed_at']=after['observed_at']
+    check(after==expected,'only review and presentation timestamp change; checkpoint stays exact')
+    check(task(snapshot(),'a')['outcome']['review']=='done','another client reads shared review')
+    check((home/'data/backlog.md').read_bytes()==baseline,'review never changes task or hold')
+    check(cli('work','outcome.review',payload=review)['code']=='review_conflict','stale review expectation refuses')
+    check(cli('work','outcome.review',payload=reviewed['undo'])['state']=='applied','Undo restores needed')
+    check(task(snapshot(),'a')['outcome']['review']=='needed','Undo is shared')
+    cli('presentation','a','--card-status','Otra tarjeta')
+    check(task(snapshot(),'a')['outcome_occurrence']==occurrence,'card patch preserves result identity')
+    check(cli('presentation','a','--presentation-file',str(result_file))['outcome_occurrence']==occurrence,
+          'identical result publication preserves occurrence')
+    result_file.write_text(json.dumps(dict(progress=dict(steps=[dict(label='Resultado',state='done')]))))
+    check(cli('presentation','a','--presentation-file',str(result_file))['outcome_occurrence']==occurrence,
+          'progress checkpoint preserves result identity')
+    result_file.write_text(json.dumps(dict(summary='Otro resultado')))
+    next_result=cli('presentation','a','--presentation-file',str(result_file))
+    check(next_result['outcome_occurrence']!=occurrence,'new result gets a new occurrence')
+    check(cli('work','outcome.review',payload=review)['code']=='stale_occurrence','stale tab cannot mark another result')
+    check(cli('work','outcome.review',payload=reviewed['undo'])['code']=='stale_occurrence','stale Undo cannot affect another result')
+    review['occurrence']=next_result['outcome_occurrence']
+    for bad in [review|dict(review='closed'), review|dict(expected_review=None),review|dict(target={}),
+                review|dict(extra=True),{k:v for k,v in review.items() if k!='occurrence'}]:
+        check(cli('work','outcome.review',payload=bad)['code']=='invalid_value','invalid review payload refuses')
+    check(cli('work','outcome.review',payload=review|dict(target='task:missing'))['code']=='unknown_target','missing result task refuses')
+    check(cli('work','outcome.review',payload=review|dict(target='project:alpha'))['code']=='unknown_target','review requires a task')
+    # Existing declarations remain reviewable without a migration write.
+    legacy=json.loads((home/'data/a/presentation.json').read_text())
+    legacy.pop('outcome_occurrence')
+    (home/'data/a/presentation.json').write_text(json.dumps(legacy))
+    legacy_task=task(snapshot(),'a')
+    legacy_review=review|dict(occurrence=legacy_task['outcome_occurrence'])
+    check(cli('work','outcome.review',payload=legacy_review)['state']=='applied','legacy outcome can be reviewed')
+    check(task(snapshot(),'a')['outcome_occurrence']==legacy_task['outcome_occurrence'],'review persists legacy identity')
+    cli('presentation','a','--clear','--replan','Reset the review fixture')
+    check(task(snapshot(),'a')['outcome_occurrence'] is None,'clear removes occurrence')
+    check(cli('work','outcome.review',payload=review)['code']=='no_outcome','unclassified task cannot be reviewed')
     import fcntl
     import threading
     for args, body in [(['update','a','--priority','1'], None),
@@ -87,6 +143,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         check(blocked.returncode!=0 and (home/'data/backlog.md').read_bytes()==baseline,'ordinary writer cannot race work transaction')
         blocked=cli('work','apply',payload=busyop)
         check(blocked['code']=='busy','work writer reports busy without mutation')
+        check(cli('work','outcome.review',payload=review)['code']=='busy','review shares the owner mutation lock')
         check(cli('work','snapshot')['code']=='busy','snapshot cannot expose partial owner transaction')
     fakebin=home/'snapshot-bin'
     fakebin.mkdir()

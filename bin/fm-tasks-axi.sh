@@ -146,6 +146,36 @@
 # Signal verbs read JSON {scope, rev, request_id, actor?, reason?}; previews
 # need no request_id. Scopes are task:<id>, project:<repo>, req:<request.id>.
 # Request scopes select only explicit presentation.request membership.
+#   work outcome.review                 Shared result review mark; JSON on stdin.
+# Payload (all four fields required, no extras):
+#   {"target":"task:<id>","occurrence":"<snapshot outcome_occurrence>",
+#    "review":"done","expected_review":"needed"}
+# target also accepts this home's persistent task alias. Both review fields
+# accept needed|done. No request_id, task revision or lifecycle action is involved.
+# Read outcome_occurrence from work snapshot.tasks[] or presentation <id>.
+# It identifies the current authored result, independently of the review mark.
+# Presentation changes to summary or outcome create a new occurrence; clearing
+# outcome removes it. Identical publications and card/progress-only updates
+# preserve it. Legacy declarations without an occurrence use legacy:<observed_at>;
+# the next write preserves that identity unless the result changes.
+# The owner locks, checks the exact task/occurrence and expected review, and
+# atomically stores outcome.review and the declaration's observed_at.
+# It persists the same occurrence, progress checkpoint and all other presentation
+# fields. It never closes a task, answers a decision or controls a worker.
+# Success: {ok:true,state:"applied",target,occurrence,outcome:{role?,review},
+#   undo:{target,occurrence,review:<previous>,expected_review:<new>}}.
+# Submit undo to the same verb to reverse the mark for that occurrence.
+# Refusals: state=conflict with code=stale_occurrence|review_conflict; refresh
+# before retrying. No receipt is created; a lost reply is resolved by reading.
+# state=rejected with code=invalid_value (payload shape/values), unknown_target
+# (missing/non-task target), no_outcome (no needed|done classification), busy
+# (owner lock held), or owner_failed (invalid declaration/unsafe local paths).
+# Refusal envelope: {request_id:null,state,code,message}.
+# Failure envelope: {state:"failed",code:"owner_failed",message}.
+# Refusals exit 0; malformed JSON and I/O errors exit 1 with state=failed,
+# code=owner_failed. Always inspect state/code, not only process success.
+# Capabilities revision 1.8 advertises outcome_controls:["outcome.review"]
+# and feature outcome_review. Snapshot exposes the persisted mark to all clients.
 # pause.request notifies workers, then closes only after their keyed safe point;
 # FM_WORK_SAFE_POINT_TIMEOUT (seconds, 1..86400, default 300) exposes an
 # unconfirmed pause without killing the worker. The main wake drain advances
