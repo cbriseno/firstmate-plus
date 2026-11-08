@@ -283,8 +283,9 @@
 # created={value,precision,source} projects a valid original instant or
 # receipt, otherwise the unchanged backlog date/unknown. Group priority/pause
 # metadata first materialized for an existing project is not a creation event.
-# Group snapshots expose updated_at and default to recent activity; --order manual
-# follows structure.order. move accepts group keys and returns its ordinary Undo.
+# Request snapshots expose updated_at and default to recent activity; --order manual
+# follows structure.order. move accepts request:<id> for display order only
+# and returns its ordinary Undo.
 # data/work-structure.json has one writer here.
 # A pause of active work requests a safe checkpoint through the primary inbox;
 # it never controls a worker endpoint. Removal requests never delete anything.
