@@ -2,6 +2,7 @@
 # Exercises the home-owned work controls through the public wrapper with real
 # tasks-axi, including hierarchy pause, graph expansion, retries, progress,
 # manual order/Undo, normalization/rollback and lossless source preservation.
+# FM_WORK_TEST_SNAPSHOT=1 selects snapshot contention and its setup checks.
 set -euo pipefail
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -82,6 +83,41 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         blocked=cli('work','apply',payload=busyop)
         check(blocked['code']=='busy','work writer reports busy without mutation')
         check(cli('work','snapshot')['code']=='busy','snapshot cannot expose partial owner transaction')
+    fakebin=home/'snapshot-bin'
+    fakebin.mkdir()
+    shim=fakebin/'bash'
+    shim.write_text('''#!/bin/bash
+if [ "$1" = -c ] && [ "${3:-}" = fm-work ]; then
+  touch "$FM_HOME/rendering"
+  while [ ! -e "$FM_HOME/release" ]; do sleep .1; done
+fi
+exec /bin/bash "$@"
+''')
+    shim.chmod(0o755)
+    previous_path=env['PATH']
+    env['PATH']=str(fakebin)+':'+previous_path
+    reading=subprocess.Popen(wrapper+['work','snapshot'],env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        for _ in range(600):
+            if (home/'rendering').exists(): break
+            check(reading.poll() is None,'snapshot reached rendering without failing')
+            time.sleep(.1)
+        check((home/'rendering').exists(),'snapshot rendering started')
+        published=cli('presentation','a','--card-status','Escritura durante lectura')
+        check(published['ok'] and published['state']=='published','presentation writer proceeds during snapshot rendering')
+        cli('update','a','--priority','3',raw=True)
+    finally:
+        (home/'release').touch()
+        output,error=reading.communicate(timeout=30)
+        env['PATH']=previous_path
+    check(reading.returncode==0,'concurrent snapshot succeeds: '+error)
+    captured=json.loads(output)
+    check(task(captured,'a')['priority']['own']==1,'snapshot retains canonical rows captured before concurrent mutation')
+    check(task(snapshot(),'a')['priority']['own']==3,'next snapshot sees the completed mutation')
+    cli('update','a','--priority','1',raw=True)
+    if os.environ.get('FM_WORK_TEST_SNAPSHOT')=='1':
+        print('PASS: snapshot setup, transaction exclusion and concurrent presentation/backlog writers')
+        sys.exit(0)
     p=op('set_priority','task:a',value=0)
     preview=cli('work','preview',payload=p)
     check((home/'data/backlog.md').read_bytes()==baseline,'preview read only')

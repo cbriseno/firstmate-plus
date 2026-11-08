@@ -21,7 +21,8 @@ from fm_work_aliases import Aliases, PATH as ALIAS_PATH
 from fm_progress import observed_run, sources as progress_sources, code_head
 
 from fm_delivery import (BIN, canonical_read, home_path, read_text,
-                         read_presentation, read_captain_call, read_captain_answer, task_creation, completion_receipt, retained_history)
+                         read_presentation, read_captain_call, read_captain_answer, task_creation, completion_receipt, retained_history,
+                         reconcile_progress)
 
 VISIBILITIES = ('public', 'private', 'unknown')
 OPS = ['set_priority', 'set_pause', 'clear_pause', 'add_dep', 'remove_dep', 'move', 'request_removal']
@@ -1602,7 +1603,7 @@ def main():
                     fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise Refusal('busy', tr('Another change is in progress. Try again.'))
-            owner.load()
+            owner.load(include_presentations=args.verb != 'snapshot')
             if args.verb == 'aliases-init':
                 refuse(not REQUEST.fullmatch(args.request_id or ''), 'invalid_value', tr('Invalid activation identity.'))
                 with open(args.map, encoding='utf-8') as stream:
@@ -1626,6 +1627,16 @@ def main():
                 result = owner.normalization_rollback(args.request_id)
             elif args.verb == 'snapshot':
                 owner.reconcile_pauses()
+                # Canonical rows, controls, aliases and declarations are captured.
+                # Slow evidence/liveness probes must not hold up owner writes.
+                os.close(lock)
+                lock = None
+                del owner.lock_fd
+                owner.env.pop('FM_WORK_OWNER_FD', None)
+                for task_id, authored in owner.presentations.items():
+                    if (authored.get('evidence') or {}).get('available') is not False:
+                        authored['lifecycle'], _ = reconcile_progress(owner.home, task_id,
+                            authored['presentation'], authored['progress_record'], read_text)
                 result = owner.snapshot()
             elif args.verb == 'reconcile':
                 result = owner.reconcile_controls()
