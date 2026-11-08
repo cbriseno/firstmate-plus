@@ -67,19 +67,32 @@ with tempfile.TemporaryDirectory(prefix='fm-creation-time-') as folder:
         assert task(old,'unknown')['created']['precision']=='unknown', old
         cli('add','legacy','Legacy card','--repo','alpha',raw=True)
         assert not receipt('legacy').exists() and (home/'data/backlog.md').read_bytes()==before
+        assert task(snap(),'legacy')['request'] is None, 'duplicate add classified legacy work'
         start=dt.datetime.now(dt.timezone.utc)
         output=cli('add','new-','New card','--repo','alpha',raw=True)
         assert output.startswith('ok: added new- '), output
         value=task_created('new-'); stamp=instant(value)
         assert value['source']=='task.creation-receipt' and start <= dt.datetime.fromisoformat(stamp.replace('Z','+00:00')) <= dt.datetime.now(dt.timezone.utc)
         original=receipt('new-').read_bytes()
+        request=task(snap(),'new-')['request']
+        assert request==dict(id='new-',label='New card',project='alpha'), request
+        cli('add','shared-step','Another step','--repo','other','--request-from','new-',raw=True)
+        assert task(snap(),'shared-step')['request']==request, 'shared request lost across repositories'
+        rejected=cli('add','bad-step','Bad step','--request-from','legacy',success=False)
+        assert rejected.returncode != 0 and 'declared request' in rejected.stderr
+        assert 'task:bad-step' not in {t['key'] for t in snap()['tasks']}, 'invalid inheritance created a task'
+        declaration=(home/'data/new-/presentation.json').read_bytes()
         cli('add','new-','Already exists','--json')
+        assert (home/'data/new-/presentation.json').read_bytes()==declaration, 'duplicate add changed request'
         cli('update','new-','--priority','1','--title','Renamed card',raw=True)
         cli('hold','new-','--kind','parked','--reason','Pause it',raw=True)
         cli('unhold','new-',raw=True)
         assert receipt('new-').read_bytes()==original
         minted=cli('create','A minted card','--mint','--repo','alpha','--json')['task']['id']
         instant(task_created(minted))
+        assert task(snap(),minted)['request']==dict(id=minted,label='A minted card',project='alpha')
+        cli('add','host-task','Host operation',raw=True)
+        assert task(snap(),'host-task')['request']['project']=='Proyecto sin registrar'
         plain=cli('add','Another minted card','--mint','--repo','alpha',raw=True)
         minted_plain=re.match(r'^ok: added (\S+)',plain)[1]
         final=snap()
@@ -87,6 +100,17 @@ with tempfile.TemporaryDirectory(prefix='fm-creation-time-') as folder:
         for key in (minted,minted_plain):
             assert task(final,key)['created']==task_created(key)
             instant(task(final,key)['created'])
+        archive=home/'data/done-archive.md'
+        archive.write_text('## Archived 2026-01-02\n- [x] archived - Entrega antigua (repo: alpha) (done 2026-01-01)\n')
+        before_archive=archive.read_bytes(); before_backlog=(home/'data/backlog.md').read_bytes()
+        request_input=home/'presentation-input.json'
+        request_input.write_text(json.dumps(dict(request=request)))
+        archived=cli('presentation','archived','--presentation-file',str(request_input))
+        assert archived['ok'] and archived['evidence']['available']
+        assert task(snap(),'archived')['request']==request
+        assert archive.read_bytes()==before_archive and (home/'data/backlog.md').read_bytes()==before_backlog
+        absent=cli('presentation','absent','--presentation-file',str(request_input),success=False)
+        assert absent.returncode != 0 and not (home/'data/absent').exists()
         print('ok - ordinary and minted creation retain original UTC instants; legacy and retries stay honest',flush=True)
     if case == 'calls':
         # Probe the real binary once, then reuse its verified one-hop verdict.

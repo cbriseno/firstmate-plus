@@ -14,6 +14,12 @@
 # stores it verbatim as a link, which lifecycle transitions record relative to
 # that same root.
 # Adding without --repo warns once and remains valid for projectless host work.
+# New add/create/public-followup tasks receive their own presentation.request
+# from the backlog title and repo (or Proyecto sin registrar). Pass
+# --request-from <task-id> to reuse that task's declared request for another
+# step of the same request, including work in another repository.
+# A dependency or a shared project alone never implies a shared request.
+# Existing duplicate adds retain their presentation unchanged.
 #
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
@@ -131,8 +137,8 @@
 # Progress Git/delivery probes share a five-second budget per owner invocation
 # and cache repeated Git observations within that read. Exhaustion exposes unknown
 # evidence and withholds a current measurement; it never guesses gate completion.
-# The existing backlog owner verifies the exact task before writing private
-# data/<id>/presentation.json atomically. This is an authored declaration with
+# The existing backlog owner verifies the exact current or retained archived
+# task before writing private data/<id>/presentation.json atomically. This is an authored declaration with
 # its own source/time, never a status transition, liveness signal or refresh
 # heartbeat. Reads never renew it; unknown fields remain null. No wake is sent.
 # Work controls (explicit FM_HOME, local Markdown owner):

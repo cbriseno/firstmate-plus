@@ -125,6 +125,16 @@ def create_task(arguments):
             or not data.is_dir() or len(command) < 2 or command[:1] != ['tasks-axi']
             or (command[1] not in ('add', 'create') and not public)):
         raise ValueError('invalid task creation owner arguments')
+    request = None
+    if '--request-from' in command:
+        index = command.index('--request-from')
+        if index + 1 == len(command) or command.count('--request-from') != 1:
+            raise ValueError('--request-from requires one task id')
+        parent = command[index + 1]
+        request = read_presentation(data.parent, parent, data, verify=False)['presentation']['request']
+        if request is None:
+            raise ValueError('--request-from needs a task with a declared request')
+        command = command[:index] + command[index + 2:]
     # Reserve durable space before the backend write. Interrupted/ambiguous
     # attempts keep this journal for exact recovery rather than inventing a
     # later first-observed time. It is never a read-side creation fallback.
@@ -199,6 +209,23 @@ def create_task(arguments):
                     raise ValueError('creation receipt conflict; original attempt retained in ' + journal) from None
             sync(folder)
             recorded.unlink()
+        if not already:
+            shown = subprocess.run(['tasks-axi', 'show', task_id, '--full'],
+                                   capture_output=True, text=True, check=True)
+            row = {}
+            for key, value in re.findall(r'^  (id|title|repo): (.*)$', shown.stdout, re.M):
+                row[key] = json.loads(value) if value.startswith('"') else value
+            if row.get('id') != task_id or not row.get('title'):
+                raise ValueError('created task needs its full backlog title')
+            if request is None:
+                request = dict(id=task_id if len(task_id) <= 80 else str(uuid.uuid4()),
+                               label=' '.join(row['title'].split())[:80],
+                               project=row.get('repo') if row.get('repo') not in (None, '-') else 'Proyecto sin registrar')
+            # The creation owner already holds the work lock; presentation uses
+            # the same declaration format without another backlog transition.
+            presentation(data.parent, argparse.Namespace(task=task_id, data=str(data),
+                presentation_file=None, groups=False, clear=False, repair=False,
+                reconcile=False, replan=None, request=request))
         pending.unlink()
         sync(data)
         sys.stdout.buffer.write(result.stdout)
@@ -881,14 +908,16 @@ def presentation(home, args):
     steps = (patch.get('progress') or {}).get('steps', [])
     if len({s['label'] for s in steps}) != len(steps):
         raise ValueError('new progress labels must be unique; replan legacy duplicate labels explicitly')
-    # Ask the existing backlog owner; a data directory or old meta alone is
-    # not an extant task. The wrapper retains its configured backend/addressing.
+    # Ask the backlog owner, including its retained completed records; a data
+    # directory or old meta alone never establishes task identity.
     probe = subprocess.run(['bash', str(BIN / 'fm-tasks-axi.sh'), 'show', args.task],
                            env=dict(os.environ, FM_HOME=str(home)), capture_output=True,
                            text=True, timeout=15)
     ids = [line[len('  id: '):].strip() for line in probe.stdout.splitlines() if line.startswith('  id: ')]
     identity = json.loads(ids[0]) if ids and ids[0].startswith('"') else (ids[0] if ids else None)
-    if probe.returncode or len(ids) != 1 or identity != args.task:
+    retained = (probe.returncode or len(ids) != 1 or identity != args.task)
+    if retained and not any(row['id'] == args.task for row in
+                            retained_history(home, include_non_deliveries=True)['records']):
         raise ValueError('presentation write needs an exact task from the backlog owner')
     folder = home
     for part in parts_in_home(home, path)[:-1]:

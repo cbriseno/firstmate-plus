@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
     (home/'config/lane-capacity').unlink()
     check(task(snapshot(),'unset')['priority']['own'] is None,'unset preserved')
     check(task(snapshot(),'a')['progress'] is None,'unknown progress')
-    check(task(snapshot(),'a')['updated']['precision']=='unknown','created never used for updated')
+    check(task(snapshot(),'a')['updated']['source']=='presentation','new request declaration supplies activity independently of creation time')
     check(not (home/'data/work-structure.json').exists(),'reads never create structure')
     # Review is a shared presentation mark, independent of task/decision closure.
     capabilities=cli('work','capabilities')
@@ -696,7 +696,8 @@ exit 1
     r=apply(op('move','request:old',before='request:new with spaces'))
     check(r['state']=='applied','explicit request can move without an execution identity')
     ordered=cli('work','snapshot','--order','manual')
-    check([g['id'] for g in ordered['requests']]==['old','new with spaces'],'request order persists including spaced ids')
+    request_order=[g['id'] for g in ordered['requests']]
+    check(request_order.index('old') < request_order.index('new with spaces'),'request order persists among default requests including spaced ids')
     check(snapshot()['requests'][0]['id']=='new with spaces','recent request sort preserves manual order')
     previous=json.loads((home/'data/work-structure.json').read_text())['order']
     moved=apply(op('move','task:request-old'))
