@@ -575,7 +575,7 @@ test_batch_reports_a_deferred_pair() {
   write_live "$home" live-a "$case_dir/project"
   out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" "task-c=$case_dir/project" --mode no-mistakes --yolo off) || rc=$?
   expect_code "$DEFER_EXIT" "$rc" "a batch whose only pair was deferred did not exit with the deferral status: $out"
-  assert_contains "$out" "batch: DEFERRED task-c ($case_dir/project) - its project is at capacity, so it stays queued" \
+  assert_contains "$out" "batch: DEFERRED task-c ($case_dir/project) - capacity does not admit it, so it stays queued" \
     "the batch did not report the deferral"
   assert_not_contains "$out" "batch: FAILED" "the batch reported a deferral as a failure"
   pass "a batch reports a capacity deferral as deferred, not failed"
@@ -649,6 +649,82 @@ SH
   pass "an Orca spawn takes the shared project lock whenever a same-origin clone is capped and defers before creating anything"
 }
 
+# A fresh pressure sample lets spawn exercise the real resource verdict without
+# stressing the host or depending on the machine running the suite.
+write_capacity_beat() {  # <home> <load1> <available-gb>
+  cat > "$1/beat.json" <<JSON
+{"schema":"lookout.beat","schema_version":"1.0","host":"fixture","interval_s":60,
+ "machine":{"pressure":{"level":"ok","why":[]},"load":{"l1":$2},
+ "mem":{"avail_gb":$3,"total_gb":8},"disks":[{"label":"home","free_gb":20}],"on_battery":false}}
+JSON
+}
+
+test_resource_verdict_defers_then_admits() {
+  local case_dir home out rc before worktrees load avail reason
+  command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource beat cases (jq absent)\n'; return; }
+  case_dir=$(make_case resources task-c)
+  home="$case_dir/home"
+  printf '2\nmax-load1 1\nmin-avail-gb 2\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  # A stale published admission must never override the current sample.
+  printf '{"verdict":{"admit":true}}\n' > "$home/state/lane-capacity.json"
+  before=$(call_count "$case_dir")
+  worktrees=$(worktree_list "$case_dir")
+  while IFS='|' read -r load avail reason; do
+    write_capacity_beat "$home" "$load" "$avail"
+    rc=0
+    out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
+    expect_code "$DEFER_EXIT" "$rc" "resource constraint did not defer: $out"
+    assert_contains "$out" "$reason" "resource deferral lost its measured cause"
+    assert_contains "$out" "task task-c was not launched and its backlog item stays queued" "resource deferral lost queue advice"
+    assert_contains "$out" "temporarily move $home/config/lane-capacity aside" "resource deferral lost its opt-out instruction"
+    assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  done <<'ROWS'
+1.25|6|load: 1.25 over its max-load1 1
+0.25|2.5|memory: no room for a 1 GB lane: 2.5 GB available, 2 GB kept
+ROWS
+  rc=0
+  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$case_dir/project" --scout) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a scout ignored resource admission: $out"
+  assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  printf 'invalid\n' > "$home/config/lane-capacity"
+  rc=0
+  out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code 1 "$rc" "invalid lane configuration became a resource deferral: $out"
+  assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  printf '2\nmax-load1 1\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  write_capacity_beat "$home" 0.25 6
+  rc=0
+  out=$(spawn_ship "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "the same queued task was not admitted after pressure cleared: $out"
+  assert_present "$home/state/task-c.meta" "an admitted worker has no record"
+  pass "fresh load and memory verdicts defer ships and scouts without effects, then admit after recovery"
+}
+
+test_batch_rereads_lane_capacity_after_each_spawn() {
+  local case_dir home out rc=0 wt
+  command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource batch case (jq absent)\n'; return; }
+  case_dir=$(make_case resource-batch task-a task-b)
+  home="$case_dir/home"
+  printf '1\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  write_capacity_beat "$home" 0.25 6
+  wt=$(new_worktree "$case_dir" task-a)
+  out=$(run_spawn "$case_dir" "$home" "$wt" "task-a=$case_dir/project" "task-b=$case_dir/project" --mode no-mistakes --yolo off) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "batch did not reread capacity after its first launch: $out"
+  assert_present "$home/state/task-a.meta" "batch did not publish its admitted first worker"
+  assert_contains "$out" "full: 1 of 1 lanes" "batch ignored the preceding worker's record"
+  assert_contains "$out" "batch: DEFERRED task-b" "batch mislabeled a resource deferral"
+  assert_not_contains "$out" "batch: FAILED" "batch reported resource deferral as failure"
+  assert_absent "$home/state/task-b.meta" "batch published a second worker beyond the ceiling"
+  assert_absent "$home/data/task-b/launch-brief.md" "batch rendered a deferred worker's brief"
+  if [ "$HAVE_TASKS_AXI" = 1 ]; then
+    assert_equals in_flight "$(row_state "$home" task-a)" "first worker did not start"
+    assert_equals queued "$(row_state "$home" task-b)" "second worker did not stay queued"
+  fi
+  pass "batch publishes one worker before rereading live capacity for the next"
+}
+
+test_resource_verdict_defers_then_admits
+test_batch_rereads_lane_capacity_after_each_spawn
 test_undeclared_capacity_keeps_dispatch_uncapped
 test_available_capacity_admits_the_worker
 test_exhausted_capacity_defers_without_leaving_anything_behind

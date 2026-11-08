@@ -219,7 +219,12 @@
 #   exactly as queued as it was; an unreadable declaration refuses with exit 1.
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
-#   capacity.
+#   project capacity. Fresh ships and scouts also consult fm-capacity.sh --admit
+#   under the existing home task-set lock before creating launch resources.
+#   That script owns the opt-in lane ceiling and live resource verdict; exit 75
+#   keeps the item queued, while invalid configuration remains an error.
+#   Batch pairs run one at a time, rereading capacity after the previous spawn
+#   has published its record. Host tasks retain their separate admission path.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -1916,7 +1921,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     pair_rc=0
     FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair_args[@]}" || pair_rc=$?
     if [ "$pair_rc" -eq "$FM_PROJECT_CAPACITY_DEFER_EXIT" ]; then
-      echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - its project is at capacity, so it stays queued" >&2
+      echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - capacity does not admit it, so it stays queued" >&2
       [ "$rc" -ne 0 ] || rc=$FM_PROJECT_CAPACITY_DEFER_EXIT
     elif [ "$pair_rc" -ne 0 ]; then
       echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
@@ -3664,6 +3669,20 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
   ! git -C "$PROJ_ABS" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "error: spawn refused: project $PROJ_ABS has no commit yet (unborn HEAD), so there is nothing to branch a worktree from; make one commit in the project, for example 'git -C $PROJ_ABS commit --allow-empty -m \"chore: initial commit\"', then spawn again" >&2
   exit 1
+fi
+# Read live home capacity for each fresh worker, never the watcher's cached
+# document. The existing task-set lock stays held through metadata publication,
+# so the next spawn sees this worker before making its own admission decision.
+if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
+  spawn_capacity_rc=0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit || spawn_capacity_rc=$?
+  if [ "$spawn_capacity_rc" -ne 0 ]; then
+    if [ "$spawn_capacity_rc" -eq 75 ]; then
+      echo "deferred: task $ID was not launched and its backlog item stays queued; retry at the next supervision event; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
+    fi
+    exit "$spawn_capacity_rc"
+  fi
 fi
 # Project capacity admission (bin/fm-project-capacity-lib.sh owns the
 # declaration, what holds a place, and why this is race-safe). A fresh worker
