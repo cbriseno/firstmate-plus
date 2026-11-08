@@ -122,8 +122,9 @@ export interface UnreadWakeScope {
    */
   corrupted: boolean;
   /**
-   * The exact "key" field of every decision-owned signal or stale row this
-   * scan excluded. Signal rows are marked by bin/fm-watch.sh; stale rows are
+   * The exact "key" field of every decision-owned row this scan excluded,
+   * plus the host report owner's explicit return-to-MAIN delivery requests.
+   * Signal rows are marked by bin/fm-watch.sh; stale rows are
    * decision-owned when their task has an open needs-decision or its current
    * declaration is captain-held. fm-primary-pi-watch.ts cross-references these
    * keys against the current trigger so its entire coalesced batch is forced
@@ -131,8 +132,8 @@ export interface UnreadWakeScope {
    */
   needsDecisionKeys: string[];
   /**
-   * The check-kind rows included in eligibleSeqs. Non-empty only in the away
-   * posture, where the branch takes main's rows too; a check row names no
+   * The check-kind rows included in eligibleSeqs. The attended host triages
+   * observations too; Pi retains its attended partition. A check row names no
    * task, so a prompt that claims one is not scoped by task.
    */
   checkSeqs: string[];
@@ -176,43 +177,15 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // itself - it only consumes the exact sequence-number snapshot this function
 // (via writeEligibleRowsSnapshot) hands it.
 //
-// A check-kind row - merge-confirmation polls, Relay mentions, credential/auth
-// failures, and every other legitimately main-only class - never vetoes a scan
-// in either mode. It is simply excluded from eligibleSeqs and left queued for
-// main, which is woken for it on that check's own watcher cycle
-// (fm-primary-pi-watch.ts forces every check-kind TRIGGER to main), so nothing
-// starves by being left behind.
-//
-// A signal row marked "needs-decision:" by the watcher, a second-mate signal
-// whose presented span owns a decision (spanIsDecisionOwned), or a stale row
-// for a task with an open needs-decision or a current captain-held declaration
-// gets the identical treatment: excluded from eligibleSeqs, never a scan veto,
-// and forced to main on its own triggering close (fm-primary-pi-watch.ts's
-// offerWakeToBranch). Heartbeat handling remains independent.
-//
-// That applies to a heartbeat review too, and it is the whole point: a
-// heartbeat used to be deferred to main merely because some unrelated check
-// row happened to be sitting unread, which put a routine fleet review in the
-// captain's chat for a reason that had nothing to do with the fleet. A
-// permanently main-owned row is not fleet context the branch is missing, so it
-// no longer rides the heartbeat into main (docs/pi-supervision-branch.md
-// "Heartbeat routing").
-//
-// The heartbeat's all-or-nothing contract is unchanged in what it actually
-// guarantees: a heartbeat review takes EVERY branch-ownable unread row or none
-// of them. An unresolvable signal/stale row (unmapped project) still vetoes the
-// whole scan in both modes, because that is a data/metadata problem this
-// function cannot safely reason past, not an ordinary main-only event. A row
-// this repo's fm_wake_append could never have produced (an unknown kind, or a
-// line that fails the structural tab-field check) also still vetoes the whole
-// scan - that is queue corruption, not an everyday mixed queue.
-//
-// In the away posture (`afk`, the dispatcher's read of the away-posture
-// record) the partition above collapses: main is parked, so check rows,
-// decision-owned signal and stale rows, and heartbeat rows are all claimed by
-// the branch on whatever wake finds them unread. The two vetoes that describe
-// a broken queue rather than a routing choice - an unresolvable task-local row
-// and a structurally invalid or unknown row - stay vetoes in both postures.
+// Pi's attended branch excludes check rows and decision-owned task rows,
+// leaving them queued for MAIN without vetoing unrelated branch rows.
+// The attended host also triages check observations; its loop separately
+// checks MAIN's existing inbox and outcome owners before accepting a close.
+// Row eligibility grants handling scope, never additional action authority.
+// Away, both take every row while guarded scripts enforce the posture.
+// Unknown kinds, malformed rows, unresolved tasks and conflicting metadata
+// stay corruption vetoes in every mode; an empty validated queue is distinct
+// from a scan that found only MAIN's rows.
 function statusLineVerb(line: string): string {
   const beforeColon = line.split(":", 1)[0].split("[", 1)[0].trim();
   const words = beforeColon.split(/\s+/);
@@ -442,11 +415,16 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
       continue;
     }
     if (kind === "check") {
-      // Main-owned while attended: excluded from what the branch may claim,
-      // never a reason to reject the rest of the queue and never a reason to
-      // send an otherwise-eligible heartbeat review to main. Away, the branch
-      // is the only actor, so the row is claimed unscoped.
-      if (afk) {
+      // This is the report owner's explicit delivery request, including a
+      // visible routine outcome missing from a return brief, not a check
+      // observation. Never consume MAIN's relay on another engine turn.
+      if (attendedHost && key.startsWith("supervision-host-return:")) {
+        needsDecisionKeys.push(key);
+        continue;
+      }
+      // Pi leaves attended checks on MAIN; the host triages them without
+      // acquiring MAIN's authority. Check rows have no task scope.
+      if (afk || attendedHost) {
         eligibleSeqs.push(seq);
         checkSeqs.push(seq);
       }
@@ -457,7 +435,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     if (kind === "signal") {
       const payload = fields[4] ?? "";
       if (/^needs-decision:/.test(payload)) {
-        // Main-owned exactly like a check-kind row above while attended: a
+        // Main-owned while attended: a
         // needs-decision status append surfaced through the actionable signal
         // path is excluded from what the branch may claim without vetoing the
         // scan (docs/pi-supervision-branch.md "Autonomy"). Away, the branch
@@ -587,27 +565,13 @@ export interface BranchOfferVerdict {
 // The offer rule for one actionable close: whether a branch may take it, in
 // either posture. The Pi watcher (fm-primary-pi-watch.ts) and the supervision
 // host off Pi (bin/fm-branch-dispatch.mjs offer) both route through this one
-// owner, so a close reaches main off Pi exactly when it would on Pi.
+// owner, with the attended host accepting check observations for triage.
 //
-// A check-kind close (merge-confirmation polls, Relay mentions,
-// credential/auth failures, and every other legitimately main-only class -
-// docs/pi-supervision-branch.md) is never routed to the branch while attended,
-// even when other currently-unread rows are individually eligible: this
-// watcher cycle's own triggering event stays on main, exactly as before
-// scopeForUnreadWake stopped letting a co-present check row veto the whole
-// scan. That relaxation is what lets an UNRELATED eligible signal/stale row
-// still reach the branch on this cycle; it must never also let a check-kind
-// trigger itself slip past main's delivery.
-//
-// A signal close containing a needs-decision status file, or a stale close for
-// a captain-held task, gets the identical main-only treatment as a check-kind
-// trigger. The cross-reference deliberately includes every unread decision
-// row: until that row is read, a later signal or stale trigger for the same
-// task stays on main. Other tasks and heartbeat handling remain independent.
-//
-// The away posture collapses that partition: every actionable row is
-// branch-eligible and the trigger class no longer forces anything to main
-// (scopeForUnreadWake owns the per-row rule).
+// Pi's attended check triggers and decision-owned task triggers stay on MAIN.
+// The host triages check observations and yields whenever any queued decision
+// is MAIN's, including a decision resurfaced by a recovery close.
+// The host's loop owns the additional inbox/outcome checks and failure path.
+// Away, the partition collapses but queue-corruption vetoes remain.
 export function branchOfferForWake(state: string, message: string, afk: boolean, attendedHost = false): BranchOfferVerdict {
   const heartbeat = /^heartbeat($|:)/.test(message);
   const isCheckTrigger = /^check:/.test(message);
@@ -625,8 +589,15 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
   const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
   const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
-  const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
-    afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible
+  // A check is an observation, not proof that MAIN owes an action. The host
+  // reconciles it under its existing role limits and escalates the outcome.
+  // On a recovery close, decision rows must reach MAIN regardless of which
+  // queued event happened to close the watcher. A validated empty queue has
+  // nothing to handle and needs no engine turn.
+  const attendedEligible = !(isCheckTrigger && !attendedHost) && !isNeedsDecisionTrigger
+    && !(attendedHost && scope.needsDecisionKeys.length > 0) && (
+    (attendedHost && scope.status === "empty") ||
+    (afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible)
   );
   const eligible = afk ? scope.eligible : attendedEligible;
   return { scope, heartbeat, eligible, awayOnly: Boolean(eligible && !attendedEligible) };

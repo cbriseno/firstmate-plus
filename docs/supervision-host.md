@@ -11,7 +11,7 @@ It is one architecture with Pi's, not a second one.
 These parts are shared with Pi and decide what the branch may do:
 
 - The same branch prompt.
-- The same row eligibility.
+- One eligibility implementation, with the attended policy of each host.
 - The same records.
 - The same guarded scripts.
 
@@ -26,7 +26,7 @@ Today it runs beside a Claude, Cursor, OpenCode, omp, Grok, or Codex primary: aw
 
 ### Behavior by posture and harness
 
-- Attended (no away record: no `state/.afk-contract`, or quiet mode's) on Claude and Cursor, the engine takes the wakes the Pi branch would take and never wakes main for a routine outcome; see [Postures](#postures).
+- Attended (no away record: no `state/.afk-contract`, or quiet mode's) on Claude and Cursor, the engine triages fleet observations, including check wakes, and never wakes main for a routine outcome; see [Postures](#postures).
   Every other close reaches main exactly as the plain watcher arm delivers it.
 - Attended on OpenCode, omp, Grok, and Codex, the host is a pass-through: every close reaches main as without the host.
 - Away (an away record exists), the host hands each close to the engine.
@@ -106,7 +106,17 @@ Only an away record is away: no record, or the record daemon-backed quiet mode w
 ### Attended
 
 The host asks the Pi branch's offer rule (`branchOfferForWake`, through `bin/fm-branch-dispatch.mjs offer`) whether the branch may take the close.
-So a close reaches main off Pi exactly when it would on Pi: a check trigger, a decision-owned signal or stale trigger, and a scan that is unsafe or holds nothing for the branch stay main's.
+Unlike Pi's attended partition, the host also claims check observations: a watcher category says what was observed, not who owes the next action.
+Before granting rows to the engine, it reads pending captain notes through `bin/fm-inbox.sh receipts` and undelivered captain outcomes through `bin/fm-branch-outcome.sh present`.
+The outcome read shares the existing owner used by the coordinator health module.
+The host and Claude's empty-recovery path share `fm_supervision_main_clear` in `bin/fm-supervision-lib.sh` for these owner reads.
+Any queued decision-owned row, pending captain input, undelivered captain outcome, explicit return relay, or unreadable owner stays main's, even when a recovery close obscures the original trigger.
+A corrupt or unresolvable queue stays main's too; a validated empty queue is absorbed without an engine turn.
+The owner reads happen once at the turn boundary after successor verification, so an obligation appearing while that successor starts is not consumed as routine.
+Accepting an observation changes no lease, merge, decision, discard, or publication authority.
+The engine reconciles current owner state before escalating, so an intentional wait, already-delivered result, or unchanged liveness observation is absorbed rather than handed to main for diagnosis.
+A real unresolved blocker, failed listener on a presented board, stuck worker after recovery, new requested result, or MAIN-only action is a captain outcome under the existing report contract.
+Routine outcomes use the existing bounded drain summary at main's next turn; they create no periodic main wake.
 On that main-only pass-through the host starts the successor watcher cycle and leaves it running, then prints the close unchanged.
 That successor, like one a turn hands back at its start (see [Away](#away)), runs in a process group of its own, so the harness tearing down the hook's group after the rewake does not stop it.
 The host confirms no handling handoff and republishes the watcher's recovery marker as downtime, even when an earlier engine turn left it reading handling, because the re-arm owner delivers a close to main only while that marker reads downtime.
@@ -278,7 +288,7 @@ Grok's model and Codex's checkpoint see it as a failed cycle and start the next 
 Before it arms, the next host does two things:
 
 - It stops, by recorded identity, whatever its predecessor left running, including the engine descendants a killed turn recorded.
-- It removes that turn's files.
+- It makes an unfinished turn's queued work recoverable through the existing recovery marker before removing that turn's files.
 
 ## The park boundary
 

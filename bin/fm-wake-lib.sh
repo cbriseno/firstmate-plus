@@ -917,8 +917,11 @@ fm_recovery_marker_snapshot() {
   fm_lock_release "$lock"
 }
 
+# The host passes interrupted only after stopping an unfinished turn's owned
+# processes. A consumed downtime close then needs a fresh recovery generation;
+# normal settlement never re-announces downtime, and an empty queue never does.
 _fm_recovery_marker_handling_settled() {
-  local marker=$1 lock line
+  local marker=$1 interrupted=${2:-} lock line recover=0 generation=''
   lock="${marker}.lock"
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   if ! fm_lock_acquire_wait "$lock"; then
@@ -934,14 +937,18 @@ _fm_recovery_marker_handling_settled() {
     line=$FM_RECOVERY_MARKER_TOKEN
     case "$line" in
       pending:handling:*|announced:handling:*)
-        if ! _fm_recovery_marker_write_locked "$marker" downtime "${line##*:}"; then
-          fm_lock_release "$lock"
-          fm_lock_release "$FM_WAKE_QUEUE_LOCK"
-          return 1
-        fi
+        recover=1
+        generation=${line##*:}
         ;;
-      pending:downtime:*|announced:downtime:*|acked:*) ;;
+      announced:downtime:*)
+        [ "$interrupted" != interrupted ] || recover=1
+        ;;
     esac
+    if [ "$recover" -eq 1 ] && ! _fm_recovery_marker_write_locked "$marker" downtime "$generation"; then
+      fm_lock_release "$lock"
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      return 1
+    fi
   fi
   fm_lock_release "$lock"
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
@@ -1151,7 +1158,7 @@ fm_recovery_transition() {
       _fm_recovery_marker_reopen_announced "$marker"
       ;;
     handling-settled)
-      _fm_recovery_marker_handling_settled "$marker"
+      _fm_recovery_marker_handling_settled "$marker" "$target"
       ;;
     handback)
       _fm_recovery_marker_publish "$marker" downtime "" handback
@@ -1198,7 +1205,7 @@ fm_recovery_marker_ack() {
 }
 
 fm_recovery_marker_handling_settled() {
-  fm_recovery_transition "$1" handling-settled
+  fm_recovery_transition "$1" handling-settled "${2:-}"
 }
 
 fm_recovery_marker_begin_handling() {

@@ -41,7 +41,9 @@
 #     shell &); Claude owns the process group, so its timeout/session teardown
 #     kills arm and watcher together, and the hook TERMs the arm with itself.
 #     HUP, TERM, and INT are translated through the ordinary durable failure
-#     handoff instead of leaving the generation frozen at arming. Claude does
+#     handoff instead of leaving the generation frozen at arming. Expected
+#     teardown under the current client's relay intent closes cleanly, without
+#     a failure rewake; fm_supervision_relay_handoff owns that read-only proof. Claude does
 #     not deliver the exit 2 of a hook it terminated at the configured timeout
 #     as a rewake (measured on Claude Code 2.1.278 and 2.1.281,
 #     docs/verification/supervision.md), so a park that outlives that timeout
@@ -297,17 +299,24 @@ autoarm_record() {  # <outcome>
 # failure protocol instead: the winning generation records a terminal outcome,
 # creates the episode marker, and exits 2 so Claude delivers a recovery turn -
 # except after Claude's own timeout kill, whose exit 2 is dropped (header).
+# A verified relay intent makes client teardown expected: preserve queued work
+# and close this hook without asking its retiring client to recover itself.
 # A superseded generation remains silent, and an episode whose attended
 # fail-open was already consumed must not restart automatic continuation.
 # shellcheck disable=SC2329 # Invoked indirectly by the signal traps below.
 handle_autoarm_signal() {
-  local signal=$1
+  local signal=$1 handoff_sid
   trap - HUP TERM INT
   if [ -n "${ARM_PID:-}" ]; then
     kill -TERM "$ARM_PID" 2>/dev/null || true
     wait "$ARM_PID" 2>/dev/null || true
   fi
   [ -z "${OUT:-}" ] || rm -f "$OUT" 2>/dev/null || true
+  handoff_sid=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null) || handoff_sid=
+  if fm_supervision_relay_handoff "$FM_HOME" "$STATE" "$handoff_sid"; then
+    autoarm_record clean
+    exit 0
+  fi
   if [ -e "$FAILURE_ALARM" ]; then
     autoarm_record failed-suppressed
     exit 0
@@ -450,7 +459,8 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   # A mechanical close with no queued work needs only acknowledgement and
   # another park. Keep this in the hook so it costs no model turn.
   if [ "$ACTIONABLE" -eq 1 ] && [ "${HOST_RC:-0}" -eq 0 ] \
-    && ! grep -E "$ACTIONABLE_RE" "$OUT" | grep -Ev '^check: rearm-resurface$' >/dev/null; then
+    && ! grep -E "$ACTIONABLE_RE" "$OUT" | grep -Ev '^check: rearm-resurface$' >/dev/null \
+    && fm_supervision_main_clear "$FM_HOME" "$STATE"; then
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || break
     QUIET_CLOSE=0
     if [ ! -s "$FM_WAKE_QUEUE" ] && fm_autoarm_still_owner "$STATE" "$MY_GEN" \

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared "supervision missing" predicate.
+# Shared supervision predicates.
 # Usage: . bin/fm-supervision-lib.sh
 #
 # Reports whether a firstmate home needs supervision (fm_supervision_status
@@ -19,6 +19,51 @@ fm_sup_stat_mtime() {
   else
     stat -c %Y "$1" 2>/dev/null
   fi
+}
+
+# fm_supervision_main_clear <home> <state-dir>
+# Read the existing outcome/inbox owners without advancing either cursor.
+# Return 0 only with no pending primary obligation, 1 when one is present,
+# 2 when an owner read cannot be completed. Each read has a 10-second bound.
+fm_supervision_main_clear() {
+  local sup_home=$1 sup_state=$2 sup_bin=${BASH_SOURCE[0]%/*} outcomes inbox
+  if ! command -v fm_run_timed >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-timeout-lib.sh
+    . "$sup_bin/fm-timeout-lib.sh" || return 2
+  fi
+  outcomes=$(FM_HOME="$sup_home" FM_STATE_OVERRIDE="$sup_state" \
+    fm_run_timed 10 bash "$sup_bin/fm-branch-outcome.sh" present 2>/dev/null) || return 2
+  inbox=$(FM_HOME="$sup_home" FM_STATE_OVERRIDE="$sup_state" \
+    fm_run_timed 10 bash "$sup_bin/fm-inbox.sh" receipts 2>/dev/null) || return 2
+  printf '%s\n' "$outcomes" | jq -e -s 'all(.[]; .verdict == "routine")' >/dev/null 2>&1 || return 1
+  printf '%s\n' "$inbox" | jq -e -s 'length == 1 and .[0].pending == []' >/dev/null 2>&1 || return 1
+}
+
+# fm_supervision_relay_handoff <home> <state-dir> <delivered-session-id>
+# Read-only intent from the external relay owner, bound to the current lock PID
+# and delivered SID (or its recorded client SID). Reuse its active phase or
+# matching stow-ready nonce; never write a ticket or drive a session here.
+fm_supervision_relay_handoff() {
+  local sup_home=$1 sup_state=$2 sup_sid=$3 sup_pid sup_ready='' sup_file
+  local sup_config="$sup_home/config/relay-lite.json" sup_ticket="$sup_state/relay-lite/ticket.json"
+  case "$sup_sid" in ''|unknown) return 1 ;; esac
+  for sup_file in "$sup_config" "$sup_ticket" "$sup_state/.lock"; do
+    [ -f "$sup_file" ] && [ ! -L "$sup_file" ] || return 1
+  done
+  sup_pid=$(cat "$sup_state/.lock" 2>/dev/null) || return 1
+  case "$sup_pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -f "$sup_state/relay-lite/stow-ready" ] && [ ! -L "$sup_state/relay-lite/stow-ready" ]; then
+    read -r sup_ready < "$sup_state/relay-lite/stow-ready" || true
+  fi
+  jq -e --slurpfile settings "$sup_config" --arg sid "$sup_sid" --arg pid "$sup_pid" --arg ready "$sup_ready" '
+    . as $ticket |
+    ($settings | length) == 1 and $settings[0].enabled == true and
+    (.old_pid | type) == "number" and (.old_pid | tostring) == $pid and
+    (.sid == $sid or .lock_sid == $sid) and
+    (.nonce | type) == "string" and (.nonce | length) > 0 and
+    ((["stowing", "stowed", "opening", "opened", "exiting"] | index($ticket.phase)) != null or
+      ($ready != "" and .nonce == $ready))
+  ' "$sup_ticket" >/dev/null 2>&1
 }
 
 # fm_supervision_status <state-dir> [grace-seconds]

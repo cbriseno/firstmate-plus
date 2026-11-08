@@ -114,12 +114,23 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   assert_contains "$out" "unscoped=1" "a claimed check row names no task, so the claim is unscoped"
 
   out=$(printf 'check: merge landed: fixture\n' | FM_HOME="$home" node "$DISPATCH" offer)
-  assert_contains "$out" "eligible=0" "an attended check trigger must stay main's"
+  assert_contains "$out" "eligible=1" "the host must triage attended check observations"
   out=$(printf 'check: merge landed: fixture\n' | FM_HOME="$home" node "$DISPATCH" offer --afk)
   assert_contains "$out" "eligible=1" "an away check trigger must be the branch's"
   out=$(printf 'signal: %s\n' "$state/demo.status" | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=1" "an attended signal trigger with a claimable row must be the branch's"
-  assert_contains "$out" "rows=1" "the offer must carry the scope it judged"
+  assert_contains "$out" "rows=1 2" "the host offer must carry check observations too"
+
+  append_wake "$state" signal demo.status 'needs-decision: demo.status'
+  out=$(printf 'check: rearm-resurface\n' | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=0" "recovery must preserve a queued decision's MAIN ownership"
+  : > "$state/.wake-queue"
+  out=$(printf 'check: rearm-resurface\n' | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=1" "a validated empty recovery is the host's no-op"
+  printf 'corrupt\n' > "$state/.wake-queue"
+  out=$(printf 'check: rearm-resurface\n' | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=0" "a corrupt queue must not be treated as an empty recovery"
+  : > "$state/.wake-queue"
 
   printf '[captain] keep it small\n[main] Will do.\n' > "$home/mirror"
   out=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --mirror-file "$home/mirror")

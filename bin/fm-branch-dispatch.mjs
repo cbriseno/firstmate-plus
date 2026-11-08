@@ -24,8 +24,9 @@
 //   fm-branch-dispatch.mjs offer [--afk]
 //     Read one actionable close's reason line from stdin and print
 //     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
-//     this close at all, trigger class included), then the same five lines
-//     `scope` prints for the scan it judged. --afk judges it under the away
+//     this close for triage, using the attended-host policy), then the same five lines
+//     `scope` prints for the scan it judged. Plain scope retains Pi's attended
+//     partition. --afk judges it under the away
 //     posture.
 //   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
 //     Read the watcher's wake reason from stdin and print the branch wake

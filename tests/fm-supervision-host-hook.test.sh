@@ -18,7 +18,7 @@ test_claude_stop_hook_delivers_a_main_only_pass_through() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "hook main-only: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'which export format?' needs-decision
-  wait_until 250 hook_exited "$home" || fail "hook main-only: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "hook main-only: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
   assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "fixture: the close was not a main-only pass-through"
   assert_rewoke_main "$home" "hook main-only"
   assert_re '^signal: .*demo.status' "$home/hook.err" "the rewake must carry the close"
@@ -60,7 +60,7 @@ test_claude_stop_hook_rewakes_main_for_an_inbox_note_after_a_handled_wake() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "inbox after handled: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'step one'
-  wait_until 600 handled_at_least "$home" 1 \
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 \
     || fail "inbox after handled: the routine wake was not handled on the engine: $(cat "$home/state/.supervision-host.log")"
   wait_until 150 watcher_live "$home" || fail "inbox after handled: the host is not parked on a live successor"
   sleep 2
@@ -68,7 +68,7 @@ test_claude_stop_hook_rewakes_main_for_an_inbox_note_after_a_handled_wake() {
   FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note "the captain sent this from Basecamp" >/dev/null \
     || fail "fixture: the inbox note was not saved and announced"
   assert_grep 'check: captain inbox note' "$home/state/.wake-queue" "fixture: the note queued no wake row"
-  wait_until 600 hook_exited "$home" \
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" \
     || fail "inbox after handled: the queued inbox note never woke main: $(cat "$home/state/.supervision-host.log"; cat "$home/state/.watcher-down")"
   assert_rewoke_main "$home" "inbox after handled"
   assert_re '^check: rearm-resurface' "$home/hook.err" "the rewake must carry the recovery close for the queued note"
@@ -89,7 +89,7 @@ test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "closed successor: the Stop hook never started a watcher cycle"
   append_status "$home" 'first actionable wake'
-  wait_until 600 hook_exited "$home" || fail "closed successor: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "closed successor: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
   assert_re '^supervision-host: branch-outcome: ' "$home/hook.err" "the host must hand its captain outcome to main"
   expect_code 2 "$(cat "$home/hook.rc")" "the Stop hook must rewake main after the successor closed"
   assert_re '^(pending|announced):downtime:' "$home/state/.watcher-down" \
@@ -117,10 +117,10 @@ test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "closed successor: the Stop hook never started a watcher cycle"
   append_status "$home" 'first actionable wake'
-  wait_until 600 test -s "$home/stub-ready" || fail "closed successor: the engine did not reach its hold: hook=$(cat "$home/hook.err" 2>/dev/null) host=$(cat "$home/state/.supervision-host.log" 2>/dev/null) mode=$(cat "$home/stub-mode" 2>/dev/null) engine=$(find "$home" -maxdepth 1 -name 'engine-call.*' -exec sh -c 'cat "$1"' _ {} \; 2>/dev/null) errors=$(cat "$home"/engine-errors.* 2>/dev/null)"
+  wait_until "$TURN_WAIT_POLLS" test -s "$home/stub-ready" || fail "closed successor: the engine did not reach its hold: hook=$(cat "$home/hook.err" 2>/dev/null) host=$(cat "$home/state/.supervision-host.log" 2>/dev/null) mode=$(cat "$home/stub-mode" 2>/dev/null) engine=$(find "$home" -maxdepth 1 -name 'engine-call.*' -exec sh -c 'cat "$1"' _ {} \; 2>/dev/null) errors=$(cat "$home"/engine-errors.* 2>/dev/null)"
   successor=$(cat "$home/state/.watch.lock/pid")
   append_status "$home" 'wake while the engine is handling'
-  wait_until 600 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" \
+  wait_until 600 fm_test_pids_dead "$successor" \
     || fail "closed successor: its watcher did not close during the engine turn"
   FM_HOME="$home" bash -c '. "$1"; fm_recovery_marker_begin_handling "$2"' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down" \
@@ -128,7 +128,7 @@ test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn() {
   assert_re '^pending:handling:' "$home/state/.watcher-down" \
     "fixture: the closed handling successor must leave the marker in handling before the host hands back"
   printf 'continue\n' > "$home/stub-release"
-  wait_until 600 hook_exited "$home" || fail "closed successor: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "closed successor: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
   assert_re '^supervision-host: branch-outcome: ' "$home/hook.err" "the host must hand its captain outcome to main"
   expect_code 2 "$(cat "$home/hook.rc")" "the Stop hook must rewake main after the successor closed"
   assert_re '^epoch=[0-9]+ owner_pid=[0-9]+ outcome=rewake ' "$home/state/.claude-autoarm-epoch" \
@@ -153,7 +153,7 @@ test_claude_stop_hook_rewakes_a_present_captain_beside_a_quiet_record() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "hook quiet: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'ready for review'
-  wait_until 250 hook_exited "$home" || fail "hook quiet: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "hook quiet: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
   assert_re '	handled	turn=[^	]*	posture=attended	' "$home/state/.supervision-host.log" "a quiet record must leave the host's turn attended"
   assert_rewoke_main "$home" "hook quiet"
   assert_re '^supervision-host: branch-outcome: ' "$home/hook.err" "the rewake must carry the captain outcome"
@@ -179,7 +179,7 @@ test_claude_stop_hook_runs_the_host_without_the_file_and_off_opts_out() {
   wait_until 150 watcher_live "$home" || fail "default-on: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   assert_grep 'watch the fleet for me' "$home/state/.host-mirror.jsonl" "a Claude home without the file must mirror the captain's dialog"
   append_status "$home" 'step one'
-  wait_until 250 handled_at_least "$home" 1 \
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 \
     || fail "default-on: the wake was not handled on the engine: $(cat "$home/hook.err" 2>/dev/null; cat "$home/state/.supervision-host.log" 2>/dev/null)"
   first="$home/engine-call.1"
   assert_re '^arg=sonnet$' "$first" "a Claude home without the file must run the Claude engine at its default model"
@@ -196,7 +196,7 @@ test_claude_stop_hook_runs_the_host_without_the_file_and_off_opts_out() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "off: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'step one'
-  wait_until 250 hook_exited "$home" || fail "off: the Stop hook never closed"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "off: the Stop hook never closed"
   assert_rewoke_main "$home" "off"
   assert_re '^signal: .*demo.status' "$home/hook.err" "off: the rewake must carry the arm's close"
   assert_no_re '^supervision-host' "$home/hook.err" "off: the close must reach main exactly as the arm printed it"
@@ -216,7 +216,7 @@ test_claude_stop_hook_delivers_a_close_that_turns_main_only_at_its_turn() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "hook turns-main-only: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'step one'
-  wait_until 250 hook_exited "$home" || fail "hook turns-main-only: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "hook turns-main-only: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
   [ "$(cat "$home/offer-count" 2>/dev/null)" -ge 2 ] || fail "fixture: the close was not accepted before it turned main-only"
   [ "$(engine_calls "$home")" -eq 0 ] || fail "hook turns-main-only: the engine ran on a stale offer"
   assert_rewoke_main "$home" "hook turns-main-only"
@@ -235,13 +235,13 @@ test_successor_left_at_the_turn_survives_the_hook_process_group_teardown() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "at-turn teardown: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'step one'
-  wait_until 250 hook_exited "$home" || fail "at-turn teardown: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "at-turn teardown: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
   [ "$(cat "$home/offer-count" 2>/dev/null)" -ge 2 ] || fail "fixture: the close was not accepted before it turned main-only"
   assert_rewoke_main "$home" "at-turn teardown"
   watcher=$(cat "$home/state/.watch.lock/pid")
   kill -TERM -- "-$(cat "$home/hook.pgid")" 2>/dev/null || true
   sleep 2
-  kill -0 "$watcher" 2>/dev/null || fail "at-turn teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
+  fm_test_pid_alive "$watcher" || fail "at-turn teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
   stop_home_processes "$home"
   pass "host+hook: the successor a close that turns main-only at its turn leaves for main survives the hook's process group teardown"
 }
@@ -266,7 +266,7 @@ SH
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "hook write failure: no watcher started"
   append_status "$home" 'step one'
-  wait_until 250 hook_exited "$home" || fail "hook write failure: the Stop hook did not finish"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "hook write failure: the Stop hook did not finish"
   [ "$(cat "$home/offer-count" 2>/dev/null)" -ge 2 ] || fail "fixture: the close did not turn main-only at its turn"
   assert_re 'pass-through[[:space:]]+downtime-unrestored' "$home/state/.supervision-host.log" "fixture: downtime publication did not fail"
   assert_re '^(pending|announced):handling:' "$home/state/.watcher-down" "fixture: the marker unexpectedly became downtime"
@@ -286,17 +286,17 @@ test_successor_close_during_main_turn_is_delivered_at_the_next_turn_end() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "successor close: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'which export format?' needs-decision
-  wait_until 250 hook_exited "$home" || fail "successor close: the first close never reached the Stop hook: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "successor close: the first close never reached the Stop hook: $(cat "$home/state/.supervision-host.log")"
   assert_rewoke_main "$home" "successor close (first)"
   successor=$(cat "$home/state/.watch.lock/pid")
   main_drain "$home" >/dev/null
   append_status "$home" 'which region?' needs-decision
-  wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" || fail "fixture: the successor did not close on the later decision"
+  wait_until 250 fm_test_pids_dead "$successor" || fail "fixture: the successor did not close on the later decision"
   # shellcheck disable=SC2086 # the printed acknowledgement arguments
   [ -z "$MAIN_ACK" ] || FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" "$@" >/dev/null 2>&1' "$ROOT/bin/fm-wake-drain.sh" $MAIN_ACK \
     || fail "successor close: main's acknowledgement failed: $MAIN_ACK"
   turn_end "$home"
-  wait_until 250 hook_exited "$home" || fail "successor close: the next turn end never closed: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "successor close: the next turn end never closed: $(cat "$home/state/.supervision-host.log")"
   assert_rewoke_main "$home" "successor close (next turn end)"
   drained=$(main_drain "$home")
   assert_contains "$drained" 'which region?' "the successor's close must reach main's drain"
@@ -318,18 +318,101 @@ test_pass_through_successor_survives_the_hook_process_group_teardown() {
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "group teardown: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
   append_status "$home" 'which export format?' needs-decision
-  wait_until 250 hook_exited "$home" || fail "group teardown: the decision close never reached the Stop hook: $(cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" hook_exited "$home" || fail "group teardown: the decision close never reached the Stop hook: $(cat "$home/state/.supervision-host.log")"
   assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "fixture: the close was not a main-only pass-through"
   assert_rewoke_main "$home" "group teardown (pass-through)"
   watcher=$(cat "$home/state/.watch.lock/pid")
   pgid=$(cat "$home/hook.pgid")
   kill -TERM -- "-$pgid" 2>/dev/null || true
   sleep 2
-  kill -0 "$watcher" 2>/dev/null || fail "group teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
+  fm_test_pid_alive "$watcher" || fail "group teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
   [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null)" = "$watcher" ] || fail "group teardown: the watcher lock moved"
   stop_home_processes "$home"
   pass "host+hook: the successor a pass-through leaves for main survives the hook's process group teardown"
 }
+
+# Exercise the real watcher, host, grants, outcomes, acknowledgement and Stop
+# hook. Only the engine's current-state judgment is supplied by the fixture.
+test_observations_stay_on_host_and_actual_failures_rewake_main() {
+  local case_home observation kind key
+  case_home=$(make_primary_home hook-observations)
+  ln -s "$ROOT/.agents" "$case_home/.agents"
+  start_hook_session "$case_home"
+  turn_end "$case_home"
+  wait_until 150 watcher_live "$case_home" || fail "observations: no watcher"
+  for observation in rearm-resurface progress-reconciliation inactive-outcome unattended future-observation; do
+    append_wake "$case_home/state" check "$observation" "check: $observation; current state unchanged"
+  done
+  append_wake "$case_home/state" signal demo.turn-ended "signal: $case_home/state/demo.turn-ended"
+  append_wake "$case_home/state" stale fm-demo 'stale: fm-demo (possible wedge, escalation 1)'
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$case_home" 1 || fail "observations: the host did not reconcile"
+  wait_until 300 bash -c '[ ! -s "$1/state/.wake-queue" ]' _ "$case_home" \
+    || fail "observations: a batch row remained unacknowledged"
+  [ ! -s "$case_home/hook.rc" ] || fail "observations: a routine event woke MAIN"
+  watcher_live "$case_home" || fail "observations: successor coverage was lost"
+  stop_home_processes "$case_home"
+
+  for observation in real-blocker presented-board-listener-dead worker-truly-stuck; do
+    case_home=$(make_primary_home "hook-$observation")
+    ln -s "$ROOT/.agents" "$case_home/.agents"
+    echo captain > "$case_home/stub-mode"
+    start_hook_session "$case_home"
+    turn_end "$case_home"
+    wait_until 150 watcher_live "$case_home" || fail "$observation: no watcher"
+    kind=check key=coverage
+    if [ "$observation" = worker-truly-stuck ]; then kind=stale; key=fm-demo; fi
+    if [ "$observation" = real-blocker ]; then
+      append_status "$case_home" 'recovery exhausted; MAIN action required' blocked
+    else
+      append_wake "$case_home/state" "$kind" "$key" "$kind: $observation; recovery exhausted; MAIN action required"
+    fi
+    wait_until "$TURN_WAIT_POLLS" hook_exited "$case_home" || fail "$observation: no MAIN wake"
+    assert_rewoke_main "$case_home" "$observation"
+    assert_re '^supervision-host: branch-outcome:' "$case_home/hook.err" "$observation: outcome missing"
+    assert_grep '"verdict":"captain"' "$case_home/state/branch-outcomes.jsonl" "$observation: no durable outcome"
+    stop_home_processes "$case_home"
+  done
+  pass "host+hook: observations are absorbed; actual blockers, dead presented listeners and stuck workers reach MAIN"
+}
+
+test_pending_results_and_return_relays_are_primary_obligations() {
+  local case_home verdict scenario drained
+  for scenario in captain routine captain-empty; do
+    verdict=${scenario%-empty}
+    case_home=$(make_primary_home "hook-undelivered-$scenario")
+    ln -s "$ROOT/.agents" "$case_home/.agents"
+    : > "$case_home/state/.wake-queue"
+    start_hook_session "$case_home"
+    turn_end "$case_home"
+    wait_until 150 watcher_live "$case_home" || fail "undelivered: no watcher"
+    FM_HOME="$case_home" bash "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict "$verdict" \
+      --summary 'requested result still awaiting delivery' >/dev/null || fail "undelivered: save failed"
+    if [ "$verdict" = routine ]; then
+      append_wake "$case_home/state" check supervision-host-return:1 'check: relay the outcome missed by the return brief'
+    elif [ "$scenario" = captain-empty ]; then
+      FM_HOME="$case_home" FM_STATE_OVERRIDE="$case_home/state" bash -c '
+        . "$1"
+        fm_recovery_marker_publish "$2"
+      ' _ "$ROOT/bin/fm-wake-lib.sh" "$case_home/state/.watcher-down" || fail "undelivered: no recovery"
+    else
+      append_wake "$case_home/state" check observation 'check: current state unchanged'
+    fi
+    wait_until "$TURN_WAIT_POLLS" hook_exited "$case_home" || fail "undelivered: MAIN was not woken"
+    assert_rewoke_main "$case_home" undelivered
+    [ "$(engine_calls "$case_home")" -eq 0 ] || fail "undelivered: another engine consumed MAIN delivery"
+    drained=$(main_drain "$case_home")
+    assert_contains "$drained" 'requested result still awaiting delivery' "undelivered: drain lost the result"
+    if [ "$verdict" = captain ]; then
+      drained=$(main_drain "$case_home")
+      assert_contains "$drained" 'requested result still awaiting delivery' "unprocessed: presentation was mistaken for handling"
+    fi
+    stop_home_processes "$case_home"
+  done
+  pass "host+hook: unread and unprocessed requested results and return relays stay on MAIN"
+}
+
+test_observations_stay_on_host_and_actual_failures_rewake_main
+test_pending_results_and_return_relays_are_primary_obligations
 
 test_main_only_close_after_handled_turn_restores_inherited_handling
 test_main_only_close_after_handled_turn_delivers_restore_failure

@@ -13,7 +13,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
   start_session "$home"
   park_again "$home"
   append_status "$home" 'first'
-  wait_until 250 host_exited "$home" || fail "latch: the first engine error did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the first engine error did not hand the wake back"
   assert_re '^supervision-host: the supervision session could not take this wake: the engine turn failed \(exit 3\); this wake is yours$' \
     "$home/host.out" "the first engine error must hand the wake back with its reason"
   assert_no_re 'paused' "$home/host.out" "one engine error must not latch the session"
@@ -21,7 +21,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
 
   park_again "$home"
   append_status "$home" 'second'
-  wait_until 250 host_exited "$home" || fail "latch: the second engine error did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the second engine error did not hand the wake back"
   assert_re '^supervision-host: the supervision session is paused after repeated engine errors; every wake reaches you for the next 5 minutes' "$home/host.out" \
     "the second consecutive engine error must trip the latch with one line"
   assert_grep 'cooldown=300' "$home/state/.supervision-host-health" "the latch must start with the Pi policy's five-minute cooldown"
@@ -29,7 +29,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
 
   park_again "$home"
   append_status "$home" 'inside the cooldown'
-  wait_until 250 host_exited "$home" || fail "latch: a close inside the cooldown did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: a close inside the cooldown did not reach main"
   assert_re '^signal: .*demo.status' "$home/host.out" "a close inside the cooldown must reach main"
   assert_no_re '^supervision-host' "$home/host.out" "a close inside the cooldown must reach main exactly as the arm printed it"
   [ "$(engine_calls "$home")" -eq 2 ] || fail "the engine ran inside the cooldown"
@@ -40,7 +40,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
   end_cooldown "$home"
   park_again "$home"
   append_status "$home" 'the probe fails'
-  wait_until 250 host_exited "$home" || fail "latch: the failed probe did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the failed probe did not hand the wake back"
   [ "$(engine_calls "$home")" -eq 3 ] || fail "the cooldown's end did not let one wake probe the engine"
   assert_no_re 'paused' "$home/host.out" "a failed probe must not repeat the trip line"
   assert_grep 'cooldown=600' "$home/state/.supervision-host-health" "a failed probe must double the cooldown"
@@ -49,7 +49,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
   end_cooldown "$home" 2400
   park_again "$home"
   append_status "$home" 'a later probe fails'
-  wait_until 250 host_exited "$home" || fail "latch: the later failed probe did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the later failed probe did not hand the wake back"
   [ "$(engine_calls "$home")" -eq 4 ] || fail "the grown cooldown's end did not let one wake probe the engine"
   assert_grep 'cooldown=3600' "$home/state/.supervision-host-health" "the doubled cooldown must stop at one hour"
   main_drain_and_ack "$home"
@@ -59,7 +59,7 @@ test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main() {
   handled=$(handled_count "$home")
   park_again "$home"
   append_status "$home" 'the probe succeeds'
-  wait_until 250 handled_at_least "$home" $((handled + 1)) \
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" $((handled + 1)) \
     || fail "latch: the successful probe was not handled: $(cat "$home/host.out"; tail -n 5 "$home/state/.supervision-host.log")"
   assert_re '	recovered	after a successful probe$' "$home/state/.supervision-host.log" "the ledger must record the recovery"
   ! wait_until 20 host_exited "$home" || fail "a routine probe's recovery reached main: $(cat "$home/host.out")"
@@ -76,10 +76,10 @@ test_engine_turn_is_bounded_and_its_descendants_reaped() {
   FM_SUPERVISION_HOST_TURN_TIMEOUT=3 FM_SUPERVISION_ENGINE_GRACE=1 start_host "$home"
   wait_until 150 watcher_live "$home" || fail "hang: the host never started a watcher cycle"
   append_status "$home" 'slow one'
-  wait_until 300 host_exited "$home" || fail "hang: the bounded turn did not end"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "hang: the bounded turn did not end"
   assert_re '^supervision-host: .*the engine turn hit its 3s bound; this wake is yours$' "$home/host.out" "a bounded turn must hand its wake to main"
   orphan=$(cat "$home/orphan-pid")
-  wait_until 50 sh -c '! kill -0 "$1" 2>/dev/null' _ "$orphan" \
+  wait_until 50 fm_test_pids_dead "$orphan" \
     || fail "an engine tool process in its own process group outlived the turn: $(ps -p "$orphan" -o pid=,pgid=,command=)"
   pass "host: an engine turn is bounded, and tool processes outside its process group are reaped"
 }
@@ -94,9 +94,9 @@ test_restarted_host_stops_what_a_killed_predecessor_left() {
   watcher=$(cat "$home/state/.watch.lock/pid")
   kill -KILL "$first_host"
   sleep 1
-  kill -0 "$arm" 2>/dev/null || fail "crash: fixture error: the arm died with its host, so this case proves nothing"
+  fm_test_pid_alive "$arm" || fail "crash: fixture error: the arm died with its host, so this case proves nothing"
   start_host "$home"
-  wait_until 200 sh -c '! kill -0 "$1" 2>/dev/null && ! kill -0 "$2" 2>/dev/null' _ "$arm" "$watcher" \
+  wait_until 200 fm_test_pids_dead "$arm" "$watcher" \
     || fail "a restarted host left its killed predecessor's arm or watcher running"
   wait_until 100 sh -c 'grep -q "	start	gen=host-" "$1" && [ "$(grep -c "	start	" "$1")" -ge 2 ]' _ "$home/state/.supervision-host.log" \
     || fail "the restarted host did not start"
@@ -225,7 +225,7 @@ SH
   echo $((park - turn - grace)) > "$home/park-clock"
   exec 3<> "$home/render-release"
   printf 'release\n' >&3
-  wait_until 300 host_exited "$home" || fail "boundary-late: the host did not end its park"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "boundary-late: the host did not end its park"
   exec 3>&-
   assert_re '^signal: .*demo.status' "$home/host.out" "the close read at the boundary must reach main"
   [ "$(tail -n 1 "$home/host.out")" = "$(grep '^supervision-host: cycle boundary - ' "$home/host.out")" ] \
@@ -234,7 +234,7 @@ SH
   assert_no_re '	(handled|failed)	turn=' "$home/state/.supervision-host.log" "no engine turn may be logged"
   assert_grep 'demo.status' "$home/state/.wake-queue" "a close refused at the boundary must stay queued for main"
   while IFS= read -r pid; do
-    kill -0 "$pid" 2>/dev/null && fail "the boundary left the successor arm $pid running"
+    fm_test_pid_alive "$pid" && fail "the boundary left the successor arm $pid running"
   done < <(awk -F '\t' '$1 == "arm" { print $2 }' "$home/host-record-at-render")
   watcher_live "$home" && fail "the boundary left the watcher running"
   pass "host: a close whose margin runs out while the successor starts reaches main at the boundary without a turn"
@@ -255,7 +255,7 @@ test_park_test_clock_requires_the_marker() {
   FM_TEST_SEAM='' FM_TEST_SUPERVISION_HOST_CLOCK="$home/park-clock" start_host "$home"
   wait_until 150 watcher_live "$home" || fail "clock-unmarked: the host never started a watcher cycle: $(cat "$home/host.out")"
   append_status "$home" 'handled on the wall clock'
-  wait_until 250 handled_at_least "$home" 1 \
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 \
     || fail "a test clock without FM_TEST_SEAM changed the park: $(cat "$home/host.out" "$home/state/.supervision-host.log")"
   [ ! -s "$home/host.rc" ] || fail "a test clock without FM_TEST_SEAM ended the park: $(cat "$home/host.out")"
   assert_no_re 'cycle boundary' "$home/host.out" "a test clock without FM_TEST_SEAM reached the boundary"
@@ -284,7 +284,7 @@ test_park_limit_lets_a_turn_outlive_the_boundary() {
       FM_SUPERVISION_ENGINE_GRACE=10 start_host "$home"
     wait_until 150 watcher_live "$home" || fail "$name: the host never started a watcher cycle"
     append_status "$home" 'one close'
-    wait_until 250 sh -c '[ -s "$1/host.rc" ] || grep -q "	handled	" "$1/state/.supervision-host.log" 2>/dev/null' _ "$home" \
+    wait_until "$TURN_WAIT_POLLS" sh -c '[ -s "$1/host.rc" ] || grep -q "	handled	" "$1/state/.supervision-host.log" 2>/dev/null' _ "$home" \
       || fail "$name: the close was neither handled nor handed to main: $(cat "$home/state/.supervision-host.log")"
     if host_exited "$home"; then
       grep -q '^supervision-host: cycle boundary - ' "$home/host.out" || fail "$name: the host exited without the boundary: $(cat "$home/host.out")"
@@ -310,7 +310,7 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
     || fail "stream: the first cycle's status did not reach the owner before a close: $(cat "$home/host.out")"
   host_exited "$home" && fail "stream: the host exited before any close: $(cat "$home/host.out")"
   append_status "$home" 'fixture finished' 'done'
-  wait_until 200 host_exited "$home" || fail "stream: the attended close did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "stream: the attended close did not reach main"
   [ "$(grep -c '^watcher: ' "$home/host.out")" -eq 1 ] || fail "stream: the status line must be printed once: $(cat "$home/host.out")"
   [ "$(sed -n '1p' "$home/host.out" | cut -c1-17)" = 'watcher: started ' ] || fail "stream: the status line must come first"
   assert_re '^signal: .*demo.status' "$home/host.out" "stream: the close must follow the status line"
@@ -339,9 +339,9 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
     || fail "stream: the restarting host never reported its cycle: $(cat "$home/host.out" "$home/claude.err" 2>/dev/null)"
   fresh=$(sed -n 's/^watcher: started pid=\([0-9]*\).*/\1/p' "$home/host.out")
   [ "$fresh" != "$stale" ] || fail "stream: --restart attached to the watcher it should have replaced"
-  wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$stale" || fail "stream: --restart left the old watcher running"
-  wait_until 200 host_exited "$home" || append_status "$home" 'second close' 'done'
-  wait_until 200 host_exited "$home" || fail "stream: the restarting host's close did not reach main"
+  wait_until 100 fm_test_pids_dead "$stale" || fail "stream: --restart left the old watcher running"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || append_status "$home" 'second close' 'done'
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "stream: the restarting host's close did not reach main"
   assert_re '^(signal: .*demo.status|check: rearm-resurface)$' "$home/host.out" "stream: the restarting host's close must reach main"
 
   # That close left an unacknowledged downtime episode; a host the owner starts
@@ -369,7 +369,7 @@ test_latch_trips_after_two_engine_errors_then_probes_and_recovers() {
 
   park_again "$home"
   append_status "$home" 'inside the cooldown'
-  wait_until 250 host_exited "$home" || fail "latch: a close inside the cooldown did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: a close inside the cooldown did not reach main"
   assert_re '^signal: .*demo.status' "$home/host.out" "a close inside the cooldown must reach main"
   assert_re '^supervision-host: the away session is paused after repeated engine errors until .*; this wake is yours$' \
     "$home/host.out" "a close inside the cooldown must say why main has it"
@@ -380,7 +380,7 @@ test_latch_trips_after_two_engine_errors_then_probes_and_recovers() {
   end_cooldown "$home"
   park_again "$home"
   append_status "$home" 'the probe fails'
-  wait_until 250 host_exited "$home" || fail "latch: the failed probe did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the failed probe did not hand the wake back"
   [ "$(engine_calls "$home")" -eq 3 ] || fail "the cooldown's end did not let one wake probe the engine"
   assert_no_re 'paused' "$home/host.out" "a failed probe must not repeat the trip line"
   assert_grep 'cooldown=600' "$home/state/.supervision-host-health" "a failed probe must double the cooldown"
@@ -389,7 +389,7 @@ test_latch_trips_after_two_engine_errors_then_probes_and_recovers() {
   end_cooldown "$home" 2400
   park_again "$home"
   append_status "$home" 'a later probe fails'
-  wait_until 250 host_exited "$home" || fail "latch: the later failed probe did not hand the wake back"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch: the later failed probe did not hand the wake back"
   [ "$(engine_calls "$home")" -eq 4 ] || fail "the grown cooldown's end did not let one wake probe the engine"
   assert_grep 'cooldown=3600' "$home/state/.supervision-host-health" "the doubled cooldown must stop at one hour"
   main_drain_and_ack "$home"
@@ -398,7 +398,7 @@ test_latch_trips_after_two_engine_errors_then_probes_and_recovers() {
   echo handle > "$home/stub-mode"
   park_again "$home"
   append_status "$home" 'the probe succeeds'
-  wait_until 250 handled_at_least "$home" 1 || fail "latch: the successful probe was not handled: $(cat "$home/host.out")"
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 || fail "latch: the successful probe was not handled: $(cat "$home/host.out")"
   [ "$(engine_calls "$home")" -eq 5 ] || fail "the cooldown's end did not let the recovering wake probe the engine"
   host_exited "$home" && fail "an away recovery must not reach main: $(cat "$home/host.out")"
   assert_re '	recovered	after a successful probe' "$home/state/.supervision-host.log" "the ledger must record the recovery"
@@ -420,7 +420,7 @@ test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes() {
   FM_HOME="$home" "$CONTRACT" archive >/dev/null 2>&1 || fail "fixture: could not archive the away posture"
   park_again "$home"
   append_status "$home" 'attended while latched'
-  wait_until 250 host_exited "$home" || fail "latch scope: the attended close did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch scope: the attended close did not reach main"
   assert_re '^signal: .*demo.status' "$home/host.out" "an attended close in a latched session must reach main"
   assert_no_re '^supervision-host' "$home/host.out" "an attended close in a latched session must reach main exactly as the arm printed it"
   [ "$(cat "$home/state/.supervision-host-health")" = "$health" ] || fail "an attended close changed the latch"
@@ -431,7 +431,7 @@ test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes() {
     || fail "fixture: could not record the away posture again"
   park_again "$home"
   append_status "$home" 'away after opting out'
-  wait_until 250 host_exited "$home" || fail "latch scope: the close after the opt-out did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "latch scope: the close after the opt-out did not reach main"
   assert_re '^supervision-host: the home no longer runs the supervision host$' "$home/host.out" \
     "a home opted out by config/supervision-host-off must hand the close back as the opt-out, not the latch"
   assert_no_re 'paused' "$home/host.out" "a home opted out by config/supervision-host-off must not read the latch"
@@ -457,11 +457,19 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
     "$home/state/held.meta" "$home/state/held.status" \
     || fail "fixture: could not age the held task's records"
   prime_status_seen "$home/state" "$home/state/held.status"
+  printf '# Backlog\n\n## In flight\n\n- [ ] held - Held result (repo: held)\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  # This case has a completed worker plan; a missing plan is a separate
+  # actionable progress event, not a repeat of the held outcome.
+  printf '%s\n' '{"phase":"implementation","progress":{"steps":[{"label":"Implementation","state":"done"}]}}' > "$home/held-progress-input.json"
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" presentation held --presentation-file "$home/held-progress-input.json" \
+    > "$home/held-progress-result.json" 2>&1 || fail "fixture: held progress publication failed: $(cat "$home/held-progress-result.json")"
+  jq -e '.ok == true and .state == "published" and .evidence.available == true and .lifecycle.evidence.current == true' \
+    "$home/held-progress-result.json" >/dev/null || fail "fixture: held progress was not current"
 
   export FM_FAKE_CREW_STATE_held='state: done · source: fake'
   export FM_INACTIVE_CREW_STATE_BIN="$home/fakebin/fm-crew-state.sh" FM_INACTIVE_RECONCILE_SECS=60
   start_host "$home"
-  wait_until 250 captain_rows_at_least "$home" 1 \
+  wait_until "$TURN_WAIT_POLLS" captain_rows_at_least "$home" 1 \
     || fail "held: the first cadence never escalated the held outcome: $(cat "$home/state/.supervision-host.log" 2>/dev/null)"
   assert_grep 'child=held' "$home/state/branch-outcomes.jsonl" "held: the escalation did not name the held task's outcome: $(cat "$home"/engine-drain.* "$home/state/.supervision-host.log")"
   wait_until 150 handled_at_least "$home" 1 || fail "held: the escalating turn never finished"
@@ -480,7 +488,7 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
   [ -s "$home/host.rc" ] && fail "held: the host handed a wake to main: $(cat "$home/host.out")"
 
   printf 'needs-decision [key=merge-153]: merge PR 153 now or hold it for the return?\n' >> "$home/state/held.status"
-  wait_until 250 captain_rows_at_least "$home" 2 \
+  wait_until "$TURN_WAIT_POLLS" captain_rows_at_least "$home" 2 \
     || fail "held: the new decision never reached the captain path: $(cat "$home/state/branch-outcomes.jsonl")"
   [ "$(captain_rows "$home")" -eq 2 ] || fail "held: the decision escalated $(captain_rows "$home") rows, not one"
   [ "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" list --recent 1 | sed -n 's/.*"task":"\([^"]*\)".*"verdict":"\([a-z]*\)".*/\1 \2/p')" = 'held captain' ] \
@@ -492,7 +500,7 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
   watcher=$(cat "$home/state/.watch.lock/pid")
   kill -TERM "$pid"
   wait_until 200 host_exited "$home" || fail "held: the host did not stop on TERM"
-  wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$watcher" || fail "held: a stopped host left its watcher running"
+  wait_until 100 fm_test_pids_dead "$watcher" || fail "held: a stopped host left its watcher running"
   pass "host: an unchanged held outcome reaches the captain once across cadences, and a later decision on the task still does"
 }
 
@@ -502,7 +510,7 @@ test_unverified_engine_hands_every_away_wake_to_main() {
   start_host "$home"
   wait_until 150 watcher_live "$home" || fail "no engine: the host never started a watcher cycle"
   append_status "$home" 'anything'
-  wait_until 200 host_exited "$home" || fail "no engine: the wake did not reach main"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "no engine: the wake did not reach main"
   assert_re "^supervision-host: no supervision engine runs here: config/supervision-host names 'pi', which is not a verified supervision engine" \
     "$home/host.out" "an unverified engine must be named on the wake it hands to main"
   ! ls "$home"/engine-call.* >/dev/null 2>&1 || fail "no engine: an engine ran"
@@ -529,10 +537,12 @@ test_tagged_lock_holder_reaches_the_engine_whole() {
   home=$(make_home tagged-holder away)
   echo hold-lease > "$home/stub-mode"
   # A Windows/Git Bash home: uname reports MINGW and ps -W lists the session
-  # harness the lock names as win:7204; every other ps question is the real one.
+  # harness the lock names as win:7204. Sever the POSIX parent link as at
+  # the native/Cygwin boundary; otherwise the test inherits its real harness.
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" MINGW64_NT-10.0-26200\n' > "$home/fakebin/uname"
   cat > "$home/fakebin/ps" <<'SH'
 #!/usr/bin/env bash
+case "$*" in '-o ppid= -p '*) printf '0\n'; exit 0 ;; esac
 [ "$*" = -W ] || exec /bin/ps "$@"
 printf '%s\n' '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND'
 printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\Users\user\.local\bin\claude.exe'
@@ -545,7 +555,7 @@ SH
     bash -c '"$0" park > "$FM_HOME/host.out" 2>&1; printf "%s\n" "$?" > "$FM_HOME/host.rc"' "$HOST" 2>> "$home/claude.err" &
   wait_until 150 watcher_live "$home" || fail "tagged: the host never started a watcher cycle: $(cat "$home/host.out")"
   append_status "$home" 'step one'
-  wait_until 250 handled_at_least "$home" 1 || fail "tagged: the wake was not handled: $(cat "$home/host.out"; cat "$home/state/.supervision-host.log")"
+  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 || fail "tagged: the wake was not handled: $(cat "$home/host.out"; cat "$home/state/.supervision-host.log")"
   first="$home/engine-call.1"
   assert_re '^holder=win:7204$' "$first" "the engine's lease holder must be the tagged session-lock holder, whole"
   assert_re '^branch win:7204 [0-9]+ live$' "$home/engine-lease.log" \
@@ -581,15 +591,15 @@ test_superseded_host_leaves_the_owner_untouched() {
   wait_until 200 sh -c '[ -s "$1" ]' _ "$home/host2.rc" || fail "superseded: the second host did not return"
   expect_code 0 "$(cat "$home/host2.rc")" "a superseded host exits 0"
   assert_grep 'supervision-host stood down: this session does not own supervision' "$home/host2.out" "the stand-down must say why"
-  kill -0 "$owner" 2>/dev/null || fail "a superseded host stopped the owner host"
+  fm_test_pid_alive "$owner" || fail "a superseded host stopped the owner host"
   [ "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")" = "$owner" ] \
     || fail "a superseded host took the owner's host record"
-  if [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null)" != "$watcher" ] || ! kill -0 "$watcher" 2>/dev/null; then
+  if [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null)" != "$watcher" ] || ! fm_test_pid_alive "$watcher"; then
     fail "a superseded host stopped the owner's watcher"
   fi
   FM_HOME="$home" "$LEASE" check demo 2>/dev/null | grep -q '^branch ' || fail "a superseded host released the owner's branch leases"
   kill -TERM "$owner"
-  wait_until 200 sh -c '! kill -0 "$1" 2>/dev/null && ! kill -0 "$2" 2>/dev/null' _ "$owner" "$watcher" \
+  wait_until 200 fm_test_pids_dead "$owner" "$watcher" \
     || fail "superseded: the owner host did not stop on TERM"
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
 }

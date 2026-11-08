@@ -51,8 +51,11 @@
 #     lock holder can be identified, the session is not cooling down after
 #     engine errors, and the Pi branch's offer rule
 #     (bin/fm-branch-dispatch.mjs offer) says the branch may take this close,
-#     so main-only classes (check triggers, decision-owned triggers, a scan
-#     that is unsafe or holds nothing for the branch) stay main's. That
+#     so decision-owned rows and corrupt scans stay main's. The host triages
+#     check observations too, but pending captain inputs and undelivered
+#     captain outcomes in their existing stores always go to main. Those
+#     owner reads use fm_supervision_main_clear (bin/fm-supervision-lib.sh);
+#     an unreadable store hands the close back. A validated empty queue needs no engine turn. That
 #     pass-through starts the successor watcher cycle and leaves it running
 #     before the close is printed, so supervision continues when the session
 #     drops the handoff. It confirms no handling handoff and republishes the
@@ -198,6 +201,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-supervision-lib.sh
+. "$SCRIPT_DIR/fm-supervision-lib.sh"
 
 FIRST_ARM_RESTART=0
 STOP_ONLY=0
@@ -352,6 +357,16 @@ release_branch_leases() {
   branch_env "$SCRIPT_DIR/fm-lease.sh" release-actor --actor branch >/dev/null 2>&1 || true
 }
 
+# The turn checkpoint remains until its stopped owner's queued work is
+# recoverable. Reuse the marker owner for both orderly and crash recovery.
+recover_interrupted_turn() {
+  [ -f "$TURN_FILE" ] || return 0
+  if ! fm_recovery_marker_handling_settled "$STATE/.watcher-down" interrupted; then
+    echo "watcher: FAILED - the interrupted host turn could not be made recoverable"
+    return 1
+  fi
+}
+
 # Stop whatever a predecessor host left running, then take the record. The
 # auto-arm admits one generation at a time, so a predecessor still alive here
 # was superseded (its owner died or went stale) or crashed mid-cleanup.
@@ -384,6 +399,7 @@ activate() {
     case "$ledger" in *.pids|*.next) continue ;; esac
     [ -f "$ledger" ] && _fm_engine_reap "$ledger"
   done
+  recover_interrupted_turn || return 1
   rm -f "$STATE"/.supervision-host-arm.* "$STATE"/.supervision-host-descendants.* "$STATE"/.supervision-host-result.* \
     "$STATE"/.supervision-host-errors.* "$STATE"/.supervision-host-readback.* "$TURN_FILE" "$MIRROR_FEED" 2>/dev/null || true
   # The successor a pass-through left for main: the first cycle takes it over
@@ -439,7 +455,12 @@ cleanup() {
     "$SCRIPT_DIR/fm-wake-grant.sh" deactivate "$HOST_PID" "$GEN" >/dev/null 2>&1 || true
   fi
   release_branch_leases
-  rm -f "$TURN_FILE" "$ENGINE_PID_FILE" 2>/dev/null || true
+  if recover_interrupted_turn; then
+    rm -f "$TURN_FILE" 2>/dev/null || true
+  else
+    rc=1
+  fi
+  rm -f "$ENGINE_PID_FILE" 2>/dev/null || true
   for f in "$TURN_RESULT" "$TURN_ERRORS"; do
     case "$f" in "$STATE"/.supervision-host-*) rm -f "$f" 2>/dev/null || true ;; esac
   done
@@ -859,7 +880,7 @@ health_record() {  # <engine-error 0|1> <reports>
 # never a subshell, because it advances the host's grant and turn state.
 handle_wake() {  # <reason-lines>
   local reason=$1 first scope status corrupted rows tasks unscoped rc turn readback
-  local receipts usage result errors unacked mirror
+  local receipts usage result errors unacked mirror main_status
   LAST_TURN=
   ENGINE_ERROR=0
   HEALTH_NOTE=
@@ -885,6 +906,18 @@ handle_wake() {  # <reason-lines>
   if [ "$corrupted" = 1 ]; then
     HANDLE_WHY="a queued wake could not be read or resolved to a task record, so its scope is unknown"
     return 1
+  fi
+  # Consult MAIN's owners once, after successor verification and before any
+  # grant, including for an empty recovery. Reading them in the preliminary
+  # offer too duplicates work without changing the turn's authority check.
+  if [ "$TURN_POSTURE" = attended ]; then
+    fm_supervision_main_clear "$FM_HOME" "$STATE"
+    main_status=$?
+    if [ "$main_status" -ne 0 ]; then
+      ATTENDED_WHY="main-only"
+      [ "$main_status" -ne 2 ] || ATTENDED_WHY="main obligations could not be read"
+      return 2
+    fi
   fi
   if [ "$status" = empty ] || [ -z "$rows" ]; then
     log_line "no-op	nothing for the branch to claim	$first"
@@ -1072,7 +1105,7 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 143' TERM
 trap 'exit 130' INT
-activate || { echo "supervision-host stood down: the host record could not be written"; exit 0; }
+activate || { echo "watcher: FAILED - the supervision host could not activate"; exit 1; }
 if [ "$STOP_ONLY" -eq 1 ]; then
   if [ -n "$LEFT_ARM" ]; then
     IFS="$(printf '\t')" read -r left_pid left_identity < "$LEFT_RECORD" || exit 1

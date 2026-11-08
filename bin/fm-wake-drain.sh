@@ -875,13 +875,10 @@ if [ -n "$ACK_THROUGH" ]; then
     claim_main_rows_locked "$ACK_THROUGH" || exit 1
   fi
   if [ "$ACTOR" = branch ]; then
-    # An away-posture grant can name check-kind rows - the attended
-    # partition's check/decision exclusions lift under the away record
-    # (docs/pi-supervision-branch.md "Postures") - so a branch ack must retire
-    # the inactive-outcome and notice receipts carried by the exact granted
-    # sequences it consumes. Otherwise the receipt stays pending and every
-    # later reconcile scan re-queues the same fingerprint. Attended, a grant
-    # names no check row and both scans find nothing.
+    # An away-posture or attended-host grant can name check-kind rows, so
+    # retire inactive-outcome and notice receipts for the exact granted
+    # sequences consumed. Otherwise reconciliation re-queues the fingerprint.
+    # Pi's attended partition still excludes check rows.
     ACK_FINGERPRINTS=$(inactive_outcome_fingerprints "$ACK_THROUGH" 'inactive-outcome:' "$ELIGIBLE_ROWS_FILE") || exit 1
     ACK_NOTICE_FINGERPRINTS=$(inactive_outcome_fingerprints "$ACK_THROUGH" 'inactive-reconcile:' "$ELIGIBLE_ROWS_FILE") || exit 1
   else

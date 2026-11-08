@@ -83,6 +83,10 @@ It re-arms by parking that awaited hook on `bin/fm-watch-arm.sh` and returning a
 ### Claude Stop hook
 
 Claude's `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) owns routine tokenless re-arm.
+Expected hook termination during the current client's context handoff closes its generation without a failure rewake, leaving queued work and stored outcomes for normal startup.
+The read-only intent check is `fm_supervision_relay_handoff` in [fm-supervision-lib.sh](../bin/fm-supervision-lib.sh); it consumes the external relay owner's existing ticket and ready marker and performs no relay or session operation.
+Outside a verified handoff, interruption retains the ordinary durable failure path.
+An empty recovery is absorbed only after `fm_supervision_main_clear` checks the existing outcome and inbox owners, so an empty queue cannot hide an undelivered result.
 Do not run the hook as a manual arm from a tool turn: a short-lived tool process cannot own its park; its header and help own the invocation contract.
 The hook fires on every Stop.
 On each Stop, an eligible primary with supervision need admits one home-scoped owner, which foregrounds `bin/fm-watch-arm.sh` inside the hook-owned process tree.
@@ -236,6 +240,7 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 An announced downtime episode stays announced for every unchanged pending row, including decisions, terminal outcomes, and unread notes.
 An announced handling episode may reopen to recover an interrupted handling turn; a watcher restart alone never reopens announced downtime.
+After stopping an unfinished host turn's recorded processes, its owner can open a fresh recovery generation for a consumed downtime close before removing the turn checkpoint.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.

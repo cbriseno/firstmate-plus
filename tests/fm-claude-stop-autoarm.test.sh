@@ -29,6 +29,8 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-claude-stop-autoarm.sh"
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
+  cp "$ROOT/bin/fm-branch-outcome.sh" "$dir/bin/fm-branch-outcome.sh"
+  cp "$ROOT/bin/fm-inbox.sh" "$dir/bin/fm-inbox.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
   cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
@@ -169,7 +171,7 @@ SH
       ;;
     blocking-actionable)
       cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
-sleep 6
+while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.05; done
 printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
 touch "$FM_HOME/state/.last-watcher-beat"
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
@@ -813,9 +815,9 @@ test_single_flight_admits_exactly_one_owner() {
 # timeout expires. The hook owner must turn that TERM into the same durable,
 # rewake-triggering failure handoff as any other exhausted arm failure; leaving
 # the generation at `arming` cannot recover without a later manual turn.
-test_term_mid_arm_commits_failure_and_rewakes() {
-  local dir out hook_pid i status=0
-  dir=$(make_primary_dir "$TMP_ROOT/term-mid-arm")
+test_term_mid_arm() {
+  local dir out hook_pid i status=0 handoff=${1:-none} phase sid expected=2
+  dir=$(make_primary_dir "$TMP_ROOT/term-mid-arm-$handoff")
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" blocking-actionable
   out="$dir/state/autoarm.out"
@@ -832,10 +834,41 @@ test_term_mid_arm_commits_failure_and_rewakes() {
   [ -n "$hook_pid" ] || fail "auto-arm did not publish its generation owner before TERM"
   [ -e "$dir/state/arm-ran" ] || fail "auto-arm did not enter the foreground arm before TERM"
 
+  # Write the existing relay owner's intent AFTER the hook has parked, then
+  # terminate it as the client does at /exit. No relay controller is executed.
+  if [ "$handoff" != none ]; then
+    mkdir -p "$dir/state/relay-lite"
+    printf '{"enabled":true}\n' > "$dir/config/relay-lite.json"
+    phase=$handoff sid=sess-autoarm
+    case "$handoff" in
+      ready|wrong-ready) phase=stopped ;;
+      foreign) phase=opening; sid=another-session ;;
+    esac
+    jq -n --arg phase "$phase" --arg sid "$sid" --argjson pid "$(cat "$dir/state/.lock")" \
+      '{phase:$phase,sid:$sid,old_pid:$pid,nonce:"fixture-nonce"}' > "$dir/state/relay-lite/ticket.json"
+    case "$handoff" in
+      ready) printf 'fixture-nonce\n' > "$dir/state/relay-lite/stow-ready" ;;
+      wrong-ready) printf 'foreign-nonce\n' > "$dir/state/relay-lite/stow-ready" ;;
+    esac
+    case "$handoff" in stowing|opening|ready) expected=0 ;; esac
+  fi
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" bash -c '
+    . "$1"
+    fm_wake_append check handoff-observation "check: routine observation while the client exits"
+  ' _ "$dir/bin/fm-wake-lib.sh" || fail "could not retain the pending observation"
+
   kill -TERM "$hook_pid" 2>/dev/null || fail "could not TERM the foreground auto-arm owner"
   wait "$RUN_AUTOARM_BG_PID" || status=$?
 
-  expect_code 2 "$status" "TERM mid-arm must preserve Claude's rewake-triggering hook exit"
+  expect_code "$expected" "$status" "TERM mid-arm returned the wrong handoff verdict ($handoff)"
+  assert_grep 'handoff-observation' "$dir/state/.wake-queue" "hook teardown consumed pending work"
+  if [ "$expected" -eq 0 ]; then
+    assert_absent "$dir/state/.claude-autoarm-failure-notified" "expected handoff opened a failure episode"
+    [ "$(epoch_outcome "$dir")" = clean ] || fail "expected handoff did not close its generation"
+    assert_not_contains "$(cat "$out")" 'auto-arm INTERRUPTED' "expected handoff requested a model continuation"
+    pass "auto-arm: expected client teardown during $handoff stays silent and retains queued work"
+    return
+  fi
   assert_present "$dir/state/.claude-autoarm-failure-notified" "TERM mid-arm left no durable failure marker"
   [ "$(epoch_outcome "$dir")" = failed ] \
     || fail "TERM mid-arm left a nonterminal ledger outcome: $(sed -n '1p' "$dir/state/.claude-autoarm-epoch")"
@@ -1316,17 +1349,18 @@ test_orphaned_claim_from_dead_session_is_superseded_by_replacement() {
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' > "$dir/state/replacement-out" 2>&1 &
   RUN_AUTOARM_BG_PID=$!
-  for i in $(seq 1 250); do
+  for i in $(seq 1 900); do
     kill -0 "$RUN_AUTOARM_BG_PID" 2>/dev/null || break
     [ "$(wc -l < "$dir/state/arm-ran")" -ge 2 ] && break
-    sleep 0.02
+    sleep 0.1
   done
+  [ "$(wc -l < "$dir/state/arm-ran")" -ge 2 ] || fail "the replacement never armed before the fixture release"
   lock_pid=$(sed -n 1p "$dir/state/.lock")
   : > "$dir/state/arm-release"
   wait "$RUN_AUTOARM_BG_PID"; status=$?
   out=$(cat "$dir/state/replacement-out")
-  for i in $(seq 1 250); do kill -0 "$orphan_pid" 2>/dev/null || break; sleep 0.02; done
-  kill -0 "$orphan_pid" 2>/dev/null && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
+  for i in $(seq 1 250); do fm_test_pid_alive "$orphan_pid" || break; sleep 0.02; done
+  fm_test_pid_alive "$orphan_pid" && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
 
   expect_code 2 "$status" "the replacement session's first Stop must supersede the dead session's orphaned claim and rewake, not defer to it"
   assert_contains "$out" "firstmate watcher wake" "the replacement's rewake must carry the wake banner"
@@ -1387,17 +1421,18 @@ test_resumed_same_id_session_supersedes_the_orphan() {
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' > "$dir/state/replacement-out" 2>&1 &
   RUN_AUTOARM_BG_PID=$!
-  for i in $(seq 1 250); do
+  for i in $(seq 1 900); do
     kill -0 "$RUN_AUTOARM_BG_PID" 2>/dev/null || break
     [ "$(wc -l < "$dir/state/arm-ran")" -ge 2 ] && break
-    sleep 0.02
+    sleep 0.1
   done
+  [ "$(wc -l < "$dir/state/arm-ran")" -ge 2 ] || fail "the replacement never armed before the fixture release"
   lock_pid=$(sed -n 1p "$dir/state/.lock")
   : > "$dir/state/arm-release"
   wait "$RUN_AUTOARM_BG_PID"; status=$?
   out=$(cat "$dir/state/replacement-out")
-  for i in $(seq 1 250); do kill -0 "$orphan_pid" 2>/dev/null || break; sleep 0.02; done
-  kill -0 "$orphan_pid" 2>/dev/null && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
+  for i in $(seq 1 250); do fm_test_pid_alive "$orphan_pid" || break; sleep 0.02; done
+  fm_test_pid_alive "$orphan_pid" && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
   unset CLAUDE_CODE_SESSION_ID
 
   expect_code 2 "$status" "a resumed session sharing the dead session's id must supersede its orphaned claim and rewake, not defer to it"
@@ -1595,7 +1630,15 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
     kill -0 "$a_pid" 2>/dev/null || { echo "owner A finished before the supersession could be exercised" > "$FM_HOME/state/scenario-fail"; exit 1; }
     touch -t 202001010000 "$FM_HOME/state/.claude-autoarm-epoch"
     touch -t 202001010000 "$FM_HOME/state/.last-watcher-beat"
-    fire c
+    fire c &
+    c_pid=$!
+    i=0
+    while [ "$(wc -l < "$FM_HOME/state/arm-ran")" -lt 2 ]; do
+      [ "$i" -lt 900 ] && kill -0 "$c_pid" 2>/dev/null || { echo "owner C never armed" > "$FM_HOME/state/scenario-fail"; exit 1; }
+      sleep 0.1; i=$((i + 1))
+    done
+    : > "$FM_HOME/state/arm-release"
+    wait "$c_pid"
     wait "$a_pid"
   '
   [ ! -e "$dir/state/scenario-fail" ] || fail "$(cat "$dir/state/scenario-fail")"
@@ -2065,7 +2108,12 @@ test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
 test_single_flight_admits_exactly_one_owner
-test_term_mid_arm_commits_failure_and_rewakes
+test_term_mid_arm
+test_term_mid_arm stowing
+test_term_mid_arm opening
+test_term_mid_arm ready
+test_term_mid_arm foreign
+test_term_mid_arm wrong-ready
 test_abandoned_owner_claim_is_reclaimed_and_rearms
 test_abandoned_claim_reclaim_reaps_dead_steal_without_nesting
 test_arming_claim_with_fresh_beacon_is_never_reclaimed

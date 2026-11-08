@@ -199,6 +199,19 @@ fm_test_pid_identity() {
     '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid"
 }
 
+# PID existence includes zombies. Reuse the production liveness owner when
+# a fixture waits for an orphan or detached child to finish.
+fm_test_pid_alive() {
+  FM_STATE_OVERRIDE="$FM_TEST_TMPDIR" bash -c \
+    '. "$1"; fm_pid_alive "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$1"
+}
+
+fm_test_pids_dead() {
+  local pid
+  for pid in "$@"; do fm_test_pid_alive "$pid" && return 1; done
+  return 0
+}
+
 FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
   rm -f "$FM_TEST_CLEANUP_REGISTRY"
   return 1
