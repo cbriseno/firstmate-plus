@@ -5412,7 +5412,8 @@ test_expected_identity_intakes() {
   capabilities=$(run_captain "$home" capabilities --json) || fail "capabilities failed"
   printf '%s' "$capabilities" | jq -e '
     .schema == "fm-captain-hold.capabilities.v1" and .guarded_input == "single-row"
-    and .expected_identity == ["answer", "answers", "reconcile-requests", "complete-action"]
+    and .expected_identity == ["answer", "answers", "reconcile-requests", "complete-action", "correct"]
+    and .attachments == true and .correction == true
   ' >/dev/null || fail "capabilities did not advertise the atomic intake contract"
   [ ! -e "$home/state/reconcile-requests" ] || fail "capabilities created request state"
   printf 'Keep café, $(literal), and an exact second line.\nSecond line.\n' > "$home/decision.txt"
@@ -5646,6 +5647,52 @@ SH
   pass "capabilities is read-only and guarded backend failures/timeouts retain their status without mutation"
 }
 
+test_expected_identity_corrections() {
+  local home mode identity current show
+  home=$(make_home identity-corrections)
+  printf 'Original answer\n' > "$home/answer"
+  printf 'Corrected answer\n' > "$home/correction"
+  for mode in 'done' release; do
+    FM_CAPTAIN_HOLD_NOW=2026-11-08T12:00:00Z run_captain "$home" hold "cas-$mode" \
+      --title Question --reason choose --no-options 'Free response' >/dev/null || fail 'cannot seed correction'
+    identity=$(run_captain "$home" open "cas-$mode" --identity)
+    if [ "$mode" = release ]; then
+      tasks_in "$home" start "cas-$mode" >/dev/null
+      run_captain "$home" answer "cas-$mode" --decision-file "$home/answer" --release >/dev/null || fail 'release failed'
+    else
+      run_captain "$home" answer "cas-$mode" --decision-file "$home/answer" >/dev/null || fail 'answer failed'
+    fi
+    current='#1'
+    expect_intake_refusal "$home" 3 identity-conflict mismatch correct "cas-$mode" \
+      --decision-file "$home/correction" --expected-identity "$identity"
+    expect_intake_refusal "$home" 3 identity-conflict not-open answer "cas-$mode" \
+      --decision-file "$home/correction" --expected-identity "$current"
+    run_captain "$home" correct "cas-$mode" --decision-file "$home/correction" --expected-identity "$current" >/dev/null \
+      || fail 'current closed/released identity rejected correction'
+    show=$(tasks_in "$home" show "cas-$mode" --full)
+    if [ "$mode" = release ]; then
+      assert_contains "$show" 'state: in_flight' 'correction changed released work state'
+      assert_not_contains "$show" 'hold_kind: captain' 'correction re-held released work'
+    else
+      assert_contains "$show" 'state: done' 'correction reopened closed work'
+    fi
+    assert_contains "$show" 'Corrected answer' 'correction was not recorded'
+    assert_contains "$show" 'Original answer' 'correction lost the original answer'
+    expect_intake_refusal "$home" 3 identity-conflict mismatch correct "cas-$mode" \
+      --decision-file "$home/correction" --expected-identity "$current"
+    if [ "$mode" = release ]; then
+      run_captain "$home" hold "cas-$mode" --reason 'choose again' --no-options 'Free response' >/dev/null
+      current=$(run_captain "$home" open "cas-$mode" --identity)
+      if run_captain "$home" correct "cas-$mode" --decision-file "$home/correction" --expected-identity "$current" \
+        > /dev/null 2> "$home/reheld.err"; then fail 'correction answered a re-held question'; fi
+      assert_contains "$(cat "$home/reheld.err")" 'answer the current open question' 'wrong re-held correction refusal'
+    fi
+  done
+  expect_intake_refusal "$home" 3 identity-conflict absent correct absent-call \
+    --decision-file "$home/correction" --expected-identity "$current"
+  pass 'guarded corrections compare closed/released identities without reopening work or weakening answer guards'
+}
+
 test_free_answer_attachments_and_correction() {
   local home snapshot saved before
   home=$(make_home free-answer-attachments)
@@ -5668,7 +5715,8 @@ print(a["attachments"][0]["path"])') || fail 'origin cannot read complete text a
   assert_equals "$before" "$(cat "$home/data/backlog.md")" 'attachment replay changed the saved answer'
   printf 'image-two' > "$home/image.png"
   : > "$home/answer"
-  run_captain "$home" correct free-call --decision-file "$home/answer" --attach "$home/image.png" >/dev/null || fail 'attachment-only correction failed'
+  run_captain "$home" correct free-call --decision-file "$home/answer" --attach "$home/image.png" \
+    --expected-identity '#1' >/dev/null || fail 'guarded attachment-only correction failed'
   assert_equals image-one "$(cat "$saved")" 'correction overwrote the original attachment'
   snapshot=$(FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" work snapshot)
   printf '%s' "$snapshot" | python3 -c 'import json,pathlib,sys
@@ -6055,6 +6103,7 @@ if [ "${FM_CAPTAIN_HOLD_TEST_ACTION:-}" = 1 ]; then
 fi
 
 if [ "${FM_CAPTAIN_HOLD_TEST_ANSWER_DELIVERY:-}" = 1 ]; then
+  test_expected_identity_corrections
   test_free_answer_attachments_and_correction
   test_saved_answer_waits_for_application_without_reasking
   test_answer_records_and_closes
@@ -6065,6 +6114,7 @@ fi
 if [ "${1:-}" = --intake-cas ] || [ "${FM_CAPTAIN_HOLD_TEST_INTAKE_CAS:-}" = 1 ] \
   || [ "${FM_CAPTAIN_HOLD_TEST_INTAKE_CAS:-}" = core ]; then
   test_expected_identity_intakes
+  test_expected_identity_corrections
   test_expected_identity_secondmate
   test_expected_identity_waits_for_control_lock
   test_expected_identity_backend_failures
@@ -6106,6 +6156,7 @@ test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
+test_expected_identity_corrections
 test_free_answer_attachments_and_correction
 test_saved_answer_waits_for_application_without_reasking
 test_answer_records_and_closes

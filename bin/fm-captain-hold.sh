@@ -199,6 +199,8 @@
 # Backend errors remain failures (exit 2), and read timeouts remain exit 124.
 # A guarded retry after a successful close/release is a conflict, including an
 # exact answer retry; unguarded legacy replay behavior is unchanged.
+# `correct` compares the same identity on an already answered closed/released
+# row; it appends a correction without releasing or reopening work.
 # With the flag, answers and reconcile-requests accept exactly one nonempty
 # input row, read the whole input before acting, and reject empty, malformed,
 # or multiple rows with exit 2 and stderr {"error":"invalid-guarded-input"}.
@@ -209,7 +211,8 @@
 # for reconcile, which never answers or closes a call.
 # `capabilities --json` is read-only, needs no configured home or tasks-axi,
 # and returns {"schema":"fm-captain-hold.capabilities.v1",
-# "expected_identity":["answer","answers","reconcile-requests","complete-action"],
+# "expected_identity":["answer","answers","reconcile-requests","complete-action","correct"],
+# "attachments":true,"correction":true,
 # "guarded_input":"single-row","call_kinds":["question","action"],
 # "action":{"where":["chat"],"completion":"complete-action","persistent":true}}.
 # Clients can require this before guarded intake.
@@ -361,7 +364,7 @@ set -eu
 if [ "${1:-}" = capabilities ]; then
   [ "$#" -eq 2 ] && [ "$2" = --json ] \
     || { printf 'usage: fm-captain-hold.sh capabilities --json\n' >&2; exit 2; }
-  printf '%s\n' '{"schema":"fm-captain-hold.capabilities.v1","expected_identity":["answer","answers","reconcile-requests","complete-action"],"guarded_input":"single-row","call_kinds":["question","action"],"action":{"where":["chat"],"completion":"complete-action","persistent":true}}'
+  printf '%s\n' '{"schema":"fm-captain-hold.capabilities.v1","expected_identity":["answer","answers","reconcile-requests","complete-action","correct"],"attachments":true,"correction":true,"guarded_input":"single-row","call_kinds":["question","action"],"action":{"where":["chat"],"completion":"complete-action","persistent":true}}'
   exit 0
 fi
 
@@ -1010,8 +1013,8 @@ hold_lifecycle_identity() {  # <shown-task-body>
 
 # Called only with this task's control lock held; leave the same canonical row
 # in TASK_SHOW_OUTPUT for the transition, without a second unlocked precheck.
-guard_expected_identity() {  # <task-id> <expected-identity>
-  local id=$1 expected=$2 status=0 show state
+guard_expected_identity() {  # <task-id> <expected-identity> [correction-0-or-1]
+  local id=$1 expected=$2 correcting=${3:-0} status=0 show state
   [ "$CAPTAIN_CONTROL_LOCK_HELD" = 1 ] && [ "$CAPTAIN_CONTROL_LOCK" = "$STATE/.control-$id.lock" ] \
     || fail "identity comparison requires task control for $id"
   task_show "$id" || status=$?
@@ -1025,8 +1028,10 @@ guard_expected_identity() {  # <task-id> <expected-identity>
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   [ -n "$state" ] || { printf 'fm-captain-hold: canonical task %s has no state\n' "$id" >&2; exit 2; }
-  [ "$state" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ] \
-    || identity_conflict not-open
+  if [ "$correcting" != 1 ]; then
+    [ "$state" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ] \
+      || identity_conflict not-open
+  fi
   [ "$(hold_lifecycle_identity "$(show_field "$show" body)")" = "$expected" ] \
     || identity_conflict mismatch
 }
@@ -1712,7 +1717,7 @@ command_answer() {
   acquire_task_control_lock "$id"
   require_tasks_axi
   if [ -n "$expected" ]; then
-    guard_expected_identity "$id" "$expected"
+    guard_expected_identity "$id" "$expected" "$correcting"
   else
     task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
   fi
