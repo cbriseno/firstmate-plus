@@ -139,6 +139,22 @@
 #   work capabilities | snapshot [--runtime]  Fresh endpoint liveness; --runtime adds full crew evidence.
 #   work preview | apply                 One bounded operation JSON on stdin.
 #   work request-status --request-id ID   Durable receipt; retries never repeat effects.
+#   work close --request-id ID            Close only workers at that pause's safe point.
+#   work reconcile                        Advance safe closes and FIFO queued resumes.
+#   work pause.preview | pause.request | pause.cancel
+#   work resume.preview | resume.request | resume.dequeue
+# Signal verbs read JSON {scope, rev, request_id, actor?, reason?}; previews
+# need no request_id. Scopes are task:<id>, project:<repo>, req:<request.id>.
+# Request scopes select only explicit presentation.request membership.
+# pause.request notifies workers, then closes only after their keyed safe point;
+# FM_WORK_SAFE_POINT_TIMEOUT (seconds, 1..86400, default 300) exposes an
+# unconfirmed pause without killing the worker. The main wake drain advances
+# these controls; snapshot/request-status never send lifecycle commands.
+# resume.request leaves its selected pause intact while queued, checks current
+# capacity before clearing it and relaunching saved work, and preserves other
+# pauses. resume.dequeue leaves queued work paused. pause.cancel is refused
+# after a safe point. Signal receipts and snapshot pause_controls/events expose
+# confirmation, refusal and queue progress; crew shows running agents and cap.
 # Pause completion requires the exact safe-point acknowledgement or a fresh
 # recovery-grade dead/missing endpoint verdict, never a status tail or metadata
 # existence. Unknown liveness stays received with an explicit Spanish reason.

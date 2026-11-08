@@ -75,7 +75,8 @@
 #   schema, generated_epoch (this host's clock), home ("main", or the id in
 #   .fm-secondmate-home), machine (the first readable beat's host, else the
 #   short host name),
-#   lanes {count, pr_ready (records with a pr= line), ids},
+#   lanes {count, pr_ready (records with a pr= line), ids}; agents proven dead
+#   by the existing recovery classifier release their lane; unknowns retain it.
 #   cap {target (number or null), status ok|none|invalid},
 #   projects (clone directory names under projects/),
 #   pressure {level ok|warn|critical|unknown, why[], basis beat|probe|none,
@@ -188,11 +189,18 @@ lanes=0
 secondmates=0
 pr_ready=0
 lane_ids=
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
   if grep -qx 'kind=secondmate' "$meta" 2>/dev/null; then
     secondmates=$((secondmates + 1))
   else
+    lane_id=$(basename "$meta" .meta)
+    if fm_backend_validate_task_endpoint "$meta" "$lane_id" >/dev/null 2>&1; then
+      lane_state=$(fm_backend_agent_state "$FM_BACKEND_VALIDATED_BACKEND" "$FM_BACKEND_VALIDATED_TARGET" 2>/dev/null) || lane_state=unknown
+      [ "$lane_state" != dead ] || continue
+    fi
     lanes=$((lanes + 1))
     lane_ids="$lane_ids$(basename "$meta" .meta)
 "

@@ -35,6 +35,8 @@ class Aliases:
             return  # Explicit activation permits private approved allocations before any new ones.
         previous = copy.deepcopy(self.value)
         for key in sorted(self.owner.keys()):
+            if key.startswith('req:'):
+                continue  # Request ids are already explicit home-scoped identities.
             if key in self.value['forward']:
                 continue
             kind = self.owner.hierarchy(key)['kind'] if not key.startswith('task:') else 'task'

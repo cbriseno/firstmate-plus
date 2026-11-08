@@ -830,6 +830,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# The main drain advances safe pauses and FIFO resumes before taking the wake
+# queue lock. Snapshot and acknowledgement paths remain observation-only.
+if [ "$ACTOR" = main ] && [ -z "$ACK_THROUGH" ] && [ -d "${FM_DATA_OVERRIDE:-$FM_HOME/data}/work-requests" ]; then
+  FM_HOME="$FM_HOME" bash "$SCRIPT_DIR/fm-tasks-axi.sh" work reconcile >/dev/null \
+    || echo 'work reconciliation failed; inspect pause and resume requests' >&2
+fi
+
 if [ -n "$ACK_THROUGH" ]; then
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
 elif fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" "$PRESENTATION_LOCK_TIMEOUT"; then
