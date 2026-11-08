@@ -1038,7 +1038,7 @@ This does not relax protection for any other untracked file.
 An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
-For a checkout with a private integration branch, run `bin/fm-local-sync.sh <repo> [--restart <command...>]` to fetch `main`, rebase that branch, and optionally restart; `bin/fm-local-branch-lib.sh` owns its declaration shared with teardown and `bin/fm-merge-local.sh`, which lands a local-only task from such a checkout by fast-forwarding `main` without a checkout and then rebasing the integration branch onto it (exit 3, branch unchanged, when that rebase conflicts).
+For a checkout with a private integration branch, run `bin/fm-local-sync.sh <repo> [--restart <command...>]` to fetch `main`, rebase that branch, and optionally restart; `bin/fm-local-branch-lib.sh` owns its declaration shared with teardown and `bin/fm-merge-local.sh`, which lands a local-only task from such a checkout by fast-forwarding `main` without a checkout and then rebasing the integration branch onto it (exit 3, branch unchanged, when that rebase conflicts). After a worker resolves such a conflict on a branch rebased onto `main`, `bin/fm-local-adopt.sh <repo> <branch>` moves the integration branch to it after backing up the old head.
 
 ## Harness support
 
