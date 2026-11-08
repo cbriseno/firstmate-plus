@@ -425,6 +425,10 @@ def retained_history(home, *, include_non_deliveries=False):
                                   text=True, timeout=15, check=True)
         result['records'] = sorted(json.loads(selected.stdout),
                                    key=lambda r: (r['completion']['date'] or '', r['id']), reverse=True)
+        for task in result['records']:
+            authored = read_presentation(home, task['id'])
+            task['presentation'] = authored['presentation']
+            task['presentation_evidence'] = authored['evidence']
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         result['complete'] = False
         result['limitations'].append(str(exc))
@@ -559,7 +563,15 @@ def activity(home, args):
 # Character bounds; the card fields are what a board renders on every card.
 PRESENTATION_BOUNDS = dict(summary=2000, waiting_for=2000, next_action=2000,
                            card_title=80, card_status=120, group=40)
-PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase')
+REQUEST_BOUNDS = dict(id=80, label=80, project=80)
+OUTCOME_ROLES = ('step', 'partial', 'final')
+OUTCOME_REVIEWS = ('needed', 'done')
+PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase', 'request', 'outcome')
+
+
+def plain_line(text, limit):
+    return (isinstance(text, str) and bool(text.strip()) and len(text) <= limit
+            and not any(ord(c) < 32 or ord(c) == 127 for c in text))
 
 
 def presentation_fields(value):
@@ -569,6 +581,17 @@ def presentation_fields(value):
         if key == 'phase':
             if text is not None and text not in PHASES:
                 raise ValueError('invalid progress phase')
+            continue
+        if key == 'request':
+            if text is not None and (not isinstance(text, dict) or set(text) != set(REQUEST_BOUNDS)
+                                     or any(not plain_line(text[k], REQUEST_BOUNDS[k]) for k in text)):
+                raise ValueError('request requires plain id, label and project text')
+            continue
+        if key == 'outcome':
+            if text is not None and (not isinstance(text, dict) or set(text) - {'role', 'review'}
+                                     or text.get('role') not in (None,) + OUTCOME_ROLES
+                                     or text.get('review') not in (None,) + OUTCOME_REVIEWS):
+                raise ValueError('outcome requires role step|partial|final and review needed|done')
             continue
         if key == 'progress':
             if text is None:

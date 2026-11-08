@@ -12,7 +12,8 @@ import unittest
 
 ROOT = Path(sys.argv.pop(1)).resolve()
 EMPTY_CARD = dict(card_title=None, card_status=None, group=None,
-                  summary=None, waiting_for=None, next_action=None)
+                  summary=None, waiting_for=None, next_action=None,
+                  progress=None, phase=None, request=None, outcome=None)
 
 
 class Clarity(unittest.TestCase):
@@ -255,7 +256,8 @@ class Clarity(unittest.TestCase):
         self.assertEqual(authored['evidence']['source'], 'task.owner.declaration')
         path = self.home / 'data/demo/presentation.json'
         before = path.read_bytes()
-        self.assertEqual(self.value('fm-tasks-axi.sh', 'presentation', 'demo'), authored)
+        self.assertEqual(self.value('fm-tasks-axi.sh', 'presentation', 'demo'),
+                         {k: v for k, v in authored.items() if k not in ('ok', 'state')})
         self.assertEqual(path.read_bytes(), before)
         snap = self.value('fm-bearings-snapshot.sh', '--json')
         row = next(v for v in snap['gates'] if v['id'] == 'demo')
@@ -366,6 +368,93 @@ class Clarity(unittest.TestCase):
         self.assertEqual(next(v for v in summary['queued'] if v['id'] == 'demo')['flow']['presentation'], card)
         cleared = self.value('fm-tasks-axi.sh', 'presentation', 'demo', '--card-status', '')['presentation']
         self.assertEqual(cleared, dict(card, card_status=None))
+
+    def test_request_and_outcome_are_file_only_validated_and_read_back(self):
+        if not shutil.which('tasks-axi') or not shutil.which('node'):
+            self.skipTest('installed tasks-axi + Node required')
+        (self.home / 'data/backlog.md').write_text(
+            '## In flight\n\n## Queued\n- [ ] enc - Revisar el encargo (kind: ship)\n\n## Done\n')
+        fields = Path(self.tmp.name) / 'fields.json'
+        saved = self.home / 'data/enc/presentation.json'
+        request = dict(id='req-1', label='Encargo de prueba', project='firstmate')
+        outcome = dict(role='final', review='needed')
+        fields.write_text(json.dumps(dict(request=request, outcome=outcome), ensure_ascii=False))
+        out = self.value('fm-tasks-axi.sh', 'presentation', 'enc', '--presentation-file', str(fields))
+        self.assertEqual((out['ok'], out['state']), (True, 'published'))
+        self.assertEqual((out['presentation']['request'], out['presentation']['outcome']), (request, outcome))
+        self.assertEqual(self.value('fm-tasks-axi.sh', 'presentation', 'enc')['presentation']['outcome'], outcome)
+        partial = dict(role=None, review='done')
+        fields.write_text(json.dumps(dict(outcome=partial)))
+        self.assertEqual(self.value('fm-tasks-axi.sh', 'presentation', 'enc', '--presentation-file', str(fields))
+                         ['presentation']['outcome'], partial)
+        before = saved.read_bytes()
+        bad = (dict(request=dict(id='req-1', label='Solo dos')), dict(request='req-1'),
+               dict(request=dict(request, label='dos\nlíneas')), dict(outcome=dict(role='done')),
+               dict(outcome=dict(role='step', note='x')), dict(outcome=dict(review='pending')))
+        for obj in bad:
+            fields.write_text(json.dumps(obj))
+            self.run_cli('fm-tasks-axi.sh', 'presentation', 'enc', '--presentation-file', str(fields), good=(1,))
+            self.assertEqual(saved.read_bytes(), before, obj)
+        self.run_cli('fm-tasks-axi.sh', 'presentation', 'enc', '--outcome', 'x', good=(2, 1))
+        cleared = self.value('fm-tasks-axi.sh', 'presentation', 'enc', '--clear')['presentation']
+        self.assertEqual((cleared['request'], cleared['outcome']), (None, None))
+
+    def test_request_membership_activity_and_archived_outcome(self):
+        if not shutil.which('tasks-axi') or not shutil.which('node'):
+            self.skipTest('installed tasks-axi + Node required')
+        (self.home / 'data/backlog.md').write_text(
+            '## Queued\n- [ ] build - Implementación (kind: ship)\n'
+            '- [ ] research - Investigación (kind: scout)\n'
+            '- [ ] legacy - Sin clasificar (kind: ship)\n'
+            '- [ ] separate - Otro proyecto (kind: ship)\n\n## Done\n')
+        request = dict(id='same', label='Encargo compartido', project='alpha')
+        fields = Path(self.tmp.name) / 'fields.json'
+        for task, role, project in [('build', 'partial', 'alpha'), ('research', 'final', 'alpha'),
+                                    ('separate', 'step', 'beta')]:
+            fields.write_text(json.dumps(dict(request=dict(request, project=project,
+                                                          id='other' if task == 'separate' else 'same'),
+                                              outcome=dict(role=role, review='needed'))))
+            self.value('fm-tasks-axi.sh', 'presentation', task, '--presentation-file', str(fields))
+        # Retained presentation follows its task after the backlog archives it.
+        backlog = self.home / 'data/backlog.md'
+        backlog.write_text(backlog.read_text().replace('- [ ] research - Investigación (kind: scout)\n', ''))
+        (self.home / 'data/done-archive.md').write_text(
+            '## Archived 2026-11-01\n'
+            '- [x] research - Investigación data/research/report.md (kind: scout) (reported 2026-11-01)\n')
+        # A later member status changes activity without rewriting the request.
+        (self.home / 'state/build.status').write_text('working [at=1893456000]: comprobando\n')
+        self.value('fm-tasks-axi.sh', 'presentation', 'legacy', '--group', 'Encargo compartido')
+        saved = self.home / 'data/build/presentation.json'
+        before = saved.read_bytes()
+        snapshot = self.value('fm-tasks-axi.sh', 'work', 'snapshot')
+        requests = {r['project']: r for r in snapshot['requests']}
+        self.assertEqual(set(requests), {'alpha', 'beta'})
+        self.assertEqual(set(requests['alpha']['tasks']), {'task:build', 'task:research'})
+        self.assertEqual(requests['alpha']['updated_at'], '2030-01-01T00:00:00Z')
+        tasks = {t['key']: t for t in snapshot['tasks']}
+        self.assertEqual(tasks['task:build']['request'], request)
+        self.assertEqual(tasks['task:build']['outcome'], dict(role='partial', review='needed'))
+        self.assertIsNone(tasks['task:legacy']['request'])
+        self.assertIsNone(tasks['task:legacy']['outcome'])
+        history = self.history()['records'][0]
+        self.assertEqual(history['presentation']['request'], request)
+        self.assertEqual(history['presentation']['outcome'], dict(role='final', review='needed'))
+        self.value('fm-tasks-axi.sh', 'work', 'snapshot')
+        self.assertEqual(saved.read_bytes(), before)  # Reading never marks reviewed.
+        # Review is independent of the result's role and survives other patches.
+        fields.write_text(json.dumps(dict(outcome=dict(role='partial', review='done'))))
+        self.value('fm-tasks-axi.sh', 'presentation', 'build', '--presentation-file', str(fields))
+        self.value('fm-tasks-axi.sh', 'presentation', 'build', '--card-status', 'Revisado')
+        snapshot = self.value('fm-tasks-axi.sh', 'work', 'snapshot')
+        build = next(t for t in snapshot['tasks'] if t['key'] == 'task:build')
+        self.assertEqual(build['outcome'], dict(role='partial', review='done'))
+        self.assertEqual(build['request'], request)
+        bearings = self.value('fm-bearings-snapshot.sh', '--json')
+        build_flow = next(r['flow'] for r in bearings['gates'] if r['id'] == 'build')
+        self.assertEqual(build_flow['presentation']['request'], request)
+        summary = self.value('fm-fleet-snapshot.sh', '--secondmate-home-summary')
+        build_flow = next(r['flow'] for r in summary['queued'] if r['id'] == 'build')
+        self.assertEqual(build_flow['presentation']['outcome'], dict(role='partial', review='done'))
 
     def test_registered_executor_is_not_current_native_activity(self):
         (self.home / 'data/backlog.md').write_text(

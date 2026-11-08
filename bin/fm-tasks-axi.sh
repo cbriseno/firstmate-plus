@@ -86,6 +86,14 @@
 #                         worker sets it when it reports done, and firstmate
 #                         checks it before cleanup.
 #   waiting_for, next_action (1..2000) optional wait and next-step text.
+# File input only (no flags): the captain's request this task belongs to,
+#   request {id, label, project} (each 1..80 plain text, all three required), and
+#   outcome {role: step|partial|final, review: needed|done}; either key may be null.
+#   Omitted or null means unclassified.
+# Reuse the same request on tasks derived from one request; group is not a fallback.
+# work snapshot exposes request/outcome on tasks and requests [{id,label,project,
+#   tasks: [task keys], updated_at: latest member activity or null}]. Request
+#   identity is id within this home. Delivery history retains these fields.
 # Firstmate may rewrite any text field at any time. Writes patch only supplied fields,
 # empty text clears one field, --clear clears them all. File input is the same
 # partial object; unknown keys, wrong types, and over-bound text are rejected.

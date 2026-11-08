@@ -557,9 +557,21 @@ class Owner:
                 recorded_answers=self.answers_by_origin.get(task_id, []),
                 progress=progress, declared_progress=declared_progress, progress_evidence=lifecycle['evidence'],
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],
+                request=p.get('request'), outcome=p.get('outcome'),
                 created=task_creation(self.data, row) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
                 completed=time_value(receipt['value'], 'completion') if receipt else time_value(row.get('closed'), 'backlog.closed') if row['state'] == 'done' else None,
                 rev=self.rev))
+        requests = {}
+        for task in tasks:
+            request = task['request']
+            if request is None:
+                continue
+            # Membership is explicit; legacy titles and groups never invent it.
+            group = requests.setdefault(request['id'], dict(request, tasks=[], updated_at=None))
+            group['tasks'].append(task['key'])
+            updated = task['updated']['value']
+            if updated and (group['updated_at'] is None or updated > group['updated_at']):
+                group['updated_at'] = updated
         by_key = {t['key']: t for t in tasks}
         for task in tasks:
             origin = by_key.get(task['question']['origin_task'])
@@ -622,7 +634,7 @@ class Owner:
             return (0, manual.index(t['key'][5:])) if t['key'][5:] in manual else (1, rank(project if project is not None else own), rank(sub if sub is not None else own), rank(own), t['key'])
         sigue = [t['key'] for t in sorted(tasks, key=sort_key) if t['state'] == 'ready']
         return dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
-                    subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, sigue=sigue, rev=self.rev, history_sources=self.history_sources,
+                    subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, requests=list(requests.values()), sigue=sigue, rev=self.rev, history_sources=self.history_sources,
                     aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized'))
 
     @staticmethod
