@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
         check(4.8 <= elapsed < 12 and output.read_bytes() == saved, 'bounded contention refuses without write')
         began = time.monotonic()
         run('update', 'proof', '--priority', '0', ok=False)
-        check(time.monotonic() - began < 3 and backlog.read_bytes() == baseline, 'other writers remain fail-fast')
+        check(4.8 <= time.monotonic() - began < 12 and backlog.read_bytes() == baseline, 'other writers bound contention without changing backlog')
     run('presentation', 'proof', '--card-status', 'No heredado', ok=False, extra_env={'FM_WORK_OWNER_FD': '98765'})
     check(output.read_bytes() == saved, 'invalid inherited lock refuses instead of silently falling back')
     # The same input-as-output mistake seen in the real worker stays invalid
