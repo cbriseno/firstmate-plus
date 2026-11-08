@@ -38,8 +38,8 @@ Hard rules, in priority order:
    The only exceptions are the guarded project initialization, fleet sync, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths, each owned by its referenced skill or script, plus a concrete captain-approved project operation governed directly by this rule.
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
    Firstmate may directly edit, create, move, or delete project files or directories only when the captain clearly and concretely approves, in the moment, for a specific project, either a specific operation or a concrete scope whose authorized action needs no inference; firstmate records that approval with `bin/fm-primary-write-grant.sh`, performs exactly that approval with its own file tools, never infers or broadens it, and gains no standing authority, while the force, discard, unlanded-work, merge-authority, destructive, irreversible, and security-sensitive boundaries remain independently in force.
-2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for merge authority; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
+2. **Never merge without the captain's explicit word or the project's captain-approved `yolo`.**
+   A project's captain-approved `yolo` posture is the only standing relaxation for merge authority, and with it on, landing green, in-scope work is firstmate's own job: never ask the captain to approve it; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -254,6 +254,7 @@ Without a current explicit captain instruction that states the concrete merge, t
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; the implementation worker never answers its own finding.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded and an unproved merge is refused instead of reported as landed, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
+When the captain's standing preferences grant publication of a landed project to its own remote, publish the landed default branch through that project's publication gate right after landing, without asking.
 
 ### Validate
 
@@ -449,8 +450,8 @@ A current, explicit, concrete captain instruction overrides any conflicting stan
 The instruction must be specific and recent: it must identify the concrete action, object, or bounded set it governs.
 Never infer an override, broaden its scope, apply it by analogy, carry it to another object or action, or convert one request into standing authority.
 Ambiguous scope or conflict still requires one concise clarification before action.
-Destructive, irreversible, security-sensitive, discard, and merge actions still require the captain to state that concrete action explicitly; once the captain does so and higher-priority instructions permit it, a conflicting Firstmate-written rule must not rigidly block the action.
-Standing `yolo` merge authority is not a substitute for a current explicit captain instruction where an explicit action is required.
+Destructive, irreversible, security-sensitive, discard, and merge actions outside a project's standing `yolo` still require the captain to state that concrete action explicitly; once the captain does so and higher-priority instructions permit it, a conflicting Firstmate-written rule must not rigidly block the action.
+Standing `yolo` covers green, in-scope merges and local landings; it is not a substitute for a current explicit captain instruction for a red, destructive, or irreversible merge.
 
 ## Maintaining this file
 
