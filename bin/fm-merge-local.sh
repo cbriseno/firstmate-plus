@@ -24,6 +24,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-local-branch-lib.sh
+. "$SCRIPT_DIR/fm-local-branch-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
@@ -104,10 +106,16 @@ git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { e
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
-# The project's main checkout must be on its default branch and clean, so the
-# fast-forward lands predictably (firstmate never writes here otherwise).
+# The project's main checkout must be clean and on its default branch, or on
+# its declared local integration branch (default + private overlay, see
+# fm-local-sync.sh); there the default ref advances without a checkout and the
+# integration branch is then rebased onto it.
 cur=$(git -C "$PROJ" symbolic-ref --short HEAD 2>/dev/null || echo "")
-[ "$cur" = "$DEFAULT" ] || { echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT'; cannot merge safely" >&2; exit 1; }
+INTEGRATION=
+if [ "$cur" != "$DEFAULT" ]; then
+  INTEGRATION=$(fm_local_integration_branch "$PROJ" 2>/dev/null || true)
+  [ -n "$cur" ] && [ "$cur" = "$INTEGRATION" ] || { echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT' or local integration branch '${INTEGRATION:-local}'; cannot merge safely" >&2; exit 1; }
+fi
 if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   echo "error: $PROJ has a dirty working tree; refusing to merge into it" >&2
   exit 1
@@ -136,7 +144,12 @@ case "$hold_status" in
     ;;
 esac
 merge_status=0
-git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
+if [ -z "$INTEGRATION" ]; then
+  git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
+else
+  git -C "$PROJ" update-ref "refs/heads/$DEFAULT" "$(git -C "$PROJ" rev-parse "$BRANCH")" \
+    "$(git -C "$PROJ" rev-parse "$DEFAULT")" || merge_status=$?
+fi
 fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
@@ -149,3 +162,13 @@ FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" presentation "$ID" --reconcile 
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
+[ -n "$INTEGRATION" ] || exit 0
+name=$(git -C "$PROJ" config user.name || git -C "$PROJ" show -s --format=%an "$INTEGRATION")
+email=$(git -C "$PROJ" config user.email || git -C "$PROJ" show -s --format=%ae "$INTEGRATION")
+if git -C "$PROJ" -c "user.name=$name" -c "user.email=$email" rebase --quiet "$DEFAULT" >/dev/null; then
+  echo "rebased $INTEGRATION onto $DEFAULT in $PROJ"
+else
+  git -C "$PROJ" rebase --abort || true
+  echo "warning: $BRANCH landed on $DEFAULT, but rebasing $INTEGRATION onto it conflicted and was aborted; $INTEGRATION is unchanged. Resolve with: git -C $PROJ rebase $DEFAULT" >&2
+  exit 3
+fi
