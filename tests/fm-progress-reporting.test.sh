@@ -244,10 +244,13 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     check(task()['title'] == 'Implementar ciclo de progreso' and task()['phase'] == 'implementation'
           and task()['progress_evidence']['freshness'] == 'stale',
           'actual promotion refreshes explicit title and requires implementation checkpoint')
-    # An old status can be resurfaced through the same public mechanical scan,
-    # without a supervisor, model invocation or a new timing policy.
+    # Age every grace input so the public mechanical scan sees the missed
+    # checkpoint without a supervisor, model invocation or a new timing policy.
     old = time.time() - 31
     os.utime(meta, (old, old)); os.utime(status, (old, old))
+    declaration = json.loads(output.read_text())
+    declaration['progress_record']['reported_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(old))
+    output.write_text(json.dumps(declaration))
     p = execute(wrapper + ['progress-check'], env=env, text=True, capture_output=True, timeout=15)
     check(p.returncode == 0 and 'proof: stale' in p.stdout, 'existing supervision input surfaces missed checkpoint')
     # The ordinary drain exposes the same obligation when no supervisor is
