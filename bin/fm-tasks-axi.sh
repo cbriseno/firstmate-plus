@@ -136,7 +136,7 @@
 # its own source/time, never a status transition, liveness signal or refresh
 # heartbeat. Reads never renew it; unknown fields remain null. No wake is sent.
 # Work controls (explicit FM_HOME, local Markdown owner):
-#   work capabilities | snapshot [--runtime]  Fresh endpoint liveness; --runtime adds full crew evidence.
+#   work capabilities | snapshot [--runtime] [--order recent|manual]  Fresh endpoint liveness; --runtime adds full crew evidence.
 #   work preview | apply                 One bounded operation JSON on stdin.
 #   work request-status --request-id ID   Durable receipt; retries never repeat effects.
 #   work close --request-id ID            Close only workers at that pause's safe point.
@@ -283,6 +283,8 @@
 # created={value,precision,source} projects a valid original instant or
 # receipt, otherwise the unchanged backlog date/unknown. Group priority/pause
 # metadata first materialized for an existing project is not a creation event.
+# Group snapshots expose updated_at and default to recent activity; --order manual
+# follows structure.order. move accepts group keys and returns its ordinary Undo.
 # data/work-structure.json has one writer here.
 # A pause of active work requests a safe checkpoint through the primary inbox;
 # it never controls a worker endpoint. Removal requests never delete anything.

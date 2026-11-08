@@ -643,6 +643,14 @@ class Owner:
             sub = self.structure['groups'].get(self.structure['membership'].get(t['key'][5:]), {}).get('priority')
             manual = self.structure['order']
             return (0, manual.index(t['key'][5:])) if t['key'][5:] in manual else (1, rank(project if project is not None else own), rank(sub if sub is not None else own), rank(own), t['key'])
+        for g in groups:
+            g['updated_at'] = g['updated']['value']
+        group_order = [key for key in self.structure['order'] if key.startswith(('project:', 'subproject:'))]
+        if getattr(self, 'group_sort', 'recent') == 'manual':
+            groups.sort(key=lambda g: (group_order.index(g['key']) if g['key'] in group_order else len(group_order), g['key']))
+        else:
+            groups.sort(key=lambda g: g['key'])
+            groups.sort(key=lambda g: g['updated_at'] or '', reverse=True)
         sigue = [t['key'] for t in sorted(tasks, key=sort_key) if t['state'] == 'ready']
         controls = [r for r in self.request_records() if r.get('signal') in ('pause.request', 'resume.request')]
         current = {}
@@ -765,7 +773,27 @@ class Owner:
             if exists != (name == 'add_dep'):
                 undo = dict(op='remove_dep' if name == 'add_dep' else 'add_dep', target=target, on=blocker)
         elif name == 'move':
-            refuse(not row, 'invalid_value', tr('Only tasks have an execution order.'))
+            if not row:
+                refuse(op.get('adopt_priority') is not None or op.get('restore_unset'), 'invalid_value', tr('Group moves only change display order.'))
+                peers = {g['key'] for field in ('projects', 'subprojects') for g in self.snapshot()[field]}
+                before_key, after_key = op.get('before'), op.get('after')
+                refuse(bool(before_key) and bool(after_key), 'invalid_value', tr('Choose before or after.'))
+                anchor = before_key or after_key
+                refuse(anchor == target or (anchor is not None and anchor not in peers), 'invalid_value', tr('Invalid order target.'))
+                before = copy.deepcopy(self.structure['order'])
+                if 'restore_order' in op:
+                    order = op['restore_order']
+                    refuse(not isinstance(order, list) or any(not isinstance(k, str) or k not in peers | set(self.rows) for k in order)
+                           or len(set(order)) != len(order), 'invalid_value', tr('Invalid order.'))
+                else:
+                    order = [k for k in before if k in peers and k != target]
+                    order += sorted(peers - set(order) - {target})
+                    at = order.index(anchor) + (1 if after_key else 0) if anchor else len(order)
+                    order.insert(at, target)
+                    order = [k for k in before if k not in peers] + order
+                self.structure['order'] = order
+                # Group moves change display order without changing execution priority.
+                return [], before, dict(op='move', target=target, restore_order=before)
             snap = self.snapshot()
             refuse(target not in snap['sigue'], 'invalid_value', tr('Only tasks in Next can be ordered.'))
             before_key, after_key = op.get('before'), op.get('after')
@@ -776,7 +804,7 @@ class Owner:
             # Internal undo records the complete order under the same revision check.
             if 'restore_order' in op:
                 order = op['restore_order']
-                refuse(not isinstance(order, list) or len(set(order)) != len(order) or any(i not in self.rows for i in order), 'invalid_value', tr('Invalid order.'))
+                refuse(not isinstance(order, list) or len(set(order)) != len(order) or any(i not in self.rows and i not in self.keys() for i in order), 'invalid_value', tr('Invalid order.'))
             else:
                 order = [k[5:] for k in snap['sigue'] if k != target]
                 at = order.index(anchor[5:]) + (1 if after_key else 0) if anchor else len(order)
@@ -789,7 +817,7 @@ class Owner:
             if op.get('restore_unset') is True:
                 command = ['@unset_priority', task_id, str(row.get('priority'))] if row.get('priority') is not None else []
                 row['priority'] = None
-            self.structure['order'] = order
+            self.structure['order'] = order if 'restore_order' in op else [k for k in self.structure['order'] if k.startswith(('project:', 'subproject:'))] + order
             undo = dict(op='move', target=target, restore_order=before['order'], adopt_priority=before['priority'], restore_unset=before['priority'] is None)
         elif name == 'request_removal':
             refuse(not isinstance(op.get('note', ''), str) or len(op.get('note', '')) > 2000 or '\x00' in op.get('note', ''),
@@ -805,7 +833,7 @@ class Owner:
         affected = ['task:' + i for i in self.members(op['target']) if self.rows[i]['state'] != 'done']
         impact = dict(affected=self.affected(affected, before['tasks']), sigue_after=after['sigue'], moved_any=before['sigue'] != after['sigue'],
                       offer=None, still_paused=[t['key'] for t in after['tasks'] if t['key'] in affected and (t['pause']['own'] or t['pause']['inherited'])], cycle_path=None)
-        if op['op'] in ('set_priority', 'move') and not impact['moved_any']:
+        if (op['op'] == 'set_priority' or (op['op'] == 'move' and op['target'].startswith('task:'))) and not impact['moved_any']:
             running = [t for t in before['tasks'] if t['state'] == 'running']
             if running:
                 impact['offer'] = dict(op='set_pause', target=running[0]['key'], why=tr('Changing priority does not interrupt active work.'))
@@ -1539,6 +1567,7 @@ def main():
     parser.add_argument('verb', choices=['capabilities', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
         'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue',
         'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
+    parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Group display order: activity or persisted manual order.')
     parser.add_argument('--runtime', action='store_true', help='Include full bounded crew reconciliation in addition to fresh endpoint liveness.')
     parser.add_argument('--freeze-scope', action='store_true', help='Interpret a historical freeze with explicit authority; dry run only until normalize-apply.')
     parser.add_argument('--metadata-only', action='store_true', help='Plan only explicit project visibility; preserve all other structure and task fields.')
@@ -1554,6 +1583,7 @@ def main():
     try:
         owner = Owner()
         owner.include_runtime = args.runtime
+        owner.group_sort = args.order
         if args.verb == 'capabilities':
             result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.7', ops=OPS,
                           signals=['pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue'],

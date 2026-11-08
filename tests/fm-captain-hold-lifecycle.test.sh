@@ -5646,6 +5646,39 @@ SH
   pass "capabilities is read-only and guarded backend failures/timeouts retain their status without mutation"
 }
 
+test_free_answer_attachments_and_correction() {
+  local home snapshot saved before
+  home=$(make_home free-answer-attachments)
+  printf '%s\n' '- sample [local-only] - Sample' > "$home/data/projects.md"
+  tasks_in "$home" add origin-work 'Origin work' --repo sample >/dev/null
+  run_captain "$home" hold free-call --title Question --reason choose --repo sample --origin origin-work \
+    --no-options 'Free response' >/dev/null || fail 'could not hold free response'
+  printf 'Primera línea\n\nSegunda línea\n' > "$home/answer"
+  printf 'image-one' > "$home/image.png"
+  run_captain "$home" answer free-call --decision-file "$home/answer" --attach "$home/image.png" >/dev/null || fail 'free answer failed'
+  snapshot=$(FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" work snapshot)
+  saved=$(printf '%s' "$snapshot" | python3 -c 'import json,sys
+v=json.load(sys.stdin); a=next(t for t in v["tasks"] if t["key"]=="task:origin-work")["recorded_answers"][0]
+assert a["text"]=="Primera línea\n\nSegunda línea", a
+assert a["attachments"][0]["name"]=="image.png", a
+print(a["attachments"][0]["path"])') || fail 'origin cannot read complete text and attachments'
+  assert_equals image-one "$(cat "$saved")" 'attachment content changed'
+  before=$(cat "$home/data/backlog.md")
+  run_captain "$home" answer free-call --decision-file "$home/answer" --attach "$home/image.png" >/dev/null || fail 'attachment replay failed'
+  assert_equals "$before" "$(cat "$home/data/backlog.md")" 'attachment replay changed the saved answer'
+  printf 'image-two' > "$home/image.png"
+  : > "$home/answer"
+  run_captain "$home" correct free-call --decision-file "$home/answer" --attach "$home/image.png" >/dev/null || fail 'attachment-only correction failed'
+  assert_equals image-one "$(cat "$saved")" 'correction overwrote the original attachment'
+  snapshot=$(FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" work snapshot)
+  printf '%s' "$snapshot" | python3 -c 'import json,pathlib,sys
+v=json.load(sys.stdin); rows={t["key"]:t for t in v["tasks"]}; a=rows["task:origin-work"]["recorded_answers"][0]
+assert rows["task:free-call"]["backlog_state"]=="done" and a["correction"] and a["occurrence"]==2, a
+assert a["application"]["state"]=="pending" and pathlib.Path(a["attachments"][0]["path"]).read_text()=="image-two", a' || fail 'correction lost delivery or reopened work'
+  assert_contains "$(cat "$home/data/backlog.md")" 'Primera línea' 'correction lost original answer'
+  pass 'free answers retain text, files and corrections without undoing work'
+}
+
 test_saved_answer_waits_for_application_without_reasking() {
   local home before out snapshot note before_call
   home=$(make_home saved-answer-application)
@@ -6022,6 +6055,7 @@ if [ "${FM_CAPTAIN_HOLD_TEST_ACTION:-}" = 1 ]; then
 fi
 
 if [ "${FM_CAPTAIN_HOLD_TEST_ANSWER_DELIVERY:-}" = 1 ]; then
+  test_free_answer_attachments_and_correction
   test_saved_answer_waits_for_application_without_reasking
   test_answer_records_and_closes
   test_release_frees_held_work
@@ -6072,6 +6106,7 @@ test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
+test_free_answer_attachments_and_correction
 test_saved_answer_waits_for_application_without_reasking
 test_answer_records_and_closes
 test_release_frees_held_work

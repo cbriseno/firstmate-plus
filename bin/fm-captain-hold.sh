@@ -26,7 +26,8 @@
 #      [--recommended <id>] [--context <line>] [--link <report path or URL>]
 #      | --no-options <why> [--question <line> [--context <line>] [--link <report path or URL>]]
 #      | --call-kind action --instruction <line> --where chat [--context <line>] [--link <path or URL>])
-#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release | --release-in-flight] [--expected-identity <identity>]
+#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--attach <file>]... [--release | --release-in-flight] [--expected-identity <identity>]
+#   fm-captain-hold.sh correct <task-id> --decision-file <path> [--attach <file>]... [--expected-identity <identity>]
 #   fm-captain-hold.sh complete-action <task-id> --evidence-file <path> [--expected-identity <identity>]
 #   fm-captain-hold.sh action-pending <task-id>   (0 pending action, 1 other/completed, 2 unknown)
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance> [--expected-identity <identity>]   (keyed answers on stdin)
@@ -504,17 +505,53 @@ BINDING_ANY='(any)'
 
 DECISION_TEXT=''
 DECISION_DIGEST=''
+ANSWER_ATTACHMENTS='[]'
 
 load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
   local path=$1 decision
   [ -n "$path" ] || fail "--decision-file is required"
   [ -f "$path" ] || fail "decision file does not exist: $path"
   decision=$(cat "$path")
-  [ -n "$decision" ] || fail "decision file must not be empty"
+  [ -n "$decision" ] || [ "${ALLOW_EMPTY_DECISION:-0}" -gt 0 ] || fail "decision file must not be empty"
   [ "$(printf '%s' "$decision" | LC_ALL=C wc -c | tr -d ' ')" -le 8192 ] \
     || fail "decision file exceeds 8192 bytes"
   DECISION_TEXT=$decision
   DECISION_DIGEST=$(sha256_text "$decision")
+}
+
+attach_answer_files() {  # <task-id> [file...]; saves each file and appends its saved path to the decision
+  local id=$1 n=0 file name saved dir base existing
+  shift
+  [ "$#" -gt 0 ] || return 0
+  base="$DATA/$id/answer-attachments"
+  for file in "$@"; do
+    [ -f "$file" ] && [ ! -L "$file" ] || fail "attachment is not a regular file: $file"
+    name=$(basename -- "$file")
+    case $name in *$'\n'*|*$'\r'*) fail "attachment name has a line break: $file" ;; esac
+  done
+  [ ! -L "$DATA/$id" ] && [ ! -L "$base" ] || fail "unsafe attachment directory for $id"
+  mkdir -p -- "$base" || fail "cannot create the attachment folder for $id"
+  dir=$(umask 077; mktemp -d "$base/files.XXXXXX") || fail "cannot save attachments for $id"
+  for file in "$@"; do
+    n=$((n + 1))
+    name=$(basename -- "$file")
+    saved=''
+    for existing in "$base"/*/"$n-$name"; do
+      if [ -f "$existing" ] && [ ! -L "$existing" ] && cmp -s -- "$file" "$existing"; then
+        saved=$existing
+        break
+      fi
+    done
+    if [ -z "$saved" ]; then
+      saved="$dir/$n-$name"
+      (umask 077; cp -- "$file" "$saved") || fail "cannot save attachment: $file"
+    fi
+    ANSWER_ATTACHMENTS=$(printf '%s' "$ANSWER_ATTACHMENTS" | jq -c --arg path "$saved" '. + [$path]')
+    DECISION_TEXT=$(printf '%s\nAdjunto: %s' "$DECISION_TEXT" "$saved")
+  done
+  [ "$(printf '%s' "$DECISION_TEXT" | LC_ALL=C wc -c | tr -d ' ')" -le 8192 ] \
+    || fail "decision with attachments exceeds 8192 bytes"
+  DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
 }
 
 # Mutations address the configured data directory's backlog from its root, the
@@ -700,8 +737,8 @@ resolution_block() {  # <mode>
   local label='Captain decision:'
   [ "$1" != reconciled ] || label='Reconciliation evidence:'
   [ "$1" != action-completed ] || label='Action completion evidence:'
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nDecision bytes: %s\nDecision attachments: %s\n\n%s\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$(printf '%s' "$DECISION_TEXT" | LC_ALL=C wc -c | tr -d ' ')" "$ANSWER_ATTACHMENTS" "$label" "$DECISION_TEXT"
 }
 
 # Durable state of one captain call: an active captain hold (annotations
@@ -1653,12 +1690,14 @@ remove_interrupted_answer_stamp() {  # <task-id>
 
 command_answer() {
   local id=${1:-} decision_file='' release=0 release_in_flight=0 show state hold_kind body outcome recorded_mode occurrence
-  local expected='' call_kind completing=${ACTION_COMPLETION:-0}
+  local expected='' call_kind completing=${ACTION_COMPLETION:-0} correcting=${ANSWER_CORRECTION:-0}
+  local -a attach_files=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --decision-file) shift; decision_file=${1:-} ;;
+      --attach) shift; attach_files+=("${1:-}") ;;
       --release) release=1 ;;
       --release-in-flight) release_in_flight=1 ;;
       --expected-identity) shift; expected=${1:-}; validate_one_line expected-identity "$expected" ;;
@@ -1669,7 +1708,7 @@ command_answer() {
   [ "$release" = 0 ] || [ "$release_in_flight" = 0 ] \
     || fail "--release and --release-in-flight are alternatives; pass one"
   validate_slug task-id "$id"
-  load_decision "$decision_file"
+  ALLOW_EMPTY_DECISION=${#attach_files[@]} load_decision "$decision_file"
   acquire_task_control_lock "$id"
   require_tasks_axi
   if [ -n "$expected" ]; then
@@ -1688,6 +1727,28 @@ command_answer() {
   else
     [ "$completing" = 0 ] || fail 'complete-action requires an explicit action call'
   fi
+  if [ "$correcting" = 1 ]; then
+    [ "$release$release_in_flight" = 00 ] || fail 'a correction does not release or reopen work'
+    body_has_resolution_record "$body" || fail "task $id has no answer to correct"
+    recorded_mode=$(recorded_resolution_mode "$body")
+    case "$recorded_mode" in answered|released|repaired|routed|declined) ;; *) fail 'this resolution is not an answer' ;; esac
+    [ "$state" = "done" ] || { [ "$recorded_mode" = released ] && [ "$hold_kind" != captain ]; } \
+      || fail 'answer the current open question before correcting a previous answer'
+    attach_answer_files "$id" "${attach_files[@]+"${attach_files[@]}"}"
+    DECISION_TEXT=$(printf 'Corrección de respuesta (no deshace lo ya aplicado):\n%s' "$DECISION_TEXT")
+    DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
+    if [ "$(recorded_decision_digest "$body")" = "$DECISION_DIGEST" ]; then
+      wake_answer_owner "$id" "$(resolution_record_count "$body")"
+      printf 'corrected: %s\n' "$id"
+      return 0
+    fi
+    occurrence=$(( $(resolution_record_count "$body") + 1 ))
+    write_resolution_record "$id" "$recorded_mode" "$body"
+    wake_answer_owner "$id" "$occurrence"
+    printf 'corrected: %s\n' "$id"
+    return 0
+  fi
+  attach_answer_files "$id" "${attach_files[@]+"${attach_files[@]}"}"
   # Read under the control lock with the row the transition acts on.
   if [ "$release_in_flight" = 1 ] && [ "$state" = in_flight ]; then release=1; fi
   if [ "$release" = 1 ]; then outcome=released; else outcome=answered; fi
@@ -2404,7 +2465,7 @@ wake_answer_owner() {  # <task-id> <resolution-occurrence>
   note=$(jq -cn --arg id "$id" --arg origin "$origin" --arg mode "$mode" --arg digest "$digest" \
     --argjson occurrence "$occurrence" \
     '{schema:"fm-captain-answer-note.v1",task_id:$id,origin:$origin,occurrence:$occurrence,mode:$mode,digest:$digest,
-      instruction:"The durable resolution is already recorded. Read it before asking again. Review or apply it to the originating work through the primary owner, preserve policy review, and reply to this note with the actual handling outcome. Pending application is not an unanswered question."}') \
+      instruction:"The durable resolution is already recorded. Read it before asking again. A correction is a new message, never an undo of applied work; relay it through the active task chat. Review or apply it to the originating work through the primary owner, preserve policy review, and reply to this note with the actual handling outcome. Pending application is not an unanswered question."}') \
     || fail "answer recorded for $id but its application receipt could not be staged"
   receipt=$(printf '%s' "$note" | bash "$SCRIPT_DIR/fm-inbox.sh" note --request-id "$request" --json --wake-primary -) \
     || fail "answer recorded for $id but its application note was not announced; retry the same answer"
@@ -2993,6 +3054,7 @@ case "${1:-}" in
   sweep-moot) shift; command_sweep_moot "$@" ;;
   hold) shift; command_hold "$@" ;;
   answer) shift; command_answer "$@" ;;
+  correct) shift; ANSWER_CORRECTION=1 command_answer "$@" ;;
   complete-action) shift; command_complete_action "$@" ;;
   action-pending) shift; command_action_pending "$@" ;;
   answers) shift; command_answers "$@" ;;

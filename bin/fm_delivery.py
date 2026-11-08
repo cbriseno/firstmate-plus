@@ -664,7 +664,21 @@ def read_captain_answer(home, task):
         return None
     occurrence = len(re.findall(r'^Resolution recorded by fm-(?:captain|decision)-hold\.$', body, re.M))
     origin = re.search(r'^Captain hold origin: (\S+)$', body, re.M) or re.search(r'^Origin: (\S+)$', body, re.M)
-    paragraph = body[record.end():].lstrip('\n').removeprefix('Captain decision:\n').split('\n\n', 1)[0]
+    tail = body[record.end():]
+    length = re.match(r'Decision bytes: (\d+)\n', tail)
+    attachments = []
+    if length:
+        tail = tail[length.end():]
+        files = re.match(r'Decision attachments: (.*)\n', tail)
+        if files:
+            attachments = json.loads(files[1])
+            tail = tail[files.end():]
+        tail = tail.lstrip('\n').removeprefix('Captain decision:\n')
+        paragraph = tail.encode('utf-8')[:int(length[1])].decode('utf-8')
+    else:
+        paragraph = tail.lstrip('\n').removeprefix('Captain decision:\n').split('\n\n', 1)[0]
+    suffix = ''.join('\nAdjunto: ' + p for p in attachments)
+    text = paragraph[:-len(suffix)] if suffix and paragraph.endswith(suffix) else paragraph
     value = re.search(r'^Answer: (.+)$', paragraph, re.M)
     application = dict(state='unconfirmed', note_id=None, reply=None)
     key = 'captain-answer:' + task_id + ':' + str(occurrence)
@@ -691,7 +705,8 @@ def read_captain_answer(home, task):
         pass
     return dict(task_id=task_id, origin=origin[1] if origin else None, occurrence=occurrence,
                 digest=record[1], mode=record[2], value=value[1] if value else None,
-                recorded=True, application=application, source='captain-hold.canonical-resolution')
+                text=text, attachments=[dict(path=p, name=Path(p).name.split("-", 1)[-1]) for p in attachments],
+                correction=text.startswith("Corrección de respuesta ("), recorded=True, application=application, source='captain-hold.canonical-resolution')
 
 
 CALL_BOUNDS = dict(question=160, label=40, detail=120, context=200, link=500, instruction=200)
