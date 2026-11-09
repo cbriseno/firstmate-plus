@@ -120,6 +120,11 @@ test_host_constraints_close_lanes() {
   fakebin=$(make_probes "$TMP_ROOT/p-edge" 7.99 10 8 5242880)
   out=$(run_capacity "$home" "$fakebin")
   assert_contains "$out" 'free_lanes=5 reason=ok ' "values just inside thresholds must not constrain"
+  printf '6\nmax-load1 12\n' > "$home/config/lane-capacity"
+  fakebin=$(make_probes "$TMP_ROOT/p-cfgload" 8.00 60 8 20971520)
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'free_lanes=5 reason=ok ' "a configured max-load1 replaces the load-at-core-count probe"
+  printf '6\n' > "$home/config/lane-capacity"
   pass "cpu, memory, and disk pressure close every lane and are named"
 }
 

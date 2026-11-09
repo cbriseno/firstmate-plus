@@ -500,7 +500,9 @@ add_constraint() {  # <name> <reason> [published reason, default the reason]
 "
 }
 if [ "$basis" = probe ]; then
-  [ "$probe_cpu" -eq 0 ] || add_constraint cpu "cpu: load $load1 on $cores cores"
+  # A configured max-load1 is the explicit load rule and replaces this generic
+  # load-at-core-count probe; memory and disk probes still apply.
+  [ "$probe_cpu" -eq 0 ] || [ -n "$max_load1" ] || add_constraint cpu "cpu: load $load1 on $cores cores"
   [ "$probe_mem" -eq 0 ] || add_constraint memory "memory: $mem_free_pct% free"
   [ "$probe_disk" -eq 0 ] || add_constraint disk "disk: $disk_free_mb MB free"
 fi
