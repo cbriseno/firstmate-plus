@@ -973,6 +973,31 @@ PY
   pass "a running worker wrapper reaps exited orphans immediately and keeps the worker exit code"
 }
 
+test_worker_wrapper_owns_one_private_session_bus() {
+  local dir
+  if [ "$(uname -s)" != Linux ] || ! command -v dbus-daemon >/dev/null 2>&1; then
+    printf 'skip: worker session bus: Linux dbus-daemon absent\n'
+    return 0
+  fi
+  dir=$(new_case bus)
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'a worker without a session bus must get one private bus that dies with it'
+import os, pathlib, subprocess, sys
+root, directory = map(pathlib.Path, sys.argv[1:])
+scope = f'{directory}/home/state/t1:bus'
+env = {k: v for k, v in os.environ.items() if k != 'DBUS_SESSION_BUS_ADDRESS'}
+env['FM_WORKER_PROCESS_SCOPE'] = scope
+out = subprocess.run([sys.executable, str(root/'bin/fm-worker-processes.py'), 'run', scope,
+                      'echo "$DBUS_SESSION_BUS_ADDRESS"; echo "$DBUS_SESSION_BUS_ADDRESS"'],
+                     env=env, capture_output=True, text=True, timeout=30)
+assert out.returncode == 0, out.stderr
+first, second = out.stdout.split()
+assert first == second and first.startswith('unix:path='), out.stdout
+socket = first.split('=', 1)[1].split(',')[0]
+assert socket not in pathlib.Path('/proc/net/unix').read_text(), 'private bus outlived its worker'
+PY
+  pass "a worker launched without a session bus gets one private bus that closes with the worker"
+}
+
 test_already_stopped_exit_is_idempotent() {
   local dir out rc
   dir=$(new_case idempotent)
@@ -1398,6 +1423,7 @@ test_resume_is_refused_with_its_reason
 test_relaunch_only_flags_are_rejected_on_other_verbs
 test_worker_resource_cleanup
 test_worker_wrapper_reaps_orphans_while_running
+test_worker_wrapper_owns_one_private_session_bus
 test_already_stopped_exit_is_idempotent
 test_missing_tmux_endpoint_refuses_rather_than_claiming_a_stop
 test_interrupt_refuses_when_no_agent_runs

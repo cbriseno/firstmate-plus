@@ -13,6 +13,11 @@ TERM, a two-second grace, then KILL precede verification. Zombies are reaped
 by the wrapper as soon as they exit, not only at the end: as subreaper it
 inherits every orphan of a long-lived worker, and unreaped ones accumulated by
 the hundreds (472 under one test-running worker on 9 Nov 2026). No process-name, cwd, session-wide, or cross-home matching.
+On Linux a worker launched without DBUS_SESSION_BUS_ADDRESS gets one private
+session bus owned by its scope: otherwise every Secret Service lookup (gh
+keeps its token in the keyring) autolaunched a new dbus-daemon and
+gnome-keyring-daemon that never exited (63 pairs, ~517 MB, on 9 Nov 2026).
+macOS needs no bus; its keychain has no per-call daemon.
 Python 3 is required on the common worker launch and cleanup path.
 """
 
@@ -102,6 +107,14 @@ def run(scope, command):
     if sys.platform == "linux":
         if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
             raise OSError(ctypes.get_errno(), "cannot enable worker child subreaper")
+        if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+            try:
+                bus = subprocess.run(["dbus-daemon", "--session", "--fork", "--print-address=1"],
+                                     capture_output=True, text=True, timeout=10)
+                if bus.returncode == 0 and bus.stdout.strip():
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
     elif sys.platform != "darwin":
         raise RuntimeError(f"unsupported worker platform: {sys.platform}")
     # Terminal SIGINT belongs to the interactive harness; HUP/TERM close scope.

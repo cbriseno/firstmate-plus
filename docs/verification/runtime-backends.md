@@ -12,6 +12,10 @@ The common spawn path was inspected for tmux, Herdr, Zellij, Orca, cmux, Paseo a
 Harness command templates retain their existing bytes inside the wrapper; ownership uses kernel process relationships rather than vendor names or rendered output.
 The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-control-relaunch.test.sh tests/fm-spawn-compact-adviser-disable.test.sh tests/fm-teardown.test.sh`.
 It exercises automatic close, explicit exit, teardown, separate ownership scopes and both launch environment modes.
+On 2026-11-09, Linux with D-Bus 1.14.10, gh 2.102.0 (token in the keyring), chrome-devtools-axi 0.1.44 and Chrome 148.0.7778.178 ran workers without `DBUS_SESSION_BUS_ADDRESS`.
+Five `gh api user` calls left five autolaunched `dbus-daemon` and `gnome-keyring-daemon` pairs under the previous wrapper and one private bus plus one keyring under the current one, none surviving the worker.
+Five `chrome-devtools-axi open` and `stop` cycles on the Deck started no `dbus-daemon` or `gnome-keyring-daemon`, because the bridge launches Chrome with `--password-store=basic`.
+`bin/fm-dbus-orphans.py` lists and closes autolaunched buses left behind outside workers; its regression is `FM_LIVE=0 bash tests/fm-dbus-orphans.test.sh`.
 macOS was inspected but not executed in that verification; its detached-child limitation is documented in the implementation header.
 No Herdr lifecycle command was run for this verification.
 
