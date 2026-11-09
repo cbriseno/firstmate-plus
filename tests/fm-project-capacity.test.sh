@@ -332,6 +332,9 @@ test_symlinked_home_counts_each_worker_once() {
     task-c "$case_dir/project" --mode no-mistakes --yolo off) || rc=$?
   expect_code 0 "$rc" "a spawn through a symlinked home counted its own worker twice: $out"
   assert_contains "$out" "spawned task-c" "a spawn through a symlinked home did not launch"
+  assert_contains "$(cat "$home/data/task-c/launch-brief.md")" \
+    "progress to $home/data/task-c/progress-input.json" \
+    "the launch contract did not render a physical progress data path"
   pass "a home reached through a symlink counts each of its workers once"
 }
 

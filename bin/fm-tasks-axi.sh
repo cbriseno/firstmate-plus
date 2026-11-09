@@ -401,6 +401,8 @@ esac
 case "${1:-}" in
   progress-contract)
     [ "$#" -eq 2 ] || fail 'progress-contract requires one exact task id'
+    # The delivery reader resolves FM_HOME physically before checking containment.
+    DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve progress contract data directory'
     export FM_HOME
     exec python3 "$SCRIPT_DIR/fm_delivery.py" progress-contract --task "$2" --data "$DATA"
     ;;
