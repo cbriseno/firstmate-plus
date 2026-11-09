@@ -659,6 +659,31 @@ class Owner:
         else:
             request_groups.sort(key=lambda g: g['key'])
             request_groups.sort(key=lambda g: g['updated_at'] or '', reverse=True)
+        # Projects view: project_key is the displayed project (a logical root
+        # included) most of a request's tasks show under, a tie preferring the
+        # declared repository; the declared project text stays as authored.
+        # Each project lists its requests in this order.
+        listed = {}
+        for g in request_groups:
+            roots = [by_key[k]['project'] for k in g['tasks'] if by_key[k]['project']]
+            g['project_key'] = max(dict.fromkeys(roots), key=lambda k: (roots.count(k), k == 'project:' + g['project'])) if roots else None
+            listed.setdefault(g['project_key'], []).append(g['key'])
+        # Relations between projects: open task-to-task dependencies whose ends
+        # show under different projects, aggregated per pair. They describe the
+        # project header only, so member tasks never inherit them the way they
+        # inherit the declared group dependencies in blocked_by.
+        derived = {}
+        for a, b, _ in self.edges():
+            source, blocker = by_key.get(a), by_key.get(b)
+            if (source and blocker and source['state'] != 'done' and blocker['state'] != 'done'
+                    and source['project'] and blocker['project'] and source['project'] != blocker['project']):
+                via = derived.setdefault(source['project'], {}).setdefault(blocker['project'], [])
+                if dict(task=a, blocker=b) not in via:
+                    via.append(dict(task=a, blocker=b))
+        for g in groups:
+            if g['kind'] == 'project':
+                g['requests'] = listed.get(g['key'], [])
+                g['derived_blocked_by'] = [dict(ref=ref, open=True, via=via) for ref, via in sorted(derived.get(g['key'], {}).items())]
         sigue = [t['key'] for t in sorted(tasks, key=sort_key) if t['state'] == 'ready']
         controls = [r for r in self.request_records() if r.get('signal') in ('pause.request', 'resume.request')]
         current = {}

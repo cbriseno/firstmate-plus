@@ -66,6 +66,33 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
                       'closed dependencies still contribute to frees without blocking readiness')
             if label=='unknown':
                 check(projected['b']['root_blocker']=='task:absent', 'missing blocker remains visible through chain')
+    # Projects view: requests sit under their tasks' project, and open task
+    # dependencies across projects become header relations no task inherits.
+    with tempfile.TemporaryDirectory(prefix='fm-work-projects-') as projects_tmp:
+        pe = dict(env, FM_HOME=projects_tmp)
+        for name in ('data','state','config'):
+            (pathlib.Path(projects_tmp)/name).mkdir()
+        (pathlib.Path(projects_tmp)/'data/projects.md').write_text('- alpha [local-only] - A\n- beta [local-only] - B\n')
+        (pathlib.Path(projects_tmp)/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+        def pcli(*args):
+            p = subprocess.run(wrapper+list(args), env=pe, text=True, capture_output=True)
+            assert p.returncode == 0, (args, p.stdout, p.stderr)
+            return p.stdout
+        for key, repo in (('x','alpha'), ('y','beta'), ('z','beta')):
+            pcli('add', key, key+' task', '--repo', repo)
+        pcli('add', 'w', 'w task', '--repo', 'beta', '--request-from', 'x')
+        pcli('block', 'y', '--by', 'x'); pcli('block', 'z', '--by', 'x'); pcli('block', 'z', '--by', 'y')
+        s = json.loads(pcli('work', 'snapshot'))
+        groups = {g['key']: g for g in s['projects']}
+        check(sorted(groups['project:alpha']['requests']) == ['request:x'] and sorted(groups['project:beta']['requests']) == ['request:y', 'request:z']
+              and {r['id']: (r['project'], r['project_key']) for r in s['requests']}['x'] == ('alpha', 'project:alpha'),
+              'each project lists its requests; a tie keeps the declared repository')
+        check(groups['project:beta']['derived_blocked_by'] == [dict(ref='project:alpha', open=True, via=[dict(task='task:y', blocker='task:x'), dict(task='task:z', blocker='task:x')])]
+              and groups['project:alpha']['derived_blocked_by'] == [], 'open cross-project task dependencies aggregate per project pair')
+        check(groups['project:beta']['blocked_by'] == [] and [b['ref'] for b in next(t for t in s['tasks'] if t['key'] == 'task:w')['blocked_by']] == [],
+              'derived relations are not inherited dependencies')
+        pcli('done', 'x')
+        check(all(g['derived_blocked_by'] == [] for g in json.loads(pcli('work', 'snapshot'))['projects']), 'completed blockers leave no project relation')
     missing = subprocess.run(wrapper+['work','snapshot'], env=env, text=True, capture_output=True)
     check(json.loads(missing.stdout)['state'] == 'rejected' and 'backlog' in missing.stdout and 'create it' in missing.stdout, 'missing backlog gives actionable guidance')
     (home / 'data/backlog.md').symlink_to(home / 'missing')

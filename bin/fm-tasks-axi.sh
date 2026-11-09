@@ -101,8 +101,14 @@
 #   outcome declares final/needed when data/<id>/report.md exists, else step.
 # Reuse the same request on tasks derived from one request; group is not a fallback.
 # work snapshot exposes request/outcome on tasks and requests [{id,label,project,
-#   tasks: [task keys], updated_at: latest member activity or null}]. Request
-#   identity is id within this home. Delivery history retains these fields.
+#   tasks: [task keys], updated_at: latest member activity or null,
+#   project_key: displayed project most member tasks show under (a tie prefers
+#   the declared project) or null}]. Request identity is id within this home.
+#   Delivery history retains these fields. Each project also lists
+#   requests: [request keys whose project_key is it, in request order] and
+#   derived_blocked_by: [{ref: other project, open: true, via: [{task, blocker}]}]
+#   aggregated from open task dependencies across displayed projects; member
+#   tasks never inherit them, unlike declared group dependencies in blocked_by.
 # Firstmate may rewrite any text field at any time. Writes patch only supplied fields,
 # empty text clears one field, --clear clears them all. File input is the same
 # partial object; unknown keys, wrong types, and over-bound text are rejected.
