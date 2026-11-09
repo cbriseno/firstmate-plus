@@ -19,6 +19,7 @@ Every unresolved question that belongs to the captain and is discovered while pr
 For a Lavish board-backed handoff, the hosting worker passes its reply through the crew-hosted contract before appending status; `AGENTS.md` section 9 owns delegation and the adapter owns version-specific acceptance ordering.
 Prefer holding the work item the question gates over minting a new row; create a new task only when no work item exists to hold.
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
+Prepare the decision under `AGENTS.md` section 9 before holding it; retain the analysis and plan in the linked result rather than expanding the card.
 Keep the reason a short plain summary, and put the card the captain answers in the structured hold fields: `--context`, `--question`, one `--option` per choice, `--recommended`, and `--link` to the report.
 `hold` refuses a call without `--question` and at least two `--option` choices, so think the choices through before holding rather than retrying around the refusal.
 Pass `--no-options "<why>"` instead only when the question genuinely has no choices to click, including an answer in words or a legacy wait.
@@ -86,7 +87,7 @@ Leave out internal terms such as task ids, hold, intake, reconcile, pipeline ste
 ## Operating sequence
 
 1. Read the complete investigation result and complete the visual review before declaring either complete.
-2. Inventory only genuine unresolved choices that require the captain, and find the task each one gates.
+2. Prepare decisions under the policy above, inventory only genuine unresolved choices that require the captain, and find the task each one gates.
 3. Hold that task - or create one captain-held task per open decision the review raised - with a short reason plus the structured card fields written as described in "Writing the card".
 4. Run `complete` with the full captain-held inventory for that review pass.
 5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.

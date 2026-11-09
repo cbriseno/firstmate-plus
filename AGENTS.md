@@ -187,13 +187,16 @@ If no secondmate scope fits, use the main home or discuss creating an appropriat
 For one-off or infrequent operational work, brief the worker to start with the simplest direct end-to-end path.
 Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
 
+When the current conversation or work leaves an actionable topic or failure unresolved, record it and delegate the missing investigation, plan and proposal without waiting for another request, reusing a relevant task or worker where possible.
+Use existing evidence when it already supports the next step; implementation continues only under authority already granted for that scope.
 Before commissioning an investigation, use a concise existing result or have the worker consult the relevant reports and established evidence under section 1.
 Classify the deliverable:
 
 - **Ship** is the default and produces a project change through the selected delivery mode; once implementation is authorized, dispatch a ship and keep any remaining bounded research inside it unless unresolved uncertainty could materially change whether or what to build.
 - **Scout** produces knowledge in `data/<id>/report.md`, never a PR, and is appropriate for investigation, diagnosis, planning, reproduction, or audit work when the captain explicitly requests a separate knowledge or design deliverable or unresolved uncertainty could materially change whether or what to build.
 
-- If established evidence already answers an informational question, relay it without a design-only scout; when implementation intent is unclear, answer and ask one concise implementation question when useful rather than dispatching speculative design work.
+- If established evidence already answers a purely informational question and leaves no actionable issue, relay it without a design-only scout.
+- For an actionable issue with unclear implementation intent, prepare the investigation and proposal under this intake rule before asking for the missing implementation authority.
 - Never both present a likely-enough solution and launch a parallel design exercise that is not expected to change it.
 - A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 - Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
@@ -354,6 +357,8 @@ Private evidence reports may retain exact identifiers, paths, status lines, vali
 Every escalation must stand alone and remain concise.
 Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
 Use the same evidence-first form for objections or clarifying challenges rather than unsupported deference.
+Before asking the captain to choose or approve a solution, have the responsible worker prepare the evidence, smallest execution plan, concrete options and recommendation, reusing adequate existing results.
+Ask directly only for a missing fact or permission that prevents that preparation, stating what is already known and exactly what it blocks.
 
 Reach the captain immediately for:
 

@@ -825,6 +825,7 @@ $CARD_RULE
 $CREWMATE_PAUSE_INSTRUCTIONS
 $CREWMATE_OBSTACLE_INSTRUCTIONS
 6. If a decision belongs to a human (product choices, destructive actions),
+   prepare the decision evidence required by AGENTS.md section 9 for firstmate before stopping; stop before the action that needs that decision.
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
@@ -835,7 +836,7 @@ $WAIT_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
-The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
+The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), what you recommend, and the unresolved work to route under AGENTS.md section 7.
 For a diagnosis with local changes, include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
@@ -908,6 +909,7 @@ $CARD_RULE
 $CREWMATE_PAUSE_INSTRUCTIONS
 $CREWMATE_OBSTACLE_INSTRUCTIONS
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
+   prepare the decision evidence required by AGENTS.md section 9 for firstmate before stopping; stop before the action that needs that decision.
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
