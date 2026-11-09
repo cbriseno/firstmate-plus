@@ -929,7 +929,7 @@ if [ -n "$ACK_THROUGH" ]; then
   ACK_REMOVED=$(( $(awk 'END { print NR }' "$FM_WAKE_QUEUE") - $(awk 'END { print NR }' "$DRAIN_TMP") ))
   # Attention latency for the diagnostic log (bin/fm-diag.sh): kind and age of
   # every row this acknowledgement consumes.
-  ACK_DIAG_ROWS=$(awk -F '\t' -v now="$(date +%s)" 'NR == FNR { kept[$0] = 1; next }
+  ACK_DIAG_ROWS=$(awk -F '\t' -v now="$(date +%s)" 'FILENAME == ARGV[1] { kept[$0] = 1; next }
     !($0 in kept) && $1 ~ /^[0-9]+$/ { print $3, now - $1 }' "$DRAIN_TMP" "$FM_WAKE_QUEUE" 2>/dev/null || true)
   if [ ! -s "$DRAIN_TMP" ]; then
     fm_recovery_marker_ack "$RECOVERY_MARKER" "$ACK_GENERATION"
