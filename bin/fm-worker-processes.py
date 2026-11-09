@@ -123,6 +123,13 @@ def run(scope, command):
         raise SystemExit(128 + sig)
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
+    # Workers yield the CPU to the captain's interactive use of the machine
+    # (9 Nov 2026: tests and backfills made the desktop sluggish for days).
+    # FM_WORKER_NICE=0 keeps normal priority; children inherit it.
+    try:
+        os.nice(int(os.environ.get("FM_WORKER_NICE", "10")))
+    except (OSError, ValueError):
+        pass
     try:
         child = subprocess.Popen(["/bin/sh", "-c", command])
         # Reap every child that exits, including orphans reparented to this
