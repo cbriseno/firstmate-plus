@@ -301,6 +301,7 @@ Use done for closed explicit steps and todo for remaining ones, never estimate a
 Keep implementation, affected checks, branch readiness, merge and installed activation distinct; never declare delivery or activation from code completion alone.
 Confirm exit success AND ok=true, state=published, evidence.available=true and lifecycle.evidence.current=true; busy/rejected JSON is not publication, even with exit0.
 After a done status, publish the checkpoint before stopping; the owner verifies gate-bound readiness separately.
+When that done checkpoint delivers a scout report or another result for the captain to read, include "outcome":{"role":"final","review":"needed"} in it (role "partial" for an interim result).
 Start later inputs from the current owner declaration, never an old draft; a card-status-only write preserves old steps and never renews the checkpoint.
 Put summary and card text in that JSON too; file input and individual field flags are mutually exclusive.
 If publication fails, preserve the input and report the failure to firstmate; bin/fm-tasks-axi.sh --help owns bounded contention and explicit repair.
