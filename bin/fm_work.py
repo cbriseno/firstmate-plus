@@ -592,7 +592,7 @@ class Owner:
                 group['updated_at'] = updated
         by_key = {t['key']: t for t in tasks}
         for group in requests.values():
-            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']])
+            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']], self.rows)
         for task in tasks:
             origin = by_key.get(task['question']['origin_task'])
             task['question']['origin'] = dict(key=task['question']['origin_task'], available=origin is not None,

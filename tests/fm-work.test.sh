@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
             check(p.returncode == 0, p.stderr+p.stdout)
             return json.loads(p.stdout) if args[:2] == ('work','snapshot') else p.stdout
         for key in ('used','queued','decision','missing'):
-            ucli('add',key,key,'--repo','alpha',*(['--request-from','used'] if key!='used' else []))
+            ucli('add',key,key,'--repo','alpha','--kind','captain' if key=='decision' else 'ship',*(['--request-from','used'] if key!='used' else []))
         ucli('hold','decision','--kind','external','--reason','Fixture')
         folder = uh/'data/used'
         claude_path, codex_path = uh/'claude.jsonl', uh/'sessions/day/rollout-main.jsonl'
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         subprocess.run(refresh,check=True)
         claude_path.unlink(); codex_path.unlink()
         projected = ucli('work','snapshot')['requests'][0]['usage']
-        check(projected['tokens']==100223 and projected['usd_complete'] and projected['tasks']['not_started']==3, 'snapshot sums caches without readable transcripts')
+        check(projected['tokens']==100223 and projected['usd_complete'] and projected['tasks']['not_started']==2 and projected['tasks']['no_agent']==1, 'snapshot sums caches without readable transcripts')
         subprocess.run(refresh,check=True)
         check(not ucli('work','snapshot')['requests'][0]['usage']['usd_complete'], 'a missing source cannot make a partial task cache look complete')
         ucli('start','missing')
@@ -100,6 +100,9 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         check(not projected['usd_complete'] and projected['tasks']['no_agent']==1 and projected['tasks']['unknown']==1 and any(r['task']=='missing' for r in projected['unknown']), 'agent-free decisions and missing launched sessions are distinct')
         cache.unlink()
         check(ucli('work','snapshot')['requests'][0]['usage']['tasks']['not_started']==2, 'unstarted tasks are explicit when no cache exists')
+        ucli('add','answered','Answered decision','--repo','alpha','--kind','captain','--request-from','used')
+        ucli('done','answered')
+        check(ucli('work','snapshot')['requests'][0]['usage']['tasks']['no_agent']==2, 'completed captain decisions retain their explicit agent-free kind')
     if os.environ.get('FM_WORK_TEST_USAGE') == '1':
         print('PASS: %d usage checks' % checks); raise SystemExit(0)
     with tempfile.TemporaryDirectory(prefix='fm-work-graph-') as graph_tmp:

@@ -175,14 +175,14 @@ def refresh(folder):
     Path(stream.name).replace(target)
 
 
-def aggregate(data, tasks):
+def aggregate(data, tasks, backlog):
     rows, counts, unknown = {}, Counter(), []
     for task in tasks:
         task_id = task['key'][5:]
         usage = read(Path(data) / task_id / 'usage.json') or {}
         values = usage.get('by', [])
         reason = next(iter(usage.get('unknown') or []), None)
-        state = ('no_agent' if task['state'] == 'captain' else 'not_started'
+        state = ('no_agent' if backlog[task_id].get('kind') == 'captain' else 'not_started'
                  if task['backlog_state'] == 'queued' else 'unknown') if not values else (
                  'running' if task['backlog_state'] == 'in_flight' else 'counted')
         counts[state] += 1
