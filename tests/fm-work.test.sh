@@ -57,6 +57,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         write_lines(codex_path,codex_rows)
         write_lines(folder/'sessions.jsonl',[dict(harness=h,model=None,effort='low',session=str(p)) for h,p in [('claude',claude_path),('codex',codex_path)]])
         refresh = ['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(folder)]
+        (folder/'usage.json').write_text('[{"legacy": true}]')
         subprocess.run(refresh,check=True)
         cache = folder/'usage.json'
         measured = json.loads(cache.read_text())
@@ -94,6 +95,26 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         subprocess.run(refresh,check=True)
         check(not ucli('work','snapshot')['requests'][0]['usage']['usd_complete'], 'a missing source cannot make a partial task cache look complete')
         ucli('start','missing')
+        saved = cache.read_bytes()
+        cache.write_text(json.dumps(measured))
+        bad_cache = uh/'data/missing/usage.json'
+        valid_row = measured['by'][0]
+        malformed = [[{'old': 'investigation'}], 'legacy', 7, True, None,
+            {'by': {}}, {'by': [None]}, {'unknown': 'legacy'},
+            {'unknown': [{}]}, {'by': [{}]}]
+        for field, bad in [('harness', []), ('model', {}), ('effort', []),
+                           ('usd', '1'), ('tokens', None), ('sessions', True),
+                           ('output_tokens', -1), ('usd_known', 'yes'), ('usd', float('inf'))]:
+            malformed.append({'by': [dict(valid_row, **{field: bad})]})
+        for invalid in malformed:
+            bad_cache.write_text(json.dumps(invalid))
+            projected = ucli('work','snapshot')['requests'][0]['usage']
+            check(projected['tokens']==sum(r['tokens'] for r in measured['by'])
+                  and not projected['usd_complete']
+                  and any(r['task']=='missing' for r in projected['unknown']),
+                  'malformed cache stays unknown and preserves valid peer usage: '+repr(invalid))
+        bad_cache.unlink()
+        cache.write_bytes(saved)
         held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
         check(held.returncode==0, held.stderr+held.stdout)
         projected = ucli('work','snapshot')['requests'][0]['usage']

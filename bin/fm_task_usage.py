@@ -11,6 +11,7 @@ https://developers.openai.com/api/docs/pricing
 """
 from collections import Counter
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -30,6 +31,32 @@ def read(path, default=None):
         return json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return default
+
+
+def read_usage(path):
+    usage = read(path)
+    if not isinstance(usage, dict):
+        return {}
+    values, unknown = usage.get('by', []), usage.get('unknown', [])
+    if not isinstance(values, list) or not isinstance(unknown, list):
+        return {}
+    if any(not isinstance(reason, str) for reason in unknown):
+        return {}
+    for value in values:
+        if not isinstance(value, dict):
+            return {}
+        if any(not isinstance(value.get(k), (str, type(None)))
+               for k in ('harness', 'model', 'effort')):
+            return {}
+        if any(k not in value for k in ('harness', 'model', 'effort')):
+            return {}
+        if not isinstance(value.get('usd_known'), bool):
+            return {}
+        if any(type(value.get(k)) not in (int, float) or
+               (isinstance(value[k], float) and not math.isfinite(value[k])) or value[k] < 0
+               for k in ('usd', 'tokens', 'output_tokens', 'sessions')):
+            return {}
+    return usage
 
 
 def records(path):
@@ -151,7 +178,7 @@ def refresh(folder):
     sizes = {str(p): p.stat().st_size if p.exists() else None
              for p in [source] + [p for _, paths in inputs for p in paths]}
     target = folder / 'usage.json'
-    if (read(target) or {}).get('sizes') == sizes:
+    if read_usage(target).get('sizes') == sizes:
         return
     rows, estimated = {}, False
     for session, paths in inputs:
@@ -179,7 +206,7 @@ def aggregate(data, tasks, backlog):
     rows, counts, unknown = {}, Counter(), []
     for task in tasks:
         task_id = task['key'][5:]
-        usage = read(Path(data) / task_id / 'usage.json') or {}
+        usage = read_usage(Path(data) / task_id / 'usage.json')
         values = usage.get('by', [])
         reason = next(iter(usage.get('unknown') or []), None)
         state = ('no_agent' if backlog[task_id].get('kind') == 'captain' else 'not_started'
