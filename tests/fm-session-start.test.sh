@@ -30,6 +30,7 @@
 #     read-only session declares the checks it skipped, and the tasks-axi
 #     compatibility verdict is paid for once per session start
 # FM_SESSION_START_CASE=lock-concurrency runs only the session-lock fixture.
+# FM_SESSION_START_CASE=network-auth runs only the deferred authentication cases.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -1902,6 +1903,9 @@ test_unreachable_network_never_blocks_the_digest() {
 $rec
 EOF
   network_finished="${root%/root}/network-finished"
+  git init -q "$home/projects/github"
+  git -C "$home/projects/github" remote add origin "$home/no-origin"
+  git -C "$home/projects/github" remote set-url --push origin https://github.com/example/project.git
   install_slow_gh "$fakebin" 12 "$network_finished"
 
   started=$(date +%s)
@@ -1938,6 +1942,9 @@ test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it() {
   IFS='|' read -r root home fakebin mate log spawned <<EOF
 $rec
 EOF
+  git init -q "$home/projects/github"
+  git -C "$home/projects/github" remote add origin "$home/no-origin"
+  git -C "$home/projects/github" remote set-url --push origin https://github.com/example/project.git
   install_slow_gh "$fakebin" 8
   queue="$home/state/.wake-queue"
 
@@ -3109,6 +3116,10 @@ EOF
 
 case "${FM_SESSION_START_CASE:-}" in
   lock-concurrency) test_session_lock_concurrent_single_winner; exit 0 ;;
+  network-auth)
+    test_unreachable_network_never_blocks_the_digest
+    test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it
+    exit 0 ;;
   '') ;;
   *) fail 'unknown focused session-start case' ;;
 esac

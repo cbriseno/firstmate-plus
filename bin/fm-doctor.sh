@@ -3,6 +3,7 @@
 # Usage: bash bin/fm-doctor.sh [--backend <name> | --tools]
 # Defaults to normal backend resolution (FM_BACKEND/config/ambient/tmux).
 # Reports command availability, basic Unix capabilities and the selected route;
+# missing feature tools are optional and report their effect without failing.
 # bootstrap remains the owner of tool version/authentication compatibility.
 # Exit 0: prerequisites found (not a live harness/backend certification).
 # Exit 1: missing prerequisite/capability. Exit 2: unsupported platform/options.
@@ -75,6 +76,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-platform-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-tasks-axi-lib.sh
+. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 backend=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -105,7 +108,10 @@ case "$(fm_platform_name)" in
     done
     ;;
 esac
-for tool in bash git python3 perl jq node gh gh-axi no-mistakes chrome-devtools-axi tasks-axi quota-axi; do
+required_tools='bash git python3 perl jq node'
+config=${FM_CONFIG_OVERRIDE:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$SCRIPT_DIR/..}}/config}
+fm_backlog_backend_manual "$config" || required_tools="$required_tools tasks-axi"
+for tool in $required_tools; do
   if command -v "$tool" >/dev/null 2>&1; then
     printf 'available: %s\n' "$tool"
   else
@@ -114,6 +120,8 @@ for tool in bash git python3 perl jq node gh gh-axi no-mistakes chrome-devtools-
   fi
 done
 for tool in $(fm_backend_required_tools "$backend"); do
+  # Worktree allocation is a dispatch prerequisite, not a startup prerequisite.
+  [ "$tool" != treehouse ] || continue
   if fm_backend_required_tool_available "$backend" "$tool"; then
     printf 'available: %s\n' "$tool"
   else
@@ -121,6 +129,19 @@ for tool in $(fm_backend_required_tools "$backend"); do
     result=1
   fi
 done
+optional() {
+  local tool=$1 effect=$2 availability=missing
+  command -v "$tool" >/dev/null 2>&1 && availability=available
+  printf 'optional: %s (%s; unavailable if missing: %s)\n' "$tool" "$availability" "$effect"
+}
+optional gh 'GitHub operations'
+optional gh-axi 'GitHub integration'
+optional no-mistakes 'no-mistakes delivery when explicitly requested'
+optional chrome-devtools-axi 'browser operations'
+optional quota-axi 'quota-based dispatch selection'
+[ "$backend" = orca ] || optional treehouse 'isolated task dispatch'
+optional lavish-axi 'visual review'
+fm_backlog_backend_manual "$config" && optional tasks-axi 'tasks-axi backlog operations'
 if ! python3 -c 'import fcntl, os, sys; sys.exit(0 if sys.version_info >= (3, 9) and hasattr(os, "killpg") else 1)' >/dev/null 2>&1; then
   printf 'missing: Python 3.9+ with POSIX locking and process groups\n'
   result=1

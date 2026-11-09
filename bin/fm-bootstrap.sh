@@ -70,11 +70,17 @@
 #          upgrade recommendation for synchronous reply acceptance.
 #          tasks-axi feature probes remain a separate defense-in-depth check, and
 #          a build failing one is OUTDATED like a below-floor build.
-#          tasks-axi and quota-axi are essential bootstrap tools.
+#          tasks-axi is required unless config/backlog-backend=manual.
 #          A compatible tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
 #          procedure in AGENTS.md section 4 and
 #          .agents/skills/quota-array-dispatch/SKILL.md.
+#          Feature-only tools are not startup requirements: treehouse is checked
+#          at dispatch, no-mistakes at explicit delivery, and browser tools when
+#          used. GitHub tools/auth are checked only for GitHub project remotes;
+#          quota-axi only for configured dispatch arrays or quota floors.
+#          On macOS package-manager dependencies get manual guidance, with no
+#          brew or sudo commands; explicit npm/self-installer paths stay usable.
 #          On a primary home, the locked mutable path materializes the visible
 #          default config/startup-memory-budget=7500 when absent. It never
 #          guesses at malformed or unsafe existing files, and secondmate homes
@@ -864,8 +870,13 @@ secondmate_handoff_detect() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
-    cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
+    tmux|node|git|gh|curl|jq|orca|zellij|cmux)
+      [ "$(fm_platform_name)" != macos ] || return 1
+      if [ "$1" = cmux ]; then
+        echo "brew install --cask cmux  # or see https://cmux.com"
+      else
+        echo "brew install $1  # or the platform's package manager"
+      fi ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
@@ -889,6 +900,9 @@ upgrade_cmd() {
 
 manual_install_url() {
   case "$1" in
+    node|git|tmux|jq|gh|orca|zellij|cmux|curl)
+      [ "$(fm_platform_name)" = macos ] || return 1
+      echo "docs/platforms.md (provide $1 on PATH manually)" ;;
     herdr) echo "https://herdr.dev" ;;
     paseo) echo "https://paseo.sh" ;;
     rex) echo "https://www.superlogical.com/rex" ;;
@@ -907,11 +921,27 @@ missing_tool_diagnostic() {
 }
 
 # Required-tool detection follows the RESOLVED backend, not a one-size default:
-# a universal toolchain every home needs plus the backend-specific delta owned by
-# fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux home is
-# never told tmux is missing, and only orca drops treehouse. A backend value with
+# a base toolchain plus the runtime-specific delta owned by
+# fm_backend_required_tools (bin/fm-backend.sh). Worktree allocation is needed at
+# dispatch rather than startup. A backend value with
 # no verified dependency set is reported before the universal checks continue.
-COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
+COMMON_TOOLS="node git"
+fm_backlog_backend_manual "$CONFIG" || COMMON_TOOLS="$COMMON_TOOLS tasks-axi"
+GITHUB_USED=0
+for project in "$PROJECTS"/*; do
+  [ -d "$project" ] || continue
+  if git -C "$project" remote -v 2>/dev/null | grep -Eq 'github\.com[:/]'; then
+    GITHUB_USED=1
+    COMMON_TOOLS="$COMMON_TOOLS gh gh-axi"
+    break
+  fi
+done
+if [ -f "$CONFIG/crew-dispatch.json" ] && command -v jq >/dev/null 2>&1 \
+  && jq -e '([(.default, .rules[]?.use) | select(type == "array")]
+      + [.. | objects | select(has("floor"))]) | length > 0' \
+      "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+  COMMON_TOOLS="$COMMON_TOOLS quota-axi"
+fi
 BACKEND=$(fm_backend_name)
 BACKEND_VALID=1
 if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
@@ -1099,7 +1129,7 @@ x_mode_setup() {
   missing=0
   for tool in curl jq; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-      echo "MISSING: $tool (install: $(install_cmd "$tool"))"
+      missing_tool_diagnostic "$tool"
       missing=1
     fi
   done
@@ -1154,7 +1184,7 @@ crew_dispatch_validate() {
   file="$CONFIG/crew-dispatch.json"
   [ -f "$file" ] || return 0
   if ! command -v jq >/dev/null 2>&1; then
-    echo "MISSING: jq (install: $(install_cmd jq))"
+    missing_tool_diagnostic jq
     return 0
   fi
   if ! jq -e . "$file" >/dev/null 2>&1; then
@@ -1519,6 +1549,7 @@ detect_local_tools() {
     echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
   fi
   for t in $BACKEND_TOOLS; do
+    [ "$t" != treehouse ] || continue
     fm_backend_required_tool_available "$BACKEND" "$t" \
       || missing_tool_diagnostic "$t"
   done
@@ -1538,15 +1569,15 @@ detect_local_tools() {
   if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
     echo "OUTDATED: gh-axi (installed: $(tool_version gh-axi); requires $GH_AXI_MIN; upgrade: $(upgrade_cmd gh-axi))"
   fi
-  if ! tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN"; then
+  if command -v lavish-axi >/dev/null 2>&1 && ! tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN"; then
     echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_BOARD_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
-  elif ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
+  elif command -v lavish-axi >/dev/null 2>&1 && ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
     echo "BOOTSTRAP_INFO: lavish-axi >=$LAVISH_AXI_MIN enables confirmed board replies; this older compatible version retains the legacy reply path, but upgrade to prevent handing back a board before its reply is accepted"
   fi
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "OUTDATED: quota-axi (installed: $(tool_version quota-axi); requires $FM_QUOTA_AXI_MIN; upgrade: $(upgrade_cmd quota-axi))"
   fi
-  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
+  if ! fm_backlog_backend_manual "$CONFIG" && command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
     echo "OUTDATED: tasks-axi (installed: $(tool_version tasks-axi); requires $(tasks_axi_requirement); upgrade: $(upgrade_cmd tasks-axi))"
   fi
 }
@@ -1667,7 +1698,7 @@ detect_home_summary_publication() {
 # fleet_sync and others assign plain names like `start` without `local`, and
 # bash's dynamic scoping would let them overwrite a stamp held by a caller.
 local_phase && detect_local_tools
-if network_phase; then
+if network_phase && [ "$GITHUB_USED" -eq 1 ] && command -v gh >/dev/null 2>&1; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"

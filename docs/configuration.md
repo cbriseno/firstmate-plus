@@ -479,14 +479,14 @@ Secondmate handoffs bypass that routine-backend choice: `fm-backlog-handoff.sh` 
 It moves in-scope `## Queued` items only and refuses `## In flight` and historical `## Done` records, which stay with their home for pruning or archiving.
 
 Handoff item bodies must use at least two leading spaces, and the helper refuses a selected item with a single-space or tab-indented continuation rather than risk orphaning it.
-Because bootstrap requires `tasks-axi` on `PATH` on every profile, that delegation works fleet-wide, and the `config/backlog-backend=manual` knob governs firstmate's own hand-editing of its backlog, not this validated helper.
+That delegation requires compatible `tasks-axi` even when `config/backlog-backend=manual` opts out of the startup requirement; the knob governs firstmate's own hand-editing, not this validated helper.
 
 ### Required tools and manual mode
 
 Compatible means the installed build passes the shared version and feature probe owned by [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh), including the atomic multi-ID move required by handoff delegation.
-Bootstrap requires compatible `tasks-axi` on every profile; see "Toolchain" below for required-tool diagnostics and silent default-backend behavior.
+Bootstrap requires compatible `tasks-axi` unless the backlog backend is `manual`; see "Toolchain" below for required-tool diagnostics and silent default-backend behavior.
 
-Set the local, gitignored `config/backlog-backend` file to `manual` to force manual backlog editing and suppress the verbose `BOOTSTRAP_INFO: tasks-axi available` fact, not required-tool diagnostics.
+Set the local, gitignored `config/backlog-backend` file to `manual` to force manual backlog editing and skip tasks-axi startup diagnostics.
 A `manual` home owns its backlog file outright: the lifecycle transitions above are skipped there, dispatch and completion never fail over the file's contents, and a completed teardown prints the hand edit that is owed instead.
 
 Absent or `tasks-axi` selects the tasks-axi path.
@@ -1754,24 +1754,22 @@ Defensive Windows/MSYS timeout defaults retained by low-level helpers do not est
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with its exact install or upgrade command, or with manual instructions.
 It installs missing automatically supported tools only after you say go; for an installed but outdated tool, run the printed upgrade command after consent, while manual-only tools remain for you to install from the printed instructions.
 
-Required tools come in two parts: a universal toolchain every home needs regardless of backend, and a per-backend delta that follows the runtime backend actually resolved for this home.
+Startup checks cover the base toolchain, the resolved runtime, and configured features.
+The doctor reports optional tools and the functions unavailable without them; their absence does not fail the base prerequisite check.
 
 **Universal requirements**
 
 Every home requires:
 
 - node and git.
-- gh, with GitHub authentication through `gh auth login`.
-- no-mistakes v1.46.0 or newer.
-- Compatible gh-axi.
-- chrome-devtools-axi.
-- Compatible tasks-axi, as specified in "Backlog backend" above.
-- Compatible quota-axi.
+- Bash, Python 3.9+ with POSIX locking and process groups, Perl, and the standard Unix utilities described in [Platform setup](platforms.md).
+- jq for JSON operations.
+- Compatible tasks-axi unless `config/backlog-backend=manual`, as specified in "Backlog backend" above.
 
 [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
-In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+GitHub, browser, quota selection, and explicitly requested no-mistakes delivery use feature-specific tools.
 Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
 
 **Backend requirements**
@@ -1790,7 +1788,8 @@ The per-backend delta is required only for the backend resolved from `FM_BACKEND
 | `rex` | `rex`, `jq`, `treehouse` |
 
 The JSON-emitting adapters (`herdr`, `zellij`, `cmux`, `paseo`, `rex`) need `jq` because their spawn and liveness paths parse backend JSON.
-Every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`, `paseo`, `rex`) uses `treehouse` for worktrees.
+Every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`, `paseo`, `rex`) uses `treehouse` for task worktrees.
+Its absence is checked at dispatch rather than startup; installed builds are still checked for lease compatibility.
 
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI and the Rex server bundle's `rex`.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
@@ -1800,19 +1799,23 @@ A herdr, zellij, cmux, paseo, or rex home is therefore never told `tmux` is miss
 
 **Feature-specific requirements**
 
+- GitHub project remotes require `gh`, GitHub authentication, and compatible `gh-axi`; homes without those remotes skip the authentication probe.
+- Configured dispatch profile arrays or quota floors require compatible `quota-axi`.
+- Browser operations require `chrome-devtools-axi`, and explicitly requested no-mistakes delivery requires no-mistakes v1.46.0 or newer.
 - When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 - When Relay is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 
 **Missing and outdated tool diagnostics**
 
-`tasks-axi` and `quota-axi` are essential bootstrap tools in every profile.
+Missing optional tools do not request installation at startup.
+On macOS, package-manager dependencies receive manual guidance without brew or sudo commands; explicitly approved npm and self-installer paths remain available.
 An absent required tool with an automated install path reports `MISSING:` with its install command, while a present required tool below its floor or missing a required capability reports `OUTDATED:` with its installed version (or `unparseable`), requirement, and upgrade command; manual-only and presentation-only dependencies retain their dedicated diagnostics, and [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh)'s header owns these exact line formats.
 
-- An absent `treehouse` reports `MISSING:` with its install command, while an installed build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
-- An absent `no-mistakes` reports `MISSING:` with its install command, while a version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
+- An installed `treehouse` build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
+- An installed `no-mistakes` version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
 - An absent `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` and a below-floor or feature-incompatible one reports `OUTDATED:` with its required version and any missing feature-probe capability, while retaining that same `npm install -g tasks-axi` upgrade; when `config/backlog-backend` is not `manual`, a home with a configured non-markdown adapter or a markdown backlog refuses lifecycle mutation until compatible `tasks-axi` is on `PATH`, while a manual-backend home keeps its backlog hand-edited.
 - An absent `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)` and an outdated one reports `OUTDATED:` with its `gh-axi update` upgrade.
-- An absent or board-incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with the 0.1.77 compatibility floor, install command, and explicit text fallback; compatible versions below 0.1.80 retain legacy board replies and report an upgrade recommendation for synchronous acceptance, while [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns diagnostic handling.
+- An installed but board-incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with the 0.1.77 compatibility floor, install command, and explicit text fallback; compatible versions below 0.1.80 retain legacy board replies and report an upgrade recommendation for synchronous acceptance, while [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns diagnostic handling.
 - An absent `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)` and an incompatible one reports `OUTDATED:` with its `quota-axi update` upgrade; firstmate cannot resolve a profile array without a compatible binary.
 
 **Checkout diagnostics**

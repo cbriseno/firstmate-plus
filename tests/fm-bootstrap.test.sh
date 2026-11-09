@@ -266,6 +266,77 @@ assert_timeout_report() {
 #   mode=empty -> output must be empty (expect/notcontains ignored)
 #   mode=exact -> output must equal <expect>
 #   mode=grep  -> output must contain <expect> (fixed string); <notcontains> must not appear
+# Exercise the public startup commands with the optional tools absent. Darwin is
+# simulated here; this is not evidence of execution on a physical Mac.
+test_base_only_mac_startup() {
+  local case_dir fakebin env_file out rc config
+  case_dir="$TMP_ROOT/base-only-mac"
+  config="$case_dir/home/config"
+  mkdir -p "$config"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  env_file="$case_dir/mac.bash"
+  cat > "$env_file" <<'SH'
+uname() { printf 'Darwin\n'; }
+command() {
+  if [ "${1:-}" = -v ]; then
+    case "${2:-}" in
+      gh|gh-axi|no-mistakes|chrome-devtools-axi|quota-axi|treehouse|lavish-axi) return 1 ;;
+    esac
+    [ "${2:-}" != "${FM_TEST_HIDE_TOOL:-}" ] || return 1
+  fi
+  builtin command "$@"
+}
+SH
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_HOME="$case_dir/home" \
+    bash "$ROOT/bin/fm-doctor.sh" --backend tmux) || fail "base-only Mac doctor failed: $out"
+  for tool in gh gh-axi no-mistakes chrome-devtools-axi quota-axi treehouse lavish-axi; do
+    assert_contains "$out" "optional: $tool (missing; unavailable if missing:" "doctor must explain $tool"
+  done
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$case_dir/home" FM_BACKEND=tmux FM_BOOTSTRAP_DETECT_ONLY=1 \
+    bash "$ROOT/bin/fm-bootstrap.sh") || fail "base-only Mac bootstrap failed: $out"
+  [ -z "$out" ] || fail "unused features requested setup: $out"
+
+  # Missing a real base requirement must still fail, with manual Mac guidance.
+  rc=0
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_TEST_HIDE_TOOL=node \
+    FM_HOME="$case_dir/home" bash "$ROOT/bin/fm-doctor.sh" --backend tmux) || rc=$?
+  [ "$rc" = 1 ] || fail "doctor accepted a missing base requirement"
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_TEST_HIDE_TOOL=node \
+    FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FM_BACKEND=tmux \
+    FM_BOOTSTRAP_DETECT_ONLY=1 bash "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" 'MISSING_MANUAL: node' 'Mac base requirement needs manual guidance'
+  assert_not_contains "$out" brew 'Mac must not suggest brew'
+  assert_not_contains "$out" sudo 'Mac must not suggest sudo'
+  rc=0
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" \
+    bash "$ROOT/bin/fm-bootstrap.sh" install node 2>&1) || rc=$?
+  [ "$rc" = 1 ] || fail 'Mac installer must defer manual installation'
+  assert_contains "$out" 'requires manual installation' 'Mac installer explains manual setup'
+
+  printf 'manual\n' > "$config/backlog-backend"
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_TEST_HIDE_TOOL=tasks-axi \
+    FM_HOME="$case_dir/home" bash "$ROOT/bin/fm-doctor.sh" --backend tmux) || fail 'manual backlog doctor failed'
+  assert_contains "$out" 'optional: tasks-axi (missing;' 'manual backlog must not require tasks-axi'
+
+  # Features become actionable only once configured, without any remote calls.
+  git init -q "$case_dir/home/projects/github"
+  git -C "$case_dir/home/projects/github" remote add origin https://github.com/example/project.git
+  printf '%s\n' '{"default":[{"harness":"codex"}]}' > "$config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$case_dir/home" FM_BACKEND=tmux FM_BOOTSTRAP_DETECT_ONLY=1 \
+    bash "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "MISSING_MANUAL: gh" "configured GitHub requires gh"
+  for tool in gh-axi quota-axi; do
+    assert_contains "$out" "MISSING: $tool" "configured feature must require $tool"
+  done
+  assert_not_contains "$out" brew "configured Mac features must not suggest brew"
+  assert_not_contains "$out" sudo "configured Mac features must not suggest sudo"
+  assert_not_contains "$out" NEEDS_GH_AUTH 'absent gh must not masquerade as an auth failure'
+  pass 'base-only Mac startup permits optional tools and preserves configured requirements'
+}
+
 test_bootstrap_reporting() {
   local label lease tasks quota backend mode expect notcontains case_dir fakebin base out n archive_body multi_id quota_version
   n=0
@@ -338,16 +409,16 @@ test_bootstrap_reporting() {
     esac
   done <<'ROWS'
 treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
-absent treehouse reports a missing tool^absent^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
+absent treehouse is needed only at dispatch^absent^0.2.6^1^-^empty^^
 treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease support; upgrade: treehouse update)^NEEDS_GH_AUTH
 compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 incompatible tasks-axi reports an upgrade by default^1^0.1.0^1^-^exact^OUTDATED: tasks-axi (installed: 0.1.0; requires 0.2.6; upgrade: npm install -g tasks-axi)^
 tasks-axi without archive-body reports an upgrade by default^1^0.2.6:noarchive^1^-^exact^OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body; upgrade: npm install -g tasks-axi)^
 tasks-axi without multi-id mv reports an upgrade by default^1^0.2.6:nomulti^1^-^exact^OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with mv multi-ID; upgrade: npm install -g tasks-axi)^
-missing quota-axi is required by default^1^0.2.6^0^manual^exact^MISSING: quota-axi (install: npm install -g quota-axi)^
+missing quota-axi is optional without quota dispatch^1^0.2.6^0^manual^empty^^
 outdated quota-axi reports an upgrade by default^1^0.2.6^0.1.50^manual^exact^OUTDATED: quota-axi (installed: 0.1.50; requires 0.1.51; upgrade: quota-axi update)^
-manual backlog backend still requires missing tasks-axi^1^-^1^manual^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
+manual backlog backend does not require tasks-axi^1^-^1^manual^empty^^
 manual backlog backend suppresses tasks-axi availability^1^0.2.6^1^manual^empty^^
 ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
@@ -364,7 +435,6 @@ test_absent_tool_cases_hide_a_real_install_in_the_base_path() {
   local case_dir fakebin hostbin out
   case_dir="$TMP_ROOT/absent-host-install"
   mkdir -p "$case_dir/home/config"
-  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
   fakebin=$(make_fake_toolchain "$case_dir")
   rm -f "$fakebin/tasks-axi"
   hostbin="$case_dir/hostbin"
@@ -416,7 +486,7 @@ test_no_mistakes_min_version() {
 minimum no-mistakes version is accepted^no-mistakes version v1.46.0 (fake)^empty^
 newer no-mistakes minor is accepted^no-mistakes version v1.47.0 (fake)^empty^
 newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^empty^
-absent no-mistakes reports a missing tool^absent^missing^
+absent no-mistakes is optional until explicitly requested^absent^empty^
 older no-mistakes patch reports an upgrade^no-mistakes version v1.45.4 (fake)^outdated^1.45.4
 unparseable no-mistakes version reports an upgrade^no-mistakes development build^outdated^unparseable
 ROWS
@@ -455,7 +525,7 @@ minimum gh-axi version is accepted^0.1.29^empty^
 newer gh-axi patch is accepted^0.1.30^empty^
 newer gh-axi minor is accepted^0.2.0^empty^
 newer gh-axi major is accepted^1.0.0^empty^
-absent gh-axi reports a missing tool^absent^missing^
+absent gh-axi is optional without GitHub projects^absent^empty^
 older gh-axi patch reports an upgrade^0.1.19^outdated^0.1.19
 much older gh-axi minor reports an upgrade^0.0.9^outdated^0.0.9
 unparseable gh-axi version reports an upgrade^gh-axi development build^outdated^unparseable
@@ -493,7 +563,7 @@ test_lavish_axi_min_version() {
         [ "$out" = "$unavailable" ] || fail "$label: expected '$unavailable', got: $out" ;;
     esac
   done <<'ROWS'
-absent lavish-axi permits text fallback^absent^unavailable
+absent lavish-axi permits text fallback silently^absent^empty
 lavish-axi reply feature floor is accepted^0.1.80^empty
 older compatible lavish-axi retains boards and recommends upgrade^0.1.79^upgrade
 minimum legacy board version is accepted with upgrade advice^0.1.77^upgrade
@@ -516,7 +586,6 @@ test_tasks_axi_min_version() {
     n=$((n + 1))
     case_dir="$TMP_ROOT/tasks-axi-$n"
     mkdir -p "$case_dir/home/config"
-    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     fakebin=$(make_fake_toolchain "$case_dir")
     base=$BASE_PATH
     if [ "$version" = absent ]; then
@@ -611,7 +680,7 @@ minimum quota-axi version is accepted^0.1.51^empty^
 newer quota-axi patch is accepted^0.1.52^empty^
 newer quota-axi minor is accepted^0.2.0^empty^
 newer quota-axi major is accepted^1.0.0^empty^
-absent quota-axi reports a missing tool^absent^missing^
+absent quota-axi is optional without quota dispatch^absent^empty^
 the patch just below the floor reports an upgrade^0.1.50^outdated^0.1.50
 much older quota-axi minor reports an upgrade^0.0.9^outdated^0.0.9
 unparseable quota-axi version reports an upgrade^quota-axi development build^outdated^unparseable
@@ -1034,6 +1103,8 @@ test_network_phase_partitions_the_run() {
   case_dir="$TMP_ROOT/network-phase"
   mkdir -p "$case_dir/home/config"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  git init -q "$case_dir/home/projects/github"
+  git -C "$case_dir/home/projects/github" remote add origin https://github.com/example/project.git
   fakebin=$(make_fake_toolchain "$case_dir")
   # Break the two diagnostics that stand for the two halves: a local tool floor
   # and the network GitHub-auth probe.
@@ -1133,6 +1204,7 @@ test_network_phases_record_per_step_elapsed_times() {
   # A real clone with a real origin, so fm-fleet-sync.sh genuinely iterates it.
   fm_git_init_commit "$case_dir/home/projects/alpha"
   fm_git_add_origin "$case_dir/home/projects/alpha" "$case_dir/alpha-origin"
+  git -C "$case_dir/home/projects/alpha" remote set-url --push origin https://github.com/example/alpha.git
   # A secondmate the liveness sweep must account for. Whatever verdict it reaches
   # is owned elsewhere; what matters here is that the step is measured.
   fm_write_secondmate_meta "$case_dir/home/state/mate-a.meta" "$case_dir/home"
@@ -1470,6 +1542,7 @@ ROWS
   pass "bootstrap gates resolver fields and additive harnesses on the typed key"
 }
 
+test_base_only_mac_startup
 test_bootstrap_reporting
 test_absent_tool_cases_hide_a_real_install_in_the_base_path
 test_no_mistakes_min_version
