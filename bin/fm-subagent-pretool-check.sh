@@ -51,6 +51,9 @@
 # Grok consumes the stdout decision object.
 # OpenCode and Pi consume exit 2 plus stderr.
 set -u
+# Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status.
+# shellcheck source=bin/fm-diag.sh
+. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin pretool-subagent && trap fm_diag_hook_end EXIT
 
 # Lowercase substrings that mark a tool name as delegation-shaped: it creates
 # work, an agent, a schedule, or an isolated workspace that firstmate would not

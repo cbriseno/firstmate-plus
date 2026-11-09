@@ -111,6 +111,9 @@ case "${1:-}" in
     exit 1
     ;;
   hook)
+    # Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status.
+    # shellcheck source=bin/fm-diag.sh
+    . "$SCRIPT_DIR/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin host-mirror && trap fm_diag_hook_end EXIT
     # The home gate runs before anything else is sourced or created, so a
     # home that does not run the host stays inert.
     fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0

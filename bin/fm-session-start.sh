@@ -286,9 +286,23 @@ done
 # that one as never emitted. Keep it in the exact order the digest prints.
 SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
 
+# shellcheck source=bin/fm-diag.sh
+. "$SCRIPT_DIR/fm-diag.sh"
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
+  stage_timing_flush
+  FM_DIAG_STAGE=$1 FM_DIAG_STAGE_START=$FM_DIAG_MS
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
   printf '%s\n' "$1" > "$FM_SESSION_START_STAGE_FILE" 2>/dev/null || true
+}
+
+# Diagnostic log (bin/fm-diag.sh): each completed stage's duration.
+stage_timing_flush() {
+  local now
+  fm_diag_now_ms
+  now=$FM_DIAG_MS
+  [ -z "${FM_DIAG_STAGE:-}" ] \
+    || fm_diag_emit session.stage stage="$FM_DIAG_STAGE" ms="$(( now - FM_DIAG_STAGE_START ))"
+  FM_DIAG_STAGE='' FM_DIAG_MS=$now
 }
 
 # shellcheck source=bin/fm-timeout-lib.sh
@@ -317,6 +331,8 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
         || SESSION_START_BUDGET=$SESSION_START_REMAINING
       ;;
   esac
+  fm_diag_now_ms
+  SESSION_START_BEGIN_MS=$FM_DIAG_MS
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision
@@ -343,6 +359,15 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
       "$SCRIPT_DIR/fm-session-start.sh"
   fi
   SESSION_START_RC=$?
+  fm_diag_now_ms
+  SESSION_START_MS=$(( FM_DIAG_MS - SESSION_START_BEGIN_MS ))
+  fm_diag_harness
+  SESSION_START_DIAG_STAGE=
+  [ "$SESSION_START_RC" -eq 0 ] \
+    || SESSION_START_DIAG_STAGE=$(cat "$SESSION_START_STAGE_FILE" 2>/dev/null || true)
+  fm_diag_emit session.start ms="$SESSION_START_MS" rc="$SESSION_START_RC" \
+    last_stage="$SESSION_START_DIAG_STAGE" budget_s="$SESSION_START_BUDGET" \
+    source="$SESSION_SOURCE" harness="$FM_DIAG_HARNESS" session="$FM_DIAG_SESSION"
   # ANY nonzero child exit is a truncation: the banner contract promises that
   # a stage that cannot print is named. Exit 124 is the bound firing; any
   # other status means the child died or was killed mid-stage, which truncates
@@ -1141,5 +1166,6 @@ if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   fi
 fi
 
+stage_timing_flush
 
 exit 0

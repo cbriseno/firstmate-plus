@@ -394,6 +394,11 @@ trap 'fm_test_cleanup; exit 143' TERM
 trap 'fm_test_cleanup; exit 129' HUP
 trap 'fm_test_cleanup; exit 131' QUIT
 
+# Keep the suite's hook and startup timings out of the operator's diagnostic
+# log (bin/fm-diag.sh) while still exercising the recording path.
+FM_DIAGNOSTICS_HOME=$(fm_test_tmproot fm-test-diagnostics) || return 1
+export FM_DIAGNOSTICS_HOME
+
 # fm_test_reap_orphans: best-effort sweep for fixture roots left behind by a
 # prior run that was killed hard enough to skip the traps above (e.g. a
 # SIGKILL timeout). Only removes directories carrying the .fm-test-fixture

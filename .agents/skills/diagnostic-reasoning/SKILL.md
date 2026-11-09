@@ -13,6 +13,14 @@ Use this procedure before scoping a reported bug and before acting on a diagnost
 This skill is the single owner of Firstmate's bug-diagnosis reasoning procedure.
 The subordinate performs this procedure and returns its result and concise evidence summary; firstmate uses that summary to scope or route work under `AGENTS.md` section 1.
 
+## Read the diagnostic logs first
+
+Before reproducing, and before asking anyone for more data, read the always-on anonymized logs in the directory above `bin/fm-diag.sh path`.
+`firstmate/events.jsonl` times every hook, session-start stage, wake acknowledgement, and task snapshot, and samples each worker's processes and zombies; `deck/events.jsonl` holds the Deck's snapshot reads and errors, animations, layout shifts, and overlays; each rotates to `events.1.jsonl`.
+`bin/fm-diag.sh`'s header owns the Firstmate event schema.
+Summarize the incident window with `jq` - counts and p50, p90, and maximum per event and field - and cite those numbers as observed facts.
+Name a number the logs lack as a gap rather than asking the captain for it.
+
 ## Establish the observed behavior
 
 Start from the end user's experience rather than an internal error string or an implementation hypothesis.
@@ -43,7 +51,7 @@ Compare the final explanation against the proven path and show why the proposed 
 
 ## Scope and act on the result
 
-A diagnosis brief should ask for the reproduction, trigger/mask/symptom separation, divergent and proven path comparison, relevant history, smallest counterfactual, and disconfirming evidence in the report.
+A diagnosis brief should ask for the diagnostic-log summary, the reproduction, trigger/mask/symptom separation, divergent and proven path comparison, relevant history, smallest counterfactual, and disconfirming evidence in the report.
 A diagnostic report should distinguish observed facts from hypotheses and state any unresolved uncertainty that could change the recommended scope.
 Before accepting "not reproduced", require a brief coverage matrix for relevant runtime/device variants, environment, time or zone, account/data state, and trigger path.
 Mark each dimension tested, excluded with a reason, or unknown, and name the untested dimensions that limit the negative result.

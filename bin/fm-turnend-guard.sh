@@ -92,6 +92,10 @@
 #      hook that leaves the ledger frozen cannot hold the guard in an
 #      unbounded re-block loop below that override.
 set -u
+# Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status; the
+# EXIT trap below records it.
+# shellcheck source=bin/fm-diag.sh
+. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin stop-guard
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -142,7 +146,11 @@ record_parent_stop_state() {
   fi
   "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" >/dev/null 2>&1 || true
 }
-trap record_parent_stop_state EXIT
+if declare -F fm_diag_hook_end >/dev/null; then
+  trap 'fm_diag_hook_end; record_parent_stop_state' EXIT
+else
+  trap record_parent_stop_state EXIT
+fi
 
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"

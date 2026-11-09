@@ -838,6 +838,7 @@ $WAIT_BLOCK$INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), what you recommend, and the unresolved work to route under AGENTS.md section 7.
+For a diagnosis, read the always-on diagnostic logs in the directory above \`$FM_ROOT/bin/fm-diag.sh path\` first and cite their numbers, as \`diagnostic-reasoning\` describes.
 For a diagnosis with local changes, include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.

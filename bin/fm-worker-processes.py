@@ -3,6 +3,7 @@
 
 Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND
        python3 fm-worker-processes.py cleanup-meta STATE/TASK.meta
+       python3 fm-worker-processes.py sample STATE
 
 Spawn records process_scope=STATE/TASK:spawn_gen and runs this wrapper with
 FM_WORKER_PROCESS_SCOPE set to that value, after environment filtering.
@@ -19,6 +20,8 @@ keeps its token in the keyring) autolaunched a new dbus-daemon and
 gnome-keyring-daemon that never exited (63 pairs, ~517 MB, on 9 Nov 2026).
 macOS needs no bus; its keychain has no per-call daemon.
 Python 3 is required on the common worker launch and cleanup path.
+sample appends one worker.procs diagnostic event (bin/fm-diag.sh) per live
+scope under STATE: its processes, the zombies they have not reaped, and RSS.
 """
 
 import ctypes
@@ -152,7 +155,43 @@ def run(scope, command):
                 pass
 
 
+def sample(state):
+    probe = subprocess.run(["ps", "-axo", "pid=,ppid=,uid=,stat=,rss="], capture_output=True, text=True, check=True)
+    rows = {}
+    for line in probe.stdout.splitlines():
+        pid, parent, uid, stat, rss = line.split()[:5]
+        if int(uid) == os.getuid():
+            rows[int(pid)] = (int(parent), stat, int(rss))
+    prefix = os.fsencode(str(Path(state).resolve())) + b"/"
+    scopes = {}
+    for pid, (_, stat, _) in rows.items():
+        if stat.startswith("Z"):
+            continue
+        for item in environment(pid):
+            if item.startswith(KEY + prefix):
+                scopes.setdefault(item[len(KEY):].decode(errors="replace"), set()).add(pid)
+    for scope, members in sorted(scopes.items()):
+        while True:  # children that cleared their environment still belong
+            grown = members | {pid for pid, (parent, stat, _) in rows.items() if parent in members and not stat.startswith("Z")}
+            if grown == members:
+                break
+            members = grown
+        task = scope.rsplit(":", 1)[0].rsplit("/", 1)[-1]
+        meta = Path(state) / f"{task}.meta"
+        harness = ""
+        if meta.is_file():
+            harness = next((line[8:] for line in meta.read_text().splitlines() if line.startswith("harness=")), "")
+        zombies = sum(1 for parent, stat, _ in rows.values() if stat.startswith("Z") and parent in members)
+        rss_mb = sum(rows[pid][2] for pid in members) // 1024
+        subprocess.run(["bash", str(Path(__file__).resolve().parent / "fm-diag.sh"), "emit", "worker.procs", f"task={task}",
+                        f"harness={harness}", f"procs={len(members)}", f"zombies={zombies}", f"rss_mb={rss_mb}"],
+                       stdin=subprocess.DEVNULL, timeout=10)
+    return 0
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "sample":
+        return sample(sys.argv[2])
     if len(sys.argv) == 4 and sys.argv[1] == "run":
         scope = sys.argv[2]
         if os.environ.get(KEY[:-1].decode()) != scope:

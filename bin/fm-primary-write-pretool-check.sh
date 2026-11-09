@@ -48,6 +48,9 @@
 # Claude requires stdout to remain empty on deny.
 # Codex blocks on exit 2 and displays stderr.
 set -u
+# Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status.
+# shellcheck source=bin/fm-diag.sh
+. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin pretool-write && trap fm_diag_hook_end EXIT
 
 TOOL=""
 CMD=""

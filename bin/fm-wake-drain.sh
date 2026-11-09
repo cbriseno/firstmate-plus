@@ -33,6 +33,8 @@ SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-diag.sh
+. "$SCRIPT_DIR/fm-diag.sh"
 
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
@@ -925,6 +927,10 @@ if [ -n "$ACK_THROUGH" ]; then
     }
   fi
   ACK_REMOVED=$(( $(awk 'END { print NR }' "$FM_WAKE_QUEUE") - $(awk 'END { print NR }' "$DRAIN_TMP") ))
+  # Attention latency for the diagnostic log (bin/fm-diag.sh): kind and age of
+  # every row this acknowledgement consumes.
+  ACK_DIAG_ROWS=$(awk -F '\t' -v now="$(date +%s)" 'NR == FNR { kept[$0] = 1; next }
+    !($0 in kept) && $1 ~ /^[0-9]+$/ { print $3, now - $1 }' "$DRAIN_TMP" "$FM_WAKE_QUEUE" 2>/dev/null || true)
   if [ ! -s "$DRAIN_TMP" ]; then
     fm_recovery_marker_ack "$RECOVERY_MARKER" "$ACK_GENERATION"
     RECOVERY_ACK_STATUS=$?
@@ -955,6 +961,9 @@ if [ -n "$ACK_THROUGH" ]; then
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   DRAIN_LOCK_HELD=false
+  while read -r ACK_DIAG_KIND ACK_DIAG_AGE; do
+    [ -n "$ACK_DIAG_KIND" ] && fm_diag_emit wake.ack kind="$ACK_DIAG_KIND" age_s="$ACK_DIAG_AGE"
+  done <<< "$ACK_DIAG_ROWS"
   if [ "$ACK_REMOVED" -eq 0 ] && [ "$PRESENTED_MAX" -gt "$ACK_THROUGH" ]; then
     # Nothing at or below the cutoff was this actor's to consume, while a
     # presented row above it is still waiting: the caller acknowledged an

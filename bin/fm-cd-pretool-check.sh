@@ -39,6 +39,9 @@
 # OpenCode and Pi consume exit 2 plus stderr.
 # Cursor consumes the stdout decision object.
 set -u
+# Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status.
+# shellcheck source=bin/fm-diag.sh
+. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin pretool-cd && trap fm_diag_hook_end EXIT
 
 CMD=""
 CMD_SET=0

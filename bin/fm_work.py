@@ -1715,6 +1715,7 @@ def main():
                     fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise Refusal('busy', tr('Another change is in progress. Try again.'))
+            DIAG['lock_ms'] = round((time.monotonic() - DIAG['started']) * 1000)
             owner.load(include_presentations=args.verb != 'snapshot')
             if args.verb == 'aliases-init':
                 refuse(not REQUEST.fullmatch(args.request_id or ''), 'invalid_value', tr('Invalid activation identity.'))
@@ -1750,6 +1751,7 @@ def main():
                         authored['lifecycle'], _ = reconcile_progress(owner.home, task_id,
                             authored['presentation'], authored['progress_record'], read_text)
                 result = owner.snapshot()
+                DIAG['tasks'] = len(result.get('tasks', []))
             elif args.verb == 'reconcile':
                 result = owner.reconcile_controls()
             elif args.verb == 'dispatch-check':
@@ -1812,8 +1814,10 @@ def main():
                 else:
                     result = owner.apply(op)
         print(json.dumps(result, ensure_ascii=False))
+        DIAG['result'] = 'ok'
         return 0
     except Refusal as exc:
+        DIAG['result'] = exc.code if exc.code == 'busy' else 'rejected'
         print(json.dumps(dict(request_id=locals().get('op', {}).get('request_id', args.request_id), state='conflict' if exc.code in ('stale_revision', 'stale_occurrence', 'review_conflict') else 'rejected', code=exc.code, message=str(exc), **exc.details), ensure_ascii=False))
         return 1 if args.verb == 'dispatch-check' else 0
     except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired) as exc:
@@ -1824,5 +1828,30 @@ def main():
             os.close(lock)
 
 
+DIAG = dict(started=time.monotonic(), result='failed')
+
+
+def diag_snapshot():
+    """Append one work.snapshot event to the diagnostic log (bin/fm-diag.sh)."""
+    caller = ''
+    try:
+        ppid = os.getppid()
+        if Path(f'/proc/{ppid}/cmdline').exists():
+            args = Path(f'/proc/{ppid}/cmdline').read_bytes().decode(errors='replace').split('\0')
+        else:
+            args = subprocess.run(['ps', '-o', 'args=', '-p', str(ppid)], capture_output=True, text=True, timeout=2).stdout.split()
+        names = [a.rsplit('/', 1)[-1] for a in args if a]
+        caller = next((n for n in names if n.endswith(('.sh', '.py', '.js', '.mjs', '.ts'))), names[0] if names else '')
+        subprocess.run(['bash', str(BIN / 'fm-diag.sh'), 'emit', 'work.snapshot', 'caller=' + caller,
+                        'ms=%d' % round((time.monotonic() - DIAG['started']) * 1000), 'lock_ms=%s' % DIAG.get('lock_ms', ''),
+                        'result=' + DIAG['result'], 'tasks=%s' % DIAG.get('tasks', '')],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    code = main()
+    if sys.argv[1:2] == ['snapshot']:
+        diag_snapshot()
+    sys.exit(code)

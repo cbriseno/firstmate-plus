@@ -3575,6 +3575,14 @@ while :; do
     lane_capacity_publish_detached
   fi
 
+  # Diagnostic log (bin/fm-diag.sh): each worker's processes and unreaped
+  # zombies, sampled in the background on a fixed cadence.
+  if [ "${FM_DIAGNOSTICS:-1}" != 0 ] \
+    && [ "$(age_of "$STATE/.diag-worker-sample")" -ge "${FM_DIAG_SAMPLE_SECS:-300}" ]; then
+    touch "$STATE/.diag-worker-sample" 2>/dev/null || true
+    python3 "$SCRIPT_DIR/fm-worker-processes.py" sample "$STATE" </dev/null >/dev/null 2>&1 &
+  fi
+
   # Bearings publishes reconcile asks as local one-shot request files and
   # returns before any mate delivery. Supervision owns their later delivery;
   # a skipped or failed request remains durable for another poll.
