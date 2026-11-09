@@ -26,3 +26,72 @@ assert previous["progress"] is None,previous
 assert s["sigue"]==["task:next"],s
 print("PASS: archived null-body snapshot preserves completion date and unknown fields")
 '
+
+# Migrate historical declarations through their real owner, including Undo.
+python3 - "$ROOT" "$TASK_HOME" <<'PY'
+import json, os, pathlib, subprocess, sys
+root, home = map(pathlib.Path, sys.argv[1:])
+env = dict(os.environ, FM_HOME=str(home))
+(home/'data/projects.md').write_text('- alpha [local-only] - A\n- beta [local-only] - B\n')
+(home/'.tasks.toml').write_text('[markdown]\npath="data/backlog.md"\narchive="data/older.md"\n')
+(home/'data/done-archive.md').rename(home/'data/older.md')
+with (home/'data/older.md').open('a') as f:
+    f.write('- [x] reopened - Old closed task (repo: alpha) (done 2026-10-29)\n')
+with (home/'data/backlog.md').open('a') as f:
+    f.write('- [ ] reopened - Open again (repo: alpha)\n\n## Done\n'
+            '- [x] declared - Explicit result (repo: alpha)\n'
+            '- [x] unknown - Ambiguous project\n'
+            '- [x] cross-a - Shared request (repo: alpha)\n'
+            '- [x] cross-b - Shared request (repo: beta)\n'
+            '- [x] silent - Completed without report (repo: alpha)\n')
+for tid in ('previous','reopened','declared','unknown'):
+    (home/'data'/tid).mkdir(exist_ok=True)
+    (home/'data'/tid/'report.md').write_text('# Report\n')
+def call(script, *args):
+    p = subprocess.run(['bash',str(root/'bin'/script),*args], env=env, capture_output=True, text=True)
+    assert p.returncode == 0, (args,p.stdout,p.stderr)
+    return json.loads(p.stdout)
+def patch(tid, value):
+    source = home/'patch.json'; source.write_text(json.dumps(value))
+    return call('fm-tasks-axi.sh','presentation',tid,'--presentation-file',str(source))
+def read(tid):
+    return call('fm-tasks-axi.sh','presentation',tid)['presentation']
+patch('previous',dict(request=dict(id='previous',label='Earlier request',project='Proyecto sin registrar')))
+patch('unknown',dict(request=dict(id='unknown',label='Unknown origin',project='Proyecto sin registrar')))
+for tid in ('cross-a','cross-b'):
+    patch(tid,dict(request=dict(id='cross-a',label='Spans two projects',project='Proyecto sin registrar')))
+patch('declared',dict(summary='Reviewed result',outcome=dict(role='final',review='done')))
+migrate = lambda mode: call('fm-migrate-v11b.sh','--'+mode)
+original = (home/'data/previous/presentation.json').read_bytes()
+plan = migrate('plan')
+assert plan['count'] == 2, plan
+assert (home/'data/previous/presentation.json').read_bytes() == original
+assert not (home/'data/migration-v11b').exists()
+assert migrate('apply')['count'] == 2
+assert read('previous')['outcome'] == dict(role='final',review=None)
+assert read('previous')['summary'] == 'Previous task'
+assert read('previous')['request']['project'] == 'alpha'
+assert read('unknown')['request']['project'] == 'Proyecto sin registrar'
+assert read('cross-a')['request']['project'] == read('cross-b')['request']['project'] == 'Proyecto sin registrar'
+assert read('reopened')['outcome'] is None
+assert read('declared')['outcome']['review'] == 'done'
+assert read('declared')['summary'] == 'Reviewed result'
+assert read('silent')['outcome'] is None
+files = {p:p.read_bytes() for p in (home/'data').glob('*/presentation.json')}
+assert migrate('apply')['count'] == 0
+assert all(p.read_bytes() == value for p,value in files.items())
+patch('previous',dict(summary='Later owner edit'))
+assert migrate('rollback')['restored'] == 2
+assert read('previous')['outcome'] is None
+assert read('previous')['summary'] == 'Later owner edit'
+assert read('previous')['request']['project'] == 'Proyecto sin registrar'
+assert migrate('rollback')['restored'] == 0
+assert migrate('apply')['count'] == 2
+snapshot = call('fm-tasks-axi.sh','work','snapshot')
+assert not any((t.get('outcome') or {}).get('review') == 'needed' for t in snapshot['tasks'])
+assert next(t for t in snapshot['tasks'] if t['key']=='task:previous')['outcome']['role']=='final'
+# An unarchived home needs no archive file just to preview an empty migration.
+(home/'data/older.md').unlink()
+assert migrate('plan')['count'] == 0
+print('PASS: v11b plan, apply, archive, reopened tasks, ambiguity, idempotence and guarded rollback')
+PY

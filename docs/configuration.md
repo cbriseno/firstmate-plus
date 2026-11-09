@@ -421,6 +421,20 @@ An open decision has its own lifecycle and may legitimately reference a complete
 A removal consultation records the actual target and initiative/dependency/work scope in the existing primary inbox, then exposes the ordinary pending/reply receipt.
 Submitting or replying to that consultation never approves or executes deletion.
 
+### v11b migration
+
+When the captain says "corre la migración v11b", the primary dispatches one worker to migrate that home's retained Markdown tasks, using [fm-migrate-v11b.sh](../bin/fm-migrate-v11b.sh) for the mechanical part.
+The script's header and help own invocation, backups and rollback; it requires only the existing tasks-axi/Node installation, bash 3.2+ and Python 3.9+.
+The worker first previews and applies historical results and projects explicitly recorded in the backlog, then reads the remaining tasks' briefs, reports and request evidence.
+It writes a private map with each task's request, reason and source reference, grouping only steps of the same documented request; a dependency, matching title prefix or shared project alone is insufficient.
+Tasks without proven common origin retain their own request, and unresolved project assignments require explicit documentary evidence rather than a guessed repository.
+The worker saves each original declaration, then applies request-only patches through `fm-tasks-axi.sh presentation`, following that owner's publication and contention contract.
+To undo grouping, it publishes the saved request value through the same owner, preserving later owner edits.
+It verifies the work snapshot consumed by Deck: grouped requests, final outcomes for completed reports, no old reviews newly marked needed, and no unregistered projects where the evidence established a project.
+Existing explicit outcomes and review marks remain authoritative; a historical result gets an unknown review state, never an invented pending review or approval.
+The worker reports any unresolved evidence instead of claiming the migration is complete.
+Migration is requested separately from updating the repository and never rewrites operational data merely because new code was pulled.
+
 ### Captain holds on Beads
 
 Captain-hold row creation is owned by [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) `hold`: when no work item exists, it creates an ordinary backlog row (`--kind captain` metadata; Beads native type `task`) and then applies the captain hold.
