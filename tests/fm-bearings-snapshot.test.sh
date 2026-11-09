@@ -1129,13 +1129,25 @@ test_open_decision_surfaces_end_to_end() {
 }
 
 test_report_pointers_surface() {
-  local home fakebin json
+  local home fakebin json report_id='a report "á'
   home=$(make_home reports); write_fixture "$home"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e --arg p "$home/data/scout-x/report.md" '
     .reports | any(.[]; .id == "scout-x" and .path == $p)
   ' >/dev/null || fail "current scout report pointer must surface: $json"
+  mkdir -p "$home/data/$report_id" "$home/data/z-report/nested" "$home/data/symlink"
+  printf '# Report\n' > "$home/data/$report_id/report.md"
+  printf '# Report\n' > "$home/data/z-report/report.md"
+  printf '# Nested\n' > "$home/data/z-report/nested/report.md"
+  ln -s "$home/data/scout-x/report.md" "$home/data/symlink/report.md"
+  json=$(run "$home" "$fakebin" --json --all-reports)
+  printf '%s' "$json" | jq -e --arg id "$report_id" --arg data "$home/data" '
+    [.reports[] | {id,path}] == [
+      {id:$id,path:($data + "/" + $id + "/report.md")},
+      {id:"scout-x",path:($data + "/scout-x/report.md")},
+      {id:"z-report",path:($data + "/z-report/report.md")}]
+  ' >/dev/null || fail "report inventory lost ordering, paths or depth/type filtering: $json"
   pass "current report pointers surface"
 }
 
@@ -3591,6 +3603,11 @@ EOF
     || fail 'same-second new declaration lost its original timestamp'
   pass 'optional card times retain authoritative precision, ownership, and lifecycle across polls and timezone changes'
 }
+
+if [ "${FM_TEST_ONLY:-}" = test_report_pointers_surface ]; then
+  test_report_pointers_surface
+  exit 0
+fi
 
 if [ "${FM_TEST_ONLY:-}" = test_current_landed_baseline_is_repeatable_and_prior_report_independent ]; then
   test_current_landed_baseline_is_repeatable_and_prior_report_independent

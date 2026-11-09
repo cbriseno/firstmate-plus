@@ -585,6 +585,9 @@ exec /bin/bash "$@"
           'promoted root appears once with no old subproject duplicate')
     scope={'task:logical-a','task:logical-b','task:logical-recovery'}
     check({t['key'] for t in after_logical['tasks'] if t['project']==logical}==scope,'one coherent cross-repository selection')
+    single=cli('work','preview',payload=op('set_pause','task:logical-a',reason='One task'))['impact']['affected']
+    check(single['queued']+single['running']+single['stopping']==['task:logical-a'],
+          'task identity selects exactly itself within a logical layout')
     check(task(after_logical,'logical-a')['parent']==logical and task(after_logical,'logical-a')['subproject'] is None,'root tasks have no redundant subproject')
     check(task(after_logical,'logical-recovery')['parent']==recovery,'fault recovery remains its own subproject')
     for old in before_logical['tasks']:

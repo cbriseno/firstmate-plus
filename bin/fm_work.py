@@ -300,12 +300,12 @@ class Owner:
                    for key, node in self.structure.get('hierarchy', {}).items())
 
     def members(self, key):
+        if key.startswith('task:'):
+            return [key[5:]] if key[5:] in self.rows else []
         # A logical layout has one selection/control scope, including the
         # source repository cards from which tasks have moved away.
         if key.startswith('req:') or self.logical_layout():
             return self.display_members(key)
-        if key.startswith('task:'):
-            return [key[5:]] if key[5:] in self.rows else []
         if key.startswith('project:'):
             return [i for i, r in self.rows.items() if r.get('repo') == key[8:]]
         return [i for i, group in self.structure['membership'].items() if group == key and i in self.rows]
@@ -379,10 +379,10 @@ class Owner:
                 return found
         return None
 
-    def blockers(self, task_id):
+    def blockers(self, task_id, edges=None):
         keys = self.ancestors(task_id) + ['task:' + task_id]
         return [dict(ref=b, by=actor, open=b not in self.keys() or any(self.rows[i]['state'] != 'done' for i in self.members(b)))
-                for a, b, actor in self.edges() if a in keys]
+                for a, b, actor in (self.edges() if edges is None else edges) if a in keys]
 
     def inherited(self, task_id):
         for key in self.ancestors(task_id):
@@ -493,6 +493,7 @@ class Owner:
 
     def snapshot(self):
         tasks = []
+        edges = self.edges()
         reasons = dict(records=[dict(id=i, hold_reason=(r.get('hold') or {}).get('reason')) for i,r in self.rows.items()])
         decoded = subprocess.run(['bash', '-c', '. "$1/fm-hold-reason-lib.sh"; fm_hold_reason_decode_stream json', 'fm-work', str(BIN)],
                                  input=json.dumps(reasons), text=True, capture_output=True, timeout=10, check=True)
@@ -507,7 +508,7 @@ class Owner:
             inherited = self.inherited(task_id)
             task_pause = self.structure.get('task_pauses', {}).get(task_id)
             safe, request_id = self.safe_point(task_id) if (hold or inherited or task_pause) else ('none', None)
-            blocks = self.blockers(task_id)
+            blocks = self.blockers(task_id, edges)
             running = row['state'] == 'in_flight'
             worker = self.worker_liveness(task_id) if running else None
             closing = any(r.get('signal') == 'pause.request' and not r.get('cancelled') and not r.get('resumed')
