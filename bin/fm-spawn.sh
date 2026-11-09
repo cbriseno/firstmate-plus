@@ -2549,7 +2549,7 @@ launch_template() {
     if [ "$kind" = secondmate ]; then
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     else
-      printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' __OPENCODEBIN__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -5026,6 +5026,9 @@ kimi_wait_for_delivery() {
 
 kimi_spawn_fail() { # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
+  fi
   echo "error: $1; inspect window $T" >&2
 }
 
@@ -5094,6 +5097,9 @@ rovo_wait_for_delivery() {
 
 rovo_spawn_fail() { # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
+  fi
   echo "error: $1; inspect window $T" >&2
   rovo_endpoint_cleanup
 }
@@ -5211,6 +5217,9 @@ agy_wait_for_working() {
 
 agy_spawn_fail() {  # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
+  fi
   echo "error: $1; inspect window $T" >&2
   rovo_endpoint_cleanup
 }
@@ -5296,6 +5305,9 @@ spawn_record_polytoken_session() {
 
 polytoken_spawn_fail() {  # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
+  fi
   echo "error: $1; inspect window $T" >&2
   # A failed gate leaves nothing running or recorded: reap this launch's exact
   # session daemon (scoped to this task's sessions root), retire the per-task
@@ -6590,6 +6602,14 @@ if [ "$HARNESS" = rovo ]; then
 fi
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
+# Codex notify proves a normal turn completion only. Its classifier continues to
+# use the bound rollout on Linux and stays unknown on unsupported surfaces.
+codex_ledger=':'
+if [ "$HARNESS" = codex ] && [ -n "$BUSY_GEN" ]; then
+  codex_ledger="[ ! -e $(shell_quote "$CONFIG/fleet-ledger") ] || $(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID") idle --gen $(shell_quote "$BUSY_GEN") --source codex-notify --event turn-complete"
+fi
+LAUNCH=${LAUNCH//__CODEXLEDGER__/$codex_ledger}
+
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
@@ -7064,6 +7084,9 @@ fi
 if [ "$HARNESS" = opencode ] && [ "$OPENCODE_MAJOR" -ge 2 ]; then
   if ! opencode2_wait_for_delivery; then
     printf '%s\n' "$(status_stamp_line "failed: opencode $OPENCODE_VERSION did not start the brief turn in window $T")" >>"$STATE/$ID.status"
+    if [ -e "$CONFIG/fleet-ledger" ]; then
+      bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
+    fi
     echo "error: opencode $OPENCODE_VERSION did not start the brief turn; inspect window $T" >&2
     rovo_endpoint_cleanup
     exit 1

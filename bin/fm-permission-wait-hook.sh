@@ -40,4 +40,8 @@ clear)
   esac
   ;;
 esac
+if [ -e "${FM_CONFIG_OVERRIDE:-${2%/*}/config}/fleet-ledger" ]; then
+  bash "${BASH_SOURCE[0]%/*}/fm-fleet-ledger.sh" appended \
+    "${FM_CONFIG_OVERRIDE:-${2%/*}/config}" "$status" >/dev/null || true
+fi
 exit 0

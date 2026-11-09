@@ -21,7 +21,7 @@ from fm_work_aliases import Aliases, PATH as ALIAS_PATH
 from fm_task_usage import aggregate as aggregate_usage
 from fm_progress import observed_run, sources as progress_sources, code_head
 
-from fm_delivery import (BIN, canonical_read, home_path, read_text,
+from fm_delivery import (fleet_event, BIN, canonical_read, home_path, read_text,
                          read_presentation, read_captain_call, read_captain_answer, task_creation, completion_receipt, retained_history,
                          reconcile_progress)
 
@@ -112,6 +112,10 @@ class Owner:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, target)
+            if path == self.structure_path:
+                fleet_event(self.home, 'work.structure', 'work', value)
+            elif path.startswith('data/work-requests/'):
+                fleet_event(self.home, 'work.control', 'work', value)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -1161,6 +1165,7 @@ class Owner:
         value['outcome_occurrence'] = authored['outcome_occurrence']
         value['observed_at'] = now()
         self.atomic(path, value)
+        fleet_event(self.home, 'task.review', task_id, read_presentation(self.home, task_id))
         return dict(ok=True, state='applied', target=target, occurrence=authored['outcome_occurrence'],
                     outcome=value['presentation']['outcome'],
                     undo=dict(target=target, occurrence=authored['outcome_occurrence'],
@@ -1823,7 +1828,7 @@ def main():
         DIAG['result'] = exc.code if exc.code == 'busy' else 'rejected'
         print(json.dumps(dict(request_id=locals().get('op', {}).get('request_id', args.request_id), state='conflict' if exc.code in ('stale_revision', 'stale_occurrence', 'review_conflict') else 'rejected', code=exc.code, message=str(exc), **exc.details), ensure_ascii=False))
         return 1 if args.verb == 'dispatch-check' else 0
-    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         print(json.dumps(dict(state='failed', code='owner_failed', message=str(exc)), ensure_ascii=False))
         return 1
     finally:

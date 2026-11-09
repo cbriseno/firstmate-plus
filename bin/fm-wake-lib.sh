@@ -2883,6 +2883,10 @@ fm_wake_status_append_self_announced() {  # <state> <status-file> <line>...
     pre_ident=$(_fm_open_decisions_file_ident "$file") || pre_ident=''
   fi
   printf '%s\n' "${stamped[@]}" >> "$file" || return 2
+  if [ -e "${FM_CONFIG_OVERRIDE:-${state%/*}/config}/fleet-ledger" ]; then
+    bash "${BASH_SOURCE[0]%/*}/fm-fleet-ledger.sh" appended \
+      "${FM_CONFIG_OVERRIDE:-${state%/*}/config}" "$file" || return 1
+  fi
   case "$pre_size" in ''|*[!0-9]*) return 1 ;; esac
   post_size=$(_fm_status_file_size "$file") || return 1
   post_ident=$(_fm_open_decisions_file_ident "$file") || return 1

@@ -548,3 +548,18 @@ The measured run printed `host failover seconds: 4.92` and `PASS: controlled rou
 The counterfactual omitting only outcome presentation failed on the same interface with an empty attention list despite the stored obligation.
 The native run required an explicit, directory-scoped approval of its external instruction import; the repository does not override client consent.
 This proves the controlled application's Linux lifetime only; native free chat, macOS execution and recovery after application SIGKILL or machine shutdown remain unverified.
+
+## Fleet ledger primary finals
+
+Verified 2026-11-09 on Linux with Claude Code 2.1.321 and codex-cli 0.166.0.
+`FM_FLEET_LEDGER_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-fleet-ledger-live-e2e.test.sh` runs the real Claude Stop guard and a real Codex TUI notify callback in disposable homes.
+The Codex proof disables hooks and uses a private tmux server and private Codex configuration, leaving user settings and conversations untouched.
+The exact verdicts were `ok - claude 2.1.321 (Claude Code): primary.final captured from the real final surface` and `ok - codex codex-cli 0.166.0: primary.final captured from the real final surface`.
+The runner reported `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=15130`.
+This proves full normal-final capture with session ownership, not structured question interception, failure/interrupt hooks, activity starts in Codex, or macOS execution.
+Codex exec can exit before its asynchronous notify callback proves primary ownership; the maintained guard deliberately uses the persistent TUI.
+The event format and installation boundary belong to [the fleet ledger contract](../fleet-ledger.md#harness-coverage).
+
+`FM_CODEX_ACTIVITY_LIVE=1 FM_CODEX_ACTIVITY_NOTIFY_ONLY=1 bash bin/fm-test-run.sh tests/fm-codex-activity-live-e2e.test.sh` also verified the captured production worker launch on 2026-11-09.
+It reported `ok - real Codex launch publishes normal completion with its bound generation` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=39341`.
+The unrestricted activity matrix reached normal completion, Escape and incarnation replacement, but its latest private HTTP-error setup produced no owner binding, so that failure route is not refreshed by this ledger verification.

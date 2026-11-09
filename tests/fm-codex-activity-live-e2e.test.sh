@@ -4,6 +4,8 @@
 # native Codex in a private tmux server and a disposable CODEX_HOME. Only auth
 # is copied; user settings, hooks, trust, servers and conversations are untouched.
 # Real prompts cover a long tool, completion, Escape, replacement and API error.
+# FM_CODEX_ACTIVITY_NOTIFY_ONLY=1 limits the probe to normal completion plus
+# the ledger assertion; the default retains the full activity matrix.
 # Refresh docs/verification/runtime-backends.md after upgrading Codex.
 set -eu
 
@@ -20,6 +22,7 @@ project="$TMP_ROOT/project"
 wt="$TMP_ROOT/wt"
 fakebin=$(fm_test_make_spawn_fakebin "$TMP_ROOT/fake")
 fm_test_spawn_home "$activity_home" codex
+: > "$activity_home/config/fleet-ledger"
 fm_test_spawn_brief "$activity_home" activity-proof
 fm_git_worktree "$project" "$wt" activity-proof
 launchlog="$TMP_ROOT/launch"
@@ -33,3 +36,8 @@ mkdir -p "$TMP_ROOT/codex"
 install -m 600 "$auth" "$TMP_ROOT/codex/auth.json"
 FM_ACTIVITY_ROOT="$ROOT" FM_ACTIVITY_LAB="$TMP_ROOT" \
   python3 "$ROOT/tests/fixtures/codex-activity-live.py"
+
+jq -e -s 'any(.[]; .event == "agent.activity" and .value.source == "codex-notify" and .value.state == "idle")' \
+  "$activity_home/state/fleet-ledger.jsonl" >/dev/null \
+  || fail 'real Codex worker notify did not publish its accepted completion'
+pass 'real Codex launch publishes normal completion with its bound generation'

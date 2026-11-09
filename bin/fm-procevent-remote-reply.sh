@@ -75,6 +75,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CURSOR_DIR="$STATE/remote-replies"
 REMOTE_LOG='state/parent-replies.status'
@@ -469,6 +470,9 @@ normalize_payload() { # <source> <destination>
 append_status_once() { # <status-file> <line>
   grep -Fqx -- "$2" "$1" 2>/dev/null && return 1
   printf '%s\n' "$2" >> "$1" || return 2
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$SCRIPT_DIR/fm-fleet-ledger.sh" appended "$CONFIG" "$1" || return 2
+  fi
   return 0
 }
 
@@ -644,6 +648,10 @@ EOF
     || { fm_lock_release "$lock"; die "cannot stage remote reply mirror identity"; }
   cat "$status_additions" >> "$status_file" \
     || { fm_lock_release "$lock"; die "cannot append remote reply"; }
+  if [ -e "$CONFIG/fleet-ledger" ]; then
+    bash "$SCRIPT_DIR/fm-fleet-ledger.sh" appended "$CONFIG" "$status_file" \
+      || { fm_lock_release "$lock"; die "cannot publish remote reply"; }
+  fi
   appended=$(LC_ALL=C awk 'END { print NR + 0 }' "$status_additions") \
     || { fm_lock_release "$lock"; die "cannot count appended remote replies"; }
   cat "$source_additions" >> "$source_record" \

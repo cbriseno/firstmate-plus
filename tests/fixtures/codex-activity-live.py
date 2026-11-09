@@ -112,6 +112,9 @@ try:
     wait_state("idle")
     assert any(e["type"] == "task_complete" for e in events(gen))
     print("ok - codex-cli 0.166.0: captured launch, task start, quiet long tool and ordinary completion", flush=True)
+    if os.environ.get("FM_CODEX_ACTIVITY_NOTIFY_ONLY") == "1":
+        raise SystemExit(0)  # This ledger proof covers normal notify, not failure/interrupt hooks.
+
 
     marker = lab / "interrupt-tool"
     send("proof:first", prompt(marker, 60))
@@ -181,7 +184,9 @@ try:
           + ",".join(e["type"] for e in events(failed)
                      if e["type"] in ("task_started", "task_complete", "turn_aborted", "error")), flush=True)
     print("ok - codex-cli 0.166.0: verified one installed native harness; no other harness invoked", flush=True)
-except BaseException:
+except BaseException as error:
+    if isinstance(error, SystemExit) and error.code == 0:
+        raise
     # Preserve the actual private failure surface rather than guessing why a
     # process disappeared before it could produce a lifecycle record.
     for pane in ("first", "replacement", "failure"):

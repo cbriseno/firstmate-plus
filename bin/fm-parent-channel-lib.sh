@@ -168,8 +168,19 @@ fm_parent_channel_append_once() {  # <path> <line>
 
 # Publish one parent-facing line from <home>. See the return codes above.
 fm_parent_channel_report() {  # <home> <state> <line>
-  local home=$1 state=$2 line=$3 destination rc=0
+  local home=$1 state=$2 line=$3 destination rc=0 ledger_home config
   destination=$(fm_parent_channel_destination "$home" "$state") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || return 4
+  ledger_home=$home
+  config=${FM_CONFIG_OVERRIDE:-$home/config}
+  if [ "${destination%/*}" != "$state" ]; then
+    ledger_home=${destination%/*}
+    ledger_home=${ledger_home%/*}
+    config=$ledger_home/config
+  fi
+  if [ -e "$config/fleet-ledger" ]; then
+    FM_HOME="$ledger_home" FM_CONFIG_OVERRIDE="$config" \
+      bash "$_FM_PARENT_CHANNEL_LIB_DIR/fm-fleet-ledger.sh" appended "$config" "$destination" || return 4
+  fi
 }

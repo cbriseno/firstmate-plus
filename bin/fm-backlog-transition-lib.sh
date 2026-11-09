@@ -352,6 +352,10 @@ fm_tasks_axi() {
     owner_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     command=(python3 "$owner_bin/fm_delivery.py" create-task "$FM_WORK_MUTATION_DATA" -- tasks-axi)
   fi
+  if [ -n "${FM_WORK_MUTATION_DATA:-}" ] && [ -e "${FM_CONFIG_OVERRIDE:-${FM_WORK_MUTATION_DATA%/*}/config}/fleet-ledger" ]; then
+    owner_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    command=(python3 "$owner_bin/fm_delivery.py" ledger-mutation "$FM_WORK_MUTATION_DATA" -- "${command[@]}")
+  fi
   if [ -n "${FM_WORK_MUTATION_DATA:-}" ] && { [ -e "$FM_WORK_MUTATION_DATA/.work.lock" ] || [ -L "$FM_WORK_MUTATION_DATA/.work.lock" ]; }; then
     command=(python3 "$FM_WORK_LOCK_OWNER" "$FM_WORK_MUTATION_DATA" "${command[@]}")
   elif [ -n "${owner_bin:-}" ]; then

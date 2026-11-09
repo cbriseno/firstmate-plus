@@ -226,6 +226,8 @@ def create_task(arguments):
             presentation(data.parent, argparse.Namespace(task=task_id, data=str(data),
                 presentation_file=None, groups=False, clear=False, repair=False,
                 reconcile=False, replan=None, request=request))
+        if (data.parent / 'config' / 'fleet-ledger').exists():
+            fleet_event(data.parent, 'task.changed', task_id, dict(task=ledger_rows(data.parent).get(task_id)))
         pending.unlink()
         sync(data)
         sys.stdout.buffer.write(result.stdout)
@@ -356,6 +358,7 @@ def record_completion(home, task_id, data):
                     os.unlink(temp)
     finally:
         os.close(lock)
+    fleet_event(home, 'task.completion', task_id, dict(receipt=completion_receipt(home, task)))
     # The close declares the delivery's role when its worker declared none: a
     # report is a final result for the captain to review, anything else a step.
     current = read_presentation(home, task_id)
@@ -385,6 +388,7 @@ def invalidate_completion(home, task_id):
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+    fleet_event(home, 'task.completion', task_id, dict(receipt=value))
 
 
 def retained_history(home, *, include_non_deliveries=False):
@@ -733,11 +737,11 @@ def read_captain_answer(home, task):
         application.update(state='pending', note_id=note)
         try:
             reply = read_text(home, 'state/inbox/.replies/' + note)
-            header, text = reply.split('\n--\n', 1)
+            header, reply_text = reply.split('\n--\n', 1)
             fields = dict(line.split('=', 1) for line in header.splitlines())
             if fields['id'] != note or not fields['seq'].isdigit():
                 raise ValueError('invalid answer handling reply')
-            application.update(state='responded', reply=dict(body=text, at=fields['at'], seq=int(fields['seq'])))
+            application.update(state='responded', reply=dict(body=reply_text, at=fields['at'], seq=int(fields['seq'])))
         except FileNotFoundError:
             pass
     except (OSError, ValueError, KeyError):
@@ -888,6 +892,55 @@ def fleet_event(home, event, task_id, value):
                    env=dict(os.environ, FM_HOME=str(home)))
 
 
+def ledger_rows(home):
+    """Read canonical backlog values, never runtime/history or a work snapshot."""
+    try:
+        config = canonical_read({'config': read_text(home, '.tasks.toml', 65536)})
+    except FileNotFoundError:
+        config = {}
+    if config.get('backend', 'markdown') != 'markdown':
+        raise ValueError('ledger task publication requires the local Markdown backend')
+    path = (config.get('markdown') or {}).get('path') or 'data/backlog.md'
+    return {r['id']: r for r in canonical_read({'text': read_text(home, path)})}
+
+
+def ledger_mutation(arguments):
+    data, command = Path(arguments[0]), arguments[2:]
+    if arguments[1] != '--' or not command:
+        raise ValueError('ledger mutation needs data -- command')
+    home = data.parent
+    before = ledger_rows(home)
+    inherited = os.environ.get('FM_WORK_OWNER_FD', '')
+    result = subprocess.run(command, capture_output=True, pass_fds=(int(inherited),) if inherited.isdigit() else ())
+    if result.returncode == 0:
+        after = ledger_rows(home)
+        for task_id in sorted(before.keys() | after.keys()):
+            if before.get(task_id) != after.get(task_id):
+                fleet_event(home, 'task.changed', task_id, dict(task=after.get(task_id)))
+    sys.stdout.buffer.write(result.stdout)
+    sys.stderr.buffer.write(result.stderr)
+    return result.returncode
+
+
+def ledger_application(home, note_id):
+    try:
+        note = read_text(home, 'state/inbox/' + note_id + '.note')
+    except FileNotFoundError:
+        note = read_text(home, 'state/inbox/handled/' + note_id + '.note')
+    try:
+        value = json.loads(note.split('\n--\n', 1)[1])
+    except (ValueError, IndexError):
+        return  # An ordinary inbox reply has no captain-answer association.
+    if not isinstance(value, dict) or value.get('schema') != 'fm-captain-answer-note.v1':
+        return
+    task_id = value['task_id']
+    task = ledger_rows(home).get(task_id)
+    answer = read_captain_answer(home, task) if task else None
+    if answer and answer['application']['note_id'] == note_id:
+        call = json.loads(read_text(home, 'data/' + task_id + '/captain-call.json'))
+        fleet_event(home, 'call.application', task_id, dict(call=call, answer=answer))
+
+
 def ledger_call(home, args):
     value = json.load(sys.stdin)
     task = value.pop('task')
@@ -896,7 +949,7 @@ def ledger_call(home, args):
         raise ValueError('invalid call event identity')
     data = Path(args.data or home / 'data')
     call = json.loads(read_text(data, args.task + '/captain-call.json', 16384))
-    value.update(call=call, answer=read_captain_answer(home, task),
+    value.update(task=ledger_rows(home).get(args.task), call=call, answer=read_captain_answer(home, task),
                  identity=call['hold_set'] + '#' + str(value['occurrence'] - 1))
     fleet_event(home, event, args.task, value)
 
@@ -1031,14 +1084,14 @@ def presentation(home, args):
 
 
 def main():
-    if sys.argv[1:2] == ['create-task']:
+    if sys.argv[1:2] in (['create-task'], ['ledger-mutation']):
         try:
-            return create_task(sys.argv[2:])
+            return (create_task if sys.argv[1] == 'create-task' else ledger_mutation)(sys.argv[2:])
         except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError) as exc:
-            print('fm-tasks-axi: creation receipt failed: ' + str(exc), file=sys.stderr)
+            print('fm-tasks-axi: owner publication failed: ' + str(exc), file=sys.stderr)
             return 2
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'ledger-call', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
+    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'ledger-call', 'ledger-application', 'ledger-task', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--task')
     parser.add_argument('--request-id')
@@ -1062,6 +1115,15 @@ def main():
     args = parser.parse_args()
     try:
         home = home_path()
+        if args.command == 'ledger-task':
+            task = ledger_rows(home).get(args.task)
+            if task is None:
+                raise ValueError('unknown task for publication')
+            fleet_event(home, 'task.changed', args.task, dict(task=task))
+            return 0
+        if args.command == 'ledger-application':
+            ledger_application(home, args.task)
+            return 0
         if args.command == 'ledger-call':
             ledger_call(home, args)
             return 0

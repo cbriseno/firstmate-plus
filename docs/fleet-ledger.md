@@ -21,7 +21,8 @@ Every record carries these members:
 | `v`     | Record format version, currently `1`                      |
 | `ts`    | Unix time in seconds when the record was written          |
 | `event` | One of the event names below                              |
-| `task`  | The firstmate task id the record is about                 |
+| `task`  | The task id, or `primary`, `work` or `home` for home entities |
+| `home` | Explicit owning home (older legacy records may omit it) |
 
 Readers must ignore members and events they do not recognize, so later versions can add them without breaking existing readers.
 
@@ -37,14 +38,29 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `call.opened` | `home`, `value` | A structured captain hold is saved or updated. |
 | `call.resolved` | `home`, `value` | The captain-hold owner settles the call and announces its resolution. |
 | `task.presentation` | `home`, `value` | The presentation owner publishes its declaration under the presentation lock. |
+| `task.changed` | `home`, `value.task` | A canonical backlog row changes; null means removed. |
+| `task.completion` | `home`, `value.receipt` | A completion receipt is written or invalidated. |
+| `task.review` | `home`, `value` | The owner changes a result's review mark; value is its presentation read result. |
+| `work.structure` | `home`, `value` | The structure owner saves the complete resulting structure. |
+| `work.control` | `home`, `value` | The control owner saves its request, scope, state and events. |
+| `call.application` | `home`, `value` | The inbox owner records handling of a settled answer; value contains call and answer. |
+| `agent.activity` | `home`, `value` | The busy writer accepts an incarnation's state; value contains gen, seq, state, source and event. |
+| `agent.retired` | `home`, `value` | The busy writer removes that incarnation; value retains its gen. |
+| `primary.final` | `home`, `value` | A verified primary final surface supplies complete text, harness, session and turn. |
+| `home.configuration` | `home`, `value` | Explicit configuration publication records lane_capacity, project_capacity and projects text (null when absent). |
 
-For these three entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
-Call values carry the canonical `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
+For entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
+`call.opened` and `call.resolved` values carry the canonical task row and `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
 Presentation values carry the presentation owner's read result: declaration, outcome occurrence, checkpoint, lifecycle and evidence.
 Replays replace the value for that identity; they do not increment counters.
-These producers return failure if publication fails, preserving the already saved canonical change for explicit replay through its owner.
+Entity commands return failure if publication fails, preserving the already saved canonical change for explicit replay through its owner.
+The primary Stop guard reports capture failure and continues its existing supervision check, so a broken ledger cannot disable supervision.
 A crash between the canonical write and append can still omit an event; this is not a transactional journal or a complete board bootstrap.
-Other business mutations and later changes to answer application are not yet published here.
+Backlog mutations use the canonical Markdown parser under the existing work lock, publishing changed rows without a runtime/history snapshot.
+Direct edits outside these owners still require explicit publication or canonical recovery.
+After editing capacity or the registry, run `bash bin/fm-fleet-ledger.sh configuration` with the owning `FM_HOME`.
+For a failed task append, replay the current value with `python3 bin/fm_delivery.py ledger-task --task ID`; for a saved inbox reply, use `ledger-application --task NOTE_ID`.
+These repair commands publish existing facts and never repeat a human answer.
 
 `task.dispatched` members: `kind` is `ship`, `scout`, or `secondmate`; `project` is the project directory name, or `null` for a remote second mate; `harness` names the agent tool; `model` is the requested model, or `null` for the tool's default.
 
@@ -70,10 +86,8 @@ Example:
 
 - A worker using the current status command in its instructions records its line immediately after appending it, while the ledger is enabled.
   The supervision monitor's regular poll is the backstop: it records any line the immediate write missed, and does not record again a line that write already recorded.
-  These lines still trail the status log by up to one poll interval, or until the monitor next runs when none is running:
-  - lines firstmate itself writes to a task's status log, such as a recorded answer, a failed launch, a relayed pending reply, or a second mate's report line;
+  Uninstrumented writes still trail the status log by up to one poll interval, or until the monitor next runs when none is running:
   - lines from workers whose instructions predate this, or that append without running the instruction's full command;
-  - lines a remote second mate reports, which reach this home through firstmate's relay;
   - lines written while the immediate record fails, for example when the ledger file cannot be written.
   Recording `task.pr_ready`, `task.merged`, or `task.cleaned_up` first records that task's pending status lines.
 - Captured status lines are delivered at least once unless a write fails or a crash loses unflushed records: an interrupted capture can repeat records, so a reader that must not double-count should tolerate duplicates.
@@ -84,7 +98,7 @@ Example:
 - The file is never rotated and grows until truncated.
   To truncate it, stop readers, then empty it with `: > state/fleet-ledger.jsonl`; restart readers from an explicit canonical base, never an earlier cursor or projection.
 - The ledger copies status text verbatim from the home's `state/` directory and adds no scrubbing, so give its readers exactly the trust you give `state/`.
-  Entity events also contain complete private call, answer and presentation text.
+  Entity events also contain complete private call, answer, presentation and final-message text.
 
 ## Not included
 
@@ -92,10 +106,22 @@ These are possible follow-ups, deliberately left out of this version:
 
 - session start, away-mode, and quiet-mode events;
 - relaunch events;
-- whether a worker is currently working or idle, and when a turn ends; subscribe to the Herdr runtime's own `pane.agent_status_changed` events for that ([Push events and polling fallback](herdr-backend.md#push-events-and-polling-fallback));
 - sequence numbers and gap detection;
 - rotation and continuity across rotated files;
 - backfill or replay of events from before the ledger was turned on;
 - secret scrubbing beyond what status lines already contain, and privacy guarantees stronger than those of `state/`.
 
 `bin/fm-fleet-ledger.sh`'s header owns the writer mechanics and lists every producer.
+
+## Harness coverage
+
+Claude's existing Stop guard captures the primary final before its supervision and loop allowances, only in the primary checkout with verified session-lock ownership.
+Codex project hooks remain unverified and worker launches keep hooks disabled.
+For a Codex primary, launch with `-c 'notify=["bash","/absolute/firstmate/bin/fm-primary-final.sh","codex"]'` to capture normal finals through its verified notify surface; combine this with an existing notify consumer if one is configured, rather than replacing it silently.
+Codex workers publish normal completion through their existing notify command, bound to the busy generation; this does not enable hook trust or change the rollout classifier.
+Other adapters publish only the events accepted by their existing busy writer.
+A final capture never identifies a free-form question semantically, opens a call, resolves an answer, closes a task or releases a lane.
+Structured question interception and error/interrupt coverage beyond the existing verified adapters are unavailable, not inferred from documentation.
+A chat answer still goes through `fm-captain-hold.sh answer` with the current expected identity; arrival of chat text does not settle a call.
+A missing hook or abrupt process death cannot guarantee an event, and macOS Codex activity remains unknown outside its normal-completion notify signal.
+Run `FM_FLEET_LEDGER_LIVE_E2E=1 bash tests/fm-fleet-ledger-live-e2e.test.sh` to refresh real primary-final evidence on either platform.

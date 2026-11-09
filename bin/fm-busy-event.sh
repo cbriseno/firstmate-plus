@@ -158,6 +158,18 @@ write_record() {  # <gen> <seq>
   mv -f "$tmp" "$REC"
 }
 
+# Publish only after this writer accepts the incarnation, under its existing lock.
+publish_activity() { # <event> <seq>
+  local home=${FM_HOME:-${STATE%/*}} config
+  config=${FM_CONFIG_OVERRIDE:-$home/config}
+  [ -e "$config/fleet-ledger" ] || return 0
+  jq -cn --arg gen "$GEN" --argjson seq "$2" --arg state "$NEW_STATE" \
+    --arg source "$SOURCE" --arg event "$EVENT" \
+    '{gen:$gen,seq:$seq,state:$state,source:$source,event:$event}' | \
+    FM_HOME="$home" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$config" \
+      bash "$SCRIPT_DIR/fm-fleet-ledger.sh" entity "$1" "$ID"
+}
+
 old_umask=$(umask)
 umask 077
 
@@ -168,6 +180,7 @@ if [ "$CMD" = arm ]; then
     printf '%s\n' "$GEN" > "$GEN_FILE.tmp.$$" && mv -f "$GEN_FILE.tmp.$$" "$GEN_FILE" \
       && write_record "$GEN" 1 && rm -f "$STATE/$ID.progress"
   } || { lock_release; umask "$old_umask"; echo "error: arm failed for $ID" >&2; exit 1; }
+  publish_activity agent.activity 1 || { lock_release; umask "$old_umask"; exit 1; }
   lock_release
   umask "$old_umask"
   printf '%s\n' "$GEN"
@@ -214,12 +227,14 @@ if [ "$GEN" != "$CURRENT" ]; then
   exit 1
 fi
 if [ "$CMD" = retire ]; then
+  NEW_STATE=unknown SOURCE=fm-retire EVENT=retired
   rm -f "$GEN_FILE" "$REC" "$STATE/$ID.progress" || {
     lock_release
     umask "$old_umask"
     echo "error: busy-state retirement failed for $ID" >&2
     exit 1
   }
+  publish_activity agent.retired 0 || { lock_release; umask "$old_umask"; exit 1; }
   lock_release
   umask "$old_umask"
   exit 0
@@ -250,6 +265,7 @@ write_record "$GEN" $((OLD_SEQ + 1)) || {
   echo "error: record write failed for $ID" >&2
   exit 1
 }
+publish_activity agent.activity "$((OLD_SEQ + 1))" || { lock_release; umask "$old_umask"; exit 1; }
 umask "$old_umask"
 # Best effort: the record already settled, so a failed touch never refuses it.
 [ "$TURN_ENDED" = 0 ] || touch "$STATE/$ID.turn-ended" 2>/dev/null || true

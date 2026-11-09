@@ -363,7 +363,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # All writers of fields shared with work controls use the same inherited lock.
 # The work owner can call this wrapper while retaining its transaction lock.
 run_owner() {
-  if [ -e "$DATA/.work.lock" ] || [ -L "$DATA/.work.lock" ]; then
+  if [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ]; then
+    FM_HOME="$FM_HOME" python3 "$SCRIPT_DIR/fm_work_lock.py" "$DATA" \
+      python3 "$SCRIPT_DIR/fm_delivery.py" ledger-mutation "$DATA" -- "$@"
+  elif [ -e "$DATA/.work.lock" ] || [ -L "$DATA/.work.lock" ]; then
     python3 "$SCRIPT_DIR/fm_work_lock.py" "$DATA" "$@"
   else
     "$@"

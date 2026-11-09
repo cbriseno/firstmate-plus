@@ -87,7 +87,7 @@ run_lifecycle() {
   } >> "$HOME_DIR/state/$TASK.status"
   out=$(in_home env FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
     "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 2 2>&1)
-  case "$out" in *"checkpoint:"*|*"signal:"*) ;; *) fail "watcher checkpoint did not run: $out" ;; esac
+  case "$out" in *"checkpoint:"*|*"signal:"*|*"check: progress reconciliation required"*) ;; *) fail "watcher checkpoint did not run: $out" ;; esac
   LEDGER_AFTER_POLL=$(cat "$HOME_DIR/state/fleet-ledger.jsonl" 2>/dev/null || true)
   printf ' finished\ndone: ready in branch\n' >> "$HOME_DIR/state/$TASK.status"
   printf 'landed\n' > "$WT_DIR/landed.txt"
@@ -99,7 +99,7 @@ run_lifecycle() {
 }
 
 ledger_rows() {  # <jq filter>: print one compact row per ledger record
-  jq -c "$1" "$HOME_DIR/state/fleet-ledger.jsonl"
+  jq -c "select(.event != \"agent.activity\" and .event != \"agent.retired\") | $1" "$HOME_DIR/state/fleet-ledger.jsonl"
 }
 
 test_flag_on_records_the_task_lifecycle() {
@@ -110,7 +110,7 @@ test_flag_on_records_the_task_lifecycle() {
   jq -e -s 'all(.[]; .v == 1 and (.ts | type) == "number" and (.task | type) == "string")' \
     "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null \
     || fail "every record must carry v, ts, event, and task: $(cat "$HOME_DIR/state/fleet-ledger.jsonl")"
-  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task) | to_entries | map(.value))')
+  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
 ["task.dispatched","$TASK","ship","sample","claude",null]
 ["task.status","$TASK","working",null," setup done"]
@@ -287,6 +287,94 @@ test_flag_off_writes_nothing() {
   pass "flag off: the whole lifecycle leaves no ledger file, offset, or lock"
 }
 
+# Entity regressions run after the real Linux hook/notify -> ledger -> Deck flow.
+test_resulting_entities() {
+  local home="$TMP_ROOT/entities"
+  mkdir -p "$home/data" "$home/state" "$home/config"
+  : > "$home/config/fleet-ledger"
+  FM_HOME="$home" python3 - "$ROOT" "$home" <<'PYTEST'
+import json, os, pathlib, subprocess, sys
+root, home = map(pathlib.Path, sys.argv[1:])
+env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'TASKS_AXI_'))}
+env.update(FM_HOME=str(home), FM_LIVE='0')
+def run(script, *args, body=None, success=True):
+    r = subprocess.run(['bash',str(root/'bin'/script),*map(str,args)],cwd=home,env=env,
+                       input=json.dumps(body) if body else None,text=True,capture_output=True,timeout=45)
+    assert (r.returncode == 0) == success, (args,r.stdout,r.stderr)
+    return r.stdout
+state=home/'state'
+gen=run('fm-busy-event.sh','arm',state,'worker').strip()
+run('fm-busy-event.sh','apply',state,'worker','idle','--gen',gen,'--source','claude-hook','--event','stop')
+def rows(): return [json.loads(l) for l in (state/'fleet-ledger.jsonl').read_text().splitlines()]
+before=rows()
+run('fm-busy-event.sh','apply',state,'worker','busy','--gen','old-gen','--source','claude-hook','--event','late',success=False)
+assert rows()==before, 'stale incarnation published'
+assert before[-1]['value']['seq']==2 and before[-1]['value']['state']=='idle'
+run('fm-busy-event.sh','retire',state,'worker','--gen',gen)
+assert rows()[-1]['event']=='agent.retired'
+(home/'.tasks.toml').write_text('backend="markdown"\n[markdown]\npath="data/backlog.md"\n')
+(home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+run('fm-tasks-axi.sh','add','one','First task','--repo','alpha')
+run('fm-tasks-axi.sh','update','one','--priority','1')
+assert rows()[-1]['event']=='task.changed' and rows()[-1]['value']['task']['priority']==1
+payload=home/'authored.json'
+payload.write_text(json.dumps(dict(summary='Real result',outcome=dict(role='final',review='needed'))))
+v=json.loads(run('fm-tasks-axi.sh','presentation','one','--presentation-file',payload))
+run('fm-tasks-axi.sh','work','outcome.review',body=dict(target='task:one',occurrence=v['outcome_occurrence'],review='done',expected_review='needed'))
+assert rows()[-1]['event']=='task.review' and rows()[-1]['value']['presentation']['outcome']['review']=='done'
+# Failed append cannot report a successful mutation, but preserves the canonical value.
+ledger=state/'fleet-ledger.jsonl'; ledger.rename(state/'saved.jsonl'); ledger.mkdir()
+result=run('fm-tasks-axi.sh','update','one','--priority','2','--json',success=False)
+assert '"ok": true' not in result, result
+ledger.rmdir(); (state/'saved.jsonl').rename(ledger)
+# Explicit replay reads this task's canonical value without repeating the mutation.
+r=subprocess.run(['python3',str(root/'bin/fm_delivery.py'),'ledger-task','--task','one'],cwd=home,env=env,capture_output=True,text=True)
+assert r.returncode==0, r.stderr
+assert rows()[-1]['value']['task']['priority']==2
+assert 'priority: 2' in run('fm-tasks-axi.sh','show','one','--full')
+run('fm-captain-hold.sh','hold','answer-one','--title','Question','--repo','alpha','--reason','Test original words',
+    '--question','Proceed?','--option','yes=Proceed','--option','no=Wait','--recommended','yes')
+call=json.loads((home/'data/answer-one/captain-call.json').read_text())
+answer_file=home/'answer.txt'; answer_file.write_text('Adelante.')
+run('fm-captain-hold.sh','answer','answer-one','--decision-file',answer_file,'--expected-identity',call['hold_set']+'#0')
+answer=rows()[-1]['value']['answer']
+assert answer['text']=='Adelante.' and answer['application']['state']=='pending'
+run('fm-inbox.sh','reply',answer['application']['note_id'],'Applied in the fixture')
+answer=rows()[-1]['value']['answer']
+assert rows()[-1]['event']=='call.application'
+assert answer['text']=='Adelante.' and answer['application']['state']=='responded'
+assert answer['application']['reply']['body'].strip()=='Applied in the fixture'
+
+PYTEST
+  pass "accepted incarnation, task values, review and append failure preserve canonical ownership"
+}
+
+test_primary_final_scope() {
+  local home="$TMP_ROOT/final-primary" fake="$TMP_ROOT/final-bin"
+  mkdir -p "$home/state" "$home/config" "$fake"
+  git init -q "$home"
+  : > "$home/AGENTS.md"
+  : > "$home/config/fleet-ledger"
+  ln -s "$ROOT/bin" "$home/bin"
+  ln -s /bin/bash "$fake/claude"
+  python3 - "$home/payload.json" <<'PYFINAL'
+import json,sys
+json.dump(dict(hook_event_name='Stop',session_id='session',prompt_id='turn',
+               last_assistant_message='¿Pregunta omitida?\n'+'x'*5000),open(sys.argv[1],'w'))
+PYFINAL
+  # shellcheck disable=SC2016 # The fake harness expands its own session variables.
+  FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FINAL_WRITER="$ROOT/bin/fm-primary-final.sh" \
+    "$fake/claude" -c 'printf "%s\n" "$$" > "$FM_HOME/state/.lock"; bash "$FINAL_WRITER" claude < "$FM_HOME/payload.json"'
+  jq -e '.event == "primary.final" and (.value.text | length) > 5000 and .value.turn == "turn"' \
+    "$home/state/fleet-ledger.jsonl" >/dev/null || fail 'final text was lost or truncated'
+  [ ! -e "$home/data" ] || fail 'capturing a final invented a call'
+  : > "$home/state/fleet-ledger.jsonl"
+  printf '99999999\n' > "$home/state/.lock"
+  FM_ROOT_OVERRIDE="$home" FM_HOME="$home" bash "$ROOT/bin/fm-primary-final.sh" claude < "$home/payload.json"
+  [ ! -s "$home/state/fleet-ledger.jsonl" ] || fail 'nonowner captured a primary final'
+  pass "complete primary final is captured only by the session owner and creates no call"
+}
+
 test_flag_on_records_the_task_lifecycle
 test_flag_on_records_a_pr_merge_once
 test_flag_on_records_a_pr_registration
@@ -297,3 +385,7 @@ test_worker_status_command_fails_when_the_append_fails
 test_worker_status_line_lands_when_the_ledger_fails
 test_worker_status_line_with_the_flag_absent
 test_flag_off_writes_nothing
+
+test_resulting_entities
+
+test_primary_final_scope

@@ -665,6 +665,10 @@ cmd_reply() {
   } >"$staging"
   mv "$staging" "$REPLIES/$id"
   fm_lock_release "$REPLY_SEQ_LOCK"
+  if [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ]; then
+    FM_HOME="$FM_HOME" python3 "$FM_ROOT/bin/fm_delivery.py" ledger-application --task "$id" \
+      || die "reply saved; event publication failed"
+  fi
   if [ "$json" -eq 1 ]; then
     need_python
     python3 - "$id" "$REPLIES/$id" <<'PY'

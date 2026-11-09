@@ -1356,6 +1356,10 @@ _fm_pending_reply_maybe_escalate_locked() {  # <state-dir> <corr_id>
   fi
   if [ "$new_episode" -eq 0 ] || ! status_event_recorded "$parent_status" "$line"; then
     printf '%s\n' "$(status_stamp_line "$line")" >> "$parent_status" 2>/dev/null || return 1
+    if [ -e "${FM_CONFIG_OVERRIDE:-${parent_status%/state/*}/config}/fleet-ledger" ]; then
+      bash "${BASH_SOURCE[0]%/*}/fm-fleet-ledger.sh" appended \
+        "${FM_CONFIG_OVERRIDE:-${parent_status%/state/*}/config}" "$parent_status" || return 1
+    fi
   fi
   now=$(fm_pending_reply_now)
   fm_pending_reply_set "$rec" escalated_epoch "$now" || return 1

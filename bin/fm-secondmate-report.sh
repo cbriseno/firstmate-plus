@@ -102,4 +102,4 @@ else
   NOTE=$*
   printf -v line '%s [%s]: %s (via-helper)' "$VERB" "$token" "$NOTE"
 fi
-printf '%s\n' "$(status_stamp_line "$line")" >> "$DESTINATION"
+fm_parent_channel_report "$HOME_DIR" "$STATE_DIR" "$line"

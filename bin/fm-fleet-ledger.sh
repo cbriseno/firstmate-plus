@@ -19,7 +19,11 @@
 #   bin/fm-merge-local.sh        merged ... local (a local-only landing)
 #   bin/fm-teardown.sh           cleaned_up
 #   bin/fm-captain-hold.sh       entity (call opened/resolved)
-#   bin/fm_delivery.py           entity (presentation published)
+#   bin/fm_delivery.py           entity (task, presentation, completion, application)
+#   bin/fm_work.py               entity (structure, controls, outcome review)
+#   bin/fm-busy-event.sh         entity (accepted activity and retirement)
+#   bin/fm-primary-final.sh      entity (complete primary final)
+#   status-writing owners       appended (permission, relay, spawn, primary closes)
 #
 # Usage:
 #   fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model>
@@ -29,7 +33,11 @@
 #   fm-fleet-ledger.sh cleaned_up <task>
 #   fm-fleet-ledger.sh capture
 #   fm-fleet-ledger.sh appended <config> <state>/<task>.status
-#   fm-fleet-ledger.sh entity <call.opened|call.resolved|task.presentation> <task>
+#   fm-fleet-ledger.sh entity <event> <task>
+#   fm-fleet-ledger.sh configuration
+# configuration publishes resulting lane/project capacity and registry text after
+# an operator edit; it never scans endpoints or snapshots work.
+# docs/fleet-ledger.md owns entity event names and values.
 # entity reads one JSON object from stdin, preserving its complete value.
 # Unlike legacy producers, entity owners propagate append failures before success.
 #
@@ -70,7 +78,7 @@ LOCK="$STATE/.fleet-ledger.lock"
 TEXT_MAX_CHARS=2000
 
 usage() {
-  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | appended <config> <state>/<task>.status | entity <event> <task> (JSON object on stdin)" >&2
+  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | configuration | appended <config> <state>/<task>.status | entity <event> <task> (JSON object on stdin)" >&2
   exit 2
 }
 
@@ -82,7 +90,7 @@ cmd=${1:-}
 case "$cmd" in
   entity)
     { [ "$#" -eq 3 ] && task_ok "$3"; } || usage
-    case "$2" in call.opened|call.resolved|task.presentation) ;; *) usage ;; esac
+    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|work.structure|work.control|agent.activity|agent.retired|primary.final) ;; *) usage ;; esac
     ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;
@@ -91,7 +99,7 @@ case "$cmd" in
     case "$#:${3:-}" in 4:pr) [ -n "$4" ] || usage ;; 3:local) ;; *) usage ;; esac
     ;;
   cleaned_up) { [ "$#" -eq 2 ] && task_ok "$2"; } || usage ;;
-  capture) [ "$#" -eq 1 ] || usage ;;
+  capture|configuration) [ "$#" -eq 1 ] || usage ;;
   appended)
     [ "$#" -eq 3 ] && [ -n "$2" ] || usage
     case "$3" in /*/*.status) ;; *) usage ;; esac
@@ -153,8 +161,8 @@ load_libs() {
 append() {
   local event=$1 task=$2 extra=$3 line
   shift 3
-  line=$(jq -cn --arg event "$event" --arg task "$task" "$@" \
-    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task} + ($extra)") \
+  line=$(jq -cn --arg home "$FM_HOME" --arg event "$event" --arg task "$task" "$@" \
+    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task, home: \$home} + ($extra)") \
     || return 1
   printf '%s\n' "$line" >> "$LEDGER"
 }
@@ -207,6 +215,16 @@ trap 'fm_lock_release "$LOCK"' EXIT
 rc=0
 # shellcheck disable=SC2016 # $names below are jq variables, not shell ones.
 case "$cmd" in
+  configuration)
+    value=$(python3 - "$CONFIG" "$FM_HOME/data/projects.md" <<'PYCONFIG'
+import json, pathlib, sys
+config = pathlib.Path(sys.argv[1])
+paths = dict(lane_capacity=config/'lane-capacity', project_capacity=config/'project-capacity', projects=pathlib.Path(sys.argv[2]))
+print(json.dumps({k:p.read_text() if p.exists() else None for k,p in paths.items()}))
+PYCONFIG
+    ) || exit 1
+    append home.configuration home '{value:$value}' --argjson value "$value" || rc=1
+    ;;
   entity)
     value=$(jq -cse 'if length == 1 and (.[0] | type) == "object" then .[0] else error("expected one object") end') || exit 1
     append "$2" "$3" '{home: $home, value: $value}' --arg home "$FM_HOME" --argjson value "$value" || rc=1

@@ -178,6 +178,20 @@ if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
   exit 0
 fi
 
+# Capture before loop allowances or supervision handoff can end this Stop path.
+if [ -e "$CONFIG/fleet-ledger" ] && [ "$CURSOR_MODE" -eq 0 ]; then
+  final_harness=claude
+  if [ "$CLAUDE_MODE" -eq 0 ]; then
+    final_harness=$(bash "$SCRIPT_DIR/fm-harness.sh")
+  fi
+  case "$final_harness" in
+    claude|codex)
+      printf '%s' "$PAYLOAD" | bash "$SCRIPT_DIR/fm-primary-final.sh" "$final_harness" \
+        || echo 'fm-turnend-guard: primary final capture failed; supervision check continues' >&2
+      ;;
+  esac
+fi
+
 # The already-registered Stop entrypoint must enforce the same opt-in boundary
 # as the new shim. This does not establish that either definition was loaded.
 if [ "$CLAUDE_MODE" -eq 0 ] && [ "$CURSOR_MODE" -eq 0 ] \
