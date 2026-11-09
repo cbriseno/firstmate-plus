@@ -15,6 +15,8 @@ set -u
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-busy-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-classify-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-busy-adapter-wiring)
 
@@ -380,6 +382,38 @@ test_claude_hooks_semantic_lifecycle() {
   out=$(classify claude "$id" "$state")
   [ "$out" = "idle claude-hook" ] || fail "SessionEnd must classify idle, got '$out'"
   pass "claude hooks open on UserPromptSubmit and close on Stop, StopFailure, and SessionEnd"
+}
+
+test_claude_permission_dialog_writes_status_blocker() {
+  local rec id=busy-cl-3 out state settings status open clear
+  rec=$(make_spawn_case claude-permission claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  status="$state/$id.status"
+  settings="$WT_DIR/.claude/settings.local.json"
+  open=$(jq -r '.hooks.PermissionRequest[0].hooks[0].command' "$settings")
+  clear=$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$settings")
+  [ -n "$open" ] && [ "$open" != null ] || fail "claude settings lack a PermissionRequest hook"
+  [ -n "$clear" ] && [ "$clear" != null ] || fail "claude settings lack a PostToolUse hook"
+
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"rm -f victim/*"}}' | sh -c "$open" >"$HOME_DIR/perm-out" \
+    || fail "PermissionRequest hook command failed"
+  [ ! -s "$HOME_DIR/perm-out" ] || fail "PermissionRequest hook must print nothing so it never answers the dialog"
+  out=$(tail -n 1 "$status")
+  assert_contains "$out" 'blocked [key=permission-prompt] [at=' "a permission dialog must open a keyed blocker in the status file"
+  assert_contains "$out" 'Bash: rm -f victim/*' "the blocker must name the operation waiting for permission"
+  out=$(status_own_open_decisions "$status")
+  assert_contains "$out" 'permission-prompt' "the status classifier must see the permission blocker as open"
+
+  sh -c "$clear" </dev/null || fail "PostToolUse hook command failed"
+  sh -c "$clear" </dev/null || fail "a second PostToolUse hook command failed"
+  [ "$(grep -c '^resolved \[key=permission-prompt\]' "$status")" = 1 ] \
+    || fail "the next tool result must close the blocker exactly once"
+  out=$(status_own_open_decisions "$status")
+  [ -z "$out" ] || fail "the permission blocker must be closed after the dialog ends, got '$out'"
+  pass "a claude permission dialog opens a keyed status blocker that the next tool result closes"
 }
 
 test_claude_hooks_stale_incarnation_harmless() {
@@ -982,6 +1016,7 @@ test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_opencode_plugin_v2_execution_lifecycle
 test_claude_hooks_semantic_lifecycle
+test_claude_permission_dialog_writes_status_blocker
 test_claude_hooks_stale_incarnation_harmless
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless

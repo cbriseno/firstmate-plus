@@ -5734,6 +5734,16 @@ BUSY_GEN=
     j_submit=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event user-prompt-submit 2>/dev/null || true")
     j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
     j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+    # A permission dialog Claude Code shows even under bypass (its built-in
+    # protected operations) writes an immediate keyed blocker to the status
+    # file, and the next tool result, prompt, or stop clears it
+    # (bin/fm-permission-wait-hook.sh owns both lines).
+    perm_cmd="$(shell_quote "$FM_ROOT/bin/fm-permission-wait-hook.sh")"
+    perm_args="$(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
+    j_perm_open=$(json_escape "$perm_cmd open $perm_args || true")
+    j_perm_clear=$(json_escape "$perm_cmd clear $perm_args || true")
+    perm_clear_hook="{\"type\":\"command\",\"command\":\"$j_perm_clear\"}"
+    perm_entries="\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_perm_open\"}]}],\"PostToolUse\":[{\"hooks\":[$perm_clear_hook]}],\"PostToolUseFailure\":[{\"hooks\":[$perm_clear_hook]}],"
     stop_entry=
     if [ "$KIND" = secondmate ] && grep -qF '.fm-busy-stop' "$WT/bin/fm-turnend-guard.sh" 2>/dev/null; then
       {
@@ -5749,9 +5759,9 @@ BUSY_GEN=
         stop_turnend="touch $(shell_quote "$TURNEND"); "
       fi
       j_stop=$(json_escape "${stop_turnend}$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
-      stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"}]}],"
+      stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"},$perm_clear_hook]}],"
     fi
-    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
+    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"},$perm_clear_hook]}],${stop_entry}${perm_entries}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
     if [ "$KIND" = secondmate ]; then
       session_keys='"feedbackDrafts":"off",'
       if [ "$KEEP_AI_TRAILERS" != 1 ]; then
