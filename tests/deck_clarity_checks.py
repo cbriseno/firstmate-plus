@@ -547,6 +547,29 @@ class Clarity(unittest.TestCase):
         self.assertFalse(json.loads(path.read_text())['valid'])
         self.assertEqual(self.history()['records'], [])
 
+    def test_close_declares_missing_outcome_and_keeps_declared_one(self):
+        if not shutil.which('tasks-axi') or not shutil.which('node'):
+            self.skipTest('installed tasks-axi + Node required')
+        for name in ('ship', 'own'):
+            (self.home / 'data' / name).mkdir()
+        (self.home / 'data/backlog.md').write_text(
+            '## In flight\n- [ ] demo - Informe data/demo/report.md (kind: scout)\n'
+            '- [ ] ship - Cambio local (kind: ship)\n- [ ] own - Avance (kind: scout)\n\n## Queued\n\n## Done\n')
+        for name in ('demo', 'own'):
+            (self.home / 'data' / name / 'report.md').write_text('# Informe\n')
+        declared = Path(self.tmp.name) / 'own.json'
+        declared.write_text(json.dumps(dict(outcome=dict(role='partial', review='needed'))))
+        self.value('fm-tasks-axi.sh', 'presentation', 'own', '--presentation-file', str(declared))
+        for name in ('demo', 'own'):
+            self.run_cli('fm-tasks-axi.sh', 'done', name, '--report', f'data/{name}/report.md', '--json')
+        self.run_cli('fm-tasks-axi.sh', 'done', 'ship', '--note', 'local main', '--json')
+        outcome = lambda name: self.value('fm-tasks-axi.sh', 'presentation', name, '--json')['presentation']['outcome']
+        self.assertEqual(outcome('demo'), dict(role='final', review='needed'))
+        self.assertEqual(outcome('ship'), dict(role='step', review=None))
+        self.assertEqual(outcome('own'), dict(role='partial', review='needed'))
+        self.assertEqual({r['id']: r['presentation']['outcome']['role'] for r in self.history()['records']},
+                         dict(demo='final', ship='step', own='partial'))
+
     def test_ops_report_close_preserves_response_without_inventing_delivery(self):
         if not shutil.which('tasks-axi') or not shutil.which('node'):
             self.skipTest('installed tasks-axi + Node required')

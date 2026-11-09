@@ -340,22 +340,30 @@ def record_completion(home, task_id, data):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             existing = json.loads(read_text(home, 'data/' + task_id + '/completion.json', 8192))
-            if (all(existing.get(key) == receipt[key] for key in ('schema', 'home', 'id', 'completion', 'artifact'))
-                    and existing.get('valid') is True):
-                return  # concurrent retries preserve the first observed close
+            retried = (all(existing.get(key) == receipt[key] for key in ('schema', 'home', 'id', 'completion', 'artifact'))
+                       and existing.get('valid') is True)  # concurrent retries preserve the first observed close
         except (OSError, ValueError, TypeError):
-            pass
-        fd, temp = tempfile.mkstemp(prefix='.completion.', dir=folder)
-        try:
-            with os.fdopen(fd, 'w') as stream:
-                json.dump(receipt, stream)
-                stream.write('\n')
-            os.replace(temp, folder / 'completion.json')
-        finally:
-            if os.path.exists(temp):
-                os.unlink(temp)
+            retried = False
+        if not retried:
+            fd, temp = tempfile.mkstemp(prefix='.completion.', dir=folder)
+            try:
+                with os.fdopen(fd, 'w') as stream:
+                    json.dump(receipt, stream)
+                    stream.write('\n')
+                os.replace(temp, folder / 'completion.json')
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
     finally:
         os.close(lock)
+    # The close declares the delivery's role when its worker declared none: a
+    # report is a final result for the captain to review, anything else a step.
+    current = read_presentation(home, task_id)
+    if (current['evidence'] or {}).get('available', True) and not current['presentation'].get('outcome'):
+        result = report or (folder / 'report.md').is_file()
+        presentation(home, argparse.Namespace(task=task_id, data=None, presentation_file=None,
+            groups=False, clear=False, repair=False, reconcile=False, replan=None,
+            outcome=dict(role='final', review='needed') if result else dict(role='step', review=None)))
 
 
 def invalidate_completion(home, task_id):

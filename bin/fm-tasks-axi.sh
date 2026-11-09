@@ -97,7 +97,8 @@
 # File input only (no flags): the captain's request this task belongs to,
 #   request {id, label, project} (each 1..80 plain text, all three required), and
 #   outcome {role: step|partial|final, review: needed|done}; either key may be null.
-#   Omitted or null means unclassified.
+#   Omitted or null means unclassified. A new owner close of a delivery with no
+#   outcome declares final/needed when data/<id>/report.md exists, else step.
 # Reuse the same request on tasks derived from one request; group is not a fallback.
 # work snapshot exposes request/outcome on tasks and requests [{id,label,project,
 #   tasks: [task keys], updated_at: latest member activity or null}]. Request
