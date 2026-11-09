@@ -304,7 +304,7 @@ After a done status, publish the checkpoint before stopping; the owner verifies 
 When that done checkpoint delivers a scout report or another result for the captain to read, include "outcome":{"role":"final","review":"needed"} in it (role "partial" for an interim result, "step" for a finished step that is not itself a result); a close without one is declared final when data/<id>/report.md exists, otherwise step.
 Start later inputs from the current owner declaration, never an old draft; a card-status-only write preserves old steps and never renews the checkpoint.
 Put summary and card text in that JSON too; file input and individual field flags are mutually exclusive.
-If publication fails, preserve the input and report the failure to firstmate; bin/fm-tasks-axi.sh --help owns bounded contention and explicit repair.
+If publication fails, preserve the input and follow the contention recovery in bin/fm-tasks-axi.sh --help before reporting failure to firstmate; that recovery precedes the generic two-obstacle rule, including in retained briefs. The same help owns explicit repair.
 """
     for label in ('Implementation in progress', 'Implementation', 'Affected checks', 'Branch ready', 'Integration'):
         template = template.replace(label, tr(label))

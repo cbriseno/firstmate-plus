@@ -84,15 +84,25 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
         check(result.get('state') == 'rejected' and result.get('code') == 'busy' and result.get('schema') != 'fm-work-snapshot.v1',
               'exit0 busy is a refusal, not a published measurement or valid snapshot')
     saved = output.read_bytes()
+    saved_input = draft.read_bytes()
     with lock.open('r') as reader:
         fcntl.flock(reader, fcntl.LOCK_SH)
         began = time.monotonic()
-        run('presentation', 'proof', '--card-status', 'No debe escribirse', ok=False)
+        rejected = run('presentation', 'proof', '--presentation-file', str(draft), ok=False)
+        check(rejected.stderr.startswith('work mutation busy:'), 'pre-execution contention has a specific recovery signal')
         elapsed = time.monotonic() - began
         check(4.8 <= elapsed < 12 and output.read_bytes() == saved, 'bounded contention refuses without write')
         began = time.monotonic()
         run('update', 'proof', '--priority', '0', ok=False)
         check(4.8 <= time.monotonic() - began < 12 and backlog.read_bytes() == baseline, 'other writers bound contention without changing backlog')
+        # Replay the worker's recovery after contention outlives the owner budget.
+        time.sleep(1)
+    recovered = run('presentation', 'proof', '--presentation-file', str(draft))
+    check(recovered.get('ok') is True and recovered.get('state') == 'published'
+          and recovered['evidence']['available'] and recovered['lifecycle']['evidence']['current']
+          and recovered['presentation']['progress'] == progress and draft.read_bytes() == saved_input,
+          'one explicit retry publishes the exact preserved input after the lock clears')
+    saved = output.read_bytes()
     run('presentation', 'proof', '--card-status', 'No heredado', ok=False, extra_env={'FM_WORK_OWNER_FD': '98765'})
     check(output.read_bytes() == saved, 'invalid inherited lock refuses instead of silently falling back')
     # The same input-as-output mistake seen in the real worker stays invalid
@@ -314,6 +324,9 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
         check(p.returncode == 0, (p.stdout, p.stderr))
         text = (space_home / 'data' / kind / 'brief.md').read_text()
         section = text.split('# Declared progress and safe pauses\n', 1)[1].split('# Firstmate instruction inbox', 1)[0]
+        check('bin/fm-tasks-axi.sh --help before reporting failure' in section
+              and 'recovery precedes the generic two-obstacle rule' in section,
+              (kind, 'generated worker contract must recover before escalating'))
         command = re.search(r'^`(.*--presentation-file.*)`$', section, re.M).group(1)
         input_path = space_home / 'data' / kind / 'progress-input.json'
         input_path.write_text(json.dumps({'progress': progress}))

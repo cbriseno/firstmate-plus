@@ -116,12 +116,16 @@
 # To repair an invalid declaration, --repair requires that separate file, retains
 # the original bytes as .presentation-invalid.*.json beside the declaration, and
 # resets unspecified fields to null. Normal writes still reject invalid data.
-# Presentation acquisition waits at most five seconds for the shared owner lock;
-# a longer contention refuses without mutation. Other owner operations stay
-# fail-fast. Failed milestone writes need a later explicit retry, not inference.
-# A successful mutation returns ok=true, state=published and evidence.available=true;
-# check those fields and lifecycle.evidence.current, not just exit 0. Preserve a
-# rejected input, retry once after contention clears, then report the refusal.
+# Owner lock acquisition waits at most five seconds; longer contention refuses
+# before the command runs. Only stderr starting with `work mutation busy:` or
+# owner JSON state=rejected/code=busy identifies this pre-execution contention.
+# Preserve the exact command and input, wait one second and retry once without
+# reporting blocked or waiting for firstmate. On success, continue normally.
+# If still busy, report both failures, affected work and the action needed from
+# firstmate; continue independent authorized work. Do not apply this recovery
+# to unsafe lock errors, other refusals or failures with possible partial effects.
+# A successful presentation requires exit success, ok=true, state=published,
+# evidence.available=true and lifecycle.evidence.current=true, not just exit 0.
 # File input may include phase (investigation, implementation, rebase, validation,
 # branch-ready, integration, activation, complete) together with progress.
 # Each step may bind gate=branch-ready, integrated or pipeline-passed. Only the existing delivery

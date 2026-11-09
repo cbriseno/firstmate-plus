@@ -731,7 +731,8 @@ SHARED_NO_CD_RULE=${SHARED_NO_CD_RULE%$'\n'}
 # One retry boundary for ship and scout work: a failed optional path must not
 # park independent authorized work, and escalation must name the action owner.
 IFS= read -r -d '' CREWMATE_OBSTACLE_INSTRUCTIONS <<'EOF' || true
-5. If you hit the same obstacle twice, stop retrying that path and append
+5. Apply any command-specific bounded recovery first; bin/fm-tasks-axi.sh --help owns work-lock contention recovery.
+   If the same obstacle persists after two attempts, stop retrying that path and append
    `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`.
    Continue independent authorized work that does not depend on that path; stop the whole task only when no such work remains.
    Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
