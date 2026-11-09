@@ -11,8 +11,8 @@
 # footer text. All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-busy-lib.sh"
@@ -504,6 +504,9 @@ try:
         return subprocess.check_output(['bash',str(root/'bin/fm-busy-event.sh'),'arm',str(state),'codex',
             '--state','unknown'],text=True).strip()
     gen = arm()
+    sessions = base / 'data/codex/sessions.jsonl'
+    (state/'codex.meta').write_text('harness=codex\nmodel=test-model\neffort=high\nspawned_at=2026-11-09T00:00:00Z\nbusy_gen='+gen+'\nsessions_file='+str(sessions)+'\n')
+    subprocess.run([sys.executable,str(root/'bin/fm_task_sessions.py'),'start',str(state),'codex'],check=True)
     proc = pathlib.Path('/proc') / str(holder.pid)
     if not proc.is_dir():
         print('skip: Codex rollout kernel binding requires Linux /proc')
@@ -521,6 +524,8 @@ try:
         assert actual == expected, (expected, actual)
     check('unknown codex-rollout')  # no start is not idle
     append(row('task_started')); check('busy codex-rollout')
+    saved = [json.loads(line) for line in sessions.read_text().splitlines()]
+    assert len(saved)==1 and saved[0]['session']==str(log), saved
     # A long, completely quiet tool has no synthetic activity or refresh events.
     time.sleep(.2); check('busy codex-rollout')
     append(row('task_complete')); check('idle codex-rollout')
@@ -766,6 +771,70 @@ test_launch_prompt_requires_a_captured_tail
 test_grok_regex_isolated
 test_codex_unverified_gate
 test_codex_process_owned_rollout
+
+# The migration reads real transcript shapes through its CLI, scoped to the
+# exact worker contract. No agent, backend, or external home is involved.
+ROOT="$ROOT" SESSIONS_TMP="$TMP_ROOT/sessions-backfill" python3 - <<'PY' || fail 'task session backfill failed'
+import json, os, pathlib, subprocess, sys
+root=pathlib.Path(os.environ['ROOT']); base=pathlib.Path(os.environ['SESSIONS_TMP'])
+home=base/'home'; claude=base/'claude/project'; codex=base/'codex/2026/11/09'
+claude.mkdir(parents=True); codex.mkdir(parents=True)
+def contract(task, owner=home):
+    return f'Your steering inbox is `{owner}/state/{task}.inbox`; this exact path belongs to your current task'
+def write(path, rows):
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+write(claude/'main.jsonl', [dict(type='last-prompt'), dict(type='user',timestamp='2026-11-09T00:00:00Z',message=dict(content=[dict(type='tool_result',content=contract('old'))])),
+    dict(type='api-request',params=dict(model='claude-test',output_config=dict(effort='high')))])
+write(codex/'rollout-main.jsonl', [dict(type='session_meta',timestamp='2026-11-09T01:00:00Z',payload=dict(source='cli')),
+    dict(type='response_item',payload=dict(role='user',content=[dict(type='input_text',text=contract('old'))])),
+    dict(type='turn_context',payload=dict(model='codex-test',effort='low'))])
+write(claude/'other-home.jsonl',[dict(type='user',message=dict(content=contract('foreign',base/'other')))])
+write(claude/'loose-path.jsonl',[dict(type='user',message=dict(content=str(home/'state/wrong.inbox')))])
+write(claude/'late.jsonl',[dict(type='system')]*60+[dict(type='user',message=dict(content=contract('late')))])
+command=[sys.executable,str(root/'bin/fm_task_sessions.py'),'backfill',str(home),str(claude.parent),str(base/'codex')]
+subprocess.run(command,check=True)
+sessions=home/'data/old/sessions.jsonl'; first=sessions.read_text()
+rows=[json.loads(line) for line in first.splitlines()]
+assert [(r['harness'],r['model'],r['effort']) for r in rows]==[('claude','claude-test','high'),('codex','codex-test','low')], rows
+assert all(pathlib.Path(r['session']).is_absolute() for r in rows)
+assert rows[0]['started_at']=='2026-11-09T00:00:00Z'
+subprocess.run(command,check=True); assert sessions.read_text()==first
+assert list((home/'data').iterdir())==[home/'data/old']
+# Relaunches, including one resuming the same transcript, each keep a row.
+state=home/'state';state.mkdir(); meta=state/'old.meta'
+meta.write_text('harness=claude\nmodel=default\neffort=low\nspawned_at=2026-11-09T02:00:00Z\nbusy_gen=new\nsessions_file='+str(sessions)+'\n')
+start=[sys.executable,str(root/'bin/fm_task_sessions.py'),'start',str(state),'old']
+bind=[sys.executable,str(root/'bin/fm_task_sessions.py'),'bind',str(state),'old']
+subprocess.run(start,check=True)
+payload=json.dumps(dict(transcript_path=rows[0]['session']))
+subprocess.run(bind+['stale'],input=payload,text=True,check=True)
+assert json.loads(sessions.read_text().splitlines()[-1])['session'] is None
+for _ in range(2):subprocess.run(bind+['new'],input=payload,text=True,check=True)
+assert len(sessions.read_text().splitlines())==3
+assert json.loads(sessions.read_text().splitlines()[-1])['session']==rows[0]['session']
+meta.unlink(); assert sessions.exists()
+print('ok - durable sessions preserve relaunches and migrate exact historical worker contracts once')
+PY
+test_claude_session_launch() {
+  local dir home fakebin sessions hook
+  dir="$TMP_ROOT/claude-session-launch"
+  home="$dir/home"
+  fakebin=$(fm_test_make_spawn_fakebin "$dir/fake")
+  fm_test_spawn_home "$home" claude
+  fm_test_spawn_brief "$home" proof
+  fm_git_worktree "$dir/project" "$dir/wt" proof
+  fm_test_run_spawn "$home" "$dir/wt" "$fakebin" proof "$dir/project" --mode local-only --yolo off >"$dir/spawn.log" \
+    || fail "session launch failed: $(cat "$dir/spawn.log")"
+  sessions="$home/data/proof/sessions.jsonl"
+  jq -e '.harness == "claude" and .session == null and (.started_at | length > 0)' "$sessions" >/dev/null || fail "launch metadata missing"
+  hook=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$dir/wt/.claude/settings.local.json")
+  printf '{"transcript_path":"/tmp/transcript with spaces.jsonl"}\n' | bash -c "$hook" || fail "emitted hook failed"
+  printf '{"transcript_path":"/tmp/transcript with spaces.jsonl"}\n' | bash -c "$hook" || fail "repeated hook failed"
+  [ "$(wc -l < "$sessions" | tr -d ' ')" = 1 ] || fail "hook duplicated launch"
+  jq -e '.session == "/tmp/transcript with spaces.jsonl"' "$sessions" >/dev/null || fail "hook lost transcript path"
+  pass "Claude's generated launch hook completes one durable session record"
+}
+test_claude_session_launch
 test_kimi_unverified_gate
 test_cursor_ignores_rendered_and_native_signals
 test_dead_endpoint_overrides

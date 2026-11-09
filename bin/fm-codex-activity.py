@@ -32,6 +32,8 @@ import stat
 import subprocess
 import sys
 
+from fm_task_sessions import bind
+
 
 VERSION = "0.166.0"
 LIMIT = 32 * 1024 * 1024
@@ -218,6 +220,11 @@ def classify(state, task):
                 raise ValueError("session changed within launch generation")
         if generation(state, task) != gen:
             raise ValueError("generation changed during session binding")
+        try:
+            if (state / (task + ".meta")).exists():
+                bind(state, task, gen, before[0])
+        except (OSError, ValueError, KeyError) as error:
+            print("warning: session record failed: " + str(error), file=sys.stderr)
         return verdict + " " + source
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return "unknown " + source

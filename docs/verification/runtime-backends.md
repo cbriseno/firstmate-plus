@@ -3,6 +3,19 @@
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
+## Worker session bindings
+
+The durable record format and one-off historical migration belong to the header of `bin/fm_task_sessions.py`.
+On 2026-11-09, Linux with Python 3.11.2, codex-cli 0.166.0 and Claude Code 2.1.319 verified both capture paths against real harnesses in disposable task data.
+`python3 bin/fm-codex-activity.py classify "$STATE" "$ID"` returned `busy codex-rollout` and completed the durable record from the validated native process's rollout; repeating it retained one record.
+`claude -p 'Reply with exactly OK.' --model haiku --effort low --tools '' --setting-sources '' --strict-mcp-config --settings "$SETTINGS" --system-prompt 'Reply to the provided text without using tools.'` returned `OK`, with its UserPromptSubmit hook filling the transcript path.
+Replaying the first 60 lines of real historical Claude and Codex transcripts through the migration recovered both sessions; a second invocation left the files unchanged.
+Claude's historical brief can arrive in a tool result after an inbox doorbell, and its first transcript record can lack a timestamp.
+The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-busy-state.test.sh`.
+The common spawn path records launches before backend delivery for tmux, Herdr, Zellij, Orca, cmux, Paseo and Rex, independent of the harness command; session capture currently uses only Claude's existing hook and Codex's existing pin.
+Remote secondmate launch transport is outside worker capture.
+macOS was inspected but not executed; the writer and migration use Python's standard library, while automatic Codex capture retains its existing native Linux capability limit.
+
 ## Worker temporary processes
 
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.
