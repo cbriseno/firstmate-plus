@@ -104,6 +104,8 @@
 #   tasks: [task keys], updated_at: latest member activity or null,
 #   project_key: displayed project most member tasks show under (a tie prefers
 #   the declared project) or null}]. Request identity is id within this home.
+#   requests[].usage sums cached task usage; bin/fm_task_usage.py owns pricing,
+#   refresh mechanics and the usage format. Snapshot never refreshes these caches.
 #   Delivery history retains these fields. Each project also lists
 #   requests: [request keys whose project_key is it, in request order] and
 #   derived_blocked_by: [{ref: other project, open: true, via: [{task, blocker}]}]

@@ -29,6 +29,79 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         assert value, message
         checks += 1
     # Historical graphs remain readable, including duplicates and invalid edges.
+    # Usage readers run outside snapshots, which read only the saved caches.
+    with tempfile.TemporaryDirectory(prefix='fm-usage-test-') as usage_tmp:
+        uh = pathlib.Path(usage_tmp)
+        ue = dict(env, FM_HOME=str(uh))
+        for name in ('data','state','config'):
+            (uh/name).mkdir()
+        (uh/'data/projects.md').write_text('- alpha [local-only] - Fixture\n')
+        (uh/'data/backlog.md').write_text('## Queued\n\n## In flight\n\n## Done\n')
+        def ucli(*args):
+            p = subprocess.run(wrapper+list(args), env=ue, text=True, capture_output=True)
+            check(p.returncode == 0, p.stderr+p.stdout)
+            return json.loads(p.stdout) if args[:2] == ('work','snapshot') else p.stdout
+        for key in ('used','queued','decision','missing'):
+            ucli('add',key,key,'--repo','alpha',*(['--request-from','used'] if key!='used' else []))
+        ucli('hold','decision','--kind','external','--reason','Fixture')
+        folder = uh/'data/used'
+        claude_path, codex_path = uh/'claude.jsonl', uh/'sessions/day/rollout-main.jsonl'
+        codex_path.parent.mkdir(parents=True)
+        def write_lines(path, rows):
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        assistant = dict(type='assistant',message=dict(id='one',model='claude-haiku-5-5',usage=dict(input_tokens=100001,output_tokens=2)))
+        write_lines(claude_path,[assistant,assistant])
+        codex_rows = [dict(type='session_meta',payload=dict(session_id='shared')),
+            dict(type='turn_context',payload=dict(model='gpt-6.1-sol',effort='high')),
+            dict(type='token_usage_record',payload=dict(usage=dict(input_tokens=100,cached_input_tokens=80,output_tokens=10)))]
+        write_lines(codex_path,codex_rows)
+        write_lines(folder/'sessions.jsonl',[dict(harness=h,model=None,effort='low',session=str(p)) for h,p in [('claude',claude_path),('codex',codex_path)]])
+        refresh = ['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(folder)]
+        subprocess.run(refresh,check=True)
+        cache = folder/'usage.json'
+        measured = json.loads(cache.read_text())
+        haiku = next(r for r in measured['by'] if r['harness']=='claude')
+        check(haiku['tokens']==100003 and abs(haiku['usd']-.0500055)<1e-9 and measured['estimated'], 'deduplication and Haiku long-prompt estimate')
+        stamp = cache.stat().st_mtime_ns
+        subprocess.run(refresh,check=True)
+        check(cache.stat().st_mtime_ns==stamp, 'unchanged sizes preserve cache')
+        write_lines(codex_path.parent/'rollout-child.jsonl',codex_rows)
+        subprocess.run(refresh,check=True)
+        check(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='codex')['tokens']==220, 'new sibling thread invalidates cache and is counted')
+        with claude_path.open('a') as stream:
+            stream.write(json.dumps(dict(type='cost-state',modelUsage={'claude-haiku-5-5':dict(costUSD=.77,inputTokens=100001,outputTokens=2)}))+'\n')
+        subprocess.run(refresh,check=True)
+        check(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='claude')['usd']==.77 and not json.loads(cache.read_text())['estimated'], 'closing cost-state supersedes estimate')
+        with (folder/'sessions.jsonl').open('a') as stream:
+            stream.write(json.dumps(dict(harness='codex',model=None,effort='high',session=str(codex_path.parent/'rollout-child.jsonl')))+'\n')
+        subprocess.run(refresh,check=True)
+        check(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='codex')['tokens']==220, 'separately bound child thread is not counted twice')
+        unknown_rows = copy.deepcopy(codex_rows); unknown_rows[1]['payload']['model'] = 'unpriced-model'
+        write_lines(codex_path.parent/'rollout-child.jsonl',unknown_rows)
+        subprocess.run(refresh,check=True)
+        check(any(not r['usd_known'] for r in json.loads(cache.read_text())['by']), 'unpriced models preserve tokens with unknown USD')
+        write_lines(codex_path.parent/'rollout-child.jsonl',codex_rows)
+        subprocess.run(refresh,check=True)
+        closed = claude_path.read_text(); resumed = copy.deepcopy(assistant); resumed['message']['id'] = 'resumed'
+        claude_path.write_text(closed+json.dumps(resumed)+'\n')
+        subprocess.run(refresh,check=True)
+        check(json.loads(cache.read_text())['estimated'], 'resumed Claude session outgrows its previous closing cost-state')
+        claude_path.write_text(closed)
+        subprocess.run(refresh,check=True)
+        claude_path.unlink(); codex_path.unlink()
+        projected = ucli('work','snapshot')['requests'][0]['usage']
+        check(projected['tokens']==100223 and projected['usd_complete'] and projected['tasks']['not_started']==3, 'snapshot sums caches without readable transcripts')
+        subprocess.run(refresh,check=True)
+        check(not ucli('work','snapshot')['requests'][0]['usage']['usd_complete'], 'a missing source cannot make a partial task cache look complete')
+        ucli('start','missing')
+        held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
+        check(held.returncode==0, held.stderr+held.stdout)
+        projected = ucli('work','snapshot')['requests'][0]['usage']
+        check(not projected['usd_complete'] and projected['tasks']['no_agent']==1 and projected['tasks']['unknown']==1 and any(r['task']=='missing' for r in projected['unknown']), 'agent-free decisions and missing launched sessions are distinct')
+        cache.unlink()
+        check(ucli('work','snapshot')['requests'][0]['usage']['tasks']['not_started']==2, 'unstarted tasks are explicit when no cache exists')
+    if os.environ.get('FM_WORK_TEST_USAGE') == '1':
+        print('PASS: %d usage checks' % checks); raise SystemExit(0)
     with tempfile.TemporaryDirectory(prefix='fm-work-graph-') as graph_tmp:
         graph_home = pathlib.Path(graph_tmp)
         for name in ('data','state','config','data/work-requests'):

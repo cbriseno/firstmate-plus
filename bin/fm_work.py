@@ -18,6 +18,7 @@ import fcntl
 
 from fm_work_lock import acquire
 from fm_work_aliases import Aliases, PATH as ALIAS_PATH
+from fm_task_usage import aggregate as aggregate_usage
 from fm_progress import observed_run, sources as progress_sources, code_head
 
 from fm_delivery import (BIN, canonical_read, home_path, read_text,
@@ -590,6 +591,8 @@ class Owner:
             if updated and (group['updated_at'] is None or updated > group['updated_at']):
                 group['updated_at'] = updated
         by_key = {t['key']: t for t in tasks}
+        for group in requests.values():
+            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']])
         for task in tasks:
             origin = by_key.get(task['question']['origin_task'])
             task['question']['origin'] = dict(key=task['question']['origin_task'], available=origin is not None,

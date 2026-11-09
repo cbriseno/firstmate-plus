@@ -3666,6 +3666,11 @@ while :; do
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+    # Refresh live usage outside work snapshot; the reader skips unchanged sizes.
+    for usage_meta in "$STATE"/*.meta; do
+      [ -f "$usage_meta" ] || continue
+      python3 "$SCRIPT_DIR/fm_task_usage.py" refresh "${FM_DATA_OVERRIDE:-$FM_HOME/data}/$(basename "$usage_meta" .meta)" || triage_log "usage refresh failed: $usage_meta"
+    done
     # Progress obligations use the same slow mechanical check cadence and
     # durable queue. No extra watcher, agent polling or inferred substeps.
     progress_obligations=$(FM_HOME="$FM_HOME" FM_SIGNAL_GRACE="$SIGNAL_GRACE" \

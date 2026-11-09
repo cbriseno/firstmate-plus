@@ -4277,6 +4277,7 @@ if [ -n "$LAUNCH_HOME_TOKEN" ] && [ "$KEEP_RUNNING" != 1 ]; then
   rm -rf "$launch_tmp_root/fm-$ID+$LAUNCH_HOME_TOKEN"
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
+python3 "$SCRIPT_DIR/fm_task_usage.py" refresh "$DATA/$ID" || echo "warning: final usage refresh failed for $ID" >&2
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
