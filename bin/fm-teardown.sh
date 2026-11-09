@@ -1918,12 +1918,15 @@ teardown_residual_body() {
 }
 
 teardown_record_residual() {
-  local body repo
+  local body repo request=()
   [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ] || return 0
   body=$(teardown_residual_body)
   repo=$(basename "${PROJ:-}")
+  # The residual is what is left of the same request, so it joins the closed
+  # task's declared request; a task without one keeps the default own request.
+  grep -q '"request": *{' "$DATA/$ID/presentation.json" 2>/dev/null && request=(--request-from "$ID")
   if ! fm_backlog_mutate "$DATA" add "$RESIDUAL_ID" "$RESIDUAL" --kind residual \
-      ${repo:+--repo "$repo"} --body "$body"; then
+      ${repo:+--repo "$repo"} --body "$body" "${request[@]}"; then
     echo "error: the residual of $ID could not be filed as $RESIDUAL_ID ($FM_BACKLOG_TRANSITION_ERROR); nothing was cleaned up" >&2
     return 1
   fi

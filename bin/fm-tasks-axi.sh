@@ -19,6 +19,8 @@
 # --request-from <task-id> to reuse that task's declared request for another
 # step of the same request, including work in another repository.
 # A dependency or a shared project alone never implies a shared request.
+# bin/fm-teardown.sh --residual files its follow-up with --request-from the
+# closed task when that task declares a request.
 # Existing duplicate adds retain their presentation unchanged.
 #
 # `show` (including `view`) and `list` decode stored captain-hold reasons

@@ -791,9 +791,16 @@ test_residual_closes_delivered_work_and_files_a_held_follow_up() {
   write_meta "$case_dir" local-only ship
   seed_backlog_in_flight "$case_dir"
   log_endpoint_and_copy_calls "$case_dir"
+  printf '%s\n' '{"request":{"id":"req-shared","label":"Shared request","project":"notes"}}' > "$case_dir/request.json"
+  FM_HOME="$case_dir" bash "$ROOT/bin/fm-tasks-axi.sh" presentation task-x1 \
+    --presentation-file "$case_dir/request.json" >/dev/null 2>&1 \
+    || fail "residual-close: could not declare the closed task's request"
 
   out=$(run_teardown "$case_dir" --residual "$text" 2> "$case_dir/stderr") || rc=$?
   expect_code 0 "$rc" "residual-close: teardown with a residual should succeed ($(cat "$case_dir/stderr"))"
+  [ "$(FM_HOME="$case_dir" bash "$ROOT/bin/fm-tasks-axi.sh" presentation task-x1-residual --json 2>/dev/null |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["presentation"]["request"]["id"])')" = req-shared ] \
+    || fail "residual-close: the residual did not join the closed task's request"
   [ "$(backlog_row_state "$case_dir")" = "done" ] \
     || fail "residual-close: the delivered task stayed open: $(backlog_row_state "$case_dir")"
   assert_absent "$case_dir/state/task-x1.meta" "residual-close: the worker record outlived the close"
