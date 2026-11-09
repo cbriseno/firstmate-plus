@@ -5400,11 +5400,13 @@ test_process_spawned_during_grace_is_reaped_on_later_pass() {
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   if [ -f "$child_file" ]; then child_pid=$(cat "$child_file"); fi
-  if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+  # An orphan can remain a zombie until its adopter reaps it; PID existence
+  # alone does not mean teardown left a process running.
+  if [ -n "$child_pid" ] && fm_test_pid_alive "$child_pid"; then
     child_survived=1
     kill -KILL "$child_pid" 2>/dev/null || true
   fi
-  if kill -0 "$pid" 2>/dev/null; then
+  if fm_test_pid_alive "$pid"; then
     parent_survived=1
     kill -KILL "$pid" 2>/dev/null || true
   fi
