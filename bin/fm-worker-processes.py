@@ -10,7 +10,9 @@ Linux uses a child subreaper: even double-forked children that clear their
 environment stay below the wrapper. Other platforms use inherited identity
 plus live descendants; detached children that also strip identity can escape.
 TERM, a two-second grace, then KILL precede verification. Zombies are reaped
-by the wrapper. No process-name, cwd, session-wide, or cross-home matching.
+by the wrapper as soon as they exit, not only at the end: as subreaper it
+inherits every orphan of a long-lived worker, and unreaped ones accumulated by
+the hundreds (472 under one test-running worker on 9 Nov 2026). No process-name, cwd, session-wide, or cross-home matching.
 Python 3 is required on the common worker launch and cleanup path.
 """
 
@@ -110,7 +112,13 @@ def run(scope, command):
     signal.signal(signal.SIGTERM, stop)
     try:
         child = subprocess.Popen(["/bin/sh", "-c", command])
-        return child.wait()
+        # Reap every child that exits, including orphans reparented to this
+        # subreaper, until the worker's own shell returns.
+        while True:
+            pid, status = os.waitpid(-1, 0)
+            if pid == child.pid:
+                child.returncode = os.waitstatus_to_exitcode(status)
+                return child.returncode
     finally:
         # Do not interrupt cleanup a second time while terminal teardown runs.
         signal.signal(signal.SIGHUP, signal.SIG_IGN)

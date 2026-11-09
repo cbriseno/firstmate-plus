@@ -952,6 +952,27 @@ PY
   pass "worker return and already-stopped exit reclaim detached resources without touching another scope"
 }
 
+test_worker_wrapper_reaps_orphans_while_running() {
+  local dir
+  dir=$(new_case reap)
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'a running worker wrapper left exited orphans as zombies'
+import os, pathlib, shlex, subprocess, sys, time
+root, directory = map(pathlib.Path, sys.argv[1:])
+scope = f'{directory}/home/state/t1:reap'
+# The worker double-forks short-lived orphans and keeps running.
+command = 'for i in 1 2 3 4 5; do (sleep 0.1 &) ; done; sleep 3'
+wrapper = subprocess.Popen([sys.executable, str(root/'bin/fm-worker-processes.py'), 'run', scope, command],
+                           env=dict(os.environ, FM_WORKER_PROCESS_SCOPE=scope))
+time.sleep(1.5)
+out = subprocess.run(['ps', '-o', 'stat=', '--ppid', str(wrapper.pid)], capture_output=True, text=True).stdout
+zombies = [s for s in out.split() if s.startswith('Z')]
+assert wrapper.wait(timeout=15) == 0, 'wrapper must return the worker exit code'
+if sys.platform == 'linux':
+    assert not zombies, f'{len(zombies)} zombie(s) under a running wrapper'
+PY
+  pass "a running worker wrapper reaps exited orphans immediately and keeps the worker exit code"
+}
+
 test_already_stopped_exit_is_idempotent() {
   local dir out rc
   dir=$(new_case idempotent)
@@ -1376,6 +1397,7 @@ test_verb_allowlist_is_closed
 test_resume_is_refused_with_its_reason
 test_relaunch_only_flags_are_rejected_on_other_verbs
 test_worker_resource_cleanup
+test_worker_wrapper_reaps_orphans_while_running
 test_already_stopped_exit_is_idempotent
 test_missing_tmux_endpoint_refuses_rather_than_claiming_a_stop
 test_interrupt_refuses_when_no_agent_runs
