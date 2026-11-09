@@ -1121,6 +1121,17 @@ CALL_SCHEMA=fm-captain-call.v1
 CALL_JSON=''
 ACTION_COMPLETION=0
 
+publish_call_event() {  # <event> <task-id> <occurrence>; task control lock held
+  local event=$1 id=$2 occurrence=$3
+  [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || return 0
+  task_show_or_fail "$id" "cannot read $id for its ledger event"
+  jq -cn --arg event "$event" --arg id "$id" --argjson occurrence "$occurrence" \
+    --arg state "$(show_field_value "$show" state)" --arg body "$(show_field_value "$show" body)" \
+    '{event:$event, occurrence:$occurrence, task:{id:$id,state:$state,body:$body}}' \
+    | python3 "$SCRIPT_DIR/fm_delivery.py" ledger-call --task "$id" --data "$DATA" \
+    || fail "canonical call $id saved but ledger publication failed; republish through the canonical owner"
+}
+
 captain_call_path() {  # <task-id>
   local data
   data=$(fm_backlog_data_absolute "$DATA") || return 1
@@ -1598,6 +1609,7 @@ command_hold() {
   [ -n "$hold_set" ] || fail "task $id lost its hold-set stamp while being held"
   [ "$call_given" = 0 ] || write_captain_call "$id" "$hold_set"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  publish_call_event call.opened "$id" "$occurrence"
   printf '%s\n' "$id"
 }
 
@@ -2447,6 +2459,7 @@ publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
   fi
   reconcile_request_retire "$id"
   wake_answer_owner "$id" "$occurrence"
+  publish_call_event call.resolved "$id" "$occurrence"
 }
 
 wake_answer_owner() {  # <task-id> <resolution-occurrence>

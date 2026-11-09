@@ -878,6 +878,29 @@ def progress_check(home):
     return lines
 
 
+def fleet_event(home, event, task_id, value):
+    """Publish a resulting entity through the existing opt-in ledger writer."""
+    config = Path(os.environ.get('FM_CONFIG_OVERRIDE') or home / 'config')
+    if not (config / 'fleet-ledger').exists():
+        return
+    subprocess.run(['bash', str(BIN / 'fm-fleet-ledger.sh'), 'entity', event, task_id],
+                   input=json.dumps(value, ensure_ascii=False), text=True, check=True,
+                   env=dict(os.environ, FM_HOME=str(home)))
+
+
+def ledger_call(home, args):
+    value = json.load(sys.stdin)
+    task = value.pop('task')
+    event = value.pop('event')
+    if task['id'] != args.task or event not in ('call.opened', 'call.resolved'):
+        raise ValueError('invalid call event identity')
+    data = Path(args.data or home / 'data')
+    call = json.loads(read_text(data, args.task + '/captain-call.json', 16384))
+    value.update(call=call, answer=read_captain_answer(home, task),
+                 identity=call['hold_set'] + '#' + str(value['occurrence'] - 1))
+    fleet_event(home, event, args.task, value)
+
+
 def presentation(home, args):
     patch = {key: getattr(args, key) or None for key in PRESENTATION_FIELDS
              if getattr(args, key, None) is not None}
@@ -994,12 +1017,14 @@ def presentation(home, args):
                 json.dump(value, stream, ensure_ascii=False)
                 stream.write('\n')
             os.replace(temp, home / path)
+            result = dict(id=args.task, **read_presentation(home, args.task, args.data))
+            fleet_event(home, 'task.presentation', args.task, result)
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)
     finally:
         os.close(lock)
-    result = dict(ok=True, state='published', id=args.task, **read_presentation(home, args.task, args.data))
+    result = dict(ok=True, state='published', **result)
     if repair_backup:
         result['repair_backup'] = repair_backup
     return result
@@ -1013,7 +1038,7 @@ def main():
             print('fm-tasks-axi: creation receipt failed: ' + str(exc), file=sys.stderr)
             return 2
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
+    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'ledger-call', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--task')
     parser.add_argument('--request-id')
@@ -1037,6 +1062,9 @@ def main():
     args = parser.parse_args()
     try:
         home = home_path()
+        if args.command == 'ledger-call':
+            ledger_call(home, args)
+            return 0
         if args.command == 'progress-contract':
             presentation_path(home, args.task, args.data)
             print(contract(home, args.task, args.data))

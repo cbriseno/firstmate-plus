@@ -18,6 +18,8 @@
 #   bin/fm-merge-outcome-lib.sh  merged ... pr (a recorded PR merge)
 #   bin/fm-merge-local.sh        merged ... local (a local-only landing)
 #   bin/fm-teardown.sh           cleaned_up
+#   bin/fm-captain-hold.sh       entity (call opened/resolved)
+#   bin/fm_delivery.py           entity (presentation published)
 #
 # Usage:
 #   fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model>
@@ -27,6 +29,9 @@
 #   fm-fleet-ledger.sh cleaned_up <task>
 #   fm-fleet-ledger.sh capture
 #   fm-fleet-ledger.sh appended <config> <state>/<task>.status
+#   fm-fleet-ledger.sh entity <call.opened|call.resolved|task.presentation> <task>
+# entity reads one JSON object from stdin, preserving its complete value.
+# Unlike legacy producers, entity owners propagate append failures before success.
 #
 # capture appends one task.status record for every complete (newline-ended)
 # line added to a state/<task>.status log since that task's byte offset in
@@ -50,7 +55,7 @@
 # home exactly as the other bin/ scripts do.
 #
 # Exit status: 0 on success or when off, 2 on a usage error, 1 when a record
-# could not be written. Producers ignore a failure so it never changes theirs.
+# could not be written. Legacy producers ignore failure; entity owners propagate it.
 set -u
 # Byte semantics for offsets and lengths; jq still reads the text as UTF-8.
 export LC_ALL=C
@@ -65,7 +70,7 @@ LOCK="$STATE/.fleet-ledger.lock"
 TEXT_MAX_CHARS=2000
 
 usage() {
-  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | appended <config> <state>/<task>.status" >&2
+  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | appended <config> <state>/<task>.status | entity <event> <task> (JSON object on stdin)" >&2
   exit 2
 }
 
@@ -75,6 +80,10 @@ task_ok() {
 
 cmd=${1:-}
 case "$cmd" in
+  entity)
+    { [ "$#" -eq 3 ] && task_ok "$3"; } || usage
+    case "$2" in call.opened|call.resolved|task.presentation) ;; *) usage ;; esac
+    ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;
   merged)
@@ -198,6 +207,10 @@ trap 'fm_lock_release "$LOCK"' EXIT
 rc=0
 # shellcheck disable=SC2016 # $names below are jq variables, not shell ones.
 case "$cmd" in
+  entity)
+    value=$(jq -cse 'if length == 1 and (.[0] | type) == "object" then .[0] else error("expected one object") end') || exit 1
+    append "$2" "$3" '{home: $home, value: $value}' --arg home "$FM_HOME" --argjson value "$value" || rc=1
+    ;;
   capture)
     while IFS=$'\t' read -r task _; do
       capture_task "$task" || rc=1

@@ -20,7 +20,7 @@ Every record carries these members:
 | ------- | --------------------------------------------------------- |
 | `v`     | Record format version, currently `1`                      |
 | `ts`    | Unix time in seconds when the record was written          |
-| `event` | One of the five event names below                         |
+| `event` | One of the event names below                              |
 | `task`  | The firstmate task id the record is about                 |
 
 Readers must ignore members and events they do not recognize, so later versions can add them without breaking existing readers.
@@ -34,6 +34,17 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `task.pr_ready`    | `pr`                                           | Firstmate records the task's PR as ready for review. |
 | `task.merged`      | `via` (`"pr"` or `"local"`), plus `pr` when `via` is `"pr"` | The task's PR merge is recorded, or its local-only branch landed. |
 | `task.cleaned_up`  | none                                           | The task's worker and local copy were removed. |
+| `call.opened` | `home`, `value` | A structured captain hold is saved or updated. |
+| `call.resolved` | `home`, `value` | The captain-hold owner settles the call and announces its resolution. |
+| `task.presentation` | `home`, `value` | The presentation owner publishes its declaration under the presentation lock. |
+
+For these three entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
+Call values carry the canonical `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
+Presentation values carry the presentation owner's read result: declaration, outcome occurrence, checkpoint, lifecycle and evidence.
+Replays replace the value for that identity; they do not increment counters.
+These producers return failure if publication fails, preserving the already saved canonical change for explicit replay through its owner.
+A crash between the canonical write and append can still omit an event; this is not a transactional journal or a complete board bootstrap.
+Other business mutations and later changes to answer application are not yet published here.
 
 `task.dispatched` members: `kind` is `ship`, `scout`, or `secondmate`; `project` is the project directory name, or `null` for a remote second mate; `harness` names the agent tool; `model` is the requested model, or `null` for the tool's default.
 
@@ -71,8 +82,9 @@ Example:
 - There is no sequence number and no gap detection.
 - Writes are plain appends with no forced flush to disk, so a machine crash can lose the newest records.
 - The file is never rotated and grows until truncated.
-  To truncate it, stop reading, then empty it with `: > state/fleet-ledger.jsonl`; later records append to the empty file.
+  To truncate it, stop readers, then empty it with `: > state/fleet-ledger.jsonl`; restart readers from an explicit canonical base, never an earlier cursor or projection.
 - The ledger copies status text verbatim from the home's `state/` directory and adds no scrubbing, so give its readers exactly the trust you give `state/`.
+  Entity events also contain complete private call, answer and presentation text.
 
 ## Not included
 
