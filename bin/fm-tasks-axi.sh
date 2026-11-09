@@ -155,7 +155,7 @@
 #   work preview | apply                 One bounded operation JSON on stdin.
 #   work request-status --request-id ID   Durable receipt; retries never repeat effects.
 #   work close --request-id ID            Close only workers at that pause's safe point.
-#   work reconcile                        Advance safe closes and FIFO queued resumes.
+#   work reconcile                        Advance safe closes and queued resumes in «Mi orden».
 #   work pause.preview | pause.request | pause.cancel
 #   work resume.preview | resume.request | resume.dequeue
 # Signal verbs read JSON {scope, rev, request_id, actor?, reason?}; previews
@@ -329,8 +329,10 @@
 # receipt, otherwise the unchanged backlog date/unknown. Group priority/pause
 # metadata first materialized for an existing project is not a creation event.
 # Request snapshots expose updated_at and default to recent activity; --order manual
-# follows structure.order. move accepts request:<id> for display order only
-# and returns its ordinary Undo.
+# is the work order: placed requests keep structure.order, unplaced ones enter by
+# priority, sigue follows it, and yields names the running task lowest in it that
+# gives way to ready work of a request placed higher. move request:<id> saves the
+# visible order with the move applied, never task priorities, and returns its ordinary Undo.
 # data/work-structure.json has one writer here.
 # A pause of active work requests a safe checkpoint through the primary inbox;
 # it never controls a worker endpoint. Removal requests never delete anything.

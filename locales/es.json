@@ -36,6 +36,7 @@
   "Only tasks have an execution order.": "Solo las tareas tienen orden de ataque.",
   "Only tasks in Next can be ordered.": "Solo puedes ordenar tareas de Sigue.",
   "Choose before or after.": "Elige antes o después.",
+  "Request moves change only the work order.": "Mover un encargo solo cambia el orden de trabajo.",
   "Invalid order target.": "Destino de orden inválido.",
   "Invalid order.": "Orden inválido.",
   "Invalid priority.": "Prioridad inválida.",

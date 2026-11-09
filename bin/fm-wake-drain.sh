@@ -830,7 +830,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The main drain advances safe pauses and FIFO resumes before taking the wake
+# The main drain advances safe pauses and queued resumes before taking the wake
 # queue lock. Snapshot and acknowledgement paths remain observation-only.
 if [ "$ACTOR" = main ] && [ -z "$ACK_THROUGH" ] && [ -d "${FM_DATA_OVERRIDE:-$FM_HOME/data}/work-requests" ]; then
   FM_HOME="$FM_HOME" bash "$SCRIPT_DIR/fm-tasks-axi.sh" work reconcile >/dev/null \

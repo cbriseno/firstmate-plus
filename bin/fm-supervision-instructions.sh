@@ -305,6 +305,7 @@ if [ -n "$HOST_SNIPPET" ]; then
 fi
 if [ -e "$FM_HOME/data/work-structure.json" ] && [ "$READ_ONLY" -eq 0 ]; then
   printf '%s\n' '- Work controls: use bin/fm-tasks-axi.sh work snapshot and its ordered sigue before choosing new work; preserve group pauses and the active-only freeze.'
+  printf '%s\n' '- When there is no room and the snapshot carries yields, pause.request its pause task with reason cede su lugar a <for_request label> and queue its resume.request; never pause for load alone.'
   printf '%s\n' '- Deck control notes arrive through the existing primary inbox. For safe_tasks, send each worker the exact safe-point key through fm-send; preserve work and never interrupt or tear down. Confirm with work request-status. Resume only eligible descendants after clear_pause, leaving individual holds and unrelated freezes intact.'
 fi
 ordinary_wake_line

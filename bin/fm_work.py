@@ -654,8 +654,33 @@ class Owner:
             return (0, manual.index(t['key'][5:])) if t['key'][5:] in manual else (1, rank(project if project is not None else own), rank(sub if sub is not None else own), rank(own), t['key'])
         request_groups = [dict(r, key='request:' + r['id']) for r in requests.values()]
         order = self.structure['order']
+        # «Mi orden» is the work order: placed requests keep the captain's
+        # order; any request not yet placed enters by its priority rank.
+        unit = {t['key']: 'request:' + t['request']['id'] if t['request'] else t['key'] for t in tasks}
+        best = {}
+        for t in tasks:
+            if t['state'] != 'done':
+                best[unit[t['key']]] = min(best.get(unit[t['key']], (9,)), sort_key(t))
+        units = {g['key'] for g in request_groups} | set(unit.values())
+        placed = [k for k in order if k in units]
+        pending = sorted(units - set(placed), key=lambda k: (best.get(k, (9,)), k))
+        work = []
+        for k in placed:
+            while pending and best.get(pending[0], (9,)) < best.get(k, (9,)):
+                work.append(pending.pop(0))
+            work.append(k)
+        work += pending
+        self.work_order = [k for k in work if k.startswith('request:')]
+        position = {k: i for i, k in enumerate(work)}
+        def unit_slot(k):
+            # Placed requests rank in the captain's order; other work enters before
+            # the first placed request it outranks, so with nothing placed all tie.
+            if k in placed:
+                return (placed.index(k), 1)
+            return (next((i for i, p in enumerate(placed) if best.get(k, (9,)) < best.get(p, (9,))), len(placed)), 0)
+        self.work_slot, self.work_unit, self.work_placed = unit_slot, unit, set(placed)
         if getattr(self, 'request_sort', 'recent') == 'manual':
-            request_groups.sort(key=lambda g: (order.index(g['key']) if g['key'] in order else len(order), g['key']))
+            request_groups.sort(key=lambda g: position[g['key']])
         else:
             request_groups.sort(key=lambda g: g['key'])
             request_groups.sort(key=lambda g: g['updated_at'] or '', reverse=True)
@@ -684,13 +709,27 @@ class Owner:
             if g['kind'] == 'project':
                 g['requests'] = listed.get(g['key'], [])
                 g['derived_blocked_by'] = [dict(ref=ref, open=True, via=via) for ref, via in sorted(derived.get(g['key'], {}).items())]
-        sigue = [t['key'] for t in sorted(tasks, key=sort_key) if t['state'] == 'ready']
+        def slot(t):
+            # Placed requests keep their tasks together in the captain's order;
+            # other work enters by its own priority, so an unplaced board is today's order.
+            if unit[t['key']] in placed:
+                return (placed.index(unit[t['key']]), 1)
+            return (next((i for i, k in enumerate(placed) if sort_key(t) < best.get(k, (9,))), len(placed)), 0)
+        sigue = [t['key'] for t in sorted(tasks, key=lambda t: (slot(t), sort_key(t))) if t['state'] == 'ready']
+        # Who gives way when there is no room: the running work lowest in the
+        # work order, only for ready work the captain placed above it.
+        crew = self.capacity()
+        running = sorted((t for t in tasks if t['state'] == 'running'), key=lambda t: position[unit[t['key']]])
+        yields = None
+        if sigue and running and unit[sigue[0]] in placed and position[unit[sigue[0]]] < position[unit[running[-1]['key']]]:
+            yields = dict(pause=running[-1]['key'], request=unit[running[-1]['key']], for_task=sigue[0], for_request=unit[sigue[0]],
+                          room=crew.get('reason') is None and (crew.get('agents_cap') is None or crew['agents_running'] < crew['agents_cap']))
         controls = [r for r in self.request_records() if r.get('signal') in ('pause.request', 'resume.request')]
         current = {}
         for record in sorted(controls, key=lambda r: r.get('at_ns', 0)):
             current[record['scope']] = record
         current = dict(sorted(current.items(), key=lambda pair: pair[1].get('at_ns', 0)))
-        queue = [r['scope'] for r in current.values() if r.get('pause_state') == 'queued' and not r.get('cancelled')]
+        queue = sorted((r['scope'] for r in current.values() if r.get('pause_state') == 'queued' and not r.get('cancelled')), key=self.scope_position)
         pauses = [dict(scope=r['scope'], state=r.get('pause_state', 'none'), at=r['at'],
                        agents_total=len(r.get('safe_tasks') or r.get('candidates', [])),
                        agents_at_safe_point=sum(self.safe_point(i, r)[0] == 'reached' for i in r.get('safe_tasks', [])) if r['signal'] == 'pause.request' else len(r.get('candidates', [])),
@@ -703,8 +742,13 @@ class Owner:
         return dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
                     subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, requests=request_groups, sigue=sigue, rev=self.rev, history_sources=self.history_sources,
                     pause_controls=pauses, events=[e for r in sorted(controls, key=lambda r: r.get('at_ns', 0)) for e in r.get('events', [])],
-                    crew=self.capacity(),
+                    crew=crew, yields=yields,
                     aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized'))
+
+    def scope_position(self, scope):
+        # A control scope ranks by its highest member in «Mi orden» (set by snapshot).
+        ranks = [self.work_slot(self.work_unit[k]) for k in ('task:' + i for i in self.members(scope)) if k in self.work_unit]
+        return min(ranks, default=(len(self.work_placed) + 1, 0))
 
     @staticmethod
     def affected(keys, tasks):
@@ -724,7 +768,7 @@ class Owner:
         row = self.rows.get(task_id)
         refuse(row is not None and row['state'] == 'done' and name != 'request_removal', 'task_done', tr('This task is already complete.'))
         if name == 'move' and target in self.request_keys():
-            refuse(op.get('adopt_priority') is not None or op.get('restore_unset'), 'invalid_value', tr('Group moves only change display order.'))
+            refuse(op.get('adopt_priority') is not None or op.get('restore_unset'), 'invalid_value', tr('Request moves change only the work order.'))
             peers = self.request_keys()
             before_key, after_key = op.get('before'), op.get('after')
             refuse(bool(before_key) and bool(after_key), 'invalid_value', tr('Choose before or after.'))
@@ -736,13 +780,13 @@ class Owner:
                 refuse(not isinstance(order, list) or any(not isinstance(k, str) or k not in peers | set(self.rows) for k in order)
                        or len(set(order)) != len(order), 'invalid_value', tr('Invalid order.'))
             else:
-                order = [k for k in before if k in peers and k != target]
-                order += sorted(peers - set(order) - {target})
+                self.snapshot()
+                order = [k for k in self.work_order if k != target]
                 at = order.index(anchor) + (1 if after_key else 0) if anchor else len(order)
                 order.insert(at, target)
                 order = [k for k in before if k not in peers] + order
             self.structure['order'] = order
-            # Group moves change display order without changing execution priority.
+            # Request moves set the work order; they never rewrite task priorities.
             return [], before, dict(op='move', target=target, restore_order=before)
         group = None
         if target.startswith('req:'):
@@ -1326,11 +1370,19 @@ class Owner:
                     record['result'].update(state='rejected', code=exc.code, message=str(exc), pause_state='none')
                     self.atomic('data/work-requests/' + record['operation']['request_id'] + '.json', record)
                     results.append(record['result'])
-        for record in records:
-            if record.get('signal') == 'resume.request' and record.get('pause_state') == 'queued' and not record.get('cancelled'):
+        queued = [r for r in records if r.get('signal') == 'resume.request' and r.get('pause_state') == 'queued' and not r.get('cancelled')]
+        if queued:
+            # Queued resumes leave in «Mi orden» (arrival order among equals) and
+            # never ahead of ready work of a request the captain placed higher.
+            sigue = self.snapshot()['sigue']
+            ahead = self.work_slot(self.work_unit[sigue[0]]) if sigue and self.work_unit[sigue[0]] in self.work_placed else None
+            queued = [(self.scope_position(r['scope']), r) for r in queued]
+            for rank, record in sorted(queued, key=lambda pair: pair[0]):
+                if ahead is not None and ahead < rank:
+                    break
                 results.append(self.advance_resume(record, from_queue=True))
                 if results[-1].get('pause_state') == 'queued':
-                    break  # FIFO: a later scope cannot take the first scope's place.
+                    break  # A later scope cannot take the first scope's place.
         return dict(state='applied', results=results)
 
     def hierarchy_invariants(self):
