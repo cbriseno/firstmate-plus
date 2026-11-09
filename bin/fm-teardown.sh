@@ -204,7 +204,7 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
-# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+# Usage: fm-teardown.sh <task-id> [--preserve | --force] [--legacy-record]
 #                       [--residual "<what is left>" [--keep-running]]
 #        fm-teardown.sh <task-id> --repair-missing-record
 #   --repair-missing-record closes only an orphan backlog row whose metadata
@@ -229,6 +229,12 @@
 #   running cannot signal a task that no longer exists. The landed-work
 #   refusals still apply, because the task is still being closed as delivered.
 #   Neither flag applies to a secondmate.
+#   --preserve closes a worker without requiring landing or discard approval:
+#   commit all pending files (respecting .gitignore), verify the task branch at
+#   that commit in the shared project, then close the endpoint and return its
+#   copy without deleting the branch. Reopen the backlog row with the branch
+#   in its note; this saves work, it does not declare delivery or installation.
+#   It cannot combine with --force, --residual, or --repair-missing-record.
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
@@ -515,6 +521,9 @@ fi
 ID=$1
 TEARDOWN_LOST_SLOT_EXIT=4
 FORCE=
+PRESERVE=0
+PRESERVED_BRANCH=
+PRESERVED_HEAD=
 LEGACY_RECORD_GIVEN=0
 RESIDUAL=
 RESIDUAL_GIVEN=0
@@ -524,6 +533,7 @@ shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
+    --preserve) PRESERVE=1 ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
     --repair-missing-record) REPAIR_MISSING_RECORD=1 ;;
     --residual)
@@ -540,6 +550,10 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+if [ "$PRESERVE" = 1 ] && { [ -n "$FORCE" ] || [ "$RESIDUAL_GIVEN" = 1 ] || [ "$REPAIR_MISSING_RECORD" = 1 ]; }; then
+  echo "error: --preserve cannot combine with --force, --residual, or --repair-missing-record" >&2
+  exit 2
+fi
 if [ "$RESIDUAL_GIVEN" = 1 ]; then
   case "$RESIDUAL" in
     ''|*[[:cntrl:]]*)
@@ -1337,6 +1351,10 @@ ORCA_PATH_MATCH_VERIFIED=0
 CLEANUP_RECOVERY=$TEARDOWN_CLEANUP_RECOVERY
 
 KIND=$TEARDOWN_META_KIND
+if [ "$PRESERVE" = 1 ] && { [ "$KIND" = secondmate ] || [ "$KIND" = host ]; }; then
+  echo "error: --preserve requires a ship or scout task with a task branch" >&2
+  exit 2
+fi
 if [ "$KIND" = secondmate ] && [ "$RESIDUAL_GIVEN" = 1 ]; then
   echo "error: --residual and --keep-running close delivered work items; secondmate $ID is not one" >&2
   exit 2
@@ -1876,6 +1894,10 @@ BACKLOG_DONE_ARGS=()
 backlog_done_args() {
   local data_relative
   BACKLOG_DONE_ARGS=()
+  if [ "$PRESERVE" = 1 ]; then
+    BACKLOG_DONE_ARGS=(--note "preserved-branch:$PRESERVED_BRANCH")
+    return 0
+  fi
   case "$KIND" in
     scout)
       data_relative=$(fm_backlog_data_relative "$DATA") || return 1
@@ -1967,7 +1989,9 @@ backlog_refresh_reminder() {
   else
     backlog_display="${DATA%/}/backlog.md"
   fi
-  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
+  if [ "$PRESERVE" = 1 ]; then
+    printf 'Preserved branch: %s in %s. Record it in the backlog note if this home uses manual updates. Work remains unlanded.\n' "$PRESERVED_BRANCH" "$PROJ"
+  elif [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
     printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   elif [ "$BACKLOG_CLOSED" = 1 ]; then
     printf '%s\n' "Backlog: $ID is closed in $backlog_display. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
@@ -2289,10 +2313,39 @@ teardown_note_dirty_return() {
   printf '%s\n' "$residue" | sed 's/^/  /' >&2
 }
 
+# The preserving close follows the manual save, verify, close, record procedure.
+verify_preserved_worktree() {
+  local head shared_head dirty
+  head=$(git -C "$WT" rev-parse HEAD) || return 1
+  shared_head=$(git -C "$PROJ" rev-parse --verify "refs/heads/$PRESERVED_BRANCH") || return 1
+  dirty=$(git -C "$WT" status --porcelain --untracked-files=all) || return 1
+  if [ "$head" != "$PRESERVED_HEAD" ] || [ "$shared_head" != "$head" ] || [ -n "$dirty" ]; then
+    echo "REFUSED: preserved branch $PRESERVED_BRANCH does not contain the complete current worktree; nothing may be discarded." >&2
+    return 1
+  fi
+}
+
+preserve_task_worktree() {
+  PRESERVED_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD) || {
+    echo "REFUSED: --preserve needs an attached task branch at $WT." >&2
+    return 1
+  }
+  git -C "$WT" add -A || return 1
+  if ! git -C "$WT" diff --cached --quiet; then
+    git -C "$WT" commit -m "Save pending work before worker close" || return 1
+  fi
+  PRESERVED_HEAD=$(git -C "$WT" rev-parse HEAD) || return 1
+  verify_preserved_worktree
+}
+
 validate_worktree_teardown_safety() {
   local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
+  if [ "$PRESERVE" = 1 ]; then
+    verify_preserved_worktree
+    return $?
+  fi
   case "$KIND" in
     secondmate|scout|host) return 0 ;;
   esac
@@ -3842,7 +3895,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
   cleanup_firstmate_home_children "$HOME_PATH" || exit $?
 fi
 
-if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
+if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ]; then
   REPORT="$DATA/$ID/report.md"
   if [ ! -f "$REPORT" ]; then
     echo "REFUSED: scout task $ID has no report at $REPORT." >&2
@@ -3905,6 +3958,10 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+if [ "$PRESERVE" = 1 ]; then
+  teardown_owns_worktree && preserve_task_worktree || exit 1
+fi
+
 if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -3919,7 +3976,7 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
-if [ "$KIND" = scout ] && [ "$KEEP_RUNNING" != 1 ] && teardown_owns_worktree && [ -d "$WT" ]; then
+if [ "$KIND" = scout ] && [ "$PRESERVE" != 1 ] && [ "$KEEP_RUNNING" != 1 ] && teardown_owns_worktree && [ -d "$WT" ]; then
   teardown_backup_scout || { echo 'REFUSED: scout backup failed; worktree and task records retained.' >&2; exit 1; }
 fi
 
@@ -3948,6 +4005,7 @@ fi
 
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
+[ "$PRESERVE" != 1 ] || BACKLOG_TRANSITION=retain
 BACKLOG_TRANSITION_FLAGS=()
 [ "$BACKLOG_TRANSITION" = close ] || BACKLOG_TRANSITION_FLAGS=(--retain)
 BACKLOG_SKIP_REASON=
@@ -4047,7 +4105,10 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
-# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
+# Preserve the saved branch; ordinary landed/discard cleanup drops its branch.
+if [ "$PRESERVE" = 1 ]; then
+  verify_preserved_worktree || exit 1
+fi
 if [ "$KEEP_RUNNING" = 1 ]; then
   # Header: --keep-running. Only firstmate's own turn-end wiring leaves the copy.
   if teardown_owns_worktree && [ -d "$WT" ]; then
@@ -4068,7 +4129,10 @@ elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
     if [ "$branch" != "HEAD" ]; then
       if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+        [ "$PRESERVE" = 1 ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      elif [ "$PRESERVE" = 1 ]; then
+        echo "REFUSED: cannot detach the saved task branch before worktree return." >&2
+        exit 1
       fi
     fi
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
@@ -4087,7 +4151,10 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
     if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      [ "$PRESERVE" = 1 ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+    elif [ "$PRESERVE" = 1 ]; then
+      echo "REFUSED: cannot detach the saved task branch before worktree return." >&2
+      exit 1
     fi
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
@@ -4362,7 +4429,7 @@ if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" != retain ]; then
     printf 'warning: cleanup closed %s, but automatic moot-call retirement needs sweep-moot retry\n' "$ID" >&2
   fi
 fi
-if [ "$KIND" = ship ] && [ "$MODE" != local-only ]; then
+if [ "$KIND" = ship ] && [ "$MODE" != local-only ] && [ "$PRESERVE" != 1 ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 # A secondmate retirement may remove the home containing an overridden control

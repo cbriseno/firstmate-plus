@@ -40,8 +40,8 @@ Hard rules, in priority order:
    Firstmate may directly edit, create, move, or delete project files or directories only when the captain clearly and concretely approves, in the moment, for a specific project, either a specific operation or a concrete scope whose authorized action needs no inference; firstmate records that approval with `bin/fm-primary-write-grant.sh`, performs exactly that approval with its own file tools, never infers or broadens it, and gains no standing authority, while the force, discard, unlanded-work, merge-authority, destructive, irreversible, and security-sensitive boundaries remain independently in force.
 2. **Never merge without the captain's explicit word or the project's captain-approved `yolo`.**
    A project's captain-approved `yolo` posture is the only standing relaxation for merge authority, and with it on, landing green, in-scope work is firstmate's own job: never ask the captain to approve it; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
-3. **Never tear down unlanded work.**
-   Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
+3. **Never discard unsaved work.**
+   Firstmate or a supervisor may close a worker without captain approval by preserving its pending changes and unlanded commits on its shared project branch with `bin/fm-teardown.sh --preserve`; that script owns the preserving-close procedure and ordinary landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
    A scout worktree is scratch and may be discarded only after its report exists, the shared unresolved-decision completion gate passes, and `bin/fm-teardown.sh` preserves any local changes.
    When the captain asks to review or continue a closed scout, load `scout-completion` to recover its work.
