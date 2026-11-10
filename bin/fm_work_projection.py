@@ -7,11 +7,12 @@ between canonical save and append still require explicit canonical recovery.
 """
 import copy
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from fm_work import Owner, digest, time_value
+from fm_work import Owner, digest, time_value, read_text
 import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
 from fm_task_usage import read_usage
@@ -40,13 +41,25 @@ def bootstrap(owner):
         receipts={i: completion_receipt(owner.home, r) for i,r in owner.rows.items()},
         created={t['key'][5:]: t['created'] for t in snapshot['tasks']},
         usage={i: read_usage(owner.data / i / 'usage.json') for i in owner.rows})
+    activity = {}
+    for task, row in owner.rows.items():
+        if row['state'] != 'in_flight':
+            continue
+        try:
+            record = read_text(owner.home, 'state/' + task + '.busy-state', 4096).strip()
+            gen = read_text(owner.home, 'state/' + task + '.busy-gen', 4096).strip()
+        except (OSError, ValueError, UnicodeError):
+            continue
+        match = re.fullmatch(r'v1 gen=(\S+) seq=(\d+) state=(busy|idle|unknown) source=(\S+) event=(\S+) ts=(\d+)', record)
+        if match and match[1] == gen:
+            activity[task] = dict(gen=gen, seq=int(match[2]), state=match[3], source=match[4], event=match[5])
     return dict(schema='fm-work-bootstrap.v1', home=str(owner.home),
         position=owner.ledger_start, enabled=(owner.home / 'config/fleet-ledger').exists(),
         rows=owner.rows, presentations=owner.presentations, projects=owner.projects,
         registry_text=owner.registry_text, structure=owner.structure, status=owner.status,
         captain_answers=owner.captain_answers, requests=owner.request_records(),
         aliases=owner.aliases.value, facts=facts, snapshot=snapshot, selector=selector,
-        empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
+        activity=activity, empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
 
 
 class Projection(Owner):
@@ -69,7 +82,7 @@ class Projection(Owner):
         self.history = self.select_history(self.rows.values())
         self.history_sources = self.value['history_sources']
         self.empty_presentation = base['empty_presentation']
-        self.messages, self.activity = [], {}
+        self.messages, self.activity = [], copy.deepcopy(base.get('activity', {}))
         self.calls = {(t['key'][5:], t['question']['asked']['value']): dict(task=t['key'][5:],
             call=dict(call=t['question']['call'], hold_set=t['question']['asked']['value']), state='open')
             for t in base['snapshot']['tasks'] if t['question']['open'] and t['question']['call']}
