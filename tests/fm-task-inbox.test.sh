@@ -665,6 +665,40 @@ idle_capture() {  # <dir>
   printf '%s\n' "$1/idle.capture"
 }
 
+test_watcher_resumes_timed_pause_once() {
+  local word dir state log rec line rings
+  for word in until hasta; do
+    dir=$(setup_watch_case "timed-pause-$word")
+    state="$dir/state"; log="$dir/send.log"; rec="$state/t1.inbox/001.msg"
+    # Each call sources a fresh watcher shell, as the other inbox checks do.
+    resume_check() {
+      PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
+        FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+        FM_FAKE_TMUX_AGENT=grok bash -c \
+        '. "$1"; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$1"
+    }
+    for line in \
+      "paused [key=timer]: wait $word 2099-01-01T00:00Z" \
+      "paused: wait $word malformed" \
+      "captain-held: wait $word 2000-01-01T00:00Z"; do
+      resume_check "$line" || fail "future or invalid pause check failed"
+      [ ! -f "$rec" ] || fail "resume without an elapsed pause deadline"
+    done
+    line="paused [key=timer]: wait $word 2000-01-01T00:00:00Z"
+    resume_check "$line" || fail "elapsed pause check failed"
+    [ -f "$rec" ] || fail "no resume after $word deadline"
+    assert_contains "$(inbox_lib "$state" fm_task_inbox_body "$rec")" \
+      'Recheck the waiting condition and resume' "timed pause resume body"
+    resume_check "$line" || fail "repeat pause check failed"
+    mv "$rec" "$state/t1.inbox/handled/"
+    resume_check "$line" || fail "acknowledged pause check failed"
+    [ ! -f "$state/t1.inbox/002.msg" ] || fail "duplicate $word resume after restart"
+    rings=$(grep -c 'Firstmate instruction waiting' "$log" || true)
+    [ "$rings" = 1 ] || fail "$word deadline rang $rings times"
+  done
+  pass "watcher: until/hasta deadlines send one durable resume, surviving acknowledgement and restart"
+}
+
 test_watcher_rerings_idle_pane_quietly() {
   local dir state out log pid rec
   dir=$(setup_watch_case rering)
@@ -1201,6 +1235,7 @@ test_fire_and_forget_retry_is_owed_once
 test_fire_and_forget_retry_is_quiet_without_the_flag
 test_ring_ladder_policy
 test_watcher_rerings_idle_pane_quietly
+test_watcher_resumes_timed_pause_once
 test_watcher_waits_on_busy_pane
 test_watcher_busy_budget_resets_on_ring_and_ack
 test_watcher_busy_bookkeeping_failure_surfaces

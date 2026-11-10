@@ -648,6 +648,31 @@ inbox_steer_check() {  # <window> <task>
   esac
 }
 
+# A timed pause gets the same resume steer a human would send, once per
+# declaration. Run before pane triage, including for busy or changing panes:
+# a deadline must not depend on a stale hash or a supervisor handling a wake.
+# fm-send owns durable delivery and the ordinary inbox retry path.
+paused_until_resume() {  # <window> <task> <declared-wait-line>
+  local win=$1 task=$2 last=$3 until marker
+  [ -n "$task" ] || return 0
+  marker="$STATE/.paused-resumed-$(window_key "$win")"
+  if ! status_is_paused "$last"; then
+    rm -f "$marker"
+    return 0
+  fi
+  [ "$(cat "$marker" 2>/dev/null || true)" != "$last" ] || return 0
+  until=$(status_paused_until "$last") || return 0
+  [ "$(date +%s)" -ge "$until" ] || return 0
+  if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-send.sh" "$task" \
+      "Your declared pause deadline has arrived. Recheck the waiting condition and resume the task if it has cleared; append resolved with the pause's key when resuming, or declare the remaining wait. Pause: $last"; then
+    printf '%s' "$last" > "$marker"
+    triage_log "sent timed-pause resume: $win"
+  else
+    triage_log "timed-pause resume failed: $win"
+  fi
+}
+
 # 0 (benign/absorb) if EVERY task in a no-verb "signal:" wake has positive work
 # evidence; 1 otherwise. Each task may satisfy the authoritative working proof,
 # or an eligible bare turn-end may use the opt-in pane-churn proof below.
@@ -3952,6 +3977,7 @@ EOF
     [ -z "$task" ] || inbox_steer_check "$w" "$task"
     key=$(window_key "$w")
     last=$(status_declared_wait_line "$STATE/$task.status")
+    paused_until_resume "$w" "$task" "$last"
     if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
       clear_pause_tracking "$key"
     fi
