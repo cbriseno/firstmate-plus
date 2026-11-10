@@ -239,6 +239,16 @@ def create_task(arguments):
             presentation(data.parent, argparse.Namespace(task=task_id, data=str(data),
                 presentation_file=None, groups=False, clear=False, repair=False,
                 reconcile=False, replan=None, request=request))
+        if (data.parent / 'data/work-aliases.json').exists():
+            # Creation holds the work lock. Allocate and publish the new short
+            # identity before readers receive the new task event.
+            from fm_work import Owner
+            owner = Owner()
+            alias_lock = owner.lock()
+            try:
+                owner.load(include_presentations=False)
+            finally:
+                os.close(alias_lock)
         if (data.parent / 'config' / 'fleet-ledger').exists():
             fleet_event(data.parent, 'task.changed', task_id, dict(task=ledger_rows(data.parent).get(task_id)))
         pending.unlink()

@@ -68,8 +68,12 @@ with tempfile.TemporaryDirectory(prefix='fm-creation-time-') as folder:
         cli('add','legacy','Legacy card','--repo','alpha',raw=True)
         assert not receipt('legacy').exists() and (home/'data/backlog.md').read_bytes()==before
         assert task(snap(),'legacy')['request'] is None, 'duplicate add classified legacy work'
+        (home/'data/work-aliases.json').write_text(json.dumps(dict(
+            schema='fm-work-aliases.v1', home=str(home), forward={}, reverse={})))
         start=dt.datetime.now(dt.timezone.utc)
         output=cli('add','new-','New card','--repo','alpha',raw=True)
+        aliases=json.loads((home/'data/work-aliases.json').read_text())
+        assert aliases['forward']['task:new-'].startswith('T-'), 'creation did not allocate its short alias'
         assert output.startswith('ok: added new- '), output
         value=task_created('new-'); stamp=instant(value)
         assert value['source']=='task.creation-receipt' and start <= dt.datetime.fromisoformat(stamp.replace('Z','+00:00')) <= dt.datetime.now(dt.timezone.utc)
