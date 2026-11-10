@@ -95,3 +95,46 @@ assert next(t for t in snapshot['tasks'] if t['key']=='task:previous')['outcome'
 assert migrate('plan')['count'] == 0
 print('PASS: v11b plan, apply, archive, reopened tasks, ambiguity, idempotence and guarded rollback')
 PY
+
+# Upgrade notes offer a real hold once, and only mark successful migrations.
+python3 - "$ROOT" "$TASK_HOME" <<'PYTHON'
+import json, os, pathlib, subprocess, sys
+root, base = map(pathlib.Path, sys.argv[1:])
+home = base/'upgrade-home'; code = base/'upgrade-release'
+for name in ('data', 'state', 'config'):
+    (home/name).mkdir(parents=True)
+code.mkdir(); (code/'bin').symlink_to(root/'bin', target_is_directory=True)
+notes = code/'UPGRADING.md'
+notes.write_bytes((root/'UPGRADING.md').read_bytes())
+(home/'data/backlog.md').write_text('## Queued\n\n## In flight\n\n## Done\n')
+env = dict(os.environ, FM_HOME=str(home), FM_ROOT_OVERRIDE=str(code))
+def call(script, *args, status=0):
+    p = subprocess.run(['bash',str(root/'bin'/script),*args],env=env,capture_output=True,text=True)
+    assert p.returncode == status, (args,p.stdout,p.stderr)
+    return p.stdout
+assert 'UPDATE_ACTIONS:' in call('fm-upgrade.sh','check')
+assert call('fm-upgrade.sh','check') == ''
+assert not (home/'data/upgrades/applied').exists()
+card = json.loads((home/'data/upgrade-v11b/captain-call.json').read_text())['call']
+assert card['recommended'] == 'apply', card
+assert len(card['options']) == 2, card
+answer = base/'upgrade-answer.txt'; answer.write_text('Aplicarlas - fixture acceptance\n')
+call('fm-captain-hold.sh','answer','upgrade-v11b','--decision-file',str(answer))
+call('fm-upgrade.sh','apply')
+assert (home/'data/upgrades/applied').read_text() == 'v11b\n'
+assert call('fm-upgrade.sh','apply') == call('fm-upgrade.sh','check') == ''
+# No repeated prompt on decline, and no applied id for a failed command.
+with notes.open('a') as stream:
+    stream.write('\n## fixture - 2026-11-10\n\nAction: Fixture action.\n\n'
+                 'Command: `bash -c "exit 7"`\n')
+assert 'upgrade-fixture' in call('fm-upgrade.sh','check')
+answer.write_text('Dejarlas pendientes - fixture decline\n')
+call('fm-captain-hold.sh','answer','upgrade-fixture','--decision-file',str(answer))
+assert call('fm-upgrade.sh','check') == ''
+call('fm-upgrade.sh','apply',status=1)
+assert (home/'data/upgrades/applied').read_text() == 'v11b\n'
+notes.write_text(notes.read_text().replace('exit 7','exit 0'))
+call('fm-upgrade.sh','apply')
+assert (home/'data/upgrades/applied').read_text() == 'v11b\nfixture\n'
+print('PASS: upgrade hold, no implicit migration, acceptance, decline, command failure and successful ids')
+PYTHON

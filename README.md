@@ -57,6 +57,8 @@ A zero exit checks local command availability and Unix capabilities.
 It does not prove authentication, tool-version compatibility, a working agent session, or live backend operation.
 Resolve missing prerequisites through the administrator before starting a supervisor.
 
+Existing installations: see [upgrade actions](UPGRADING.md) for migrations and activation steps offered after updating.
+
 ## Required versus optional tools
 
 Run `bash bin/fm-doctor.sh --tools` from the checkout for a read-only inventory of detected tools, their known minimums, factory availability, and affected capabilities.

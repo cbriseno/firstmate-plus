@@ -796,8 +796,20 @@ EOF
   FM_HOME="$home" "$ROOT/bin/fm-fleet-ledger.sh" configuration || fail 'configuration publication failed'
   jq -e --arg home "$home" 'select(.event == "home.configuration" and .home == $home)' \
     "$home/state/fleet-ledger.jsonl" >/dev/null || fail 'enabled producer did not publish configuration'
+  # Notes are first discovered after the old home pulls the new release.
+  cp "$ROOT/UPGRADING.md" "$root/UPGRADING.md"
+  # Use real task ownership, while keeping terminal/network boundaries fake.
+  ln -s "$(command -v tasks-axi)" "$fakebin/tasks-axi"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+  rm -f "$fakebin/node"
+  ln -s "$(command -v node)" "$fakebin/node"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'UPDATE_ACTIONS: upgrade-v11b' 'startup did not offer the pulled upgrade'
+  [ -s "$home/data/upgrades/offered" ] || fail 'startup did not remember the offer'
+  [ ! -e "$home/data/upgrades/applied" ] || fail 'startup applied a migration without acceptance'
   printf 'existing flag contents\n' > "$home/config/fleet-ledger"
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" 'UPDATE_ACTIONS:' 'startup repeated the upgrade question'
   assert_equals 'existing flag contents' "$(cat "$home/config/fleet-ledger")" 'startup overwrote the flag'
   pass 'locked startup enables event publication without manual configuration and preserves existing flags'
 }
@@ -854,6 +866,7 @@ test_lock_refusal_read_only_path() {
   IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
+  cp "$ROOT/UPGRADING.md" "$root/UPGRADING.md"
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
 
@@ -877,6 +890,7 @@ EOF
   wait "$holder_pid" 2>/dev/null || true
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a lock refusal"
+  [ ! -e "$home/data/upgrades" ] || fail 'read-only startup offered upgrades'
   [ ! -e "$home/config/fleet-ledger" ] || fail 'read-only startup enabled publication'
   assert_contains "$out" "READ-ONLY SESSION" "read-only banner missing on lock refusal"
   assert_contains "$out" "another live firstmate session holds the lock" "read-only banner did not surface fm-lock.sh's own error text"
@@ -2495,12 +2509,14 @@ EOF
   assert_contains "$network_report" "SECONDMATE_LIVENESS" \
     "the full startup fixture did not exercise a mutating sweep"
 
+  cp "$ROOT/UPGRADING.md" "$root/UPGRADING.md"
   rm -f "$home/config/fleet-ledger"
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     "$SESSION_START" --reemit)
 
+  [ ! -e "$home/data/upgrades" ] || fail 'context re-emit offered upgrades'
   [ ! -e "$home/config/fleet-ledger" ] || fail 'context re-emit enabled publication'
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
   assert_not_contains "$reemit" "SECONDMATE_LIVENESS" "--reemit repeated a mutating sweep startup already ran"

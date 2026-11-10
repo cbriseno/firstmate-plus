@@ -779,6 +779,8 @@ if [ "$READ_ONLY" -eq 0 ]; then
         printf 'FLEET_LEDGER: could not create config/fleet-ledger; event publication remains disabled.\n'
       fi
     fi
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-upgrade.sh" check 2>&1 \
+      || printf 'UPDATE_ACTIONS: detection failed; run bin/fm-upgrade.sh check after resolving the error.\n'
   fi
   fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
   # A full locked start publishes this home's current structured summary.

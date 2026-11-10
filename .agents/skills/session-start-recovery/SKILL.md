@@ -41,3 +41,8 @@ Follow `AGENTS.md` sections 1 and 9 for tool use and delegated visual work; cons
 A silent bootstrap section needs no action; for any printed actionable diagnostic line, load `bootstrap-diagnostics` and follow its owner procedure.
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.
+
+On `UPDATE_ACTIONS:`, read [UPGRADING.md](../../../UPGRADING.md) and relay the existing structured hold once.
+On acceptance, record the actual answer through `captain-hold-lifecycle`, then run the upgrade command's `apply` for this home or dispatch its worker when the migration requires documentary evidence.
+A declined action stays unapplied without another automatic question; never treat a pull, a hold creation or a pending card as consent.
+The [upgrade command](../../../bin/fm-upgrade.sh) owns records and retries.

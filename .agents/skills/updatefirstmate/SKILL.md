@@ -105,3 +105,6 @@ This touches only the firstmate repo and its own worktrees, never anything under
   A restart replaces that mate's agent in the same home and endpoint after its open work is written down; it is never a teardown and never forced.
   Its crewmates keep running in their own endpoints, and every durable record - backlog, held captain calls, unread status, unhandled instructions - is re-presented to the replacement at startup.
   A restart refused before it is attempted leaves that mate on the re-read path; once a relaunch is attempted, any failed or ambiguous result is reported as unknown rather than attributed to either incarnation.
+
+The updater also checks [upgrade notes](../../../UPGRADING.md) for this home.
+Handle `UPDATE_ACTIONS:` through [session-start recovery](../session-start-recovery/SKILL.md); secondmates check their own home at restart, and a manual pull is covered at the next locked session start.

@@ -244,3 +244,7 @@ fi
 echo "reread-firstmate: $reread_firstmate"
 echo "restart-secondmates:${FF_RESTART_WINDOWS:- none}"
 echo "nudge-secondmates:${FF_STEER_WINDOWS:- none}"
+
+# Offer new operator actions without applying operational data during a pull.
+FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-upgrade.sh" check \
+  || printf 'UPDATE_ACTIONS: detection failed; run bin/fm-upgrade.sh check after resolving the error.\n'

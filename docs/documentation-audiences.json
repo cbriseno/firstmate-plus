@@ -282,6 +282,10 @@
       "audience": "public-product"
     },
     {
+      "path": "UPGRADING.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "VISION.md",
       "audience": "public-product"
     },
