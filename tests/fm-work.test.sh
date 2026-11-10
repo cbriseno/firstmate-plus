@@ -1035,5 +1035,39 @@ exit 1
     check(failed['state']=='failed' and failed['reason']=='other' and not failed['agents_started'],'unknown endpoint cannot be relaunched or confirmed')
     check(task(snapshot(),'idle')['pause']['own'] is not None,'failed resume preserves saved work with an explicit pause')
     check(any(e['event']=='resume.refused' and e['reason']=='other' for e in failed['events']),'failed relaunch exposes refusal reason')
+    # The Deck gives each control eight seconds, including retained history.
+    # Use the public owner with saved declarations, not artificial probe delays.
+    home = home/'retained'
+    home.mkdir()
+    for name in ('data','state','config'):
+        (home/name).mkdir()
+    env.update(FM_HOME=str(home))
+    (home/'data/projects.md').write_text('- alpha [local-only] - Example\n')
+    (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+    cli('add','prueba-pause','Pending task','--repo','alpha',raw=True)
+    archived=[]
+    for n in range(600):
+        key='prueba-retained-%04d'%n
+        archived.append('- [x] '+key+' - Retained task (repo: alpha) (since 2026-10-01) (done 2026-10-02)')
+        folder=home/'data'/key; folder.mkdir()
+        (folder/'presentation.json').write_text(json.dumps(dict(schema='fm-task-presentation.v1',home=str(home),
+            id=key,source='task.owner.declaration',observed_at='2026-10-02T00:00:00Z',
+            presentation=dict(request=dict(id=key,label='Retained request',project='alpha')))))
+    (home/'data/done-archive.md').write_text('## Archived 2026-10-02\n'+'\n'.join(archived)+'\n')
+    for action in ('pause','resume'):
+        rev=snapshot()['rev']
+        payload=dict(scope='task:prueba-pause',rev=rev,request_id='retained-control-'+action)
+        for suffix in ('preview','request'):
+            run=subprocess.run(wrapper+['work',action+'.'+suffix],input=json.dumps(payload),env=env,
+                               text=True,capture_output=True,timeout=8)
+            result=json.loads(run.stdout)
+            check(run.returncode==0 and (result.get('can_pause') if action=='pause' and suffix=='preview'
+                  else result.get('agents_needed')==0 if suffix=='preview' else result.get('state')=='applied'),
+                  'retained history control finishes inside the Deck deadline: '+str(result))
+            if suffix=='preview':
+                held=task(snapshot(),'prueba-pause')['pause']['own']
+                check(bool(held)==(action=='resume'),'preview leaves the selected pause unchanged')
+        check(task(snapshot(),'prueba-pause')['state']==('paused_own' if action=='pause' else 'ready'),
+              'retained history control confirms the actual pause state')
     print('PASS: %d work owner behavioral assertions'%checks)
 PY

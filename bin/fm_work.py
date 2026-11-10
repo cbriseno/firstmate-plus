@@ -88,6 +88,7 @@ class Owner:
         self._runtime = {}
         self._workers = {}
         self.include_runtime = False
+        self.control_request = False
         self.structure_path = 'data/work-structure.json'
 
     def read(self, path, default=None):
@@ -166,7 +167,11 @@ class Owner:
         self.rows = {r['id']: r for r in rows}
         self.current_ids = set(self.rows)
         refuse(len(self.rows) != len(rows), 'owner_failed', tr('The backlog contains duplicate identities.'))
-        history = retained_history(self.home, include_non_deliveries=True)
+        # Pause/resume never change history or declarations while holding the
+        # owner lock. Reload the mutable backlog/controls, not those same facts.
+        history = self._control_history if self.control_request and hasattr(self, '_control_history') else retained_history(self.home, include_non_deliveries=True)
+        if self.control_request:
+            self._control_history = history
         for row in history['records']:
             if row['id'] not in self.rows or self.rows[row['id']]['state'] == 'done':
                 self.rows[row['id']] = row
@@ -181,7 +186,8 @@ class Owner:
         except FileNotFoundError:
             self.registry_text = ''
         self.load_projects()
-        self.presentations = {i: read_presentation(self.home, i, verify=include_presentations) for i in self.rows}
+        saved = getattr(self, 'presentations', {}) if self.control_request else {}
+        self.presentations = {i: saved[i] if i in saved else read_presentation(self.home, i, verify=include_presentations) for i in self.rows}
         self.requests = {r['id']: r for p in self.presentations.values() if (r := p['presentation'].get('request'))}
         self.structure = self.read(self.structure_path, dict(schema='fm-work-structure.v1', groups={}, membership={}, order=[], edge_meta={}))
         self.validate_structure()
@@ -574,7 +580,7 @@ class Owner:
                     and (safe != 'reached' or closing) and worker['state'] != 'dead')
         return hold, inherited, task_pause, safe, request_id, running, worker, stopping
 
-    def snapshot(self, facts=None, previous=None, affected=None):
+    def snapshot(self, facts=None, previous=None, affected=None, controls_only=False):
         tasks = []
         edges = self.edges()
         reasons = dict(records=[dict(id=i, hold_reason=(r.get('hold') or {}).get('reason')) for i,r in self.rows.items()
@@ -615,6 +621,14 @@ class Owner:
                 state = 'waiting_' + hold.get('kind', 'external')
             else:
                 state = 'ready'
+            if controls_only:
+                project, subproject = self.display_membership(task_id)
+                tasks.append(dict(key='task:' + task_id, state=state, backlog_state=row['state'],
+                    worker_liveness=worker, priority=priority(row.get('priority')), project=project,
+                    subproject=subproject, repository_project='project:' + row['repo'] if row.get('repo') else None,
+                    request=p.get('request'), updated=time_value(), question=dict(origin_task=None),
+                    pause=dict(own=task_pause or hold, inherited=inherited), blocked_by=blocks))
+                continue
             control_keys = self.ancestors(task_id) + ['task:' + task_id]
             control_times = [time_value(r['at'], 'work.control') for r in self.request_records()
                              if r.get('phase') == 'verified' and r['operation']['target'] in control_keys
@@ -674,8 +688,9 @@ class Owner:
             if updated and (group['updated_at'] is None or updated > group['updated_at']):
                 group['updated_at'] = updated
         by_key = {t['key']: t for t in tasks}
-        for group in requests.values():
-            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']], self.rows, usages=facts['usage'] if facts is not None else None)
+        if not controls_only:
+            for group in requests.values():
+                group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']], self.rows, usages=facts['usage'] if facts is not None else None)
         for task in tasks:
             origin = by_key.get(task['question']['origin_task'])
             task['question']['origin'] = dict(key=task['question']['origin_task'], available=origin is not None,
@@ -813,6 +828,8 @@ class Owner:
                 return (placed.index(unit[t['key']]), 1)
             return (next((i for i, k in enumerate(placed) if sort_key(t) < best.get(k, (9,))), len(placed)), 0)
         sigue = [t['key'] for t in sorted(tasks, key=lambda t: (slot(t), sort_key(t))) if t['state'] == 'ready']
+        if controls_only:
+            return dict(tasks=tasks, sigue=sigue)
         # Who gives way when there is no room: the running work lowest in the
         # work order, only for ready work the captain placed above it.
         crew = self.capacity()
@@ -1002,9 +1019,13 @@ class Owner:
         return command, before, undo
 
     def preview(self, op):
-        before = self.snapshot()
+        controls_only = op['op'] in ('set_pause', 'clear_pause')
+        before = self.snapshot(controls_only=controls_only)
         command, previous, undo = self.change(op)
-        after = self.snapshot()
+        if op['op'] in ('set_pause', 'clear_pause'):
+            after = self.snapshot(previous={t['key'][5:]: t for t in before['tasks']}, affected=set(self.members(op['target'])), controls_only=True)
+        else:
+            after = self.snapshot()
         affected = ['task:' + i for i in self.members(op['target']) if self.rows[i]['state'] != 'done']
         impact = dict(affected=self.affected(affected, before['tasks']), sigue_after=after['sigue'], moved_any=before['sigue'] != after['sigue'],
                       offer=None, still_paused=[t['key'] for t in after['tasks'] if t['key'] in affected and (t['pause']['own'] or t['pause']['inherited'])], cycle_path=None)
@@ -1056,7 +1077,7 @@ class Owner:
                'owner_failed', tr('The inquiry receipt was not confirmed.'))
         return receipt
 
-    def apply(self, op):
+    def apply(self, op, loaded=False):
         request_id = op.get('request_id')
         refuse(not isinstance(request_id, str) or not REQUEST.fullmatch(request_id), 'invalid_value', tr('Invalid request identity.'))
         path = 'data/work-requests/' + request_id + '.json'
@@ -1064,7 +1085,8 @@ class Owner:
         if existing:
             refuse(existing['operation'] != op, 'request_mismatch', tr('This identity belongs to another request.'))
             return self.reconcile(existing, path, retry=True)
-        self.load()
+        if not loaded:
+            self.load()
         command, previous, undo, impact = self.preview(op)
         desired_structure = copy.deepcopy(self.structure)
         safe_tasks = [i for i in self.members(op['target']) if self.rows[i]['state'] == 'in_flight'] if op['op'] == 'set_pause' else []
@@ -1272,22 +1294,26 @@ class Owner:
                         not r.startswith('full:') for r in value['verdict']['reasons'])) else None)
 
     def resume_preview(self, op):
-        _, _, _, impact = self.preview(dict(op, op='clear_pause'))
-        closed = set()
-        for record in sorted(self.request_records(), key=lambda r: r.get('at_ns', 0)):
-            closed.update(record.get('exited', []))
-            closed.difference_update(record.get('started', []))
-        candidates = [i for i in self.members(op['target']) if i in closed and self.rows[i]['state'] == 'in_flight'
-                      and not self.progress_reporting_held(i) and not any(b['open'] for b in self.blockers(i))
-                      and self.worker_liveness(i)['state'] != 'alive']
-        self.load()  # Preview simulated clearing only the selected pause.
+        rows, structure = copy.deepcopy(self.rows), copy.deepcopy(self.structure)
+        try:
+            _, _, _, impact = self.preview(dict(op, op='clear_pause'))
+            closed = set()
+            for record in sorted(self.request_records(), key=lambda r: r.get('at_ns', 0)):
+                closed.update(record.get('exited', []))
+                closed.difference_update(record.get('started', []))
+            candidates = [i for i in self.members(op['target']) if i in closed and self.rows[i]['state'] == 'in_flight'
+                          and not self.progress_reporting_held(i) and not any(b['open'] for b in self.blockers(i))
+                          and self.worker_liveness(i)['state'] != 'alive']
+        finally:
+            # Only the in-memory pause was simulated; no source needs reloading.
+            self.rows, self.structure = rows, structure
         return dict(impact=impact, agents_needed=len(candidates), candidates=candidates, **self.capacity())
 
     def signal(self, verb, op):
         target = op['target']
         scope = op.get('scope', target)
-        if verb.endswith('.preview'):
-            refuse(op.get('expected_rev') != self.rev, 'stale_revision', tr('The data changed; review it again.'), snapshot=self.snapshot())
+        if verb.endswith('.preview') and op.get('expected_rev') != self.rev:
+            raise Refusal('stale_revision', tr('The data changed; review it again.'), snapshot=self.snapshot())
         if verb == 'resume.preview':
             return self.resume_preview(op)
         if verb == 'pause.preview':
@@ -1300,7 +1326,8 @@ class Owner:
         if existing:
             refuse(existing.get('signal_operation') != op or existing.get('signal') != verb, 'request_mismatch', tr('This identity belongs to another request.'))
             return existing['result']
-        refuse(op.get('expected_rev') != self.rev, 'stale_revision', tr('The data changed; review it again.'), snapshot=self.snapshot())
+        if op.get('expected_rev') != self.rev:
+            raise Refusal('stale_revision', tr('The data changed; review it again.'), snapshot=self.snapshot())
         matching = [r for r in self.request_records() if r.get('scope') == scope and not r.get('cancelled') and not r.get('resumed')]
         if verb in ('pause.cancel', 'resume.dequeue'):
             selected = [r for r in matching if r.get('signal') == ('pause.request' if verb == 'pause.cancel' else 'resume.request')]
@@ -1309,7 +1336,7 @@ class Owner:
             if verb == 'pause.cancel':
                 refuse(any(r.get('pause_state') == 'paused' or r.get('exited') or any(self.safe_point(i, r)[0] == 'reached' for i in r['safe_tasks']) for r in selected),
                        'invalid_value', tr('The safe point was reached; use resume.'))
-                result = self.apply(dict(op, op='clear_pause'))
+                result = self.apply(dict(op, op='clear_pause'), loaded=True)
                 refuse(result['state'] != 'applied', 'owner_failed', result['message'])
             else:
                 refuse(any(r['pause_state'] != 'queued' for r in selected), 'invalid_value', tr('The request is no longer queued.'))
@@ -1335,7 +1362,7 @@ class Owner:
             refuse(any(r.get('pause_state') == 'queued' for r in matching), 'invalid_value', tr('Dequeue the pending resume first.'))
             refuse(any(r.get('signal') == verb and r.get('pause_state') in ('pending', 'unconfirmed', 'failed') for r in matching),
                    'invalid_value', tr('A pause is already pending; inspect or cancel its request.'))
-            result = self.apply(dict(op, op='set_pause', reason=op.get('reason', 'Pausa desde el Deck')))
+            result = self.apply(dict(op, op='set_pause', reason=op.get('reason', 'Pausa desde el Deck')), loaded=True)
             refuse(result['state'] == 'failed', 'owner_failed', result['message'])
             record = self.read(path)
             record.update(signal=verb, signal_operation=op, scope=scope, pause_state='pending')
@@ -1363,7 +1390,7 @@ class Owner:
         self.atomic(path, record)
         ahead = any(r.get('signal') == 'resume.request' and r.get('pause_state') == 'queued' and not r.get('cancelled')
                     for r in self.request_records() if r['operation']['request_id'] != request_id)
-        return self.advance_resume(record, from_queue=ahead, defer=ahead)
+        return self.advance_resume(record, from_queue=ahead, defer=ahead, preview=preview)
 
     def advance_pause(self, record):
         closed = self.close_safe_point(record['operation']['request_id'])
@@ -1384,7 +1411,7 @@ class Owner:
         self.atomic('data/work-requests/' + record['operation']['request_id'] + '.json', record)
         return record['result']
 
-    def advance_resume(self, record, from_queue=False, defer=False):
+    def advance_resume(self, record, from_queue=False, defer=False, preview=None):
         path = 'data/work-requests/' + record['operation']['request_id'] + '.json'
         op = record['operation']
         if any(r.get('at_ns', 0) > record['at_ns'] and r['operation']['target'] == op['target']
@@ -1395,7 +1422,8 @@ class Owner:
             record['result']['events'] = record['events']
             self.atomic(path, record)
             return record['result']
-        preview = self.resume_preview(dict(op, expected_rev=self.rev))
+        if preview is None:
+            preview = self.resume_preview(dict(op, expected_rev=self.rev))
         cap = preview['agents_cap']
         reason = (preview['reason'] if preview['agents_needed'] else None) or ('cap' if cap is not None and preview['agents_running'] + preview['agents_needed'] > cap else None)
         if reason or defer:
@@ -1449,7 +1477,8 @@ class Owner:
                         self.atomic('data/work-requests/' + paused['operation']['request_id'] + '.json', paused)
         record['result']['events'] = record.get('events', [])
         self.atomic(path, record)
-        self.load()
+        if not reason and not defer and preview['candidates']:
+            self.load()
         return record['result']
 
     def reconcile_controls(self):
@@ -1797,6 +1826,7 @@ def main():
         owner = Owner()
         owner.include_runtime = args.runtime
         owner.request_sort = args.order
+        owner.control_request = args.verb.startswith(('pause.', 'resume.'))
         if args.verb == 'supervision':
             result = owner.supervision(args.tasks)
         elif args.verb == 'capabilities':
