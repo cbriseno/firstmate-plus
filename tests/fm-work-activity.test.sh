@@ -24,10 +24,21 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     base = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
     assert base['activity']['activity']['state'] == 'busy', base['activity']
     model = Projection(base)
+    assert model.capacity()['agents_running'] is None
+    run('fm-fleet-ledger.sh', 'dispatched', 'activity', 'ship', 'firstmate', 'codex', '')
+    event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert model.apply(event)
+    assert model.capacity()['agents_running'] == 1
+    assert model.apply(event)  # A repeated launch replaces membership.
+    assert model.capacity()['agents_running'] == 1
+    restarted = Projection(json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap')))
+    assert restarted.capacity()['agents_running'] == 1
+    assert restarted.capacity()['source'] == 'fleet-ledger'
     run(*writer, 'apply', str(home / 'state'), 'activity', 'idle', '--gen', gen, '--source', 'claude-hook', '--event', 'Stop')
     event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
     assert model.apply(event)
     assert model.activity['activity']['state'] == 'idle'
+    assert model.capacity()['agents_running'] == 1  # Turn end keeps the worker.
     assert model.value['tasks'][0]['backlog_state'] == 'in_flight'
     assert not model.apply(dict(event, value=dict(event['value'], seq=1, state='busy')))
     # Replacing a presentation must release the previous task snapshot without
@@ -49,5 +60,12 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
         gc.enable()
     (home / 'state/activity.busy-gen').write_text('other-generation\n')
     assert 'activity' not in json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))['activity']
-print('ok - bootstrap activity, turn end, old sequence, generation mismatch and snapshot release')
+    run('fm-fleet-ledger.sh', 'cleaned_up', 'activity')
+    event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert model.apply(event)
+    assert model.capacity()['agents_running'] == 0
+    assert model.apply(event)
+    assert model.capacity()['agents_running'] == 0
+    assert Projection(json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))).capacity()['agents_running'] == 0
+print('ok - lifecycle counts, duplicate launch/close, recovery, bootstrap activity, turn end, old sequence, generation mismatch and snapshot release')
 PY

@@ -34,6 +34,17 @@ def bootstrap(owner):
         crew = owner.capacity()
     except subprocess.TimeoutExpired:
         crew = dict(agents_running=None, agents_cap=None, reason='unconfirmed')
+    launches = {}
+    enabled = (owner.home / 'config/fleet-ledger').exists()
+    if enabled and owner.ledger_start[2]:
+        with (owner.home / 'state/fleet-ledger.jsonl').open('rb') as stream:
+            for line in stream.read(owner.ledger_start[2]).splitlines():
+                event = json.loads(line)
+                if event.get('home', str(owner.home)) != str(owner.home):
+                    continue
+                if event.get('event') in ('task.dispatched', 'task.cleaned_up'):
+                    launches[event['task']] = event['event'] == 'task.dispatched'
+    crew = lifecycle_capacity(crew, launches, enabled)
     owner.capacity = lambda: crew
     snapshot = owner.snapshot()
     selector = subprocess.run(['bash', '-c', '. "$1/fm-landed-lib.sh"; printf "%s" "$FM_LANDED_JQ_DEFS"', 'projection', str(BIN)], capture_output=True, text=True, check=True).stdout
@@ -59,7 +70,13 @@ def bootstrap(owner):
         registry_text=owner.registry_text, structure=owner.structure, status=owner.status,
         captain_answers=owner.captain_answers, requests=owner.request_records(),
         aliases=owner.aliases.value, facts=facts, snapshot=snapshot, selector=selector,
-        activity=activity, empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
+        launches=launches, activity=activity, empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
+
+
+def lifecycle_capacity(crew, launches, enabled):
+    known = enabled and bool(launches)
+    return dict(crew, agents_running=sum(launches.values()) if known else None,
+                reason=None if known else 'unconfirmed', source='fleet-ledger')
 
 
 class Projection(Owner):
@@ -75,6 +92,8 @@ class Projection(Owner):
         self.aliases.alias = lambda key: (self.aliases.value or {}).get('forward', {}).get(key)
         self.workers = {t['key'][5:]: t['worker_liveness'] for t in base['snapshot']['tasks'] if t['worker_liveness']}
         self.crew = base['snapshot']['crew']
+        self.launches = copy.deepcopy(base.get('launches', {}))
+        self.ledger_enabled = base['enabled']
         self.include_runtime = False
         self.request_sort = 'manual'
         self.value = base['snapshot']
@@ -157,11 +176,11 @@ class Projection(Owner):
                     self.activity.pop(task, None)
             else:
                 self.workers[task] = dict(state='dead' if name == 'task.cleaned_up' else 'unknown', source='events', verdict=name)
-                self.crew = dict(self.crew, agents_running=None, reason='unconfirmed')
+                self.launches[task] = name == 'task.dispatched'
         elif name == 'home.configuration':
             # Configuration publishes limits, not observed occupied lanes.
             cap = str(value.get('lane_capacity') or '').strip()
-            self.crew = dict(self.crew, agents_cap=int(cap) if cap.isdigit() else None, reason='unconfirmed')
+            self.crew = dict(self.crew, agents_cap=int(cap) if cap.isdigit() else None)
             self.registry_text = value.get('projects') or ''
             self.load_projects()
             self.project_visibilities()
@@ -189,6 +208,7 @@ class Projection(Owner):
         if name in ('task.changed', 'call.opened', 'call.resolved'):
             scopes |= set(self.ancestors(task)) if task in self.rows else set()
             affected |= {i for i in self.rows if any(b['ref'] in scopes for b in self.blockers(i))}
+        self.crew = lifecycle_capacity(self.crew, self.launches, self.ledger_enabled)
         previous = {t['key'][5:]: t for t in self.value['tasks']}
         self.value = self.snapshot(facts=self.facts, previous=previous, affected=affected)
         return True
