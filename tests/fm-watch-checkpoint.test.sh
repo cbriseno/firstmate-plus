@@ -143,9 +143,9 @@ test_never_announced_recovery_without_eligible_row_stays_quiet() {
   expect_code 124 "$status" "recovery without an eligible row checkpoint exit"
   assert_not_contains "$(cat "$out")" 'check: rearm-resurface' \
     "recovery without an eligible row was announced"
-  [ "$(cat "$home/state/.watcher-down")" = 'pending:downtime:unreported.1.aaa' ] \
-    || fail "recovery without an eligible row changed its generation"
-  pass "a pending recovery stays quiet until an eligible durable row remains"
+  [ "$(cat "$home/state/.watcher-down")" = 'announced:downtime:unreported.1.aaa' ] \
+    || fail "recovery without an eligible row did not retain its announced generation"
+  pass "recovery without an eligible row is announced internally but produces no rearm wake"
 }
 
 test_queue_append_during_checkpoint_still_resurfaces() {
