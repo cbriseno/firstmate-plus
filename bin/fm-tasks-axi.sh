@@ -221,6 +221,9 @@
 # clear_pause only removes the selected pause. Its note's resume_candidates
 # contains confirmed live workers only; it never starts an absent worker.
 #   work assign --task ID --subproject KEY|none   Firstmate-only membership maintenance.
+#   work supervision --tasks ID...          Read-only bounded supervision predicate.
+# Captures current source texts under the work lock, then parses and probes
+# outside it; missing/invalid data needs supervision. No history or alias writes.
 #   work dispatch-check --task ID         Nonzero if group pause/dependency prevents launch.
 #   work normalize-plan --map FILE --additions FILE   Read-only current-source manifest.
 #   work normalize-plan --metadata-only --map FILE   Only project visibility, zero task operations.

@@ -200,6 +200,61 @@ class Owner:
         self.rev = digest([self.registry_text, self.structure, {i:p['presentation'].get('request') for i,p in self.presentations.items()}, {i: {k:r.get(k) for k in ('repo', 'state', 'priority', 'hold', 'deps')} for i,r in self.rows.items()}])
         return self
 
+    def supervision(self, task_ids):
+        refuse(any(not ID.fullmatch(i) for i in task_ids), 'invalid_value', tr('Invalid task identity.'))
+        def optional(path, limit=16 * 1024 * 1024):
+            try:
+                return read_text(self.home, path, limit)
+            except FileNotFoundError:
+                return None
+        config_text = optional('.tasks.toml', 65536)
+        config = canonical_read({'config': config_text}) if config_text is not None else {}
+        refuse(os.environ.get('TASKS_AXI_BACKEND', config.get('backend', 'markdown')) != 'markdown',
+               'not_local_home', tr('This backend only supports read access in Deck.'))
+        backlog_path = (config.get('markdown') or {}).get('path') or 'data/backlog.md'
+        captured = {}
+        lock = self.lock()
+        try:
+            refuse(optional('.tasks.toml', 65536) != config_text, 'busy', tr('Configuration changed. Try again.'))
+            for path in (backlog_path, 'data/projects.md', self.structure_path):
+                captured[path] = optional(path)
+            for task_id in task_ids:
+                for path, limit in [('state/' + task_id + '.meta', 65536),
+                                    ('state/' + task_id + '.status', 1024 * 1024),
+                                    ('data/' + task_id + '/presentation.json', 32768)]:
+                    captured[path] = optional(path, limit)
+            folder = self.data / 'work-requests'
+            refuse(folder.is_symlink(), 'owner_failed', tr('Unsafe receipt path.'))
+            requests = [read_text(self.home, 'data/work-requests/' + p.name) for p in sorted(folder.glob('*.json'))]
+        finally:
+            os.close(lock)
+            del self.lock_fd
+            self.env.pop('FM_WORK_OWNER_FD', None)
+        def reader(home, path, limit=None):
+            if captured[path] is None:
+                raise FileNotFoundError(path)
+            return captured[path]
+        rows = canonical_read({'text': reader(self.home, backlog_path)})
+        self.rows = {r['id']: r for r in rows}
+        refuse(len(self.rows) != len(rows), 'owner_failed', tr('The backlog contains duplicate identities.'))
+        self.registry_text = captured['data/projects.md'] or ''
+        self.load_projects()
+        self.presentations = {i: read_presentation(self.home, i, verify=False, reader=reader) for i in task_ids}
+        self.requests = {r['id']: r for p in self.presentations.values() if (r := p['presentation'].get('request'))}
+        self.structure = json.loads(captured[self.structure_path]) if captured[self.structure_path] is not None else dict(
+            schema='fm-work-structure.v1', groups={}, membership={}, order=[], edge_meta={})
+        self.validate_structure()
+        self.status = {i: captured['state/' + i + '.status'] or '' for i in task_ids}
+        self._requests = [json.loads(text) for text in requests]
+        tasks = []
+        for task_id in task_ids:
+            needed = True
+            if task_id in self.rows and (self.presentations[task_id].get('evidence') or {}).get('available') is not False:
+                hold, inherited, own, safe, _, _, _, stopping = self.pause_facts(task_id)
+                needed = bool(stopping or safe == 'pending' or not (hold or inherited or own))
+            tasks.append(dict(id=task_id, needed=needed))
+        return dict(schema='fm-work-supervision.v1', tasks=tasks)
+
     def project_visibilities(self):
         for group in self.structure['groups'].values():
             if group['kind'] == 'project' and 'visibility' in group:
@@ -504,6 +559,21 @@ class Owner:
             pass
         return dict(state='unknown', source='none', detail=tr('Current activity could not be confirmed.'))
 
+    def pause_facts(self, task_id):
+        row = self.rows[task_id]
+        hold = self.current_hold(task_id)
+        inherited = self.inherited(task_id)
+        task_pause = self.structure.get('task_pauses', {}).get(task_id)
+        safe, request_id = self.safe_point(task_id) if (hold or inherited or task_pause) else ('none', None)
+        running = row['state'] == 'in_flight'
+        worker = self.worker_liveness(task_id) if running else None
+        closing = any(r.get('signal') == 'pause.request' and not r.get('cancelled') and not r.get('resumed')
+                      and task_id in r.get('safe_tasks', []) and task_id not in r.get('exited', [])
+                      for r in self.request_records())
+        stopping = (running and (task_pause or inherited or (hold and hold.get('kind') == 'parked'))
+                    and (safe != 'reached' or closing) and worker['state'] != 'dead')
+        return hold, inherited, task_pause, safe, request_id, running, worker, stopping
+
     def snapshot(self, facts=None, previous=None, affected=None):
         tasks = []
         edges = self.edges()
@@ -521,21 +591,13 @@ class Owner:
             authored = self.presentations[task_id]
             p = authored['presentation']
             evidence = authored.get('evidence') or {}
-            hold = self.current_hold(task_id)
+            hold, inherited, task_pause, safe, request_id, running, worker, stopping = self.pause_facts(task_id)
             if hold:
                 hold['reason'] = display_reasons.get(task_id)
-            inherited = self.inherited(task_id)
-            task_pause = self.structure.get('task_pauses', {}).get(task_id)
-            safe, request_id = self.safe_point(task_id) if (hold or inherited or task_pause) else ('none', None)
             blocks = self.blockers(task_id, edges)
-            running = row['state'] == 'in_flight'
-            worker = self.worker_liveness(task_id) if running else None
-            closing = any(r.get('signal') == 'pause.request' and not r.get('cancelled') and not r.get('resumed')
-                          and task_id in r.get('safe_tasks', []) and task_id not in r.get('exited', [])
-                          for r in self.request_records())
             if row['state'] == 'done':
                 state = 'done'
-            elif running and (task_pause or inherited or (hold and hold.get('kind') == 'parked')) and (safe != 'reached' or closing) and worker['state'] != 'dead':
+            elif stopping:
                 state = 'stopping'
             elif running and not hold and not inherited and not task_pause and worker['state'] != 'dead':
                 state = 'running'
@@ -1714,7 +1776,7 @@ class Owner:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('verb', choices=['capabilities', 'bootstrap', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
+    parser.add_argument('verb', choices=['capabilities', 'supervision', 'bootstrap', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
         'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review',
         'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Request display order: activity or persisted manual order.')
@@ -1727,6 +1789,7 @@ def main():
     parser.add_argument('--additions')
     parser.add_argument('--request-id')
     parser.add_argument('--task')
+    parser.add_argument('--tasks', nargs='*', default=[])
     parser.add_argument('--subproject')
     args = parser.parse_args()
     lock = None
@@ -1734,7 +1797,9 @@ def main():
         owner = Owner()
         owner.include_runtime = args.runtime
         owner.request_sort = args.order
-        if args.verb == 'capabilities':
+        if args.verb == 'supervision':
+            result = owner.supervision(args.tasks)
+        elif args.verb == 'capabilities':
             result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.8', ops=OPS,
                           outcome_controls=['outcome.review'],
                           signals=['pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue'],

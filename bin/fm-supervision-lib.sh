@@ -102,19 +102,19 @@ fm_supervision_status() {
   snapshot=
   owner="${BASH_SOURCE[0]%/*}/fm-tasks-axi.sh"
   home=${state%/state}
+  set --
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
-    if [ -z "$snapshot" ] && [ -x "$owner" ]; then
-      snapshot=$(FM_HOME="$home" bash "$owner" work snapshot 2>/dev/null) || snapshot=
-      [ -n "$snapshot" ] || snapshot=unavailable
-    fi
     id=${meta##*/}
-    id=${id%.meta}
-    if [ -n "$snapshot" ] && printf '%s' "$snapshot" | jq -e --arg key "task:$id" '
-      .schema == "fm-work-snapshot.v1" and
-      ([.tasks[] | select(.key == $key and .state != "stopping" and
-        .pause.safe_point != "pending" and
-        (.pause.own != null or .pause.inherited != null))] | length == 1)
+    set -- "$@" "${id%.meta}"
+  done
+  if [ "$#" -gt 0 ] && [ -x "$owner" ]; then
+    snapshot=$(FM_HOME="$home" bash "$owner" work supervision --tasks "$@" 2>/dev/null) || snapshot=
+  fi
+  for id in "$@"; do
+    if [ -n "$snapshot" ] && printf '%s' "$snapshot" | jq -e --arg id "$id" '
+      .schema == "fm-work-supervision.v1" and
+      ([.tasks[] | select(.id == $id and .needed == false)] | length == 1)
     ' >/dev/null 2>&1; then
       continue
     fi

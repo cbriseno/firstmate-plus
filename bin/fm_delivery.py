@@ -684,11 +684,11 @@ def presentation_path(home, task_id, data=None):
     return '/'.join(parts + [task_id, 'presentation.json'])
 
 
-def read_presentation(home, task_id, data=None, verify=True):
+def read_presentation(home, task_id, data=None, verify=True, reader=read_text):
     empty = dict.fromkeys(PRESENTATION_FIELDS)
     try:
         path = presentation_path(home, task_id, data)
-        value = json.loads(read_text(home, path, 32768))
+        value = json.loads(reader(home, path, 32768))
         if not isinstance(value, dict):
             raise ValueError('presentation declaration must be an object')
         if (value.get('schema') != 'fm-task-presentation.v1' or value.get('home') != str(home)
@@ -702,12 +702,12 @@ def read_presentation(home, task_id, data=None, verify=True):
         record = value.get('progress_record')
         if record is not None:
             validate_record(record)
-        view, _ = reconcile_progress(home, task_id, fields, record, read_text, verify)
+        view, _ = reconcile_progress(home, task_id, fields, record, reader, verify)
         return dict(presentation=dict(empty, **fields), outcome_occurrence=occurrence, progress_record=record, lifecycle=view,
                     evidence=dict(source=value['source'], observed_at=value['observed_at'],
                                   current_state=False, path=path, available=True))
     except FileNotFoundError:
-        view, _ = reconcile_progress(home, task_id, empty, None, read_text, verify)
+        view, _ = reconcile_progress(home, task_id, empty, None, reader, verify)
         return dict(presentation=empty, evidence=None, progress_record=None, lifecycle=view)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return dict(presentation=empty, progress_record=None,

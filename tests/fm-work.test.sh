@@ -3,6 +3,7 @@
 # tasks-axi, including hierarchy pause, graph expansion, retries, progress,
 # manual order/Undo, normalization/rollback and lossless source preservation.
 # FM_WORK_TEST_SNAPSHOT=1 selects snapshot contention and its setup checks.
+# FM_WORK_TEST_SUPERVISION=1 selects bounded supervision and writer exclusion.
 set -euo pipefail
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -28,6 +29,87 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         global checks
         assert value, message
         checks += 1
+    if os.environ.get('FM_WORK_TEST_SUPERVISION') == '1':
+        import fcntl, shutil
+        (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+        cli('add','a','Task','--repo','alpha',raw=True)
+        base = dict(schema='fm-work-structure.v1',groups={},membership={},order=[],edge_meta={})
+        structure = home/'data/work-structure.json'
+        def compare(expected):
+            full = cli('work','snapshot')['tasks'][0]
+            needed = not (full['state'] != 'stopping' and full['pause']['safe_point'] != 'pending'
+                          and (full['pause']['own'] or full['pause']['inherited']))
+            bounded = cli('work','supervision','--tasks','a','missing')['tasks']
+            if (home/'state/a.meta').exists():
+                count = subprocess.check_output(['bash','-uc','. "$1/bin/fm-supervision-lib.sh"; fm_supervision_status "$FM_HOME/state"; printf "%s" "$FM_SUP_IN_FLIGHT"','test',str(root)], env=dict(env,LAVISH_AXI_STATE_DIR=str(home/'lavish')), text=True)
+                check(count == str(int(expected)), 'shared shell predicate uses the bounded owner')
+            check(bounded == [dict(id='a',needed=expected),dict(id='missing',needed=True)]
+                  and needed == expected, 'bounded predicate agrees with full snapshot')
+        compare(True)
+        cli('hold','a','--kind','parked','--reason','Own pause',raw=True); compare(False)
+        cli('unhold','a',raw=True)
+        for patch in [dict(task_pauses={'a':dict(kind='parked',reason='Own')}),
+                      dict(groups={'project:alpha':dict(kind='project',repo='alpha',label='Alpha',pause={'reason':'Parent'})}),
+                      dict(groups={'req:a':dict(kind='request',label='Request',pause={'reason':'Request pause'})}),
+                      dict(groups={'subproject:alpha/ui':dict(kind='subproject',repo='alpha',label='UI',pause={'reason':'Subproject'})},membership={'a':'subproject:alpha/ui'}),
+                      dict(freeze=dict(reason='Freeze',except_=[],tasks=['a']))]:
+            if 'freeze' in patch: patch['freeze']['except'] = patch['freeze'].pop('except_')
+            structure.write_text(json.dumps(base|patch)); compare(False)
+        fakebin=home/'fakebin'; fakebin.mkdir()
+        tmux=fakebin/'tmux'
+        tmux.write_text('#!/usr/bin/env bash\ncase "$1" in list-windows) echo fm-a ;; display-message) echo codex ;; *) exit 1 ;; esac\n')
+        tmux.chmod(0o755); env['PATH']=str(fakebin)+os.pathsep+env['PATH']
+        cli('start','a',raw=True)
+        (home/'state/a.meta').write_text(f'window=example:fm-a\nworktree={home}\nproject={home}\nkind=ship\nbackend=tmux\nmode=local-only\n')
+        structure.write_text(json.dumps(base|dict(task_pauses={'a':dict(kind='parked',reason='Own')})))
+        compare(True)  # stopping, even without a request marker
+        records=home/'data/work-requests'; records.mkdir()
+        request=dict(at='2020-01-01T00:00:00Z',safe_tasks=['a'],phase='verified',result=dict(state='applied'),scope='task:a',
+                     operation=dict(op='set_pause',target='task:a',request_id='safe-test-0000001'))
+        (records/'safe-test.json').write_text(json.dumps(request)); compare(True)
+        check(cli('work','snapshot')['tasks'][0]['pause']['safe_point']=='pending','live worker awaits safe point')
+        (home/'state/a.status').write_text('paused [key=safe-point-safe-test-0000001] [at=1893456000]: saved\n')
+        compare(False)
+        (records/'safe-test.json').write_text(json.dumps(request|dict(signal='pause.request'))); compare(True)
+        (records/'safe-test.json').write_text(json.dumps(request)); compare(False)
+        structure.write_text('{invalid')
+        invalid=subprocess.run(wrapper+['work','supervision','--tasks','a'],env=env,text=True,capture_output=True)
+        check(invalid.returncode != 0 and json.loads(invalid.stdout)['state']=='failed','invalid structure refuses')
+        structure.write_text(json.dumps(base))
+        result_file=home/'result.json'
+        result_file.write_text(json.dumps(dict(summary='Result',outcome=dict(role='final',review='needed'))))
+        published=cli('presentation','a','--presentation-file',str(result_file))
+        review=dict(target='task:a',occurrence=published['outcome_occurrence'],expected_review='needed',review='done')
+        processes=[]
+        with (home/'data/.work.lock').open('w') as held:
+            fcntl.flock(held,fcntl.LOCK_EX)
+            for args, body in [(['presentation','a','--card-status','Serialized'],None),(['work','outcome.review'],json.dumps(review)),(['presentation','a','--card-title','Concurrent title'],None)]:
+                proc=subprocess.Popen(wrapper+args,env=env,text=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                if body: proc.stdin.write(body)
+                proc.stdin.close(); proc.stdin=None; processes.append(proc)
+            time.sleep(.2)
+            check(all(p.poll() is None for p in processes),'publication and review wait for the global lock')
+        for proc in processes:
+            out,err=proc.communicate(timeout=20); check(proc.returncode==0 and json.loads(out)['state'] in ('published','applied'),err)
+        saved=cli('presentation','a')['presentation']
+        check(saved['card_status']=='Serialized' and saved['card_title']=='Concurrent title' and saved['outcome']['review']=='done','serialized writers preserve both changes')
+        node=fakebin/'node'; real_node=shutil.which('node')
+        node.write_text('#!/usr/bin/env bash\nbody=$(cat)\nif [ ! -e "$FM_HOME/node-entered" ]; then touch "$FM_HOME/node-entered"; while [ ! -e "$FM_HOME/release-node" ]; do sleep .01; done; fi\nexec '+real_node+' "$@" <<< "$body"\n')
+        node.chmod(0o755)
+        reading=subprocess.Popen(wrapper+['work','supervision','--tasks','a'],env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            deadline=time.monotonic()+10
+            while not (home/'node-entered').exists() and time.monotonic()<deadline: time.sleep(.01)
+            check((home/'node-entered').exists(),'canonical parser reached after source capture')
+            check(cli('presentation','a','--card-status','During parsing')['state']=='published','writer proceeds while query parses')
+        finally:
+            (home/'release-node').touch(); out,err=reading.communicate(timeout=20)
+        check(reading.returncode==0 and json.loads(out)['tasks'][0]['needed'],err)
+        structure.write_text(json.dumps(base|dict(task_pauses={'a':dict(kind='parked',reason='Own')})))
+        (home/'data/a/presentation.json').write_text('{invalid')
+        check(cli('work','supervision','--tasks','a')['tasks'][0]['needed'],'invalid declaration needs supervision')
+        print('PASS: %d bounded supervision and writer exclusion checks' % checks)
+        sys.exit(0)
     # Historical graphs remain readable, including duplicates and invalid edges.
     # Usage readers run outside snapshots, which read only the saved caches.
     with tempfile.TemporaryDirectory(prefix='fm-usage-test-') as usage_tmp:
