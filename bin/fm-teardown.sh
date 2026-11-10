@@ -236,7 +236,7 @@
 #   in its note; this saves work, it does not declare delivery or installation.
 #   It cannot combine with --force, --residual, or --repair-missing-record.
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
-#   checks, and discards secondmate child work for kind=secondmate. Only use it
+#   checks, retains task branches, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
 #   --legacy-record accepts a task record that predates the spawn_gen field:
 #   teardown then proceeds only when the recorded endpoint is confirmed dead or
@@ -4105,7 +4105,7 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
-# Preserve the saved branch; ordinary landed/discard cleanup drops its branch.
+# Preserve saved and forced-close branches; ordinary landed cleanup drops its branch.
 if [ "$PRESERVE" = 1 ]; then
   verify_preserved_worktree || exit 1
 fi
@@ -4129,7 +4129,7 @@ elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
     if [ "$branch" != "HEAD" ]; then
       if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        [ "$PRESERVE" = 1 ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+        [ "$PRESERVE" = 1 ] || [ "$FORCE" = --force ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       elif [ "$PRESERVE" = 1 ]; then
         echo "REFUSED: cannot detach the saved task branch before worktree return." >&2
         exit 1
@@ -4151,7 +4151,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
     if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      [ "$PRESERVE" = 1 ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      [ "$PRESERVE" = 1 ] || [ "$FORCE" = --force ] || git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
     elif [ "$PRESERVE" = 1 ]; then
       echo "REFUSED: cannot detach the saved task branch before worktree return." >&2
       exit 1

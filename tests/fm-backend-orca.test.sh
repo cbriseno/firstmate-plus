@@ -1042,27 +1042,34 @@ test_ship_teardown_refuses_orca_missing_worktree_path() {
 }
 
 test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
-  local proj wt data state config id out rc neutral
-  id="orcashipmatchz2"
-  proj="$TMP_ROOT/ship-match-project"
-  wt="$TMP_ROOT/ship-match-wt"
-  data="$TMP_ROOT/ship-match-data"
-  state="$TMP_ROOT/ship-match-state"
-  config="$TMP_ROOT/ship-match-config"
+  local proj wt data state config id out rc neutral force=${1:-} head
+  id="orcashipmatchz2${force:+forced}"
+  proj="$TMP_ROOT/$id-project"
+  wt="$TMP_ROOT/$id-wt"
+  data="$TMP_ROOT/$id-data"
+  state="$TMP_ROOT/$id-state"
+  config="$TMP_ROOT/$id-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  if [ -n "$force" ]; then
+    fm_git_identity fmtest fmtest@example.invalid
+    printf 'unlanded\n' > "$wt/feature.txt"
+    git -C "$wt" add feature.txt
+    git -C "$wt" commit -qm unlanded
+  fi
+  head=$(git -C "$wt" rev-parse HEAD)
   mkdir -p "$data/$id" "$state" "$config"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "terminal=term-ship-match" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=ship" "mode=local-only" "yolo=off" \
     "backend=orca" "orca_worktree_id=wt-ship-match::/orca/wt-ship-match"
-  orca_case ship-match
+  orca_case "ship-match${force:+forced}"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-ship-match::/orca/wt-ship-match","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
+    "$ROOT/bin/fm-teardown.sh" "$id" ${force:+"$force"} 2>&1 )
   rc=$?
   set -e
   expect_code 0 "$rc" "Orca ship teardown should succeed when the id path matches the inspected worktree"$'\n'"$out"
@@ -1073,6 +1080,10 @@ test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
   assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm'$'\x1f''--worktree'$'\x1f''id:wt-ship-match::/orca/wt-ship-match'$'\x1f''--force'$'\x1f''--json' \
     "teardown did not remove the matched Orca worktree"
   assert_absent "$state/$id.meta" "successful matched teardown should remove task metadata"
+  if [ -n "$force" ]; then
+    [ "$(git -C "$proj" rev-parse "refs/heads/fm/$id")" = "$head" ] \
+      || fail "forced Orca teardown deleted the branch holding unlanded work"
+  fi
   pass "fm-teardown.sh backend=orca: ship teardown requires a matching Orca id path"
 }
 
@@ -1394,6 +1405,7 @@ test_teardown_preserves_metadata_when_orca_remove_error_json
 test_scout_teardown_refuses_orca_missing_report_when_path_missing
 test_ship_teardown_refuses_orca_missing_worktree_path
 test_ship_teardown_removes_orca_worktree_when_id_path_matches
+test_ship_teardown_removes_orca_worktree_when_id_path_matches --force
 test_ship_teardown_refuses_orca_unresolvable_worktree_id
 test_ship_teardown_refuses_orca_id_path_mismatch
 test_teardown_refuses_orca_missing_worktree_id

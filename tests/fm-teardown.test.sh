@@ -2923,10 +2923,11 @@ test_fractional_legacy_retry_wait_refuses_without_arithmetic_error() {
 }
 
 test_local_only_force_overrides_unpushed() {
-  local case_dir rc
+  local case_dir rc head
   case_dir=$(make_case force-override)
   write_meta "$case_dir" local-only ship
   wt_commit_file "$case_dir" feature.txt unlanded "unpushed work"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
 
   set +e
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
@@ -2935,7 +2936,11 @@ test_local_only_force_overrides_unpushed() {
 
   expect_code 0 "$rc" "force-override: --force should bypass the unpushed-work check"
   ! grep -q REFUSED "$case_dir/stderr" || fail "force-override: REFUSED printed despite --force"
-  pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
+  [ "$(git -C "$case_dir/project" rev-parse refs/heads/fm/task-x1)" = "$head" ] \
+    || fail "force-override: teardown deleted the branch holding unlanded work"
+  [ "$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)" = HEAD ] \
+    || fail "force-override: task branch was not detached before return"
+  pass "forced teardown returns the worktree and keeps its unlanded branch"
 }
 
 # Mark the case's home as a secondmate home bound to a parent: teardown and
