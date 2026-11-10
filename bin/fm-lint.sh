@@ -41,11 +41,12 @@
 # invocations in the core bin/ and bin/backends/ scripts so every configured
 # backlog backend follows the same tasks-axi lifecycle path.
 #
-# Lint defaults to two concurrency-limited workers over two stable logical
-# shards, and each worker runs ONE canonical root per ShellCheck process, so a
-# run holds at most JOBS concurrent ShellCheck processes. Diagnostics replay
-# in stable shard/root order. FM_LINT_JOBS=1 changes concurrency, not diagnostics
-# or exit selection.
+# Lint takes /tmp/firstmate-shellcheck-<uid>.lock across homes and worktrees,
+# waits for other lints, and runs one ShellCheck at a time on this host.
+# Python fcntl holds the lock through an inherited descriptor until exit.
+# FM_LINT_SKIP_HOST_LOCK=1 bypasses the lock and allows --jobs/FM_LINT_JOBS
+# (default 2); use only when concurrent ShellCheck memory use is acceptable.
+# The two logical shards and diagnostic replay order remain stable.
 # --partition 1of2/2of2 splits the entire canonical inventory across
 # two CI runners, each with those same concurrency-limited workers.
 # Partitions are complete, disjoint, and byte-weight balanced; --list-files
@@ -106,7 +107,7 @@
 #   fm-lint.sh                         lint the context-selected file set (see above)
 #   fm-lint.sh --fast [path]...       local lint with extended analysis disabled
 #   fm-lint.sh <path>...               lint explicit roots with the same config
-#   fm-lint.sh --jobs <1|2> [path]...  override concurrent worker count
+#   fm-lint.sh --jobs <1|2> [path]...  worker count (host lock caps it at 1)
 #   fm-lint.sh --partition <1of2|2of2> lint one canonical CI partition (see fallback above)
 #   fm-lint.sh --telemetry <path> ...  write a quiet metrics snapshot
 #   fm-lint.sh --required-version      print the ShellCheck pin
@@ -114,6 +115,7 @@
 #   fm-lint.sh --help                  print this usage
 set -u
 
+ORIGINAL_ARGS=("$@")
 REQUIRED_SHELLCHECK=0.11.0
 # Cross-file codes that need --external-sources. No-source checks (local
 # changed-file mode and memory fallback) cannot judge them.
@@ -918,6 +920,29 @@ SHELLCHECK_BIN=$(command -v shellcheck)
 if ! PERL_BIN=$(command -v perl); then
   printf 'fm-lint.sh: perl is required for bounded worker cleanup.\n' >&2
   exit 127
+fi
+# Keep the lock outside FM_HOME, the checkout, and TMPDIR (macOS may give
+# each session a different TMPDIR). Exec preserves the lint PID and cleanup.
+if [ "${FM_LINT_SKIP_HOST_LOCK:-0}" != 1 ]; then
+  if [ "${FM_LINT_HOST_LOCKED:-0}" != 1 ]; then
+    exec python3 - "${BASH:-bash}" "$SELF" "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}" <<'PYLOCK'
+import fcntl
+import os
+import sys
+
+fd = os.open(f"/tmp/firstmate-shellcheck-{os.getuid()}.lock",
+             os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    print("fm-lint.sh: waiting for host ShellCheck lock; skip: FM_LINT_SKIP_HOST_LOCK=1", file=sys.stderr, flush=True)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+os.set_inheritable(fd, True)
+os.environ["FM_LINT_HOST_LOCKED"] = "1"
+os.execvp(sys.argv[1], sys.argv[1:])
+PYLOCK
+  fi
+  JOBS=1
 fi
 resolved=$("$SHELLCHECK_BIN" --version | awk '/^version:/ {print $2; exit}')
 printf 'fm-lint.sh: ShellCheck %s (pinned %s)\n' "$resolved" "$REQUIRED_SHELLCHECK" >&2

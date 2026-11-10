@@ -1325,7 +1325,7 @@ SH
   [ "$telemetry_out" = "$out_clean_2" ] || fail "quiet telemetry changed routine lint output"
   assert_grep $'format\tfm-lint-telemetry-v1' "$telemetry" "telemetry format marker is missing"
   assert_grep $'analysis_mode\tfull' "$telemetry" "telemetry did not record full analysis mode"
-  assert_grep $'jobs\t2' "$telemetry" "telemetry did not record bounded jobs"
+  assert_grep $'jobs\t1' "$telemetry" "host lock did not cap concurrent jobs"
   assert_grep $'root_count\t1' "$telemetry" "telemetry did not record root count"
   assert_grep $'wall_seconds\t' "$telemetry" "telemetry did not record wall time"
   assert_grep $'user_seconds\t' "$telemetry" "telemetry did not record user CPU"
@@ -1342,6 +1342,58 @@ SH
   [ -z "$(find "$cleanup_tmp" -mindepth 1 -maxdepth 1 -name 'fm-lint.*' -print -quit)" ] \
     || fail "bounded lint left temporary worker state behind"
   pass "jobs=1 and jobs=2 preserve deterministic diagnostics, failures, cleanup bounds, and quiet telemetry"
+}
+
+test_host_lock_serializes_homes_and_worktrees() {
+  local tmp fakebin lane pid_a pid_b
+  tmp=$(fm_test_tmproot fm-lint-host-lock)
+  mkdir -p "$tmp"
+  fakebin=$(fm_fakebin "$tmp")
+  cat > "$fakebin/shellcheck" <<'PYLOCK'
+#!/usr/bin/env python3
+import os
+import sys
+import time
+
+if "--version" in sys.argv:
+    print("version: 0.11.0")
+    sys.exit(0)
+with open(os.environ["FM_TEST_LOCK_LOG"], "a") as log:
+    log.write(f"begin {os.environ['FM_TEST_LOCK_LANE']} {time.time()}\n")
+time.sleep(0.2)
+with open(os.environ["FM_TEST_LOCK_LOG"], "a") as log:
+    log.write(f"end {os.environ['FM_TEST_LOCK_LANE']} {time.time()}\n")
+PYLOCK
+  chmod +x "$fakebin/shellcheck"
+  for lane in a b; do
+    mkdir -p "$tmp/$lane/bin" "$tmp/$lane/tmp"
+    cp "$LINT" "$tmp/$lane/bin/fm-lint.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/$lane/good.sh"
+  done
+  # Different checkouts, homes and TMPDIR must still meet at the same lock.
+  PATH="$fakebin:$PATH" FM_TEST_LOCK_LOG="$tmp/events" FM_TEST_LOCK_LANE=a \
+    FM_HOME="$tmp/a" TMPDIR="$tmp/a/tmp" FM_LINT_SKIP_HOST_LOCK=0 \
+    bash "$tmp/a/bin/fm-lint.sh" --jobs 2 "$tmp/a/good.sh" "$tmp/a/good.sh" > "$tmp/a/out" 2>&1 &
+  pid_a=$!
+  PATH="$fakebin:$PATH" FM_TEST_LOCK_LOG="$tmp/events" FM_TEST_LOCK_LANE=b \
+    FM_HOME="$tmp/b" TMPDIR="$tmp/b/tmp" FM_LINT_SKIP_HOST_LOCK=0 \
+    bash "$tmp/b/bin/fm-lint.sh" --jobs 2 "$tmp/b/good.sh" "$tmp/b/good.sh" > "$tmp/b/out" 2>&1 &
+  pid_b=$!
+  wait "$pid_a" || fail "first host-locked lint failed"
+  wait "$pid_b" || fail "second host-locked lint failed"
+  python3 - "$tmp/events" <<'PYLOCK' || fail "host-locked lints overlapped"
+import sys
+from pathlib import Path
+
+events = [line.split() for line in Path(sys.argv[1]).read_text().splitlines()]
+assert [event[0] for event in events] == ["begin", "end"] * 4, events
+lanes = [event[1] for event in events]
+assert lanes in (["a"] * 4 + ["b"] * 4, ["b"] * 4 + ["a"] * 4), events
+assert [float(event[2]) for event in events] == sorted(float(event[2]) for event in events)
+PYLOCK
+  grep -q 'skip: FM_LINT_SKIP_HOST_LOCK=1' "$tmp/a/out" "$tmp/b/out" \
+    || fail "waiting lint omitted the one-line bypass instruction"
+  pass "host lock serializes ShellCheck across homes, worktrees and internal workers"
 }
 
 test_worker_trees_stop_on_signal() {
@@ -2048,6 +2100,7 @@ test_rejects_direct_beads_cli_in_explicit_core_path
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
+test_host_lock_serializes_homes_and_worktrees
 test_worker_trees_stop_on_signal
 test_root_deadline_names_the_root_and_reaps_the_tree
 test_root_memory_limit_reports_a_named_death
