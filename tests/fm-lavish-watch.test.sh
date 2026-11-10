@@ -269,7 +269,7 @@ SH
   rm -f -- "$SW/home/state/host.meta"
   advance_scan 300
   scan >/dev/null
-  [ "$(scan_count)" = 6 ] || fail "restart/teardown lost an unattended board or its reminder"
+  [ "$(scan_count)" = 3 ] || fail "a single listener loss generated repeated reminders"
   [ "$(cat "$LAVISH_AXI_STATE_DIR/state.json")" = "$saved_feedback" ] || fail "discovery changed saved feedback"
   pass "unregistered boards wake within a bound, preserve ownership, and ignore other homes"
 
@@ -283,7 +283,7 @@ SH
   scan >/dev/null
   advance_scan 31
   scan >/dev/null
-  [ "$(scan_count)" = 7 ] || fail "a second listener-loss episode was suppressed"
+  [ "$(scan_count)" = 4 ] || fail "a second listener-loss episode was suppressed"
   pass "restored listeners close episodes and later loss receives a fresh wake"
 
   # A round waiting for acknowledgement must never be auto-rearmed or handled.

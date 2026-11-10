@@ -129,7 +129,7 @@ test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   pass "an announced recovery is not reannounced by the next foreground checkpoint"
 }
 
-test_never_announced_recovery_is_announced_once() {
+test_never_announced_recovery_without_eligible_row_stays_quiet() {
   local home out err status
   home=$(make_home pending-recovery)
   out="$home/out.txt"
@@ -138,14 +138,14 @@ test_never_announced_recovery_is_announced_once() {
 
   status=0
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
-    "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+    "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
 
-  expect_code 0 "$status" "pending recovery checkpoint exit"
-  [ "$(grep -c '^check: rearm-resurface$' "$out" || true)" -eq 1 ] \
-    || fail "never-announced recovery did not surface exactly once: $(cat "$out")"
-  [ "$(cat "$home/state/.watcher-down")" = 'announced:downtime:unreported.1.aaa' ] \
-    || fail "never-announced recovery did not retain its announced generation"
-  pass "a never-announced recovery still surfaces once from a foreground checkpoint"
+  expect_code 124 "$status" "recovery without an eligible row checkpoint exit"
+  assert_not_contains "$(cat "$out")" 'check: rearm-resurface' \
+    "recovery without an eligible row was announced"
+  [ "$(cat "$home/state/.watcher-down")" = 'pending:downtime:unreported.1.aaa' ] \
+    || fail "recovery without an eligible row changed its generation"
+  pass "a pending recovery stays quiet until an eligible durable row remains"
 }
 
 test_queue_append_during_checkpoint_still_resurfaces() {
@@ -511,7 +511,7 @@ test_supervision_loop_lands_each_delivery_on_one_wake() {
 test_quiet_checkpoint_exits_124_cleanly
 test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
 test_announced_recovery_is_not_reannounced_by_next_checkpoint
-test_never_announced_recovery_is_announced_once
+test_never_announced_recovery_without_eligible_row_stays_quiet
 test_queue_append_during_checkpoint_still_resurfaces
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
@@ -555,7 +555,7 @@ test_unchanged_queue_is_not_reannounced_on_ordinary_start() {
   pass "unchanged pending rows stay quiet across ordinary starts; new rows still wake"
 }
 
-test_progress_notice_changes_once_per_obligation_state() {
+test_progress_reconciliation_waits_for_terminal_status() {
   local home out status
   home=$(make_home progress-state)
   out="$home/out.txt"
@@ -564,22 +564,17 @@ test_progress_notice_changes_once_per_obligation_state() {
   printf 'working: assignment started\n' > "$home/state/worker.status"
   # Keep the signal scan from preempting the slow progress check.
   FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_wake_status_mark_current "$2" "$2/worker.status"' _ "$ROOT" "$home/state"
-  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 10 >"$out" 2>&1
-  assert_contains "$(cat "$out")" 'check: progress reconciliation required' "initial obligation missing"
-  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" >"$home/drain.txt" 2>"$home/drain.err"
-  ack_presented_wakes "$home" "$home/drain.err" || fail "could not acknowledge the progress notice"
   status=0
-  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 3 >"$out" 2>&1 || status=$?
-  expect_code 124 "$status" "unchanged obligation checkpoint"
-  assert_not_contains "$(cat "$out")" 'progress reconciliation required' "unchanged obligation repeated"
-  : > "$home/state/worker.status"
-  FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_wake_status_mark_current "$2" "$2/worker.status"' _ "$ROOT" "$home/state"
-  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 3 >"$out" 2>&1 || true
-  printf 'working: assignment resumed\n' > "$home/state/worker.status"
+  FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 2 >"$out" 2>&1 || status=$?
+  expect_code 124 "$status" "progress-only checkpoint"
+  assert_not_contains "$(cat "$out")" 'progress reconciliation required' "progress check created a separate turn"
+  printf 'done: worker finished\n' >> "$home/state/worker.status"
   FM_HOME="$home" FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 10 >"$out" 2>&1
-  assert_contains "$(cat "$out")" 'check: progress reconciliation required' "returned obligation did not wake"
-  pass "progress wakes once per obligation state and returns after that state clears"
+  assert_contains "$(cat "$out")" 'signal: ' "terminal status did not wake"
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" >"$home/drain.txt" 2>"$home/drain.err"
+  assert_contains "$(cat "$home/drain.txt")" 'progress reconciliation:' "terminal wake omitted progress reconciliation"
+  pass "progress reconciliation accompanies the next terminal status wake"
 }
 
 test_unchanged_queue_is_not_reannounced_on_ordinary_start
-test_progress_notice_changes_once_per_obligation_state
+test_progress_reconciliation_waits_for_terminal_status

@@ -1820,11 +1820,11 @@ wedge_defer_validating() {  # <window> <since-file> <triage-label> <idle-age> <t
 # display stays absorbed. Under one unchanged incarnation a dead pane's static
 # display absorbs on every threshold either way.
 # Returns 0 when it has handled the window, 1 to escalate on the unchanged path.
-wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-hash> <task>
-  local win=$1 since_file=$2 label=$3 age=$4 hash=$5 task=$6 key marker agent_state detail reason gen id
+wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-hash> <task> [<confirmed-state>]
+  local win=$1 since_file=$2 label=$3 age=$4 hash=$5 task=$6 agent_state=${7-} key marker detail reason gen id
   key=$(window_key "$win")
   marker="$STATE/.dead-reported-$key"
-  agent_state=$(fm_backend_agent_state "$(window_backend "$win")" "$win" 2>/dev/null) || agent_state=unreadable
+  [ -n "$agent_state" ] || agent_state=$(fm_backend_agent_state "$(window_backend "$win")" "$win" 2>/dev/null) || agent_state=unreadable
   case "$agent_state" in
     dead) detail='the endpoint is still there with no agent running in it' ;;
     missing) detail='the recorded endpoint is gone' ;;
@@ -3947,12 +3947,15 @@ EOF
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
-        # The pane is idle/stale at hash $h. Triage decides whether this wakes
-        # firstmate. Detection itself is unchanged from above.
-        [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ] || continue
+        # Recheck endpoint liveness even when this pane hash was previously
+        # observed alive or unknown; the endpoint can die without pane output changing.
         agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
         case "$agent_state" in
-          dead|missing) ;;
+          dead|missing)
+            wedge_dead_record "$w" "$ssf" stale 0 "$h" "$task" "$agent_state"
+            printf '%s' "$h" > "$sf"
+            continue
+            ;;
           *)
             printf '%s' "$h" > "$sf"
             wedge_episode_end "$key"

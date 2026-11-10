@@ -86,72 +86,83 @@ test_signal_catchup_without_running_watcher() {
   pass "signal written while no watcher runs is caught on next run"
 }
 
-test_stale_enqueue_before_suppressor() {
-  local dir state fakebin out drain_out capture_file window key pane_hash
+test_stale_alive_then_dead_enqueues_before_dead_marker() {
+  local dir state fakebin out drain_out capture_file agent_file window key pane_hash pid i
   dir=$(make_case stale)
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/watch.out"
   drain_out="$dir/drain.out"
   capture_file="$dir/pane.txt"
+  agent_file="$dir/agent-command"
   window="test:fm-stale"
   printf 'idle prompt' > "$capture_file"
+  printf 'claude\n' > "$agent_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/stale.meta"
-  # A stale pane sitting on a captain-relevant status is actionable when the crew
-  # is not provably working, so give the window one and prime the .seen-* marker
-  # to its current signature so the per-poll signal scan does not pre-empt the
-  # stale wake with a signal wake.
+  # Keep a terminal status classified so this wake must come from stale liveness.
   printf 'done: ready in branch fm/stale\n' > "$state/stale.status"
   prime_status_seen "$state" "$state/stale.status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle prompt")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 40 || fail "watcher did not exit for stale pane"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "watcher did not print stale wake"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND_FILE="$agent_file" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" != "$pane_hash" ]; do
+    is_live_non_zombie "$pid" || fail "watcher exited before recording the live stale pane: $(cat "$out")"
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+    || { kill -TERM "$pid" 2>/dev/null || true; fail "live endpoint was not classified silent"; }
+  assert_not_contains "$(cat "$out")" "stale: $window" "a confirmed-live endpoint produced a stale wake"
+  printf 'zsh\n' > "$agent_file"
+  wait_for_exit "$pid" 40 || { kill -TERM "$pid" 2>/dev/null || true; fail "dead transition was hidden by the unchanged pane hash"; }
+  grep -F "stale: $window (" "$out" >/dev/null || fail "watcher did not print stale wake after the endpoint died"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after stale wake failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "stale wake was not queued"
-  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor was not written"
-  pass "stale wake is queued before suppressor state is advanced"
+  [ -s "$state/.dead-reported-$key" ] || fail "dead report marker was not written after the queue append"
+  pass "a same-hash alive-to-dead transition produces one durable stale wake"
 }
 
-# Absorb-only-when-provably-working adds a new actionable wake: a non-terminal stale
-# whose crew is NOT provably working is surfaced immediately. That new path must keep
-# the queue-safety invariant - enqueue the stale wake BEFORE advancing the .stale-*
-# suppressor - so a watcher killed between the two never swallows the surfaced finish.
-test_not_working_stale_enqueue_before_suppressor() {
-  local dir state fakebin out drain_out capture_file window key pane_hash
+test_unknown_stale_endpoint_stays_silent() {
+  local dir state fakebin out capture_file agent_file window key pane_hash pid i
   dir=$(make_case stale-stopped)
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/watch.out"
-  drain_out="$dir/drain.out"
   capture_file="$dir/pane.txt"
+  agent_file="$dir/agent-command"
   window="test:fm-stopped"
   printf 'idle prompt, finished' > "$capture_file"
+  : > "$agent_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/stopped.meta"
-  # Non-terminal status (no captain-relevant verb); prime .seen-* so the per-poll
-  # signal scan does not pre-empt the stale path.
   printf 'working: implementing\n' > "$state/stopped.status"
   prime_status_seen "$state" "$state/stopped.status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle prompt, finished")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  # NOT provably working: no running pipeline, idle pane. (make_case installed the
-  # fake fm-crew-state.sh the watcher reads via FM_CREW_STATE_BIN.)
-  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 40 || fail "watcher did not surface a not-provably-working stale"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "watcher did not print the immediate stale wake"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after the immediate stale wake failed"
-  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "immediate stale wake was not queued"
-  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor was not advanced after the enqueue"
-  unset FM_FAKE_CREW_STATE
-  pass "a not-provably-working stale wake is queued before its suppressor is advanced"
+    FM_FAKE_TMUX_CURRENT_COMMAND_FILE="$agent_file" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" != "$pane_hash" ]; do
+    is_live_non_zombie "$pid" || fail "watcher exited while endpoint state was unknown: $(cat "$out")"
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+    || { kill -TERM "$pid" 2>/dev/null || true; fail "unknown endpoint did not get classified"; }
+  assert_not_contains "$(cat "$out")" "stale: $window" "an unknown endpoint produced a stale wake"
+  [ ! -s "$state/.wake-queue" ] || fail "an unknown endpoint queued a wake"
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pass "an unknown endpoint stays silent until dead or missing is confirmed"
 }
 
 test_check_output_is_queued() {
@@ -3635,8 +3646,8 @@ test_owned_growth_still_annotates_turn_ended
 test_historical_annotation_skips_announced_status
 test_concurrent_append_and_drain
 test_signal_catchup_without_running_watcher
-test_stale_enqueue_before_suppressor
-test_not_working_stale_enqueue_before_suppressor
+test_stale_alive_then_dead_enqueues_before_dead_marker
+test_unknown_stale_endpoint_stays_silent
 test_check_output_is_queued
 test_atomic_double_drain
 test_drain_dedupes_obvious_duplicates
