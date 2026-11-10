@@ -11,8 +11,7 @@
 # unknown boards elsewhere on the machine are never adopted.
 #
 # After 30 seconds without a supervised listener, enqueue a durable check wake,
-# with a reminder every 300 seconds until coverage returns or the session ends
-# with no queued feedback. Bounds are observation times plus the watcher cadence.
+# once per loss until coverage returns or the session ends with no queued feedback.
 # An open worker round is covered by its immutable captured result, not another
 # listener while its worker is provably working; otherwise after the same grace,
 # ask firstmate to verify it. Never acknowledge it or re-arm on its behalf.
@@ -162,7 +161,7 @@ while IFS=$'\t' read -r id task artifact; do
     read -r since last nonce < "$marker" || exit 1
     [[ "$since" =~ ^[0-9]+$ && "$last" =~ ^[0-9]+$ && "$nonce" =~ ^[0-9]+-[0-9]+$ ]] || exit 1
   fi
-  if [ "$((now - since))" -ge 30 ] && { [ "$last" -eq 0 ] || [ "$((now - last))" -ge 300 ]; }; then
+  if [ "$((now - since))" -ge 30 ] && [ "$last" -eq 0 ]; then
     case "$owner" in
       task:*/round-open)
         detail="Captured feedback is still held by $owner. Verify the worker is handling it; steer it to finish its reply and re-arm after the nonterminal round, or conclude a terminal round. Never acknowledge or re-arm on its behalf." ;;

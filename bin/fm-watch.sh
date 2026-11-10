@@ -2,39 +2,21 @@
 # Firstmate watcher.
 # Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
 # and keeps blocking; it queues and exits only for actionable wakes.
-# The no-verb signal and stale path is absorb-only-on-positive-evidence: a wake
-# is absorbed only when the crew shows it is still working through an actively
-# running no-mistakes step or a backend busy signal. A home that opts in with
-# config/turnend-churn-absorb lets a bare turn-end also use bounded pane churn
-# since the previous poll. Every other no-verb wake surfaces, so a crew
-# that finishes (or stops and waits) is never silently swallowed. A declared wait,
-# either a paused: external wait or a verified captain-held transfer, is the
-# separate idle absorb case and re-surfaces only on its long bounded cadence,
-# although its initial no-verb status signal still surfaces in normal mode.
-# That cadence is hours long and condition-aware: a paused: line naming
-# `until <UTC ISO 8601>` is rechecked when that time passes, but a declared time
-# beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence, and
-# while an away record (state/.afk-contract, never quiet mode's) exists an
-# item held for the captain is never rechecked at all, in either posture.
-# While state/.afk exists, the daemon owns triage and this watcher queues and exits
-# on every wake. Printed reason lines:
-#   signal: <file>...      status/turn-end signals, surfaced when a listed status
-#                          span has a captain-relevant event OR a no-verb signal lacks
-#                          positive execution evidence, unless afk is active
-#   stale: <window>        a provably-working stale is ALWAYS absorbed (with a wedge
-#                          timer) regardless of what the status log says - an active
-#                          run-step or busy pane outranks even a captain-relevant log
-#                          line, since the crew's own log gets no new entry once
-#                          firstmate hands it to a no-mistakes validation. A declared
-#                          external-wait pause or verified captain-held transfer is
-#                          absorbed instead with its own long re-surface cadence,
-#                          never as a wedge, and that recheck reason names which
-#                          human the wait is on. Only when neither absorb class
-#                          applies does the log's latest recognized status event decide:
-#                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
-#                          wedge threshold also surfaces, with an "escalation N"
-#                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
+# Status wakes require a captain-relevant status event; routine progress and
+# turn-end signals without one are absorbed after the coalescing grace. Stale
+# panes wake only when the recorded endpoint is confirmed dead or missing.
+# While state/.afk exists, the daemon owns triage for eligible durable wakes.
+# Printed reason lines:
+#   signal: <file>...      a newly classified captain-relevant status event
+#   stale: <window>        a confirmed dead/missing endpoint needing recovery
+#                          (live, quiet, or unknown endpoints stay silent)
+#                          A dead endpoint is reported once per pane state; it is
+#                          never interrupted or restarted automatically.
+#                          The remaining detail below describes wedge bounds and
+#                          declared-wait deferrals for eligible dead endpoints.
+#                          A dead endpoint past the wedge threshold also surfaces
+#                          with an "escalation N" count in the reason; at
+#                          FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
 #                          also carries a "demand-deep-inspection" marker so the
 #                          wake payload itself, not just repetition, forces a
@@ -3024,25 +3006,6 @@ EOF
   [ "$linger" -le 0 ] || sleep "$linger"
 }
 
-# A mechanical turn-end or timestamp-only status change adds nothing when the
-# worker's log was already classified. Pane staleness still surfaces an
-# undeclared stop after its existing stable-poll grace, once per unchanged pane.
-# Missing/unreadable logs retain the ordinary signal-grace fallback.
-signal_statuses_already_classified() {  # <signal-file> ...
-  local f status size
-  [ "$#" -gt 0 ] || return 1
-  for f in "$@"; do
-    case "$f" in
-      *.turn-ended) status="${f%.turn-ended}.status" ;;
-      *.status) status=$f ;;
-      *) return 1 ;;
-    esac
-    [ -f "$status" ] && [ -r "$status" ] && [ ! -L "$status" ] || return 1
-    size=$(_fm_status_file_size "$status") || return 1
-    [ "$size" -gt 0 ] && [ "$(fm_wake_signal_seen_size "$STATE" "$status")" -eq "$size" ] || return 1
-  done
-}
-
 # 0 when any signaled status file carries a captain-relevant event in the bytes
 # appended since this watcher last classified it. The start offset is the
 # classified-position field in that file's .seen-* marker, and fm-classify-lib.sh's
@@ -3087,9 +3050,7 @@ signal_files_actionable() {  # <status-file> ...
     if [ "$needs_decision" -eq 1 ]; then
       FM_SIGNAL_NEEDS_DECISION_FILES="${FM_SIGNAL_NEEDS_DECISION_FILES} ${f}"
     fi
-    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ] \
-      || { [ "$endpoint" -gt "$(fm_wake_signal_seen_size "$STATE" "$f")" ] \
-        && status_is_paused "$(last_status_line "$f")"; }; then
+    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ]; then
       found=0
     fi
   done
@@ -3306,12 +3267,10 @@ done
 if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
-handling_successor_has_queued_row() {
-  local queued=1
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
-  [ ! -s "$FM_WAKE_QUEUE" ] || queued=0
-  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
-  return "$queued"
+main_has_eligible_queued_row() {
+  local queued
+  queued=$(fm_wake_actor_pending_count main) || return 1
+  [[ "$queued" =~ ^[0-9]+$ ]] && [ "$queued" -gt 0 ]
 }
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
@@ -3553,7 +3512,7 @@ resurface_after_downtime() {
       exit 1
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
-    handling_successor_has_queued_row || return 0
+    main_has_eligible_queued_row || return 0
     wake "check: rearm-resurface"
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
@@ -3565,6 +3524,7 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
+  main_has_eligible_queued_row || return 0
   wake "check: rearm-resurface"
 }
 
@@ -3696,16 +3656,11 @@ while :; do
       [ -f "$usage_meta" ] || continue
       python3 "$SCRIPT_DIR/fm_task_usage.py" refresh "${FM_DATA_OVERRIDE:-$FM_HOME/data}/$(basename "$usage_meta" .meta)" || triage_log "usage refresh failed: $usage_meta"
     done
-    # Progress obligations use the same slow mechanical check cadence and
-    # durable queue. No extra watcher, agent polling or inferred substeps.
+    # Progress obligations use the slow mechanical cadence and are carried with
+    # the next captain-relevant status wake, without creating a separate turn.
     progress_obligations=$(FM_HOME="$FM_HOME" FM_SIGNAL_GRACE="$SIGNAL_GRACE" \
       "$SCRIPT_DIR/fm-tasks-axi.sh" progress-check 2>/dev/null) || progress_obligations=
-    progress_changed=0
     if [ "$progress_obligations" != "$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)" ]; then
-      if [ -n "$progress_obligations" ]; then
-        fm_wake_append check progress-reconciliation "check: progress reconciliation required: $progress_obligations" || exit 1
-        progress_changed=1
-      fi
       printf '%s' "$progress_obligations" > "$STATE/.progress-reconciliation" || exit 1
     fi
     rejected_checks=
@@ -3833,9 +3788,6 @@ EOF
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"
     fi
-    if [ "$progress_changed" -eq 1 ]; then
-      wake "check: progress reconciliation required"
-    fi
   fi
 
   # On the first changed signal, linger one grace period and re-scan before
@@ -3861,29 +3813,9 @@ EOF
 $pending
 EOF
     reason="signal:$files"
-    # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
-    #   - the away-mode daemon owns triage (afk) and wants every wake;
-    #   - any status file gained a captain-relevant event since it was last
-    #     classified (its whole new span, not merely its last line);
-    #   - or it is a no-verb wake (a bare turn-end, a working: note) with no
-    #     already-classified log or positive evidence the crew is still executing:
-    #     with no actively-running pipeline or busy pane, it may be done
-    #     (even via an interactive menu that wrote no done: status), waiting on a
-    #     decision, or wedged. Absorbing such a turn-end is exactly the
-    #     swallowed-finish this change guards against.
-    # Positive evidence is either an authoritative provably-working verdict or, in a
-    # home that opts in with config/turnend-churn-absorb and for a BARE turn-end
-    # alone, a pane that rendered something since the previous poll
-    # (signal_turnend_panes_churned) - the only proof available to a harness whose
-    # busy state has no verified semantic source, bounded so it cannot defer that
-    # task's turn-ends forever. Without a classified log or either proof, the
-    # wake surfaces after the signal grace as before.
-    # Actionable -> enqueue, advance .seen-* markers, exit. Benign (a no-verb wake
-    # with no new status or whose crew is still executing) -> advance markers so it
-    # will not re-fire, log, and keep blocking without enqueuing. Both evidence
-    # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
-    # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
-    # status span, and the capture only once the authoritative verdict comes up short.
+    # Only a newly classified captain-relevant status event becomes a wake.
+    # Routine progress and bare turn-end signals still advance their markers but
+    # do not create a model turn, including while AFK owns durable-wake handling.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
@@ -3900,13 +3832,13 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_statuses_already_classified $files \
-        && ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+    if [ "$signal_actionable" -eq 0 ]; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
+        progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
         case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+        [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
         fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
       done <<EOF
 $pending
@@ -4017,6 +3949,17 @@ EOF
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
+        [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ] || continue
+        agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
+        case "$agent_state" in
+          dead|missing) ;;
+          *)
+            printf '%s' "$h" > "$sf"
+            wedge_episode_end "$key"
+            clear_write_tracking "$key"
+            continue
+            ;;
+        esac
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
@@ -4228,13 +4171,8 @@ EOF
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,
-    # without exiting); the away-mode daemon, when present, owns triage and wants
-    # every heartbeat.
-    if afk_present; then
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
-      touch "$STATE/.last-heartbeat"
-      wake "heartbeat"
-    elif heartbeat_scan_finds_actionable; then
+    # without exiting), including while the away-mode daemon owns the queue.
+    if heartbeat_scan_finds_actionable; then
       # Backstop: a captain-relevant event the per-wake path absorbed by mistake.
       # Enqueue first, then record every status log surfaced through its end so the
       # next heartbeat does not re-fire it (enqueue-before-suppress preserved);
