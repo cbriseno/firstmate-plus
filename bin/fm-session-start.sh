@@ -772,6 +772,13 @@ FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-role.sh" report 
 if [ "$READ_ONLY" -eq 0 ]; then
   if [ "$REEMIT" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
+    # Enable event publication before any startup producer or deferred work.
+    # Presence remains the producer contract; preserve an existing flag.
+    if [ ! -e "$CONFIG/fleet-ledger" ]; then
+      if ! { mkdir -p "$CONFIG" && touch "$CONFIG/fleet-ledger"; }; then
+        printf 'FLEET_LEDGER: could not create config/fleet-ledger; event publication remains disabled.\n'
+      fi
+    fi
   fi
   fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
   # A full locked start publishes this home's current structured summary.

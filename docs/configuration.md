@@ -677,7 +677,12 @@ See [`trace-context.md`](trace-context.md) for carrier semantics, supported rout
 
 ## Fleet activity ledger (config/fleet-ledger)
 
-See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.
+The local, gitignored `config/fleet-ledger` presence flag enables event publication for this home.
+A full session start that acquires the home lock creates it when absent, so Deck requires no manual enablement after an update.
+This default applies to every home, independently of harness, backend, or whether Deck is installed.
+Read-only sessions and context re-emits do not create the flag.
+Deleting it stops publication until the next full locked session start; existing flag contents are left unchanged.
+See [`fleet-ledger.md`](fleet-ledger.md) for the record contract and limits.
 
 ## Firstmate role (config/firstmate-role)
 

@@ -31,6 +31,7 @@
 #     compatibility verdict is paid for once per session start
 # FM_SESSION_START_CASE=lock-concurrency runs only the session-lock fixture.
 # FM_SESSION_START_CASE=network-auth runs only the deferred authentication cases.
+# FM_SESSION_START_CASE=fleet-ledger runs publication defaults and mutation boundaries.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -776,6 +777,31 @@ write_omp_loaded_markers() {
 
 # --- context digest: absent vs empty vs present -----------------------------
 
+test_fleet_ledger_enabled_on_locked_start() {
+  local rec root home fakebin out
+  rec=$(new_world fleet-ledger-default)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" python3 "$ROOT/bin/fm_work.py" bootstrap \
+    | jq -e '.enabled == false' >/dev/null || fail 'fixture does not reproduce disabled Deck events'
+  [ ! -e "$home/config/fleet-ledger" ] || fail 'fixture already enables publication'
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  [ -f "$home/config/fleet-ledger" ] || fail "startup did not enable publication: $out"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" python3 "$ROOT/bin/fm_work.py" bootstrap \
+    | jq -e '.enabled == true' >/dev/null || fail 'Deck bootstrap still disables events'
+  FM_HOME="$home" "$ROOT/bin/fm-fleet-ledger.sh" configuration || fail 'configuration publication failed'
+  jq -e --arg home "$home" 'select(.event == "home.configuration" and .home == $home)' \
+    "$home/state/fleet-ledger.jsonl" >/dev/null || fail 'enabled producer did not publish configuration'
+  printf 'existing flag contents\n' > "$home/config/fleet-ledger"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_equals 'existing flag contents' "$(cat "$home/config/fleet-ledger")" 'startup overwrote the flag'
+  pass 'locked startup enables event publication without manual configuration and preserves existing flags'
+}
+
 test_context_digest_absent_empty_present() {
   local rec root home fakebin out
   rec=$(new_world context-digest)
@@ -851,6 +877,7 @@ EOF
   wait "$holder_pid" 2>/dev/null || true
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a lock refusal"
+  [ ! -e "$home/config/fleet-ledger" ] || fail 'read-only startup enabled publication'
   assert_contains "$out" "READ-ONLY SESSION" "read-only banner missing on lock refusal"
   assert_contains "$out" "another live firstmate session holds the lock" "read-only banner did not surface fm-lock.sh's own error text"
   assert_contains "$out" "Skipping every mutating step" "read-only banner did not explain what was skipped"
@@ -2468,11 +2495,13 @@ EOF
   assert_contains "$network_report" "SECONDMATE_LIVENESS" \
     "the full startup fixture did not exercise a mutating sweep"
 
+  rm -f "$home/config/fleet-ledger"
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     "$SESSION_START" --reemit)
 
+  [ ! -e "$home/config/fleet-ledger" ] || fail 'context re-emit enabled publication'
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
   assert_not_contains "$reemit" "SECONDMATE_LIVENESS" "--reemit repeated a mutating sweep startup already ran"
   assert_contains "$reemit" "done: queued after the re-emit too" "--reemit did not drain the wake queue"
@@ -3115,6 +3144,11 @@ EOF
 }
 
 case "${FM_SESSION_START_CASE:-}" in
+  fleet-ledger)
+    test_fleet_ledger_enabled_on_locked_start
+    test_lock_refusal_read_only_path
+    test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
+    exit 0 ;;
   lock-concurrency) test_session_lock_concurrent_single_winner; exit 0 ;;
   network-auth)
     test_unreachable_network_never_blocks_the_digest
@@ -3124,6 +3158,7 @@ case "${FM_SESSION_START_CASE:-}" in
   *) fail 'unknown focused session-start case' ;;
 esac
 
+test_fleet_ledger_enabled_on_locked_start
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
