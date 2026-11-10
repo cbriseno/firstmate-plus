@@ -57,6 +57,34 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     lock.touch()
     run('presentation', 'proof', '--presentation-file', str(draft))
     check(task()['progress']['done'] == 1, 'uncontended known matching path')
+    # Identity comes from the same canonical store and exact owning data root,
+    # even when caller/config defaults point at a different backlog.
+    decoy = home / 'decoy.md'
+    decoy.write_text('## Queued\n\n- [ ] other - Other task\n')
+    config = home / '.tasks.toml'
+    config.write_text('[markdown]\npath = "decoy.md"\n')
+    result = run('presentation', 'proof', '--card-status', 'Pinned identity',
+                 extra_env={'TASKS_AXI_FILE': str(decoy)})
+    check(result['ok'] and result['id'] == 'proof', 'owner data overrides config and inherited backlog path')
+    config.unlink()
+    run('presentation', 'pro', '--card-status', 'Wrong identity', ok=False)
+    check(not (home / 'data/pro/presentation.json').exists(), 'prefix is never an exact task identity')
+    saved_backlog = backlog.read_bytes()
+    backlog.unlink()
+    backlog.symlink_to(decoy)
+    run('presentation', 'other', '--card-status', 'Wrong owner', ok=False)
+    check(not (home / 'data/other/presentation.json').exists(), 'symlink backlog cannot establish task ownership')
+    backlog.unlink()
+    backlog.write_bytes(saved_backlog)
+    relocated = home / 'relocated/data'
+    relocated.mkdir(parents=True)
+    (relocated / 'backlog.md').write_text('## Queued\n\n- [ ] moved - Relocated task\n')
+    result = run('presentation', 'moved', '--card-status', 'Relocated owner',
+                 extra_env={'FM_DATA_OVERRIDE': str(relocated), 'TASKS_AXI_FILE': str(decoy)})
+    check(result['ok'] and (relocated / 'moved/presentation.json').is_file(), 'relocated data uses its own exact backlog')
+    (home / 'data/done-archive.md').write_text('## Archived 2026-11-09\n\n- [x] archived - Archived task (done 2026-11-09)\n')
+    check(run('presentation', 'archived', '--card-status', 'Retained owner')['ok'],
+          'canonical retained-history fallback remains available')
     output = home / 'data/proof/presentation.json'
     progress['steps'][1]['state'] = 'done'
     draft.write_text(json.dumps({'progress': progress}))

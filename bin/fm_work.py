@@ -621,17 +621,22 @@ class Owner:
                 backlog_state=origin['backlog_state'] if origin else None, completed=origin['completed'] if origin else None,
                 source='owner.retained_row' if origin else None) if task['question']['origin_task'] else None
         def root_blocker(key, visited):
-            if key in visited:
-                return key  # existing invalid historical graphs remain visible
-            visited = visited | {key}
-            if key.startswith('task:'):
-                node = by_key.get(key)
-                if node:
-                    opened = [b['ref'] for b in node['blocked_by'] if b['open']]
-                    return root_blocker(opened[0], visited) if opened else key
-                return key
-            members = [i for i in self.members(key) if self.rows[i]['state'] != 'done']
-            return root_blocker('task:' + sorted(members)[0], visited) if members else key
+            # A recursive local closure retains its entire snapshot until cyclic
+            # collection. Walk the same first open edge without keeping that cycle.
+            while key not in visited:
+                visited.add(key)
+                if key.startswith('task:'):
+                    node = by_key.get(key)
+                    opened = [b['ref'] for b in node['blocked_by'] if b['open']] if node else []
+                    if not opened:
+                        return key
+                    key = opened[0]
+                else:
+                    members = [i for i in self.members(key) if self.rows[i]['state'] != 'done']
+                    if not members:
+                        return key
+                    key = 'task:' + sorted(members)[0]
+            return key  # existing invalid historical graphs remain visible
         for t in tasks:
             t['root_blocker'] = next((b['ref'] for b in t['blocked_by'] if b['open']), None)
             if t['root_blocker']:

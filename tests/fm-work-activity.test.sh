@@ -5,7 +5,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 export ROOT
 python3 - <<'PY'
-import json, os, pathlib, subprocess, sys, tempfile
+import copy, gc, json, os, pathlib, subprocess, sys, tempfile, weakref
 root = pathlib.Path(os.environ['ROOT'])
 sys.path.insert(0, str(root / 'bin'))
 from fm_work_projection import Projection
@@ -30,7 +30,24 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert model.activity['activity']['state'] == 'idle'
     assert model.value['tasks'][0]['backlog_state'] == 'in_flight'
     assert not model.apply(dict(event, value=dict(event['value'], seq=1, state='busy')))
+    # Replacing a presentation must release the previous task snapshot without
+    # waiting for a cyclic collection that pauses the event reader.
+    class Evidence(dict):
+        pass
+    gc.collect()
+    gc.disable()
+    try:
+        value = copy.deepcopy(base['empty_presentation'])
+        value['lifecycle']['evidence'] = Evidence(value['lifecycle']['evidence'])
+        previous_evidence = weakref.ref(value['lifecycle']['evidence'])
+        assert model.apply(dict(event='task.presentation', task='activity', ts=1, value=value))
+        del value
+        assert model.apply(dict(event='task.presentation', task='activity', ts=2,
+                                value=copy.deepcopy(base['empty_presentation'])))
+        assert previous_evidence() is None, 'old snapshot retained until cyclic garbage collection'
+    finally:
+        gc.enable()
     (home / 'state/activity.busy-gen').write_text('other-generation\n')
     assert 'activity' not in json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))['activity']
-print('ok - bootstrap activity, turn end, old sequence and generation mismatch')
+print('ok - bootstrap activity, turn end, old sequence, generation mismatch and snapshot release')
 PY

@@ -28,7 +28,20 @@ import fs from 'node:fs';
 import {pathToFileURL} from 'node:url';
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const root = process.argv[1];
-if (input.config !== undefined) {
+if (input.task !== undefined) {
+  const {resolveConfig} = await import(pathToFileURL(root + '/config.js'));
+  const {resolveTasksContext} = await import(pathToFileURL(root + '/context.js'));
+  // Match the wrapper's data-root addressing without rendering a CLI detail.
+  const overrides = {cwd: input.cwd, env: {...process.env, TASKS_AXI_FILE: undefined}};
+  if (resolveConfig(overrides).backend === 'markdown') {
+    try {
+      if (fs.lstatSync(input.file).isSymbolicLink()) throw new Error('backlog file is a symlink');
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    overrides.file = input.file;
+  }
+  const {store} = resolveTasksContext(overrides);
+  console.log(JSON.stringify((await store.get(input.task))?.id ?? null));
+} else if (input.config !== undefined) {
   const {parseConfigToml} = await import(pathToFileURL(root + '/config.js'));
   console.log(JSON.stringify(parseConfigToml(input.config)));
 } else {
@@ -245,7 +258,7 @@ def canonical_read(payload):
     result = subprocess.run([node, '--input-type=module', '-e', READER, str(root)],
                             input=json.dumps(payload), text=True, capture_output=True, timeout=15)
     if result.returncode:
-        raise ValueError('tasks-axi canonical reader unavailable/incompatible (parseConfigToml/parseBacklog)')
+        raise ValueError('tasks-axi canonical reader unavailable/incompatible')
     return json.loads(result.stdout)
 
 
@@ -1010,12 +1023,9 @@ def presentation(home, args):
         raise ValueError('new progress labels must be unique; replan legacy duplicate labels explicitly')
     # Ask the backlog owner, including its retained completed records; a data
     # directory or old meta alone never establishes task identity.
-    probe = subprocess.run(['bash', str(BIN / 'fm-tasks-axi.sh'), 'show', args.task],
-                           env=dict(os.environ, FM_HOME=str(home)), capture_output=True,
-                           text=True, timeout=15)
-    ids = [line[len('  id: '):].strip() for line in probe.stdout.splitlines() if line.startswith('  id: ')]
-    identity = json.loads(ids[0]) if ids and ids[0].startswith('"') else (ids[0] if ids else None)
-    retained = (probe.returncode or len(ids) != 1 or identity != args.task)
+    data = Path(args.data or home / 'data').resolve(strict=True)
+    identity = canonical_read(dict(task=args.task, cwd=str(data.parent), file=str(data / 'backlog.md')))
+    retained = identity != args.task
     if retained and not any(row['id'] == args.task for row in
                             retained_history(home, include_non_deliveries=True)['records']):
         raise ValueError('presentation write needs an exact task from the backlog owner')
