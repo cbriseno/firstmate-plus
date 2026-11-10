@@ -157,6 +157,7 @@
 # its own source/time, never a status transition, liveness signal or refresh
 # heartbeat. Reads never renew it; unknown fields remain null. No wake is sent.
 # Work controls (explicit FM_HOME, local Markdown owner):
+#   work bootstrap  Canonical activation base plus ledger cut; fm_work_projection.py owns replay semantics.
 #   work capabilities | snapshot [--runtime] [--order recent|manual]  Fresh endpoint liveness; --runtime adds full crew evidence.
 #   work preview | apply                 One bounded operation JSON on stdin.
 #   work request-status --request-id ID   Durable receipt; retries never repeat effects.

@@ -90,7 +90,7 @@ cmd=${1:-}
 case "$cmd" in
   entity)
     { [ "$#" -eq 3 ] && task_ok "$3"; } || usage
-    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|work.structure|work.control|agent.activity|agent.retired|primary.final) ;; *) usage ;; esac
+    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|task.usage|work.structure|work.control|work.aliases|agent.activity|agent.retired|primary.final) ;; *) usage ;; esac
     ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;

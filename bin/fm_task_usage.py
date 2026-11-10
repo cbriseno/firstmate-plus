@@ -200,13 +200,15 @@ def refresh(folder):
     with tempfile.NamedTemporaryFile(mode='w', dir=folder, delete=False) as stream:
         json.dump(result, stream)
     Path(stream.name).replace(target)
+    from fm_delivery import fleet_event
+    fleet_event(folder.parent.parent, 'task.usage', folder.name, result)
 
 
-def aggregate(data, tasks, backlog):
+def aggregate(data, tasks, backlog, usages=None):
     rows, counts, unknown = {}, Counter(), []
     for task in tasks:
         task_id = task['key'][5:]
-        usage = read_usage(Path(data) / task_id / 'usage.json')
+        usage = usages.get(task_id, {}) if usages is not None else read_usage(Path(data) / task_id / 'usage.json')
         values = usage.get('by', [])
         reason = next(iter(usage.get('unknown') or []), None)
         state = ('no_agent' if backlog[task_id].get('kind') == 'captain' else 'not_started'

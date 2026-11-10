@@ -391,6 +391,28 @@ def invalidate_completion(home, task_id):
     fleet_event(home, 'task.completion', task_id, dict(receipt=value))
 
 
+def delivery_row(task, home, source="current", path=None):
+    task = dict(task, structured=True, source=source, source_path=path, home=str(home),
+                body=task.get('body'), owner='(main)')
+    # The canonical parser preserves the closed date, but does not
+    # expose the completion verb. Read only metadata in its row tail.
+    raw = task.get('raw', '').split('\n', 1)[0]
+    title = task.get('title', '')
+    tail = raw[raw.find(title) + len(title):] if title and title in raw else ''
+    stamp = re.search(r'\((merged|reported|done|closed) ([^()\s]+)\)', tail)
+    verb, value = (stamp[1], stamp[2]) if stamp else (None, task.get('closed'))
+    links = task.get('links') or []
+    task['report_path'] = next((v['url'] for v in links if v.get('kind') == 'report'), None)
+    task['pr_url'] = next((v['url'] for v in links if v.get('kind') == 'pr'), None)
+    task['local_note'] = 'local main' if local_artifact(task) else None
+    task['hold_kind'] = (task.get('hold') or {}).get('kind')
+    if re.search(r'\(hold-kind:\s*captain\)', tail):
+        task['hold_kind'] = 'captain'
+    task['completion'] = dict(verb=verb, date=value)
+    task['card_time'] = event_time(value, verb) if verb else None
+    return task
+
+
 def retained_history(home, *, include_non_deliveries=False):
     result = dict(schema='fm-delivery-history.v1', home=str(home), complete=True,
                   sources=[], limitations=['Retained local records only; deleted records cannot be recovered.'],
@@ -421,24 +443,9 @@ def retained_history(home, *, include_non_deliveries=False):
                         continue  # a reopened or current record supersedes its archive
                     if task.get('state') != 'done':
                         continue
-                    task = dict(task, structured=True, source=source, source_path=path, home=str(home),
-                                body=task.get('body'), owner='(main)')
-                    # The canonical parser preserves the closed date, but does not
-                    # expose the completion verb. Read only metadata in its row tail.
-                    raw = task.get('raw', '').split('\n', 1)[0]
-                    title = task.get('title', '')
-                    tail = raw[raw.find(title) + len(title):] if title and title in raw else ''
-                    stamp = re.search(r'\((merged|reported|done|closed) ([^()\s]+)\)', tail)
-                    verb, value = (stamp[1], stamp[2]) if stamp else (None, task.get('closed'))
-                    links = task.get('links') or []
-                    task['report_path'] = next((v['url'] for v in links if v.get('kind') == 'report'), None)
-                    task['pr_url'] = next((v['url'] for v in links if v.get('kind') == 'pr'), None)
-                    task['local_note'] = 'local main' if local_artifact(task) else None
-                    task['hold_kind'] = (task.get('hold') or {}).get('kind')
-                    if re.search(r'\(hold-kind:\s*captain\)', tail):
-                        task['hold_kind'] = 'captain'
-                    task['completion'] = dict(verb=verb, date=value)
-                    task['card_time'] = completion_receipt(home, task) or (event_time(value, verb) if verb else None)
+                    task = delivery_row(task, home, source, path)
+                    task['card_time'] = completion_receipt(home, task) or task['card_time']
+                    value = task['completion']['date']
                     if key not in rows or (source == 'archive' and
                                            (value or '') >= (rows[key]['completion']['date'] or '')):
                         rows[key] = task
@@ -892,7 +899,7 @@ def fleet_event(home, event, task_id, value):
                    env=dict(os.environ, FM_HOME=str(home)))
 
 
-def ledger_rows(home):
+def ledger_rows(home, archive=False):
     """Read canonical backlog values, never runtime/history or a work snapshot."""
     try:
         config = canonical_read({'config': read_text(home, '.tasks.toml', 65536)})
@@ -901,7 +908,15 @@ def ledger_rows(home):
     if config.get('backend', 'markdown') != 'markdown':
         raise ValueError('ledger task publication requires the local Markdown backend')
     path = (config.get('markdown') or {}).get('path') or 'data/backlog.md'
-    return {r['id']: r for r in canonical_read({'text': read_text(home, path)})}
+    if archive:
+        path = (config.get('markdown') or {}).get('archive') or str(Path(path).parent / 'done-archive.md')
+    try:
+        return {r['id']: delivery_row(r, home, source='archive' if archive else 'current', path=path)
+                for r in canonical_read({'text': read_text(home, path), 'archive': archive})}
+    except FileNotFoundError:
+        if archive:
+            return {}
+        raise
 
 
 def ledger_mutation(arguments):
@@ -914,9 +929,10 @@ def ledger_mutation(arguments):
     result = subprocess.run(command, capture_output=True, pass_fds=(int(inherited),) if inherited.isdigit() else ())
     if result.returncode == 0:
         after = ledger_rows(home)
+        archived = ledger_rows(home, archive=True) if before.keys() - after.keys() else {}
         for task_id in sorted(before.keys() | after.keys()):
             if before.get(task_id) != after.get(task_id):
-                fleet_event(home, 'task.changed', task_id, dict(task=after.get(task_id)))
+                fleet_event(home, 'task.changed', task_id, dict(task=after.get(task_id) or archived.get(task_id)))
     sys.stdout.buffer.write(result.stdout)
     sys.stderr.buffer.write(result.stderr)
     return result.returncode

@@ -40,6 +40,8 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `task.presentation` | `home`, `value` | The presentation owner publishes its declaration under the presentation lock. |
 | `task.changed` | `home`, `value.task` | A canonical backlog row changes; null means removed. |
 | `task.completion` | `home`, `value.receipt` | A completion receipt is written or invalidated. |
+| `task.usage` | `home`, `value` | The usage owner replaces its cached task totals. |
+| `work.aliases` | `home`, `value` | The identity owner saves its resulting reservations. |
 | `task.review` | `home`, `value` | The owner changes a result's review mark; value is its presentation read result. |
 | `work.structure` | `home`, `value` | The structure owner saves the complete resulting structure. |
 | `work.control` | `home`, `value` | The control owner saves its request, scope, state and events. |

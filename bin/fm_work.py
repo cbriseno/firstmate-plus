@@ -112,7 +112,9 @@ class Owner:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, target)
-            if path == self.structure_path:
+            if path == ALIAS_PATH:
+                fleet_event(self.home, 'work.aliases', 'work', value)
+            elif path == self.structure_path:
                 fleet_event(self.home, 'work.structure', 'work', value)
             elif path.startswith('data/work-requests/'):
                 fleet_event(self.home, 'work.control', 'work', value)
@@ -178,15 +180,7 @@ class Owner:
             self.registry_text = read_text(self.home, 'data/projects.md')
         except FileNotFoundError:
             self.registry_text = ''
-        self.projects = {}
-        for line in self.registry_text.splitlines():
-            match = re.match(r'^- ([A-Za-z0-9_.-]+) \[([^\]]*)\]\s*-\s*(.*)', line)
-            if match:
-                repo, flags, description = match.groups()
-                install = re.search(r'(?:^|\s)install=([A-Za-z0-9_.-]+)', flags)
-                self.projects[repo] = dict(key='project:' + repo, label=repo,
-                    visibility='public' if install else 'unknown',
-                    installs='project:' + install[1] if install else None, description=description)
+        self.load_projects()
         self.presentations = {i: read_presentation(self.home, i, verify=include_presentations) for i in self.rows}
         self.requests = {r['id']: r for p in self.presentations.values() if (r := p['presentation'].get('request'))}
         self.structure = self.read(self.structure_path, dict(schema='fm-work-structure.v1', groups={}, membership={}, order=[], edge_meta={}))
@@ -194,9 +188,7 @@ class Owner:
         self.aliases = Aliases(self, refuse)
         if hasattr(self, 'lock_fd'):
             self.aliases.sync()
-        for group in self.structure['groups'].values():
-            if group['kind'] == 'project' and 'visibility' in group:
-                self.projects[group['repo']]['visibility'] = group['visibility']
+        self.project_visibilities()
         self.status = {}
         for i in self.rows:
             try:
@@ -207,6 +199,22 @@ class Owner:
         self._requests = None
         self.rev = digest([self.registry_text, self.structure, {i:p['presentation'].get('request') for i,p in self.presentations.items()}, {i: {k:r.get(k) for k in ('repo', 'state', 'priority', 'hold', 'deps')} for i,r in self.rows.items()}])
         return self
+
+    def project_visibilities(self):
+        for group in self.structure['groups'].values():
+            if group['kind'] == 'project' and 'visibility' in group:
+                self.projects[group['repo']]['visibility'] = group['visibility']
+
+    def load_projects(self):
+        self.projects = {}
+        for line in self.registry_text.splitlines():
+            match = re.match(r'^- ([A-Za-z0-9_.-]+) \[([^\]]*)\]\s*-\s*(.*)', line)
+            if match:
+                repo, flags, description = match.groups()
+                install = re.search(r'(?:^|\s)install=([A-Za-z0-9_.-]+)', flags)
+                self.projects[repo] = dict(key='project:' + repo, label=repo,
+                    visibility='public' if install else 'unknown',
+                    installs='project:' + install[1] if install else None, description=description)
 
     def validate_structure(self):
         s = self.structure
@@ -496,20 +504,26 @@ class Owner:
             pass
         return dict(state='unknown', source='none', detail=tr('Current activity could not be confirmed.'))
 
-    def snapshot(self):
+    def snapshot(self, facts=None, previous=None, affected=None):
         tasks = []
         edges = self.edges()
-        reasons = dict(records=[dict(id=i, hold_reason=(r.get('hold') or {}).get('reason')) for i,r in self.rows.items()])
-        decoded = subprocess.run(['bash', '-c', '. "$1/fm-hold-reason-lib.sh"; fm_hold_reason_decode_stream json', 'fm-work', str(BIN)],
-                                 input=json.dumps(reasons), text=True, capture_output=True, timeout=10, check=True)
-        display_reasons = {r['id']: r['hold_reason'] for r in json.loads(decoded.stdout)['records']}
+        reasons = dict(records=[dict(id=i, hold_reason=(r.get('hold') or {}).get('reason')) for i,r in self.rows.items()
+                                if (previous is None or affected is None or i in affected) and (r.get('hold') or {}).get('reason') is not None])
+        display_reasons = {}
+        if reasons['records']:
+            decoded = subprocess.run(['bash', '-c', '. "$1/fm-hold-reason-lib.sh"; fm_hold_reason_decode_stream json', 'fm-work', str(BIN)],
+                                     input=json.dumps(reasons), text=True, capture_output=True, timeout=10, check=True)
+            display_reasons = {r['id']: r['hold_reason'] for r in json.loads(decoded.stdout)['records']}
         for task_id, row in self.rows.items():
+            if previous is not None and affected is not None and task_id not in affected and task_id in previous:
+                tasks.append(dict(previous[task_id], question=dict(previous[task_id]['question'])))
+                continue
             authored = self.presentations[task_id]
             p = authored['presentation']
             evidence = authored.get('evidence') or {}
             hold = self.current_hold(task_id)
             if hold:
-                hold['reason'] = display_reasons[task_id]
+                hold['reason'] = display_reasons.get(task_id)
             inherited = self.inherited(task_id)
             task_pause = self.structure.get('task_pauses', {}).get(task_id)
             safe, request_id = self.safe_point(task_id) if (hold or inherited or task_pause) else ('none', None)
@@ -546,6 +560,8 @@ class Owner:
             hold_stamp = re.search(r'^Captain hold set:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
             hold_set = hold_stamp[1] if hold_stamp else None
             stamps = control_times + [time_value(evidence.get('observed_at'), 'presentation'), time_value(hold_set, 'captain_hold'), time_value(row.get('closed'), 'backlog.closed')]
+            if facts is not None and task_id in facts.get('changed', {}):
+                stamps.append(facts['changed'][task_id])
             for stamp in re.findall(r'\[at=(\d+)\]', self.status[task_id]):
                 try:
                     stamps.append(time_value(dt.datetime.fromtimestamp(int(stamp), dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'status'))
@@ -563,9 +579,9 @@ class Owner:
             if not lifecycle['evidence']['current']:
                 progress = None
             call_row = dict(row, structured=True, hold_kind=(hold or {}).get('kind'), hold_reason=(hold or {}).get('reason'), hold_set=hold_set)
-            call = read_captain_call(call_row, str(self.data))
+            call = facts['calls'].get(task_id) if facts is not None else read_captain_call(call_row, str(self.data))
             origin = re.search(r'^Captain hold origin:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
-            receipt = completion_receipt(self.home, row)
+            receipt = facts['receipts'].get(task_id) if facts is not None else completion_receipt(self.home, row)
             project, subproject = self.display_membership(task_id)
             tasks.append(dict(runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
                 alias=self.aliases.alias('task:' + task_id), kind='task', parent=subproject or project,
@@ -580,11 +596,12 @@ class Owner:
                 progress=progress, declared_progress=declared_progress, progress_evidence=lifecycle['evidence'],
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],
                 request=p.get('request'), outcome=p.get('outcome'), outcome_occurrence=authored.get('outcome_occurrence'),
-                created=task_creation(self.data, row) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
+                created=(facts['created'].get(task_id) if facts is not None else task_creation(self.data, row)) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
                 completed=time_value(receipt['value'], 'completion') if receipt else time_value(row.get('closed'), 'backlog.closed') if row['state'] == 'done' else None,
                 rev=self.rev))
         requests = {}
         for task in tasks:
+            task['rev'] = self.rev
             request = task['request']
             if request is None:
                 continue
@@ -596,7 +613,7 @@ class Owner:
                 group['updated_at'] = updated
         by_key = {t['key']: t for t in tasks}
         for group in requests.values():
-            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']], self.rows)
+            group['usage'] = aggregate_usage(self.data, [by_key[k] for k in group['tasks']], self.rows, usages=facts['usage'] if facts is not None else None)
         for task in tasks:
             origin = by_key.get(task['question']['origin_task'])
             task['question']['origin'] = dict(key=task['question']['origin_task'], available=origin is not None,
@@ -616,6 +633,7 @@ class Owner:
             members = [i for i in self.members(key) if self.rows[i]['state'] != 'done']
             return root_blocker('task:' + sorted(members)[0], visited) if members else key
         for t in tasks:
+            t['root_blocker'] = next((b['ref'] for b in t['blocked_by'] if b['open']), None)
             if t['root_blocker']:
                 t['root_blocker'] = root_blocker(t['root_blocker'], {t['key']})
         reverse_deps = {}
@@ -633,13 +651,17 @@ class Owner:
                         seen.add(child)
                         pending.append(child)
             t['frees'] = dict(direct=direct, chain_count=len(seen))
-        groups = []
+        groups, display_members = [], {}
+        for task in tasks:
+            for scope in (task['key'], task['project'], task['subproject']):
+                if scope:
+                    display_members.setdefault(scope, []).append(task)
         for key in sorted((set('project:' + r for r in self.projects) | set(self.structure['groups'])) - {k for k in self.structure['groups'] if k.startswith('req:')}):
             raw = self.structure['groups'].get(key, {})
             repo = raw.get('repo', key[8:] if key.startswith('project:') else None)
             kind = raw.get('kind', 'project')
             topology = self.hierarchy(key)
-            members = [by_key['task:' + i] for i in self.display_members(key)]
+            members = display_members.get(key, [])
             pause = copy.deepcopy(raw.get('pause'))
             opened = [t for t in members if t['state'] != 'done']
             if not pause and self.structure.get('freeze') and (opened and all(t['pause']['inherited'] and t['pause']['inherited']['from'] == 'freeze' for t in opened)):
@@ -1687,7 +1709,7 @@ class Owner:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('verb', choices=['capabilities', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
+    parser.add_argument('verb', choices=['capabilities', 'bootstrap', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
         'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review',
         'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Request display order: activity or persisted manual order.')
@@ -1715,7 +1737,7 @@ def main():
                                     'stable_aliases', 'normalized_hierarchy', 'logical_project_roots', 'question_provenance', 'removal_consultation',
                                     'progress_checkpoints', 'progress_phases', 'verified_progress_gates', 'worker_liveness', 'pause_reconciliation', 'outcome_review'])
         else:
-            if args.verb in ('snapshot', 'apply', 'request-status', 'close', 'reconcile', 'assign', 'normalize-apply', 'normalize-rollback', 'aliases-init') or '.' in args.verb or (owner.home / ALIAS_PATH).exists() or owner.env.get('FM_WORK_OWNER_FD'):
+            if args.verb in ('bootstrap', 'snapshot', 'apply', 'request-status', 'close', 'reconcile', 'assign', 'normalize-apply', 'normalize-rollback', 'aliases-init') or '.' in args.verb or (owner.home / ALIAS_PATH).exists() or owner.env.get('FM_WORK_OWNER_FD'):
                 lock = owner.lock()
             if lock is None and args.verb in ('snapshot', 'preview', 'normalize-plan', 'dispatch-check', 'resolve') and (owner.data / '.work.lock').exists():
                 lock = os.open(owner.data / '.work.lock', os.O_RDONLY | os.O_NOFOLLOW)
@@ -1724,8 +1746,18 @@ def main():
                 except BlockingIOError:
                     raise Refusal('busy', tr('Another change is in progress. Try again.'))
             DIAG['lock_ms'] = round((time.monotonic() - DIAG['started']) * 1000)
+            if args.verb == 'bootstrap':
+                from fm_work_projection import position
+                owner.ledger_start = position(owner.home)
             owner.load(include_presentations=args.verb != 'snapshot')
-            if args.verb == 'aliases-init':
+            if args.verb == 'bootstrap':
+                from fm_work_projection import bootstrap
+                os.close(lock)
+                lock = None
+                del owner.lock_fd
+                owner.env.pop('FM_WORK_OWNER_FD', None)
+                result = bootstrap(owner)
+            elif args.verb == 'aliases-init':
                 refuse(not REQUEST.fullmatch(args.request_id or ''), 'invalid_value', tr('Invalid activation identity.'))
                 with open(args.map, encoding='utf-8') as stream:
                     result = owner.aliases.seed(json.load(stream), args.request_id)
