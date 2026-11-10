@@ -6945,7 +6945,9 @@ fi
 # The wrapper owns temporary processes across all harnesses and backends,
 # including children that detach or clear their environment on Linux.
 if [ "$KIND" != secondmate ]; then
-  LAUNCH="env FM_WORKER_PROCESS_SCOPE=$(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") python3 $(shell_quote "$FM_ROOT/bin/fm-worker-processes.py") run $(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") $(shell_quote "$LAUNCH")"
+  liveness_config=$CONFIG
+  case "$liveness_config" in /*) ;; *) liveness_config=$PWD/$liveness_config ;; esac
+  LAUNCH="env FM_WORKER_PROCESS_SCOPE=$(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") python3 $(shell_quote "$FM_ROOT/bin/fm-worker-processes.py") run $(shell_quote "$STATE_REAL/$ID:$SPAWN_GEN") $(shell_quote "$LAUNCH") $(shell_quote "$FM_HOME") $(shell_quote "$liveness_config")"
 fi
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Own a worker's temporary processes, independently of its terminal backend.
 
-Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND
+Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND [HOME CONFIG]
        python3 fm-worker-processes.py cleanup-meta STATE/TASK.meta
        python3 fm-worker-processes.py sample STATE
 
@@ -20,11 +20,17 @@ keeps its token in the keyring) autolaunched a new dbus-daemon and
 gnome-keyring-daemon that never exited (63 pairs, ~517 MB, on 9 Nov 2026).
 macOS needs no bus; its keychain has no per-call daemon.
 Python 3 is required on the common worker launch and cleanup path.
+The wrapper publishes agent.liveness on child start and after scope cleanup,
+bound to the current process_scope in task metadata; an idle turn is not exit.
+Spawn passes HOME and CONFIG explicitly, including when STATE is elsewhere;
+standalone callers may omit them for the standard HOME/state layout.
 sample appends one worker.procs diagnostic event (bin/fm-diag.sh) per live
 scope under STATE: its processes, the zombies they have not reaped, and RSS.
 """
 
 import ctypes
+import datetime as dt
+import json
 import os
 from pathlib import Path
 import signal
@@ -106,7 +112,30 @@ def cleanup(scope, root=None):
     raise RuntimeError(f"worker processes still alive: {sorted(tracked)}")
 
 
-def run(scope, command):
+def publish_liveness(scope, state, home=None, config=None):
+    path, gen = scope.rsplit(":", 1)
+    task_path = Path(path)
+    home = Path(home) if home else task_path.parent.parent
+    config = Path(config) if config else home / "config"
+    if not (config / "fleet-ledger").exists():
+        return
+    try:
+        meta = dict(line.split("=", 1) for line in Path(path + ".meta").read_text().splitlines() if "=" in line)
+        if meta.get("process_scope") != scope:
+            return
+        value = dict(state=state, source="worker.process", verdict="process_started" if state == "alive" else "process_exited",
+                     gen=gen, observed_at=dt.datetime.now(dt.timezone.utc).isoformat())
+        result = subprocess.run(["bash", str(Path(__file__).resolve().parent / "fm-fleet-ledger.sh"),
+                                 "entity", "agent.liveness", task_path.name], input=json.dumps(value), text=True,
+                                env=dict(os.environ, FM_HOME=str(home), FM_STATE_OVERRIDE=str(task_path.parent),
+                                         FM_CONFIG_OVERRIDE=str(config)), timeout=10)
+        if result.returncode:
+            print("worker liveness publication failed", file=sys.stderr)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"worker liveness publication failed: {error}", file=sys.stderr)
+
+
+def run(scope, command, home=None, config=None):
     if sys.platform == "linux":
         if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
             raise OSError(ctypes.get_errno(), "cannot enable worker child subreaper")
@@ -135,6 +164,7 @@ def run(scope, command):
         pass
     try:
         child = subprocess.Popen(["/bin/sh", "-c", command])
+        publish_liveness(scope, "alive", home, config)
         # Reap every child that exits, including orphans reparented to this
         # subreaper, until the worker's own shell returns.
         while True:
@@ -147,6 +177,7 @@ def run(scope, command):
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         cleanup(scope, os.getpid())
+        publish_liveness(scope, "dead", home, config)
         if sys.platform == "linux":
             try:
                 while os.waitpid(-1, os.WNOHANG)[0]:
@@ -192,11 +223,11 @@ def sample(state):
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "sample":
         return sample(sys.argv[2])
-    if len(sys.argv) == 4 and sys.argv[1] == "run":
+    if len(sys.argv) in (4, 6) and sys.argv[1] == "run":
         scope = sys.argv[2]
         if os.environ.get(KEY[:-1].decode()) != scope:
             raise RuntimeError("worker scope missing from launch environment")
-        return run(scope, sys.argv[3])
+        return run(scope, *sys.argv[3:])
     if len(sys.argv) == 3 and sys.argv[1] == "cleanup-meta":
         path = Path(sys.argv[2])
         meta = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)

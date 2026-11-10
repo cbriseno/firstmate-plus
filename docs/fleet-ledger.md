@@ -48,6 +48,7 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `call.application` | `home`, `value` | The inbox owner records handling of a settled answer; value contains call and answer. |
 | `agent.activity` | `home`, `value` | The busy writer accepts an incarnation's state; value contains gen, seq, state, source and event. |
 | `agent.retired` | `home`, `value` | The busy writer removes that incarnation; value retains its gen. |
+| `agent.liveness` | `home`, `value` | The worker process wrapper observes child start or finishes scope cleanup; value contains state (`alive` or `dead`), source, verdict, spawn gen and observed_at. |
 | `primary.final` | `home`, `value` | A verified primary final surface supplies complete text, harness, session and turn. |
 | `home.configuration` | `home`, `value` | Explicit configuration publication records lane_capacity, project_capacity and projects text (null when absent). |
 
@@ -107,7 +108,6 @@ Example:
 These are possible follow-ups, deliberately left out of this version:
 
 - session start, away-mode, and quiet-mode events;
-- relaunch events;
 - sequence numbers and gap detection;
 - rotation and continuity across rotated files;
 - backfill or replay of events from before the ledger was turned on;
@@ -121,9 +121,12 @@ Claude's existing Stop guard captures the primary final before its supervision a
 Codex project hooks remain unverified and worker launches keep hooks disabled.
 For a Codex primary, launch with `-c 'notify=["bash","/absolute/firstmate/bin/fm-primary-final.sh","codex"]'` to capture normal finals through its verified notify surface; combine this with an existing notify consumer if one is configured, rather than replacing it silently.
 Codex workers publish normal completion through their existing notify command, bound to the busy generation; this does not enable hook trust or change the rollout classifier.
-Other adapters publish only the events accepted by their existing busy writer.
+Other adapters' turn activity comes from their existing busy writer.
 A final capture never identifies a free-form question semantically, opens a call, resolves an answer, closes a task or releases a lane.
 Structured question interception and error/interrupt coverage beyond the existing verified adapters are unavailable, not inferred from documentation.
 A chat answer still goes through `fm-captain-hold.sh answer` with the current expected identity; arrival of chat text does not settle a call.
-A missing hook or abrupt process death cannot guarantee an event, and macOS Codex activity remains unknown outside its normal-completion notify signal.
+Worker process liveness uses the common process wrapper rather than a harness hook; its scope and limits are owned by `bin/fm-worker-processes.py`.
+It includes relaunches, changes occupied-agent counts without completing the task, and survives a killed harness while the wrapper remains alive.
+Killing the wrapper itself with SIGKILL or losing the host can still omit the exit event; secondmate launches do not use this wrapper.
+macOS Codex activity remains unknown outside its normal-completion notify signal.
 Run `FM_FLEET_LEDGER_LIVE_E2E=1 bash tests/fm-fleet-ledger-live-e2e.test.sh` to refresh real primary-final evidence on either platform.

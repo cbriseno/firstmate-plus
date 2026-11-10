@@ -99,7 +99,8 @@ run_lifecycle() {
 }
 
 ledger_rows() {  # <jq filter>: print one compact row per ledger record
-  jq -c "select(.event != \"agent.activity\" and .event != \"agent.retired\") | $1" "$HOME_DIR/state/fleet-ledger.jsonl"
+  # These assertions concern task lifecycle order, not independent agent/usage entities.
+  jq -c "select(.event != \"agent.activity\" and .event != \"agent.retired\" and .event != \"agent.liveness\" and .event != \"task.usage\") | $1" "$HOME_DIR/state/fleet-ledger.jsonl"
 }
 
 test_flag_on_records_the_task_lifecycle() {

@@ -22,6 +22,7 @@
 #   bin/fm_delivery.py           entity (task, presentation, completion, application)
 #   bin/fm_work.py               entity (structure, controls, outcome review)
 #   bin/fm-busy-event.sh         entity (accepted activity and retirement)
+#   bin/fm-worker-processes.py  entity (observed worker process liveness)
 #   bin/fm-primary-final.sh      entity (complete primary final)
 #   status-writing owners       appended (permission, relay, spawn, primary closes)
 #
@@ -90,7 +91,7 @@ cmd=${1:-}
 case "$cmd" in
   entity)
     { [ "$#" -eq 3 ] && task_ok "$3"; } || usage
-    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|task.usage|work.structure|work.control|work.aliases|agent.activity|agent.retired|primary.final) ;; *) usage ;; esac
+    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|task.usage|work.structure|work.control|work.aliases|agent.activity|agent.retired|agent.liveness|primary.final) ;; *) usage ;; esac
     ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;

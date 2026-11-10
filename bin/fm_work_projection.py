@@ -34,7 +34,7 @@ def bootstrap(owner):
         crew = owner.capacity()
     except subprocess.TimeoutExpired:
         crew = dict(agents_running=None, agents_cap=None, reason='unconfirmed')
-    launches = {}
+    launches, workers = {}, {}
     enabled = (owner.home / 'config/fleet-ledger').exists()
     if enabled and owner.ledger_start[2]:
         with (owner.home / 'state/fleet-ledger.jsonl').open('rb') as stream:
@@ -42,8 +42,16 @@ def bootstrap(owner):
                 event = json.loads(line)
                 if event.get('home', str(owner.home)) != str(owner.home):
                     continue
-                if event.get('event') in ('task.dispatched', 'task.cleaned_up'):
-                    launches[event['task']] = event['event'] == 'task.dispatched'
+                task, name = event.get('task'), event.get('event')
+                if name == 'task.dispatched':
+                    launches.setdefault(task, True)
+                elif name == 'task.cleaned_up':
+                    launches[task] = False
+                    workers[task] = dict(state='dead', source='events', verdict=name)
+                elif name == 'agent.liveness':
+                    workers[task] = event['value']
+                    launches[task] = event['value']['state'] == 'alive'
+    owner._workers.update(workers)
     crew = lifecycle_capacity(crew, launches, enabled)
     owner.capacity = lambda: crew
     snapshot = owner.snapshot()
@@ -165,7 +173,7 @@ class Projection(Owner):
             self.status[task] = self.status.get(task, '') + '\n' + event.get('line', event.get('state') or '') + ' [at=' + str(event['ts']) + '] [key=' + str(event.get('key') or '') + ']: ' + event.get('text', '')
         elif name == 'primary.final':
             self.messages.append(value)
-        elif name in ('agent.activity', 'agent.retired', 'task.dispatched', 'task.cleaned_up'):
+        elif name in ('agent.activity', 'agent.retired', 'agent.liveness', 'task.dispatched', 'task.cleaned_up'):
             if name == 'agent.activity':
                 prior = self.activity.get(task, {})
                 if prior.get('gen') == value.get('gen') and prior.get('seq', 0) > value.get('seq', 0):
@@ -174,9 +182,19 @@ class Projection(Owner):
             elif name == 'agent.retired':
                 if self.activity.get(task, {}).get('gen') == value.get('gen'):
                     self.activity.pop(task, None)
+            elif name == 'agent.liveness':
+                self.workers[task] = value
+                self.launches[task] = value['state'] == 'alive'
+                if value['state'] == 'dead':
+                    self.activity.pop(task, None)
+            elif name == 'task.dispatched':
+                # Spawn can append dispatch after the child already exited.
+                self.launches.setdefault(task, True)
+                if self.workers.get(task, {}).get('source') != 'worker.process':
+                    self.workers[task] = dict(state='unknown', source='events', verdict=name)
             else:
-                self.workers[task] = dict(state='dead' if name == 'task.cleaned_up' else 'unknown', source='events', verdict=name)
-                self.launches[task] = name == 'task.dispatched'
+                self.workers[task] = dict(state='dead', source='events', verdict=name)
+                self.launches[task] = False
         elif name == 'home.configuration':
             # Configuration publishes limits, not observed occupied lanes.
             cap = str(value.get('lane_capacity') or '').strip()

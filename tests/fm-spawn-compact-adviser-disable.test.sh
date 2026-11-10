@@ -385,16 +385,20 @@ SH
 test_launch_exports_process_scope() {
   local filtered rec seen expected
   for filtered in absent enabled; do
-    rec=$(make_case "scope-$filtered" codex scope-a1)
+    rec=$(make_case "scope-$filtered" codex prueba-scope-a1)
     read_case "$rec"
+    : > "$HOME_DIR/config/fleet-ledger"
     [ "$filtered" != enabled ] || : > "$HOME_DIR/config/launch-env-allowlist"
-    run_case_spawn scope-a1 "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null \
+    run_case_spawn prueba-scope-a1 "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null \
       || fail 'scope launch failed'
     install_env_probe "$FAKEBIN_DIR" codex FM_WORKER_PROCESS_SCOPE
     seen=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG")
-    expected=$(sed -n 's/^process_scope=//p' "$HOME_DIR/state/scope-a1.meta")
+    expected=$(sed -n 's/^process_scope=//p' "$HOME_DIR/state/prueba-scope-a1.meta")
     [ -n "$expected" ] || fail 'spawn omitted process ownership'
     assert_equals "$expected" "$seen" 'agent inherits its recorded scope after environment filtering'
+    jq -es --arg home "$HOME_DIR" 'map(select(.event == "agent.liveness")) |
+      (map(.value.state) == ["alive", "dead"]) and all(.[]; .home == $home and .task == "prueba-scope-a1")' \
+      "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null || fail 'emitted launch lost process liveness'
   done
   pass 'worker ownership survives both launch environment modes'
 }
