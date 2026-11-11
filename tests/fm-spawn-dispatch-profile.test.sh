@@ -94,6 +94,8 @@ make_spawn_case() {
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" "$harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
+  git -C "$proj" config user.name 'Test Worker'
+  git -C "$proj" config user.email 'test@example.com'
   for id in "$@"; do
     fm_test_spawn_brief "$home" "$id"
   done
@@ -114,6 +116,8 @@ make_seeded_secondmate_home() {
   printf 'charter for %s\n' "$id" > "$home/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$home/.gitignore"
   git -C "$home" init -q -b main
+  git -C "$home" config user.name 'Test Worker'
+  git -C "$home" config user.email 'test@example.com'
 }
 
 task_inbox_export() {  # <home> <id>
@@ -768,6 +772,13 @@ test_codex_approval_mode_contract() {
       fi
       expect_code 0 "$status" "$id spawn failed: $out"
       launch=$(cat "$LAUNCH_LOG")
+      assert_not_contains "$launch" '--sandbox read-only' 'loader evidence must not prevent worker edits'
+      assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" 'Unsupported: this interactive Codex adapter' \
+        'worker brief must disclose the native-loader evidence limitation'
+      assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" 'Continue the assigned work, including edits' \
+        'loader notice must allow the assigned edits'
+      assert_contains "$(cat "$HOME_DIR/state/$id.meta")" "approval_mode=${value/absent/bypass}" \
+        'metadata must retain the configured approval mode'
       if [ "$value" = approve-for-me ]; then
         assert_contains "$launch" '--approve-for-me' 'persistent fallback was not used directly'
         assert_not_contains "$launch" '--dangerously-bypass-approvals-and-sandbox' 'fallback retried bypass'

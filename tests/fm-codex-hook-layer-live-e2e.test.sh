@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Live guard for the codex crewmate launch's native hook posture.
 #
-# This uses the installed Codex CLI to verify the actual launch flags remain
-# accepted, while Firstmate leaves native hook layers enabled and does not
-# bypass Codex's trust review. It does not execute or trust any project hook.
-# It spends no model tokens (`codex features list` resolves configuration only).
+# Executes the captured fm-spawn command with installed Codex, then verifies
+# an actual file edit and turn completion. Native hooks remain enabled; the
+# disposable project and CODEX_HOME contain no hooks to trust. Only auth is
+# copied from the operator's profile. This submits a real prompt, so is opt-in.
 set -u
 
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
-fm_live_gate default-on FM_CODEX_HOOK_LAYER_LIVE codex
+fm_live_gate opt-in FM_CODEX_HOOK_LAYER_LIVE codex tmux python3
 
-CODEX_VERSION=$(codex --version 2>&1)
+CODEX_VERSION=$(codex --version 2>/dev/null) || fail 'cannot read installed Codex version'
 TMP_ROOT=$(fm_test_tmproot fm-codex-hook-layer-live)
 
 # capture_codex_launch <name> <extra fm-spawn args...>: spawns a codex crewmate
@@ -30,12 +30,17 @@ capture_codex_launch() {
   fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" codex
   printf 'approve-for-me\n' > "$home/config/codex-approval-mode"
-  fm_test_spawn_brief "$home" "$id"
+  fm_test_spawn_brief "$home" "$id" \
+    'Replace README.md with exactly "edited by Codex" followed by a newline, using a file editing tool. Do not change other project files or commit. Then reply DONE.'
   fm_git_worktree "$proj" "$wt" "wt-$name"
+  git -C "$proj" config user.name 'Test Worker'
+  git -C "$proj" config user.email 'test@example.com'
   : > "$launchlog"
   FM_FAKE_LAUNCH_LOG="$launchlog" \
-    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" "$@" >/dev/null 2>&1 ||
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" "$@" >"$case_dir/spawn.log" 2>&1 || {
+    cat "$case_dir/spawn.log" >&2
     fail "codex $CODEX_VERSION: fm-spawn could not build a crewmate launch"
+  }
   cat "$launchlog"
 }
 
@@ -48,9 +53,9 @@ codex_global_flags() {
   printf '%s' "$flags"
 }
 
-test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch() {
-  local launch flags listing
-  launch=$(capture_codex_launch ship --mode no-mistakes --yolo off)
+test_installed_codex_edits_with_preserved_hook_posture() {
+  local launch flags auth
+  launch=$(capture_codex_launch ship --mode local-only --yolo off --model gpt-6.1-sol --effort low)
   flags=$(codex_global_flags "$launch")
   case " $flags " in
     *' --approve-for-me '*) ;;
@@ -67,13 +72,65 @@ test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
   case " $flags " in
     *' --dangerously-bypass-hook-trust '*) fail "codex $CODEX_VERSION launch bypassed hook trust review" ;;
   esac
+  case " $flags " in
+    *' --sandbox read-only '*) fail "codex $CODEX_VERSION launch prevents assigned edits" ;;
+  esac
 
-  listing=$(codex features list 2>&1) ||
-    fail "codex $CODEX_VERSION could not inspect its enabled feature list: $listing"
-  [ -n "$listing" ] || fail "codex $CODEX_VERSION returned an empty feature list"
-  printf 'ok - codex %s accepts the preserved hook posture for a firstmate crewmate launch\n' "$CODEX_VERSION"
+  auth="${CODEX_HOME:-$HOME/.codex}/auth.json"
+  [ -r "$auth" ] || fail "codex $CODEX_VERSION: live editing needs a readable auth.json"
+  mkdir -p "$TMP_ROOT/codex"
+  install -m 600 "$auth" "$TMP_ROOT/codex/auth.json"
+  FM_CODEX_EDIT_LAB="$TMP_ROOT" FM_CODEX_EDIT_VERSION="$CODEX_VERSION" \
+    python3 - <<'PY' || fail "codex $CODEX_VERSION: real worker editing failed"
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+
+lab = Path(os.environ["FM_CODEX_EDIT_LAB"])
+version = os.environ["FM_CODEX_EDIT_VERSION"]
+workspace = lab / "ship/wt"
+state = lab / "ship/home/state"
+target = workspace / "README.md"
+before = target.read_text()
+assert before != "edited by Codex\n", "edit assertion would be vacuous"
+brief = lab / "ship/home/data/codex-hook-layer-ship/launch-brief.md"
+assert "Unsupported: this interactive Codex adapter" in brief.read_text()
+env = os.environ.copy()
+env["CODEX_HOME"] = str(lab / "codex")
+env["FM_HOME"] = str(lab / "ship/home")
+for key in ("FM_ROOT_OVERRIDE", "FM_CONFIG_OVERRIDE", "FM_STATE_OVERRIDE", "FM_DATA_OVERRIDE", "CODEX_THREAD_ID"):
+    env.pop(key, None)
+# Only the private directory is trusted; no hook trust is manufactured.
+(lab / "codex/config.toml").write_text(
+    "[projects." + json.dumps(str(workspace)) + ']\ntrust_level="trusted"\n'
+)
+socket = "fm-codex-worker-edit-" + str(os.getpid())
+
+def tmux(*args):
+    return subprocess.check_output(["tmux", "-L", socket, *args], text=True, env=env, timeout=10)
+
+try:
+    launch = (lab / "ship/launch.log").read_text().strip()
+    tmux("new-session", "-d", "-s", "proof", "-x", "160", "-y", "50", "-c", str(workspace),
+         "bash", "-c", launch)
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        if target.read_text() == "edited by Codex\n" and (state / "codex-hook-layer-ship.turn-ended").exists():
+            print("ok - " + version + ": captured worker launch edited README.md and completed its turn", flush=True)
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(version + ": worker did not edit README.md and complete within 180s")
+finally:
+    try:
+        print("# real worker pane:\n" + tmux("capture-pane", "-p", "-S", "-200", "-t", "proof:0"), flush=True)
+    finally:
+        subprocess.run(["tmux", "-L", socket, "kill-server"], env=env, capture_output=True, timeout=10)
+PY
 }
 
-test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
+test_installed_codex_edits_with_preserved_hook_posture
 
 echo "# all fm-codex-hook-layer-live-e2e tests passed"

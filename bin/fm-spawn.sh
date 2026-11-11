@@ -437,6 +437,8 @@
 #   --approve-for-me, with model-reviewed approvals in workspace-write.
 #   Any other value or unreadable file refuses before mutation, like the Claude
 #   file. Both files apply to ships, scouts, secondmates, and relaunches.
+#   Worker briefs report same-session native-loader evidence as unsupported;
+#   that notice does not change the configured approval or sandbox posture.
 #   bin/fm-approval-failover.sh owns captain-approved durable failover after
 #   firstmate observes a bypass approval prompt or policy refusal; no polling.
 # Worker tool exclusions:
@@ -3785,6 +3787,9 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
       FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID" &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
+      if [ "$HARNESS" = codex ]; then
+        printf '\n## Native loader evidence\nUnsupported: this interactive Codex adapter does not provide Firstmate with same-session evidence of effective instruction sources and skill activation. Continue the assigned work, including edits, under the configured approval policy; do not claim native loading was verified.\n'
+      fi &&
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"
       fi
