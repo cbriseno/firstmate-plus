@@ -3959,7 +3959,16 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
 fi
 
 if [ "$PRESERVE" = 1 ]; then
-  teardown_owns_worktree && preserve_task_worktree || exit 1
+  if teardown_owns_worktree; then
+    preserve_task_worktree || exit 1
+  else
+    PRESERVED_BRANCH=$(meta_value "$META" branch)
+    if [ -z "$PRESERVED_BRANCH" ] \
+       || ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$PRESERVED_BRANCH"; then
+      echo "REFUSED: --preserve cannot verify task $ID's recorded branch in $PROJ after its worktree was reassigned; task records remain intact." >&2
+      exit 1
+    fi
+  fi
 fi
 
 if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
@@ -4106,7 +4115,7 @@ fi
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
 # Preserve saved and forced-close branches; ordinary landed cleanup drops its branch.
-if [ "$PRESERVE" = 1 ]; then
+if [ "$PRESERVE" = 1 ] && teardown_owns_worktree; then
   verify_preserved_worktree || exit 1
 fi
 if [ "$KEEP_RUNNING" = 1 ]; then

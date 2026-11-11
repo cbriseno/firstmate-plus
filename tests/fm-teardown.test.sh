@@ -6046,6 +6046,39 @@ test_preserving_close_saves_and_records_branch() {
   pass "preserving ship/scout close saves pending files and retains unlanded branch in backlog"
 }
 
+test_preserving_close_skips_reassigned_pool_slot() {
+  local case_dir wt slot
+  case_dir=$(make_case preserve-reassigned-slot)
+  wt=$(move_case_to_pool_slot "$case_dir" 12)
+  assert_present "$wt" "reassigned-slot fixture did not move the task worktree into the pool"
+  write_meta "$case_dir" local-only ship "$wt"
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "branch=fm/task-x1" \
+    "spawn_gen=teardown-test-task-x1"
+  seed_backlog_in_flight "$case_dir"
+  slot="$case_dir/pool/12"
+  printf 'task=next-task\nhome=/another/home\n' > "$slot/.fm-slot-owner"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/treehouse.log"\n' "$case_dir" \
+    > "$case_dir/fakebin/treehouse"
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  run_teardown "$case_dir" --preserve > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "preserving close of a reassigned slot failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/treehouse.log" "reassigned preserving close returned another task's slot"
+  assert_present "$slot/.fm-slot-owner" "reassigned preserving close removed the new owner's claim"
+  assert_grep 'preserved-branch:fm/task-x1' "$case_dir/data/backlog.md" \
+    "reassigned preserving close did not retain the task's recorded branch"
+  assert_absent "$case_dir/state/task-x1.meta" "reassigned preserving close left worker metadata"
+  pass "preserving close retires a reassigned task record without touching the new owner's slot"
+}
+
+test_preserving_close_skips_reassigned_pool_slot
 test_preserving_close_saves_and_records_branch
 
 test_local_integration_branch_safety
