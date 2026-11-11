@@ -482,8 +482,12 @@ session2 = '66666666-2222-3333-4444-555555555555'
 log2 = log.parent / ('rollout-test-' + session2 + '.jsonl')
 lock2 = lock.parent / (session2 + '.lock')
 ready2 = base / 'switched'
+review_id = '77777777-2222-3333-4444-555555555555'
+review_log = log.parent / ('rollout-test-' + review_id + '.jsonl')
+review_lock = lock.parent / (review_id + '.lock')
+review_ready = base / 'review-open'
 holder = subprocess.Popen([sys.executable,'-c',
-    '''import fcntl,pathlib,signal,sys,time
+    '''import fcntl,json,pathlib,signal,subprocess,sys,time
 a=open(sys.argv[1],"ab"); b=open(sys.argv[2],"a")
 fcntl.flock(b,fcntl.LOCK_EX)
 def switch(*_):
@@ -492,9 +496,25 @@ def switch(*_):
     a=open(sys.argv[4],"ab"); b=open(sys.argv[5],"a")
     fcntl.flock(b,fcntl.LOCK_EX); pathlib.Path(sys.argv[6]).touch()
 signal.signal(signal.SIGUSR1,switch)
+reviews=[]
+def notify(path):
+    session=json.loads(pathlib.Path(path).read_text().splitlines()[0])["payload"]["id"]
+    program=[sys.executable,"-c","import pathlib,sys;pathlib.Path(sys.argv[1]).touch()",sys.argv[13]]
+    subprocess.run([sys.executable,sys.argv[10],"notify",sys.argv[11],"codex",
+        (pathlib.Path(sys.argv[11])/"codex.busy-gen").read_text().strip(),sys.argv[12],
+        json.dumps(program),json.dumps({"thread-id":session})],check=True)
+def review(*_):
+    if reviews:
+        for f in reviews:f.close()
+        reviews.clear();notify(sys.argv[1]);pathlib.Path(sys.argv[9]).unlink()
+    else:
+        reviews.extend([open(sys.argv[7],"ab"),open(sys.argv[8],"a")])
+        fcntl.flock(reviews[1],fcntl.LOCK_EX);notify(sys.argv[7]);pathlib.Path(sys.argv[9]).touch()
+signal.signal(signal.SIGUSR2,review)
 pathlib.Path(sys.argv[3]).touch()
 time.sleep(120)
-''', str(log),str(lock),str(ready),str(log2),str(lock2),str(ready2)])
+''', str(log),str(lock),str(ready),str(log2),str(lock2),str(ready2),str(review_log),str(review_lock),str(review_ready),
+    str(root/'bin/fm-codex-activity.py'),str(state),str(workspace),str(base/'notified')])
 try:
     for _ in range(100):
         if ready.exists(): break
@@ -557,6 +577,34 @@ try:
     for key,value in [('identity',['other-boot','other-start']),('workspace','/wrong'),('version','future'),('gen','old')]:
         binding = dict(original,**{key:value});owner.write_text(json.dumps(binding));check('unknown codex-rollout')
     owner.write_text(json.dumps(original));check('busy codex-rollout')
+    # A dedicated native server labels its UI session vscode and also holds
+    # the guardian's rollout. Only the parent's events determine its state.
+    remote_meta=json.loads(json.dumps(meta));remote_meta['payload']['source']='vscode'
+    owner.write_text(json.dumps(dict(original,source='vscode')))
+    write(remote_meta,row('task_started'))
+    review_meta={'type':'session_meta','payload':dict(id=review_id,cwd=str(workspace),cli_version='0.166.0',
+        source={'subagent':{'other':'guardian'}},thread_source='guardian_review',parent_thread_id=session)}
+    def write_review(parent):
+        review_meta['payload']['parent_thread_id']=parent
+        review_log.write_text('\n'.join(json.dumps(r) for r in
+            (review_meta,row('task_started','review-turn'),row('task_complete','review-turn')))+'\n')
+    write_review(session);holder.send_signal(signal.SIGUSR2)
+    for _ in range(100):
+        if review_ready.exists():break
+        time.sleep(.05)
+    assert review_ready.exists(), 'holder never opened the concurrent review descriptors'
+    assert not (base/'notified').exists(), 'guardian completion invoked the parent notification'
+    check('busy codex-rollout')  # the guardian completion cannot settle its parent
+    append(row('task_complete'));check('idle codex-rollout')
+    write_review('unrelated-parent');check('unknown codex-rollout')
+    write_review(session);check('idle codex-rollout')
+    holder.send_signal(signal.SIGUSR2)
+    for _ in range(100):
+        if not review_ready.exists():break
+        time.sleep(.05)
+    assert not review_ready.exists(), 'holder did not close the review descriptors'
+    assert (base/'notified').exists(), 'parent completion lost its original notification'
+    owner.write_text(json.dumps(original));write(meta,row('task_started'));check('busy codex-rollout')
     # A replaced file at the same pathname cannot stand in for the held inode.
     log.rename(log.with_suffix('.old'));write(meta,row('task_started'));check('unknown codex-rollout')
     log.unlink();log.with_suffix('.old').rename(log)

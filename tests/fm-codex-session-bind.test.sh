@@ -43,3 +43,24 @@ assert len(rows) == 1 and rows[0]['session'] == sys.argv[2], rows
 PY
 
 printf 'ok - Codex rollout binding records the current task session through the launch interface\n'
+
+# An unavailable extraRoots API must keep the original writable CLI invocation.
+mkdir -p "$workspace/.claude/skills"
+printf 'Follow the repository convention.\n' > "$workspace/CLAUDE.md"
+cat > "$fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'codex-cli 0.166.0\n'; exit 0; fi
+if [ "${1:-}" = app-server ]; then exit 64; fi
+printf '%s\n' "$@" > "$FM_TEST_CODEX_ARGS"
+printf 'editable\n' > "$FM_TEST_CODEX_RESULT"
+SH
+chmod +x "$fakebin/codex"
+PATH="$fakebin:$PATH" CODEX_HOME="$codex_home" FM_TEST_CODEX_ARGS="$TMP_ROOT/args" \
+  FM_TEST_CODEX_RESULT="$workspace/result" python3 "$ROOT/bin/fm-codex-activity.py" \
+  launch "$state" "$task" "$gen" "$workspace" "$fakebin/codex" --approve-for-me 'original task' \
+  > "$TMP_ROOT/fallback.log" 2>&1
+printf '%s\n' -c 'project_doc_fallback_filenames=["CLAUDE.md"]' --approve-for-me 'original task' > "$TMP_ROOT/expected-args"
+cmp "$TMP_ROOT/expected-args" "$TMP_ROOT/args"
+[ "$(cat "$workspace/result")" = editable ]
+rg -q 'Unsupported: Codex native skill-root registration unavailable' "$TMP_ROOT/fallback.log"
+printf 'ok - unavailable native root registration warns and retains editable configured launch\n'

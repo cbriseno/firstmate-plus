@@ -773,8 +773,8 @@ test_codex_approval_mode_contract() {
       expect_code 0 "$status" "$id spawn failed: $out"
       launch=$(cat "$LAUNCH_LOG")
       assert_not_contains "$launch" '--sandbox read-only' 'loader evidence must not prevent worker edits'
-      assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" 'Unsupported: this interactive Codex adapter' \
-        'worker brief must disclose the native-loader evidence limitation'
+      assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" 'Unsupported registration is reported without restricting edits' \
+        'worker brief must disclose the editable native-loader fallback'
       assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" 'Continue the assigned work, including edits' \
         'loader notice must allow the assigned edits'
       assert_contains "$(cat "$HOME_DIR/state/$id.meta")" "approval_mode=${value/absent/bypass}" \

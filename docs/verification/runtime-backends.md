@@ -150,16 +150,19 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-## Codex worker editing
+## Codex worker editing and native repository skills
 
 Verified 2026-11-11 on Linux with `codex-cli 0.166.0`.
-`FM_LIVE=0 FM_CODEX_HOOK_LAYER_LIVE=1 bash bin/fm-test-run.sh tests/fm-codex-hook-layer-live-e2e.test.sh` captures the production `fm-spawn.sh` command, runs it in a private tmux server with a disposable Codex profile, and checks that the worker changes the existing `README.md` and emits its turn-end notification.
-The exact edit verdict was `ok - codex-cli 0.166.0: captured worker launch edited README.md and completed its turn`.
+`FM_LIVE=0 FM_CODEX_HOOK_LAYER_LIVE=1 bash bin/fm-test-run.sh tests/fm-codex-hook-layer-live-e2e.test.sh` captures the production `fm-spawn.sh` command and runs it in private tmux with a disposable Codex profile.
+The repository contains only `CLAUDE.md` and `.claude/skills`, and the worker brief names neither the skill nor its required admission format version.
+The guard checks the initial native skill catalog before the task, the repository instruction and skill format in an actual `README.md` edit, busy/idle classification, and the worker's completion notification.
+The exact verdicts were `ok - codex-cli 0.166.0: native skill, repository instructions, edit and completion verified` and `ok - native catalog and CLAUDE.md loaded before the unnamed task`.
 The launch retained `--approve-for-me`, native hooks, and hook trust review; the disposable profile and project contained no hooks requiring consent.
-The generated worker brief disclosed unsupported same-session native-loader evidence and explicitly allowed assigned edits.
-This proves real editing under the configured approval policy, not native instruction-source or skill-activation evidence.
-The guard submits a prompt and is opt-in; `tests/fm-spawn-dispatch-profile.test.sh` checks the notice, absence of forced read-only, and configured approval metadata for ship and scout launches without model calls.
-macOS and other runtime backends were not executed in this editing guard; all backends consume the same generated brief and Codex launch template.
+`bin/fm-codex-activity.py` owns native root registration, its qualified runtime, completion attribution, and the editable fallback when registration is unsupported.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh` passed with `ok - unavailable native root registration warns and retains editable configured launch`.
+The Codex case in `tests/fm-busy-state.test.sh` passed with `ok - Codex rollout source proves lifecycle, kernel/session binding and replacement; invalid evidence stays unknown`, including simultaneous automatic review and parent-only completion notification.
+The live guard submits a prompt and is opt-in; `tests/fm-spawn-dispatch-profile.test.sh` also checks configured approval and the absence of forced read-only for ship and scout launches without model calls.
+macOS and other runtime backends were not executed in this guard; all backends consume the same generated brief and Codex launch template.
 
 ## Codex automatic approval review
 

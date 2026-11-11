@@ -437,8 +437,8 @@
 #   --approve-for-me, with model-reviewed approvals in workspace-write.
 #   Any other value or unreadable file refuses before mutation, like the Claude
 #   file. Both files apply to ships, scouts, secondmates, and relaunches.
-#   Worker briefs report same-session native-loader evidence as unsupported;
-#   that notice does not change the configured approval or sandbox posture.
+#   Worker native skill-root registration and its editable Unsupported fallback
+#   are owned by fm-codex-activity.py; approval and sandbox flags stay configured.
 #   bin/fm-approval-failover.sh owns captain-approved durable failover after
 #   firstmate observes a bypass approval prompt or policy refusal; no polling.
 # Worker tool exclusions:
@@ -3788,7 +3788,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
       if [ "$HARNESS" = codex ]; then
-        printf '\n## Native loader evidence\nUnsupported: this interactive Codex adapter does not provide Firstmate with same-session evidence of effective instruction sources and skill activation. Continue the assigned work, including edits, under the configured approval policy; do not claim native loading was verified.\n'
+        printf '\n## Native loader evidence\nThis launch attempts native registration of additional repository skills. Unsupported registration is reported without restricting edits or changing configured approval. Continue the assigned work, including edits. Native activation evidence must come from the running worker, not this brief.\n'
       fi &&
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"

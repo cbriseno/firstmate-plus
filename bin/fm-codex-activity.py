@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """Codex activity for a locally launched, native Linux TUI.
 
-launch STATE ID GEN WORKSPACE CODEX [ARGS...] records this process's kernel
-identity, then execs the verified CLI with --no-daemon. Unsupported installations
-still launch normally and have no activity binding. It never installs hooks,
-changes Codex configuration, starts a relay, or searches other conversations.
+launch STATE ID GEN WORKSPACE CODEX [ARGS...] normally records this process's
+kernel identity, then execs the verified CLI with --no-daemon. A distinct
+WORKSPACE/.claude/skills root uses an owned app-server: register that root with
+skills/extraRoots/set before the interactive client receives its task. The
+server owns the rollout and activity binding. CLI approval flags are retained;
+unavailable registration prints Unsupported and falls back to the normal CLI.
+Only codex-cli 0.166.0 is qualified for that API. No hook, profile, repository
+file or shared daemon is changed. Repositories with CLAUDE.md and no native
+AGENTS file use the CLI project_doc_fallback_filenames setting on this launch.
 
 classify STATE ID prints the shared busy classifier's two-field result. The
 generation-specific ID.codex-owner.GEN.json binding is immutable after launch;
 busy-gen selects it, so an old launcher cannot overwrite a replacement. The
 first validated session is pinned in ID.codex-session.GEN.json; an in-process
 conversation switch is unsupported until a new launch generation. Only
-the bound process's open rollout and matching writer-lock descriptor are read.
+the bound process's open primary rollout and matching writer-lock are read;
+extra open rollouts are accepted only for its explicit native guardian children.
+The private server uses source vscode. Its notify callback forwards the original
+program and payload only for a verified idle primary, never a guardian turn.
 The native executable, boot/start identity, workspace, CLI version, session ID,
 and generation must all agree before and after the read. No descriptor, partial
 JSON, conflicting lifecycle, unsupported version, or unreadable evidence means
@@ -27,11 +35,15 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+from types import SimpleNamespace
 
 from fm_task_sessions import bind, metadata
 
@@ -78,10 +90,134 @@ def identity(pid):
             os.readlink(proc / "ns/pid")]
 
 
+def record_owner(state, task, gen, workspace, command, pid, source="cli"):
+    binary = shutil.which(command[0])
+    if sys.platform != "linux" or not binary or generation(state, task) != gen:
+        raise ValueError("unsupported launch")
+    binary = str(Path(binary).resolve(strict=True))
+    with open(binary, "rb") as handle:
+        if handle.read(4) != b"\x7fELF":
+            raise ValueError("non-native executable")
+    result = subprocess.run([binary, "--version"], capture_output=True, timeout=5, check=True)
+    if result.stdout.decode().strip() != "codex-cli " + VERSION:
+        raise ValueError("unverified version")
+    binding = {
+        "schema": 1, "gen": gen, "pid": pid,
+        "identity": identity(pid), "executable": binary,
+        "workspace": str(Path(workspace).resolve(strict=True)),
+        "codex_home": str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()),
+        "version": VERSION,
+        "source": source,
+    }
+    with owner_path(state, task, gen).open("x") as handle:
+        json.dump(binding, handle)
+    return binary
+
+
+def launch_with_skill_root(state, task, gen, workspace, command, root):
+    # The native extraRoots API is process scoped. A private server retains it
+    # across the bootstrap connection and the unchanged interactive client.
+    with tempfile.TemporaryDirectory(prefix="fm-codex-roots-") as folder:
+        remote = "unix://" + str(Path(folder) / "server.sock")
+        server = None
+        diagnostic = {"phase": "version"}
+        try:
+            with (Path(folder) / "server.log").open("w") as log:
+                try:
+                    version = subprocess.run([command[0], "--version"], capture_output=True, timeout=5, check=True)
+                    if version.stdout.decode().strip() != "codex-cli " + VERSION:
+                        raise ValueError("unqualified native runtime")
+                    options = []
+                    arguments = iter(command[1:])
+                    for arg in arguments:
+                        if arg in ("-c", "--config"):
+                            value = next(arguments)
+                        elif arg.startswith("--config="):
+                            value = arg.removeprefix("--config=")
+                        else:
+                            continue
+                        if value.partition("=")[0].strip() == "notify":
+                            original = decode(value.partition("=")[2])
+                            callback = [sys.executable, str(Path(__file__).resolve()), "notify", str(state), task,
+                                        gen, str(Path(workspace).resolve()), json.dumps(original)]
+                            options.extend(["-c", "notify=" + json.dumps(callback)])
+                        else:
+                            options.extend(["-c", value])
+                    diagnostic["phase"] = "start"
+                    server = subprocess.Popen([command[0], "app-server", *options, "--listen", remote],
+                                              cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+                    deadline = time.monotonic() + 20
+                    while not (Path(folder) / "server.sock").exists() and server.poll() is None:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError()
+                        time.sleep(.1)
+                    client_type = runpy.run_path(str(Path(__file__).with_name("fm-codex-native-rpc.py")))["Client"]
+                    client = client_type(SimpleNamespace(remote=remote, executable=command[0], wait_for_idle=20), diagnostic)
+                    try:
+                        client.upgrade()
+                        client.request("initialize", {"clientInfo": {"name": "firstmate-worker-skills", "version": "1"},
+                                                      "capabilities": {"experimentalApi": True}})
+                        client.send({"method": "initialized"})
+                        client.request("skills/extraRoots/set", {"extraRoots": [str(root.resolve())]})
+                    finally:
+                        client.close()
+                except (OSError, ValueError, EOFError, TimeoutError, KeyError, subprocess.SubprocessError):
+                    print("Unsupported: Codex native skill-root registration unavailable ("
+                          + diagnostic["phase"] + "); continuing with configured approval.", file=sys.stderr)
+                    return None
+                try:
+                    record_owner(state, task, gen, workspace, command, server.pid, "vscode")
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass  # The existing activity capability limit does not restrict editing.
+                if shutil.which("lsof"):
+                    threading.Thread(target=bind_open_session,
+                                     args=(state, task, gen, workspace, server.pid, lambda: server.poll() is None, "vscode"),
+                                     daemon=True).start()
+                return subprocess.call([command[0], "--remote", remote, *command[1:]])
+        finally:
+            if server is not None and server.poll() is None:
+                server.terminate()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                    server.wait()
+
+
+def native_notify(state, task, gen, workspace, program, payload):
+    """Keep guardian completions from invoking the worker's original notify."""
+    try:
+        data = decode(payload)
+        if sys.platform == "linux":
+            binding = decode(owner_path(state, task, gen).read_text())
+            if binding["pid"] != os.getppid() or generation(state, task) != gen:
+                return
+            entry, session, _ = sample(binding)
+        else:
+            home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+            entry = Path(open_rollout(os.getppid(), home, workspace, "vscode"))
+            session = ROLLOUT.fullmatch(entry.name)[1]
+            binding = {"workspace": workspace, "source": "vscode"}
+        if data.get("thread-id") != session:
+            return
+        with entry.open("rb") as handle:
+            if fold(handle, binding, session) != "idle":
+                return
+        subprocess.run([*decode(program), payload], check=False)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        print("warning: native Codex completion could not be attributed to its worker", file=sys.stderr)
+
+
 def launch(state, task, gen, workspace, command):
-    # Keep launch metadata useful on both Linux and macOS.  The activity
-    # classifier below still has its own Linux-only kernel proof, but spend
-    # binding needs only this process's open Codex rollout.
+    repo = Path(workspace)
+    if (repo / "CLAUDE.md").is_file() and not any((repo / name).is_file()
+                                                              for name in ("AGENTS.md", "AGENTS.override.md")):
+        command = [command[0], "-c", 'project_doc_fallback_filenames=["CLAUDE.md"]', *command[1:]]
+    root = Path(workspace) / ".claude/skills"
+    if root.is_dir() and root.resolve() != (Path(workspace) / ".agents/skills").resolve():
+        status = launch_with_skill_root(state, task, gen, workspace, command, root)
+        if status is not None:
+            raise SystemExit(status)
     if shutil.which("lsof"):
         try:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "bind-session",
@@ -91,35 +227,15 @@ def launch(state, task, gen, workspace, command):
                              close_fds=True)
         except OSError:
             pass
-    binary = shutil.which(command[0])
     try:
-        if sys.platform != "linux" or not binary or generation(state, task) != gen:
-            raise ValueError("unsupported launch")
-        binary = str(Path(binary).resolve(strict=True))
-        # Script shims have a different kernel executable and remain unsupported.
-        with open(binary, "rb") as handle:
-            if handle.read(4) != b"\x7fELF":
-                raise ValueError("non-native executable")
-        result = subprocess.run([binary, "--version"], capture_output=True, timeout=5, check=True)
-        if result.stdout.decode().strip() != "codex-cli " + VERSION:
-            raise ValueError("unverified version")
-        binding = {
-            "schema": 1, "gen": gen, "pid": os.getpid(),
-            "identity": identity(os.getpid()), "executable": binary,
-            "workspace": str(Path(workspace).resolve(strict=True)),
-            "codex_home": str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()),
-            "version": VERSION,
-        }
-        # Exclusive, generation-specific publication: no shared mutable cache.
-        with owner_path(state, task, gen).open("x") as handle:
-            json.dump(binding, handle)
+        binary = record_owner(state, task, gen, workspace, command, os.getpid())
         command = [binary, "--no-daemon", *command[1:]]
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     os.execvp(command[0], command)
 
 
-def open_rollout(pid, codex_home, workspace):
+def open_rollout(pid, codex_home, workspace, source="cli"):
     lsof = shutil.which("lsof")
     if not lsof:
         return None
@@ -148,7 +264,7 @@ def open_rollout(pid, codex_home, workspace):
             if not isinstance(payload, dict):
                 continue
             if (first.get("type") != "session_meta" or payload.get("id") != match[1]
-                    or payload.get("cli_version") != VERSION or payload.get("source") != "cli"
+                    or payload.get("cli_version") != VERSION or payload.get("source") != source
                     or str(Path(payload.get("cwd", "")).resolve()) != workspace):
                 continue
             candidates.append(str(resolved))
@@ -158,10 +274,11 @@ def open_rollout(pid, codex_home, workspace):
         return None
 
 
-def bind_open_session(state, task, gen, workspace, pid):
-    # This helper is a child of the launched Codex process.  Reparenting means
-    # that process exited, so PID reuse can never bind an unrelated session.
-    if os.getppid() != pid:
+def bind_open_session(state, task, gen, workspace, pid, alive=None, source="cli"):
+    # The exec helper follows its parent; the server launch supplies its owned
+    # Popen's poll instead, so both paths stop when their exact engine exits.
+    alive = alive or (lambda: os.getppid() == pid)
+    if not alive():
         return False
     try:
         meta = metadata(state, task)
@@ -171,9 +288,9 @@ def bind_open_session(state, task, gen, workspace, pid):
         return False
     codex_home = str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve())
     deadline = time.monotonic() + BIND_SECONDS
-    while time.monotonic() < deadline and os.getppid() == pid:
-        session = open_rollout(pid, codex_home, workspace)
-        if os.getppid() != pid:
+    while time.monotonic() < deadline and alive():
+        session = open_rollout(pid, codex_home, workspace, source)
+        if not alive():
             return False
         if session:
             bind(state, task, gen, session)
@@ -205,10 +322,27 @@ def sample(binding):
             if not os.path.samefile(entry, target):
                 raise ValueError("replaced rollout")
             logs[str(target)] = (entry, match[1])
-    if len(logs) != 1:
+    primary, reviews = {}, {}
+    for name, (entry, session) in logs.items():
+        with entry.open("rb") as stream:
+            header = decode(stream.readline(LIMIT + 1))
+        if not isinstance(header, dict) or not isinstance(header.get("payload"), dict):
+            raise ValueError("invalid session metadata")
+        payload = header.get("payload", {})
+        if (header.get("type") != "session_meta" or payload.get("id") != session
+                or payload.get("cli_version") != VERSION or payload.get("cwd") != binding["workspace"]):
+            raise ValueError("session identity mismatch")
+        if payload.get("source") == binding.get("source", "cli"):
+            primary[name] = (entry, session)
+        elif (payload.get("source") == {"subagent": {"other": "guardian"}}
+              and payload.get("thread_source") == "guardian_review"):
+            reviews[session] = payload.get("parent_thread_id")
+        else:
+            raise ValueError("unrecognized concurrent session")
+    if len(primary) != 1:
         raise ValueError("ambiguous or absent rollout")
-    name, (entry, session) = next(iter(logs.items()))
-    if session not in locks or len(locks) != 1:
+    name, (entry, session) = next(iter(primary.items()))
+    if locks != {session, *reviews} or any(parent != session for parent in reviews.values()):
         raise ValueError("writer identity mismatch")
     info = entry.stat()
     return entry, session, (name, info.st_dev, info.st_ino)
@@ -230,7 +364,7 @@ def fold(handle, binding, session):
             raise ValueError("invalid payload")
         if number == 0:
             if (row.get("type") != "session_meta" or payload.get("id") != session
-                    or payload.get("cli_version") != VERSION or payload.get("source") != "cli"
+                    or payload.get("cli_version") != VERSION or payload.get("source") != binding.get("source", "cli")
                     or payload.get("cwd") != binding["workspace"]):
                 raise ValueError("session identity mismatch")
             continue
@@ -274,7 +408,8 @@ def classify(state, task):
         source = "codex-rollout"
         binding = decode(path.read_text())
         if (sys.platform != "linux" or binding["schema"] != 1
-                or binding["version"] != VERSION or binding["gen"] != gen):
+                or binding["version"] != VERSION or binding["gen"] != gen
+                or binding.get("source", "cli") not in ("cli", "vscode")):
             raise ValueError("unsupported binding")
         entry, session, before = sample(binding)
         with entry.open("rb") as handle:
@@ -311,6 +446,9 @@ def classify(state, task):
 def main():
     if sys.argv[1:] in (["--help"], ["-h"]):
         print(__doc__)
+        return
+    if sys.argv[1:2] == ["notify"] and len(sys.argv) == 8:
+        native_notify(Path(sys.argv[2]), *sys.argv[3:])
         return
     if len(sys.argv) < 4:
         raise SystemExit("usage: fm-codex-activity.py --help")

@@ -31,7 +31,7 @@ If the choice or approval is unclear, leave the dialog for the operator rather t
 Writing Codex's own trust store to pre-accept it would manufacture an operator consent that was never given.
 Firstmate ship and scout launches preserve the normal hook layers; Codex may stop at this review until the operator decides whether to trust the displayed hooks.
 Firstmate does not modify the operator's Codex settings, write hook trust, or bypass the review.
-The worker notice and approval posture are owned by [`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) ("Codex approval mode"); [runtime verification](../../../../../docs/verification/runtime-backends.md#codex-worker-editing) records the real editing guard.
+The worker notice and approval posture are owned by [`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) ("Codex approval mode"); [runtime verification](../../../../../docs/verification/runtime-backends.md#codex-worker-editing-and-native-repository-skills) records the real editing guard.
 The turn-end signal is the `-c notify=` program on the same launch, and Firstmate's hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
 A secondmate is a primary in its own home and keeps its hooks, so hook review there can also require the operator's scoped consent.
 
