@@ -840,60 +840,6 @@ SH
   pass "fm-lint.sh changed mode excludes cross-file codes that explicit paths still report"
 }
 
-# One ShellCheck process per root. Passing the whole canonical set in a
-# single invocation still follows in-set sources and is not the no-x posture.
-fm_lint_nox_one_root() {
-  local index=$1 path=$2 outdir=$3
-  shellcheck --norc --format gcc -- "$path" > "$outdir/$index" || true
-}
-
-test_local_exclusion_list_covers_every_no_external_sources_code() {
-  if ! pinned_ready; then
-    pass "SKIP (ShellCheck $REQUIRED not resolved): local exclusion completeness"
-    return
-  fi
-  local tmp files_file out unexpected code path found i batch
-  local -a files
-  tmp=$(fm_test_tmproot fm-lint-nox-complete)
-  files_file="$tmp/files"
-  CI=true "$LINT" --list-files > "$files_file"
-  [ -s "$files_file" ] || fail "CI --list-files returned no canonical lint roots"
-  files=()
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    files+=("$path")
-  done < "$files_file"
-  [ "${#files[@]}" -gt 0 ] || fail "CI --list-files returned no readable lint roots"
-  mkdir -p "$tmp/gcc"
-  i=0
-  batch=0
-  for path in "${files[@]}"; do
-    i=$((i + 1))
-    fm_lint_nox_one_root "$i" "$path" "$tmp/gcc" &
-    batch=$((batch + 1))
-    if [ "$batch" -eq 4 ]; then
-      wait
-      batch=0
-    fi
-  done
-  wait
-  found=$(find "$tmp/gcc" -type f | wc -l | tr -d '[:space:]')
-  [ "$found" = "${#files[@]}" ] \
-    || fail "completeness sweep linted $found roots, expected ${#files[@]}"
-  out=$(cat "$tmp/gcc"/* 2>/dev/null || true)
-  unexpected=
-  while IFS= read -r code; do
-    [ -n "$code" ] || continue
-    case "$code" in
-      SC1091|SC2034|SC2153|SC2329) ;;
-      *) unexpected="${unexpected}${unexpected:+ }$code" ;;
-    esac
-  done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)
-  [ -z "$unexpected" ] \
-    || fail "no-external-sources pass emitted codes outside the local exclusion list: $unexpected"
-  pass "local exclusion list covers every no-external-sources ShellCheck code"
-}
-
 test_pins_an_explicit_version() {
   [ -n "$REQUIRED" ] || fail "fm-lint.sh --required-version printed nothing"
   # The captain-agreed pin: adopt ShellCheck 0.11.0's rule set consistently,
@@ -1344,6 +1290,40 @@ SH
   pass "jobs=1 and jobs=2 preserve deterministic diagnostics, failures, cleanup bounds, and quiet telemetry"
 }
 
+test_local_memory_cap() {
+  local tmp fakebin out rc=0
+  tmp=$(fm_test_tmproot fm-lint-local-memory)
+  fakebin=$(fm_fakebin "$tmp")
+  cat > "$fakebin/shellcheck" <<'PYMEM'
+#!/usr/bin/env python3
+import resource
+import sys
+if "--version" in sys.argv:
+    print("version: 0.11.0")
+else:
+    cap = resource.getrlimit(resource.RLIMIT_AS)[0]
+    assert 0 < cap <= 1572864 * 1024, cap
+    print("local-cap-enforced")
+PYMEM
+  chmod +x "$fakebin/shellcheck"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/good.sh"
+  if ( ulimit -v 1572864 ) 2>/dev/null; then
+    out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 "$LINT" "$tmp/good.sh" 2>&1) \
+      || fail "local lint did not enforce its default cap"$'\n'"$out"
+    assert_contains "$out" "local-cap-enforced" "root never checked its inherited memory cap"
+  else
+    # Do not claim a memory guarantee on a host that rejects the adapter.
+    fm_lint_stub_shellcheck "$fakebin" "$tmp/stub.log"
+    out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 "$LINT" "$tmp/good.sh" 2>&1) \
+      || fail "portable lock-only lint failed"$'\n'"$out"
+    assert_contains "$out" "memory protection UNKNOWN" "unsupported adapter silently ran uncapped"
+  fi
+  out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 FM_LINT_LOCAL_MEMORY_KIB=invalid \
+    "$LINT" "$tmp/good.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "invalid local memory cap accepted"
+  pass "local memory protection is enforced or explicitly unknown, never silent"
+}
+
 test_host_lock_serializes_homes_and_worktrees() {
   local tmp fakebin lane pid_a pid_b
   tmp=$(fm_test_tmproot fm-lint-host-lock)
@@ -1641,7 +1621,11 @@ SH
     if [ "$mode" -eq 1 ]; then
       assert_grep $'meta\tbounds_enforced\t1' "$tmp/pass.$mode.roots.tsv" \
         "the bounded fallback did not enforce bounds"
-      case "$rss_kib" in ''|*[!0-9]*) fail "the fallback attempts lost per-root RSS reporting: $rss_kib" ;; esac
+      if [ -x /usr/bin/time ]; then
+        case "$rss_kib" in ''|*[!0-9]*) fail "the fallback attempts lost per-root RSS reporting: $rss_kib" ;; esac
+      else
+        [ "$rss_kib" = unavailable ] || fail "RSS claimed without /usr/bin/time: $rss_kib"
+      fi
     else
       assert_grep $'meta\tbounds_enforced\t0' "$tmp/pass.$mode.roots.tsv" \
         "the unbounded fallback unexpectedly enforced bounds"
@@ -1999,8 +1983,10 @@ test_roots_sidecar_records_per_root_lifecycle() {
     || fail "the sidecar did not record the timing mechanism"
   grep -q $'^meta\troot_deadline_seconds\tunbounded$' "$roots_log" \
     || fail "the sidecar did not record the unbounded deadline state"
-  grep -q $'^meta\troot_memory_limit_kib\tunbounded$' "$roots_log" \
-    || fail "the sidecar did not record the unbounded memory state"
+  local expected_memory=unknown
+  if ( ulimit -v 1572864 ) 2>/dev/null; then expected_memory=1572864; fi
+  grep -q "$(printf 'meta\troot_memory_limit_kib\t%s$' "$expected_memory")" "$roots_log" \
+    || fail "the sidecar did not record the local memory protection state"
   grep -q $'^meta\troots_completed\t3$' "$roots_log" \
     || fail "the sidecar did not count three completed roots"
   [ "$(grep -c '^begin' "$roots_log")" -eq 3 ] \
@@ -2100,6 +2086,7 @@ test_rejects_direct_beads_cli_in_explicit_core_path
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
+test_local_memory_cap
 test_host_lock_serializes_homes_and_worktrees
 test_worker_trees_stop_on_signal
 test_root_deadline_names_the_root_and_reaps_the_tree
@@ -2127,4 +2114,3 @@ test_merge_base_less_keeps_external_sources
 test_explicit_path_keeps_external_sources
 test_fast_mode_on_a_local_branch_keeps_source_following
 test_changed_mode_hides_cross_file_codes_that_ci_still_sees
-test_local_exclusion_list_covers_every_no_external_sources_code

@@ -683,7 +683,8 @@ EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-  SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm'
+  SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm
+For Firstmate shell checks, including reviews, use bin/fm-lint.sh [paths...] instead of raw shellcheck; its header owns host serialization and memory protection.'
 else
   SIMPLICITY_LINE=''
 fi

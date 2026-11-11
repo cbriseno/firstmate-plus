@@ -71,7 +71,12 @@
 # named error, so a required-bounds run never lints uncapped. Without
 # FM_LINT_REQUIRE_BOUNDS (a local developer lint, where hosts like macOS
 # cannot apply the address-space limit at all) each root still runs in its
-# own ShellCheck process with identical diagnostics, just unbounded.
+# own ShellCheck process with identical diagnostics and the local memory cap below.
+# Local runs attempt a 1536 MiB address-space cap (FM_LINT_LOCAL_MEMORY_KIB).
+# Hosts that reject ulimit -v, including macOS, explicitly report protection
+# unknown; the portable host lock still serializes their ShellCheck processes.
+# This cap bounds virtual memory, not only the heap; exhaustion fails lint.
+# Use --fast explicitly for a smaller local analysis, never raw shellcheck.
 #
 # If a source-following root exits with a memory failure, it is retried once
 # without --external-sources under the same memory limit and only the time
@@ -258,7 +263,12 @@ fm_lint_exec_root() {  # <path> <stdout-file> <stderr-file> <rss-file> <seconds>
     wait "$FM_LINT_WORKER_RUN_PID" || invocation_rc=$?
     FM_LINT_WORKER_RUN_PID=
   else
-    "$FM_LINT_SHELLCHECK" "$@" -- "$path" > "$root_out" 2> "$root_err" &
+    (
+      if [ -n "${FM_LINT_INTERNAL_LOCAL_MEMORY_KIB:-}" ]; then
+        ulimit -v "$FM_LINT_INTERNAL_LOCAL_MEMORY_KIB" 2>/dev/null || exit 97
+      fi
+      exec "$FM_LINT_SHELLCHECK" "$@" -- "$path"
+    ) > "$root_out" 2> "$root_err" &
     FM_LINT_WORKER_RUN_PID=$!
     wait "$FM_LINT_WORKER_RUN_PID" || invocation_rc=$?
     FM_LINT_WORKER_RUN_PID=
@@ -979,7 +989,22 @@ fi
 # watchdog is probed and the host's acceptance of ulimit -v is checked before
 # any root starts; failed checks refuse with a named error. A required-bounds run
 # never lints uncapped. Without it each root still runs alone in its own
-# ShellCheck process, unbounded, for local developer lint.
+# ShellCheck process with a separately probed local memory cap.
+LOCAL_MEMORY_KIB=
+if [ "${FM_LINT_REQUIRE_BOUNDS:-0}" != 1 ]; then
+  local_memory_requested=${FM_LINT_LOCAL_MEMORY_KIB:-1572864}
+  case "$local_memory_requested" in
+    ''|0*|*[!0-9]*)
+      printf 'fm-lint.sh: FM_LINT_LOCAL_MEMORY_KIB must be a positive integer.\n' >&2
+      exit 2 ;;
+  esac
+  if ( ulimit -v "$local_memory_requested" ) 2>/dev/null; then
+    LOCAL_MEMORY_KIB=$local_memory_requested
+    printf 'fm-lint.sh: local address-space cap %s KiB per ShellCheck\n' "$LOCAL_MEMORY_KIB" >&2
+  else
+    printf 'fm-lint.sh: local memory protection UNKNOWN (ulimit -v unavailable); host lock still applies.\n' >&2
+  fi
+fi
 ROOT_SECONDS=${FM_LINT_ROOT_SECONDS:-1200}
 ROOT_GRACE=${FM_LINT_ROOT_GRACE:-5}
 # 12 GiB of virtual address space per analysis process. ulimit -v caps
@@ -1102,7 +1127,7 @@ else
   bounds_applied=0
   root_deadline_meta=unbounded
   root_grace_meta=unbounded
-  root_memory_meta=unbounded
+  root_memory_meta=${LOCAL_MEMORY_KIB:-unknown}
 fi
 {
   printf 'format\t%s\n' 'fm-lint-roots-v1'
@@ -1194,6 +1219,7 @@ fm_lint_run_worker() {  # <worker-index>
     FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES"
     FM_LINT_INTERNAL_BOUNDED="$BOUND_MECH"
     FM_LINT_INTERNAL_MEMORY_KIB="$ROOT_MEMORY_KIB"
+    FM_LINT_INTERNAL_LOCAL_MEMORY_KIB="$LOCAL_MEMORY_KIB"
     FM_LINT_INTERNAL_ROOT_SECS="$ROOT_SECONDS"
     FM_LINT_INTERNAL_GRACE="$ROOT_GRACE"
     FM_LINT_INTERNAL_ROOTS_LOG="$ROOTS_LOG"
