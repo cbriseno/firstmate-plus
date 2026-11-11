@@ -757,17 +757,24 @@ test_new_status_with_turnend_surfaces() {
   pass 'new status lines still surface with a coalesced turn-end'
 }
 
-# Incident: routine wake suppression swallowed a real Codex worker's completion
-# while its last declaration still said working. Exercise the executable watcher,
-# including a restart after ACK, without depending on vendor-rendered output.
-test_undeclared_worker_turnend_wakes_once() {
-  local dir state out pid variant verdict verb kind
+# Fixed-input decision and signature regression. The real working -> idle ->
+# wake -> ACK -> silent checkpoint flow is covered by recorrido's idle-wake-once.
+# Source the watcher through its library guard; no poll loop or timing budgets.
+test_undeclared_worker_turnend_wakes_once() (
+  local dir state variant verdict verb kind pending sf sig file scanned expected actual
+  export FM_HOME="$TMP_ROOT/turnend-decisions" FM_STATE_OVERRIDE="$TMP_ROOT/turnend-decisions/state"
+  # Production modules have their own canonical lint roots.
+  # shellcheck source=/dev/null
+  . "$WATCH"
   for variant in stopped unknown busy validating paused held terminal secondmate progress; do
-    dir=$(make_case "undeclared-turnend-$variant"); state="$dir/state"; out="$dir/out"
+    dir=$(make_case "undeclared-turnend-$variant"); state="$dir/state"
+    # shellcheck disable=SC2034 # Read by the sourced watcher functions.
+    STATE="$state"
     verdict='state: working · source: status-log · last declaration'
-    verb=working; kind=ship
+    verb=working; kind=ship; expected=silent
     case "$variant" in
-      unknown) verdict='state: unknown · source: pane · unavailable' ;;
+      stopped) expected=wake ;;
+      unknown) verdict='state: unknown · source: pane · unavailable'; expected=wake ;;
       busy) verdict='state: working · source: pane · harness busy' ;;
       validating) verdict='state: working · source: run-step · running' ;;
       paused) verb=paused; verdict='state: paused · source: status-log · external wait' ;;
@@ -775,41 +782,30 @@ test_undeclared_worker_turnend_wakes_once() {
       terminal) verb='done' ;;
       secondmate) kind=secondmate ;;
     esac
+    export FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE_task="$verdict"
     printf 'kind=%s\nharness=codex\n' "$kind" > "$state/task.meta"
     printf '%s: recorded declaration\n' "$verb" > "$state/task.status"
+    [ "$variant" = progress ] || prime_status_seen "$state" "$state/task.status"
+    file="$state/task.status"
     if [ "$variant" != progress ]; then
-      prime_status_seen "$state" "$state/task.status"
+      file="$state/task.turn-ended"
+      : > "$file"
     fi
-    watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
-    pid=$!
-    # Complete startup for every variant, including progress without a turn-end.
-    # Cold-start reconciliation is not part of the signal delivery budget.
-    wait_poll_cycle "$state" "$pid" \
-      || { reap "$pid"; fail "$variant watcher did not arm: $(cat "$out")"; }
-    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant woke before turn-end"; }
-    if [ "$variant" != progress ]; then
-      : > "$state/task.turn-ended"
-    fi
-    case "$variant" in
-      stopped|unknown)
-        wait_for_exit "$pid" 100 || { reap "$pid"; fail "$variant turn-end was swallowed"; }
-        grep -F "signal: $state/task.turn-ended" "$out" >/dev/null \
-          || fail "$variant did not surface its turn-end"
-        ack_stopped_cycle "$state" || fail "cannot acknowledge $variant turn-end"
-        watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
-        pid=$!
-        wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "$variant woke again after ACK"; }
-        ;;
-      *)
-        wait_for_absorbed "$state" "$pid" 'absorbed benign signal:' \
-          || { reap "$pid"; fail "$variant created a routine wake: $(cat "$out")"; }
-        ;;
-    esac
-    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant queued a repeat or routine wake"; }
-    reap "$pid"
+    pending=$(scan_signals)
+    actual=silent
+    if signal_files_actionable "$file" || signal_worker_stopped "$file"; then actual=wake; fi
+    [ "$actual" = "$expected" ] || fail "$variant: expected $expected, got $actual"
+    [ -n "$pending" ] || fail "$variant: new signal missing from scan"
+    IFS=$'\t' read -r sf sig scanned <<< "$pending"
+    [ "$scanned" = "$file" ] || fail "$variant: unexpected signal $scanned"
+    # The existing reported signature is the only once/silence state, whether
+    # this marker was surfaced or intentionally absorbed.
+    if [ "$variant" = progress ]; then prime_status_seen "$state" "$file"
+    else printf '%s' "$sig" > "$sf"; fi
+    [ -z "$(scan_signals)" ] || fail "$variant: reported signal appeared again"
   done
   pass 'undeclared worker stops wake once; progress, execution, waits, results and secondmates stay silent'
-}
+)
 
 test_turn_ended_not_working_surfaced() {
   local dir state fakebin out drain_out pid
