@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix='fm-creation-time-') as folder:
         instant(task_created(minted))
         assert task(snap(),minted)['request']==dict(id=minted,label='A minted card',project='alpha')
         cli('add','host-task','Host operation',raw=True)
-        assert task(snap(),'host-task')['request']['project']=='Proyecto sin registrar'
+        assert task(snap(),'host-task')['request']['project'] is None
         plain=cli('add','Another minted card','--mint','--repo','alpha',raw=True)
         minted_plain=re.match(r'^ok: added (\S+)',plain)[1]
         final=snap()

@@ -21,6 +21,8 @@ Prefer holding the work item the question gates over minting a new row; create a
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
 Prepare the decision under `AGENTS.md` section 9 before holding it; retain the analysis and plan in the linked result rather than expanding the card.
 Keep the reason a short plain summary, and put the card the captain answers in the structured hold fields: `--context`, `--question`, one `--option` per choice, `--recommended`, and `--link` to the report.
+Write the context as the consequence in human language, and include the recommended outcome and why when the report supports one; keep dates, source keys, and diagnostics in the linked report.
+Pass `--origin` for the work that produced the decision, then block each work item the answer gates with `bin/fm-tasks-axi.sh block <work> --by <decision>` so the Deck can show recorded relationships without inferring them.
 `hold` refuses a call without `--question` and at least two `--option` choices, so think the choices through before holding rather than retrying around the refusal.
 Pass `--no-options "<why>"` instead only when the question genuinely has no choices to click, including an answer in words or a legacy wait.
 Use the owner's explicit action facet for a separate persistent instruction to act in chat; [`fm-captain-hold.sh`](../../../bin/fm-captain-hold.sh) owns its fields and authoritative completion contract.
