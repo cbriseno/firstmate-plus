@@ -779,10 +779,17 @@ test_undeclared_worker_turnend_wakes_once() {
     printf '%s: recorded declaration\n' "$verb" > "$state/task.status"
     if [ "$variant" != progress ]; then
       prime_status_seen "$state" "$state/task.status"
-      : > "$state/task.turn-ended"
     fi
     watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
     pid=$!
+    if [ "$variant" != progress ]; then
+      # Arm before the worker ends its turn. Cold-start reconciliation can cost
+      # more than the exit budget; wait for a full cycle before testing delivery.
+      wait_poll_cycle "$state" "$pid" \
+        || { reap "$pid"; fail "$variant watcher did not arm: $(cat "$out")"; }
+      [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant woke before turn-end"; }
+      : > "$state/task.turn-ended"
+    fi
     case "$variant" in
       stopped|unknown)
         wait_for_exit "$pid" 100 || { reap "$pid"; fail "$variant turn-end was swallowed"; }
