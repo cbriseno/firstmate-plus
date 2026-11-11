@@ -232,9 +232,10 @@
 #   --preserve closes a worker without requiring landing or discard approval:
 #   commit all pending files (respecting .gitignore), verify the task branch at
 #   that commit in the shared project, then close the endpoint and return its
-#   copy without deleting the branch. Reopen the backlog row with the branch
-#   in its note; this saves work, it does not declare delivery or installation.
-#   It cannot combine with --force, --residual, or --repair-missing-record.
+#   copy without deleting the branch. Keep its original backlog row visible and
+#   held until work resumes; optional --residual says what remains on that row.
+#   This saves work, it does not declare delivery or installation. It cannot
+#   combine with --force or --repair-missing-record.
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, retains task branches, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
@@ -550,8 +551,8 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-if [ "$PRESERVE" = 1 ] && { [ -n "$FORCE" ] || [ "$RESIDUAL_GIVEN" = 1 ] || [ "$REPAIR_MISSING_RECORD" = 1 ]; }; then
-  echo "error: --preserve cannot combine with --force, --residual, or --repair-missing-record" >&2
+if [ "$PRESERVE" = 1 ] && { [ -n "$FORCE" ] || [ "$REPAIR_MISSING_RECORD" = 1 ]; }; then
+  echo "error: --preserve cannot combine with --force or --repair-missing-record" >&2
   exit 2
 fi
 if [ "$RESIDUAL_GIVEN" = 1 ]; then
@@ -1895,7 +1896,9 @@ backlog_done_args() {
   local data_relative
   BACKLOG_DONE_ARGS=()
   if [ "$PRESERVE" = 1 ]; then
-    BACKLOG_DONE_ARGS=(--note "preserved-branch:$PRESERVED_BRANCH")
+    local note="preserved-branch:$PRESERVED_BRANCH"
+    [ "$RESIDUAL_GIVEN" != 1 ] || note="$note; remaining: $RESIDUAL"
+    BACKLOG_DONE_ARGS=(--note "$note")
     return 0
   fi
   case "$KIND" in
@@ -1960,6 +1963,7 @@ teardown_record_residual() {
 
 residual_reminder() {
   [ "$RESIDUAL_GIVEN" = 1 ] || return 0
+  [ "$PRESERVE" != 1 ] || return 0
   if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     printf '%s\n' "Residual: $RESIDUAL_ID is Queued and held as an external wait with what is left of $ID; check it and close it when it is settled."
   else
@@ -1990,7 +1994,17 @@ backlog_refresh_reminder() {
     backlog_display="${DATA%/}/backlog.md"
   fi
   if [ "$PRESERVE" = 1 ]; then
-    printf 'Preserved branch: %s in %s. Record it in the backlog note if this home uses manual updates. Work remains unlanded.\n' "$PRESERVED_BRANCH" "$PROJ"
+    printf 'Preserved branch: %s in %s. Work remains unlanded.\n' "$PRESERVED_BRANCH" "$PROJ"
+    if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ] && [ "$TEARDOWN_CAPTAIN_OPEN_STATUS" = 0 ]; then
+      printf 'Backlog: %s remains open under its captain hold.\n' "$ID"
+    elif [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
+      printf 'Backlog: %s stays Queued and held until work resumes.\n' "$ID"
+    else
+      printf 'Manual backlog: keep %s Queued and held as an external wait.\n' "$ID"
+    fi
+    if [ "$RESIDUAL_GIVEN" = 1 ]; then
+      printf 'Remaining work: %s.\n' "$RESIDUAL"
+    fi
   elif [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
     printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   elif [ "$BACKLOG_CLOSED" = 1 ]; then
@@ -4008,7 +4022,7 @@ fi
 
 # Every refusal has passed and nothing is destroyed yet, so a residual that
 # cannot be recorded stops here with every record intact (header: --residual).
-if [ "$RESIDUAL_GIVEN" = 1 ]; then
+if [ "$RESIDUAL_GIVEN" = 1 ] && [ "$PRESERVE" != 1 ]; then
   teardown_record_residual || exit 1
 fi
 
@@ -4428,6 +4442,32 @@ else
     META_LOCK_HELD=0
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
+  fi
+fi
+# A preserved task returns to the queue with its branch as the deliverable.
+# Re-dispatching that same task must check out the saved branch, not try to
+# create a duplicate ref from the generated brief's original setup command.
+if [ "$PRESERVE" = 1 ] && [ "$KIND" = ship ]; then
+  preserved_brief="$DATA/$ID/brief.md"
+  if [ -f "$preserved_brief" ]; then
+    if ! python3 - "$preserved_brief" "$PRESERVED_BRANCH" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+branch = sys.argv[2]
+text = path.read_text()
+old = f"git checkout -b {branch} --"
+new = f"git checkout {branch} --"
+if old not in text:
+    raise SystemExit(1)
+path.write_text(text.replace(old, new, 1))
+PY
+    then
+      echo "warning: $ID was preserved, but its brief could not be changed to resume $PRESERVED_BRANCH" >&2
+    fi
+  else
+    echo "warning: $ID was preserved without a brief at $preserved_brief; a replacement worker will need the saved branch named in its instructions" >&2
   fi
 fi
 fm_lock_release "$META_LOCK"

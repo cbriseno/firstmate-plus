@@ -502,6 +502,45 @@ EOF
   pass "fm-merge-local: a registry change cannot redirect an in-flight local-only task"
 }
 
+test_local_merge_closes_a_landed_preserved_task() {
+  local home proj original_id integration_id main out state details
+  home="$TMP_ROOT/local-merge-preserved/home"
+  proj="$TMP_ROOT/local-merge-preserved/project"
+  original_id='original-task'
+  integration_id='integration-task'
+  mkdir -p "$home/state" "$home/data" "$proj"
+  git -C "$proj" init -q -b main || fail "could not initialize preserved-branch fixture"
+  git -C "$proj" config user.email test@example.invalid
+  git -C "$proj" config user.name test
+  printf 'base\n' > "$proj/base"
+  git -C "$proj" add base
+  git -C "$proj" commit -qm base
+  tasks-axi add "$original_id" "Original preserved task" --kind ship --file "$home/data/backlog.md" >/dev/null
+  tasks-axi update "$original_id" --body "Preserved work: preserved-branch:fm/$original_id; remaining: Finish integration checks" --file "$home/data/backlog.md" >/dev/null
+  tasks-axi hold "$original_id" --kind external --reason "Preserved branch fm/$original_id; remaining: Finish integration checks" \
+    --file "$home/data/backlog.md" >/dev/null
+  git -C "$proj" checkout -qb "fm/$original_id"
+  printf 'preserved\n' > "$proj/preserved"
+  git -C "$proj" add preserved
+  git -C "$proj" commit -qm preserved
+  git -C "$proj" checkout -q main
+  main=$(git -C "$proj" rev-parse HEAD)
+  tasks-axi add "$integration_id" "Integrate preserved work" --kind ship --file "$home/data/backlog.md" >/dev/null
+  tasks-axi start "$integration_id" --file "$home/data/backlog.md" >/dev/null
+  printf 'project=%s\nkind=ship\nmode=local-only\nyolo=off\nbranch=fm/%s\n' "$proj" "$original_id" \
+    > "$home/state/$integration_id.meta"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$MERGE_LOCAL" "$integration_id" 2>&1) \
+    || fail "integration task could not land the preserved branch: $out"
+  state=$(tasks-axi show "$original_id" --file "$home/data/backlog.md" |
+    sed -n 's/^  state: *//p' | head -1)
+  [ "$state" = "done" ] || fail "the original preserved task stayed '$state' after its branch landed"
+  details=$(tasks-axi show "$original_id" --full --file "$home/data/backlog.md")
+  assert_contains "$details" "local main via integration $integration_id" \
+    "the original task did not record which integration landed its branch"
+  pass "fm-merge-local: landing a preserved branch closes its queued original task with the integration reference"
+}
+
 # A registered name may contain spaces, and the lookup must match the whole
 # name rather than only its first whitespace-delimited token (issue #1977).
 # The longer "foo bar" row is listed before the "foo" row so a leading-prefix
@@ -1752,6 +1791,7 @@ test_promotion_delivers_the_real_definition_of_done
 test_promotion_persists_the_selected_ship_branch
 test_promotion_branch_command_is_shell_safe
 test_local_merge_uses_the_recorded_ship_branch
+test_local_merge_closes_a_landed_preserved_task
 test_project_mode_matches_whole_multiword_names
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally

@@ -21,11 +21,15 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-local-branch-lib.sh
 . "$SCRIPT_DIR/fm-local-branch-lib.sh"
+# shellcheck source=bin/fm-tasks-axi-lib.sh
+. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
@@ -154,6 +158,48 @@ fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+# A separate integration task can land a previously preserved fm/<id> branch.
+# Reconcile only matching queued rows whose exact branch is now contained in the
+# local default; ordinary task branches and captain-held rows stay untouched.
+reconcile_preserved_branches() {
+  local branch preserved_id row state refs gate_status
+  fm_backlog_transition_applies "$CONFIG" "$DATA" ship || gate_status=$?
+  case "${gate_status:-0}" in
+    0) ;;
+    1) return 0 ;;
+    *)
+      echo "warning: $ID landed, but backlog reconciliation could not be configured ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      return 0
+      ;;
+  esac
+  refs=$(git -C "$PROJ" for-each-ref --format='%(refname:short)' refs/heads/fm/) || {
+    echo "warning: $ID landed, but preserved branches could not be listed for backlog reconciliation" >&2
+    return 0
+  }
+  while IFS= read -r branch; do
+    case "$branch" in fm/*) preserved_id=${branch#fm/} ;; *) continue ;; esac
+    fm_pr_task_id_valid "$preserved_id" || continue
+    git -C "$PROJ" merge-base --is-ancestor "$branch" "$DEFAULT" || continue
+    if ! fm_backlog_row_probe "$DATA" "$preserved_id"; then
+      [ "$FM_BACKLOG_ROW_RESULT" = not_found ] && continue
+      echo "warning: $ID landed, but preserved task $preserved_id could not be read ($FM_BACKLOG_ROW_ERROR)" >&2
+      continue
+    fi
+    state=${FM_BACKLOG_ROW_STATE%% *}
+    [ "$state" = queued ] && [ "$FM_BACKLOG_ROW_HOLD_KIND" != captain ] || continue
+    row=$(fm_backlog_row_show "$DATA" "$preserved_id" --full) || {
+      echo "warning: $ID landed, but preserved task $preserved_id's deliverable could not be read" >&2
+      continue
+    }
+    printf '%s\n' "$row" | grep -Fq "preserved-branch:$branch" || continue
+    if ! fm_backlog_done "$DATA" "$preserved_id" --note "local main via integration $ID"; then
+      echo "warning: $ID landed, but preserved task $preserved_id could not be closed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+    fi
+  done <<EOF
+$refs
+EOF
+}
+reconcile_preserved_branches
 # Retain the ready-head/integration facts through the same presentation owner.
 # A failed publication does not undo a successful merge; reads can reconstruct
 # ancestry and the warning requires reconciliation before cleanup.

@@ -620,7 +620,7 @@ fm_backlog_row_artifact_supported() {
 # fields; only bin/fm-captain-hold.sh answer resolves the call.
 fm_backlog_retain() {  # <data-dir> <id> [flag...]
   local data authorized_data=$1 id=$2 out command_status previous_arg=''
-  local arg deliverable='' line body new_body tmp
+  local arg deliverable='' line body new_body tmp preserved_work=0 preserved_branch remaining hold_reason
   local -a row_args=()
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
@@ -644,7 +644,10 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
           deliverable="${deliverable:+$deliverable; }$(fm_backlog_pr_note_label "$arg") $arg"
         fi
         ;;
-      --note) deliverable="${deliverable:+$deliverable; }$arg" ;;
+      --note)
+        deliverable="${deliverable:+$deliverable; }$arg"
+        case "$arg" in preserved-branch:*) preserved_work=1 ;; esac
+        ;;
     esac
     previous_arg=$arg
   done
@@ -679,7 +682,10 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
       FM_BACKLOG_TRANSITION_ERROR="could not decode the task body of $id"
       return 1
     }
-    line="Deliverable of the finished work: $deliverable"
+    case "$deliverable" in
+      preserved-branch:*) line="Preserved work: $deliverable" ;;
+      *) line="Deliverable of the finished work: $deliverable" ;;
+    esac
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*) ;;
       *)
@@ -704,6 +710,26 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
   fi
   if [ "${#row_args[@]}" -gt 0 ]; then
     fm_backlog_mutate "$authorized_data" update "$id" "${row_args[@]}" || return 1
+  fi
+  if [ "$preserved_work" = 1 ]; then
+    fm_backlog_row_probe "$data" "$id" || return 1
+    case "$FM_BACKLOG_ROW_HOLD_KIND" in
+      ''|external)
+        preserved_branch=${deliverable#preserved-branch:}
+        case "$preserved_branch" in
+          *'; remaining:'*)
+            remaining=${preserved_branch#*; remaining: }
+            preserved_branch=${preserved_branch%%; remaining:*}
+            hold_reason="Preserved branch $preserved_branch; remaining: $remaining"
+            ;;
+          *) hold_reason="Preserved branch $preserved_branch requires continued work" ;;
+        esac
+        hold_reason=${hold_reason//(/\[}
+        hold_reason=${hold_reason//)/\]}
+        fm_backlog_mutate "$authorized_data" hold "$id" --kind external \
+          --reason "$hold_reason" || return 1
+        ;;
+    esac
   fi
   fm_backlog_mutate "$authorized_data" reopen "$id"
 }
@@ -942,7 +968,7 @@ fm_backlog_close_marker_path() {  # <state-dir> <id>
 
 fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <expected-id> <state-dir>
   local marker=$1 authorized_data data_resolved expected_id=$3 state=$4
-  local id='' data='' marker_spawn_gen='' cleanup_incomplete=0 mode=close line raw_bytes arg_value
+  local id='' data='' marker_spawn_gen='' cleanup_incomplete=0 mode=close line raw_bytes arg_value note_branch
   local url_tail url_authority url_path url_host url_port host_rest host_label host_valid
   local percent_tail percent_valid
   local id_count=0 data_count=0 spawn_gen_count=0 cleanup_incomplete_count=0 mode_count=0
@@ -1042,7 +1068,11 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
         --note)
           [ "${args[1]}" = "local%20main" ] || {
             [ "$mode" = retain ] && case "${args[1]}" in
-              preserved-branch:*) git check-ref-format "refs/heads/${args[1]#preserved-branch:}" ;;
+              preserved-branch:*)
+                note_branch=${args[1]#preserved-branch:}
+                case "$note_branch" in *'; remaining:'*) note_branch=${note_branch%%; remaining:*} ;; esac
+                git check-ref-format "refs/heads/$note_branch"
+                ;;
               *) false ;;
             esac
           }

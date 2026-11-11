@@ -6023,17 +6023,27 @@ test_status_archive_nested_secondmate_children() {
 # The incident lost the only branch naming unlanded work. Saving must retain
 # both that commit and pending untracked bytes through the public close path.
 test_preserving_close_saves_and_records_branch() {
-  local case_dir saved kind
+  local case_dir saved kind backlog
   for kind in ship scout; do
     case_dir=$(make_case "preserve-$kind")
     write_meta "$case_dir" local-only "$kind"
     seed_backlog_in_flight "$case_dir" "$kind"
+    mkdir -p "$case_dir/data/task-x1"
+    # shellcheck disable=SC2016  # The fixture stores the literal instruction for teardown to update.
+    printf '%s\n' 'First action: create your branch: `git checkout -b fm/task-x1 --`' \
+      > "$case_dir/data/task-x1/brief.md"
     wt_commit_file "$case_dir" committed.txt unlanded
     printf 'pending\n' > "$case_dir/wt/pending.txt"
     printf 'ignored.txt\n' > "$case_dir/wt/.gitignore"
     printf 'scratch\n' > "$case_dir/wt/ignored.txt"
-    run_teardown "$case_dir" --preserve > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    if [ "$kind" = ship ]; then
+      run_teardown "$case_dir" --preserve --residual 'Finish integration checks' \
+        > "$case_dir/stdout" 2> "$case_dir/stderr" \
+        || fail "preserving $kind close with remaining work failed: $(cat "$case_dir/stderr")"
+    else
+      run_teardown "$case_dir" --preserve > "$case_dir/stdout" 2> "$case_dir/stderr" \
       || fail "preserving $kind close failed: $(cat "$case_dir/stderr")"
+    fi
     saved=$(git -C "$case_dir/project" rev-parse refs/heads/fm/task-x1) \
       || fail "preserving close deleted the shared branch"
     [ "$(git -C "$case_dir/project" show "$saved:pending.txt")" = pending ] \
@@ -6044,6 +6054,22 @@ test_preserving_close_saves_and_records_branch() {
       && fail "ignored scratch was committed"
     [ "$(backlog_row_state "$case_dir")" = queued ] || fail "saved work was declared delivered"
     assert_grep 'preserved-branch:fm/task-x1' "$case_dir/data/backlog.md" "missing saved branch note"
+    backlog=$(tasks-axi show task-x1 --file "$case_dir/data/backlog.md" --full)
+    assert_contains "$backlog" 'hold_kind: external' \
+      "preserved $kind work was left ready to dispatch instead of held"
+    if [ "$kind" = ship ]; then
+      assert_contains "$backlog" 'remaining: Finish integration checks' \
+        "--residual was not recorded on the preserved task itself"
+      assert_contains "$backlog" 'hold_reason: "Preserved branch fm/task-x1; remaining: Finish integration checks"' \
+        "the visible hold did not name the saved branch and remaining work"
+      if tasks-axi show task-x1-residual --file "$case_dir/data/backlog.md" >/dev/null 2>&1; then
+        fail "--preserve --residual created a separate residual task"
+      fi
+    fi
+    if [ "$kind" = ship ]; then
+      assert_grep 'git checkout fm/task-x1 --' "$case_dir/data/task-x1/brief.md" \
+        "preserved task brief still tries to create its existing branch"
+    fi
     assert_absent "$case_dir/state/task-x1.meta" "preserving close left worker metadata"
   done
   pass "preserving ship/scout close saves pending files and retains unlanded branch in backlog"
