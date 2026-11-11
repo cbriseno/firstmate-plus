@@ -71,7 +71,7 @@ FM_FLOW_JQ_DEFS='
        declared_state:($declaration.state // null),
        presentation:($record.presentation
          | {card_title, card_status, group, summary, waiting_for, next_action,
-            progress, phase, request, outcome}),
+            progress, phase, request, outcome, closure}),
        presentation_evidence:($record.presentation_evidence // null),
        waiting_for:($record.presentation.waiting_for //
          (if ($waiting | length) > 0 then ($deps | map(select(.unresolved) | .title) | join(", ")) else null end)),

@@ -259,6 +259,34 @@ test_wrapper_single_home() {
   pass "fm-tasks-axi.sh keeps the single-home layout addressing its own code-root backlog"
 }
 
+test_wrapper_cancel() {
+  local dir out
+  dir=$(make_split wrapper-cancel)
+  wrapper_from_code "$dir" add cancelled-1 "Cancel example" --repo firstmate >/dev/null || fail "add failed"
+  wrapper_from_code "$dir" presentation cancelled-1 --card-status "Validando promoción por lote" >/dev/null || fail "presentation failed"
+  wrapper_from_code "$dir" cancel cancelled-1 --reason "Cancelado por el capitán" >/dev/null || fail "cancel failed"
+  out=$(wrapper_from_code "$dir" presentation cancelled-1)
+  printf '%s' "$out" | jq -e '
+    .presentation.closure.kind == "cancelled" and
+    .presentation.closure.reason == "Cancelado por el capitán" and
+    (.presentation.closure.at | fromdateiso8601 > 0) and
+    .presentation.card_status == "Cancelada" and .presentation.progress == null
+  ' >/dev/null || fail "cancelled presentation lost reason or retained worker status"
+  out=$(wrapper_from_code "$dir" work snapshot)
+  printf '%s' "$out" | jq -e '.tasks[] | select(.key == "task:cancelled-1") |
+    .state == "done" and .closure.kind == "cancelled" and .progress == null and .outcome == null
+  ' >/dev/null || fail "cancelled snapshot is not closed without delivery"
+  out=$(printf '{"records":[{"id":"cancelled-1","state":"done"}]}' |
+    FM_HOME="$dir/home" python3 "$ROOT/bin/fm_delivery.py" enrich-times --data "$dir/home/data")
+  printf '%s' "$out" | jq -e '.records[0] | .closure.kind == "cancelled" and
+    .activity == "cancelled" and .delivery_available == false and .delivered_time == null and
+    .presentation.card_status == "Cancelada"' >/dev/null || fail "Deck projection retained delivery"
+  wrapper_from_code "$dir" reopen cancelled-1 >/dev/null || fail "reopen failed"
+  out=$(wrapper_from_code "$dir" presentation cancelled-1)
+  printf '%s' "$out" | jq -e '.presentation.closure == null' >/dev/null || fail "reopen retained cancellation"
+  pass "cancel closes with reason, clears worker presentation and delivery in Deck snapshot, and reopen clears closure"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -270,6 +298,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refuses_add_start
 test_wrapper_refuses_captain_hold
   test_wrapper_single_home
+  test_wrapper_cancel
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi

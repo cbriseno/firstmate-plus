@@ -669,9 +669,9 @@ class Owner:
                 blocked_by=blocks, frees=dict(direct=[], chain_count=0), root_blocker=next((b['ref'] for b in blocks if b['open']), None),
                 question=dict(origin_task='task:' + origin[1] if origin else None, open=bool(hold and hold.get('kind') == 'captain' and row['state'] != 'done'), call=call, answer=self.captain_answers.get(task_id), asked=time_value(hold_set, 'captain_hold')),
                 recorded_answers=self.answers_by_origin.get(task_id, []),
-                progress=progress, declared_progress=declared_progress, progress_evidence=lifecycle['evidence'],
+                progress=None if p.get('closure') else progress, declared_progress=None if p.get('closure') else declared_progress, progress_evidence=lifecycle['evidence'],
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],
-                request=p.get('request'), outcome=p.get('outcome'), outcome_occurrence=authored.get('outcome_occurrence'),
+                closure=p.get('closure'), delivery_available=False if p.get('closure') else None, request=p.get('request'), outcome=None if p.get('closure') else p.get('outcome'), outcome_occurrence=authored.get('outcome_occurrence'),
                 created=(facts['created'].get(task_id) if facts is not None else task_creation(self.data, row)) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
                 completed=time_value(receipt['value'], 'completion') if receipt else time_value(row.get('closed'), 'backlog.closed') if row['state'] == 'done' else None,
                 rev=self.rev))

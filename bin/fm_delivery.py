@@ -300,6 +300,8 @@ def local_artifact(task):
 
 def completion_receipt(home, task):
     """A successful owner close, bound to the same retained completion/artifact."""
+    if task.get('closure'):
+        return None
     try:
         value = json.loads(read_text(home, 'data/' + task['id'] + '/completion.json', 8192))
         completion = task.get('completion') or {}
@@ -498,6 +500,10 @@ def retained_history(home, *, include_non_deliveries=False):
         for task in result['records']:
             authored = read_presentation(home, task['id'])
             task['presentation'] = authored['presentation']
+            task['closure'] = authored['presentation'].get('closure')
+            if task['closure']:
+                task.update(delivery_available=False, delivered_time=None, activity='cancelled',
+                            pr_url=None, report_path=None, local_note=None, card_time=None)
             task['presentation_evidence'] = authored['evidence']
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         result['complete'] = False
@@ -636,7 +642,7 @@ PRESENTATION_BOUNDS = dict(summary=2000, waiting_for=2000, next_action=2000,
 REQUEST_BOUNDS = dict(id=80, label=80, project=80)
 OUTCOME_ROLES = ('step', 'partial', 'final')
 OUTCOME_REVIEWS = ('needed', 'done')
-PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase', 'request', 'outcome')
+PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase', 'request', 'outcome', 'closure')
 
 
 def plain_line(text, limit):
@@ -648,6 +654,13 @@ def presentation_fields(value):
     if not isinstance(value, dict) or set(value) - set(PRESENTATION_FIELDS):
         raise ValueError('presentation accepts only ' + ', '.join(PRESENTATION_FIELDS))
     for key, text in value.items():
+        if key == 'closure':
+            if text is not None:
+                if (not isinstance(text, dict) or set(text) != {'kind', 'reason', 'at'}
+                        or text['kind'] != 'cancelled' or not plain_line(text['reason'], 2000)):
+                    raise ValueError('closure requires cancelled kind, reason and UTC instant')
+                dt.datetime.strptime(text['at'], '%Y-%m-%dT%H:%M:%SZ')
+            continue
         if key == 'phase':
             if text is not None and text not in PHASES:
                 raise ValueError('invalid progress phase')
@@ -705,6 +718,9 @@ def read_presentation(home, task_id, data=None, verify=True, reader=read_text):
                 or value.get('id') != task_id or value.get('source') != 'task.owner.declaration'):
             raise ValueError('invalid presentation declaration identity')
         fields = presentation_fields(value['presentation'])
+        if fields.get('closure'):
+            fields = dict(fields, card_status='Cancelada', summary=fields['closure']['reason'],
+                          waiting_for=None, next_action=None, progress=None, phase=None, outcome=None)
         dt.datetime.strptime(value['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
         occurrence = value.get('outcome_occurrence', 'legacy:' + value['observed_at']) if fields.get('outcome') else None
         if occurrence is not None and not plain_line(occurrence, 128):
@@ -996,6 +1012,8 @@ def ledger_call(home, args):
 def presentation(home, args):
     patch = {key: getattr(args, key) or None for key in PRESENTATION_FIELDS
              if getattr(args, key, None) is not None}
+    if getattr(args, 'clear_closure', False):
+        patch['closure'] = None
     if args.groups:
         if args.task or patch or args.clear or args.presentation_file or args.repair or args.reconcile or args.replan:
             raise ValueError('--groups is a home-wide read; it takes no task or field flags')
@@ -1097,6 +1115,8 @@ def presentation(home, args):
             record = dict(reported_at=None, status_token=None, context=context,
                           head=code_head(meta), gates=view['gates'])
         fields['progress'] = view['progress']
+        if fields.get('closure') is None:
+            fields.pop('closure', None)
         value = dict(schema='fm-task-presentation.v1', home=str(home), id=args.task,
                      presentation=fields, outcome_occurrence=occurrence, progress_record=record,
                      source='task.owner.declaration', observed_at=stamp)
@@ -1127,12 +1147,13 @@ def main():
             print('fm-tasks-axi: owner publication failed: ' + str(exc), file=sys.stderr)
             return 2
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'ledger-call', 'ledger-application', 'ledger-task', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
+    parser.add_argument('command', choices=['history', 'explain', 'activity', 'presentation', 'cancel', 'ledger-call', 'ledger-application', 'ledger-task', 'progress-check', 'progress-contract', 'record-completion', 'enrich-times', 'invalidate-completion'])
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--task')
     parser.add_argument('--request-id')
     parser.add_argument('--status', action='store_true')
     parser.add_argument('--state', choices=['coordinating', 'waiting', 'idle'])
+    parser.add_argument('--reason')
     parser.add_argument('--summary')
     parser.add_argument('--waiting-for', dest='waiting_for')
     parser.add_argument('--next-action', dest='next_action')
@@ -1146,6 +1167,7 @@ def main():
     parser.add_argument('--reconcile', action='store_true')
     parser.add_argument('--replan')
     parser.add_argument('--clear', action='store_true')
+    parser.add_argument('--clear-closure', action='store_true')
     parser.add_argument('--ttl', type=int, default=300)
     parser.add_argument('--data')
     args = parser.parse_args()
@@ -1175,6 +1197,24 @@ def main():
             result, rc = retained_history(home), 0
         elif args.command == 'activity':
             result, rc = activity(home, args), 0
+        elif args.command == 'cancel':
+            presentation_path(home, args.task, args.data)
+            if not plain_line(args.reason, 2000):
+                raise ValueError('cancel requires a plain reason of 1..2000 characters')
+            current = read_presentation(home, args.task, args.data)
+            if (current.get('evidence') or {}).get('available') is False:
+                raise ValueError('invalid existing presentation')
+            subprocess.run(['tasks-axi', 'done', args.task, '--note', args.reason], check=True,
+                           stdout=sys.stderr)
+            args.closure = dict(kind='cancelled', reason=args.reason,
+                                at=dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+            previous = current['presentation'].get('closure')
+            if previous and previous['reason'] == args.reason:
+                args.closure = previous
+            result = presentation(home, args)
+            invalidate_completion(home, args.task)
+            fleet_event(home, 'task.changed', args.task, dict(task=ledger_rows(home)[args.task]))
+            rc = 0
         elif args.command == 'presentation':
             result, rc = presentation(home, args), 0
         elif args.command == 'record-completion':
@@ -1193,6 +1233,10 @@ def main():
             for task in result['records']:
                 authored = read_presentation(home, task.get('id'), args.data)
                 task['presentation'] = authored['presentation']
+                task['closure'] = authored['presentation'].get('closure')
+                if task['closure']:
+                    task.update(delivery_available=False, delivered_time=None, activity='cancelled',
+                                pr_url=None, report_path=None, local_note=None)
                 task['presentation_evidence'] = authored['evidence']
                 call = read_captain_call(task, args.data or str(home / 'data'))
                 if call:

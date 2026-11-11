@@ -69,6 +69,9 @@
 # start/reopen invalidate that receipt. Receipt failures warn without changing
 # a successful backend result; unavailable proof retains date-only history.
 #
+# cancel <id> --reason TEXT closes as done and records presentation.closure
+# {kind:"cancelled",reason:TEXT,at:ISO8601 UTC}; snapshots suppress delivery.
+#
 # Home-owned presentation extension (not a tasks-axi backend mutation):
 #   presentation <id> [--json]                         Read the saved declaration.
 #   presentation <id> [--card-title TEXT] [--card-status TEXT] [--group TEXT]
@@ -510,7 +513,7 @@ case "${1:-}" in
       CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data'
     fi
     ;;
-  done|close|unhold) ACTION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve the attention owner data directory' ;;
+  done|close|cancel|unhold) ACTION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve the attention owner data directory' ;;
 esac
 
 if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
@@ -524,7 +527,7 @@ fi
 
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
 case "${1:-}" in
-  done|close|unhold)
+  done|close|cancel|unhold)
     for action_id in "$@"; do
       case "$action_id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
       [ -e "$ACTION_DATA/$action_id/captain-call.json" ] || [ -L "$ACTION_DATA/$action_id/captain-call.json" ] || continue
@@ -561,6 +564,12 @@ case "${1:-}" in
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
     exit $?
     ;;
+  cancel)
+    [ "$#" -eq 4 ] && [ "$3" = --reason ] && [ -n "$4" ] || fail 'cancel requires <id> --reason TEXT'
+    export FM_HOME
+    run_owner python3 "$SCRIPT_DIR/fm_delivery.py" cancel --task "$2" --reason "$4" --data "$DATA"
+    exit $?
+    ;;
   done|close)
     case "${2:-}" in
       ''|-*) exec tasks-axi ${ARGS[@]+"${ARGS[@]}"} ;;
@@ -586,7 +595,11 @@ case "${1:-}" in
   start|reopen)
     run_owner tasks-axi ${ARGS[@]+"${ARGS[@]}"}
     result=$?
-    [ "$result" -ne 0 ] || fm_backlog_invalidate_completion "$DATA" "${2:-}"
+    if [ "$result" -eq 0 ]; then
+      fm_backlog_invalidate_completion "$DATA" "${2:-}"
+      export FM_HOME
+      run_owner python3 "$SCRIPT_DIR/fm_delivery.py" presentation --task "${2:-}" --data "$DATA" --clear-closure
+    fi
     exit "$result"
     ;;
 esac
