@@ -655,6 +655,8 @@
 #   identity is owned by the parent home that holds its task metadata, while the
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
+# Every repository worker launch pins public user.name/user.email locally from
+# the project configuration, falling back to the home (fm-git-identity.sh).
 # FM_SPAWN_EXTENSION is an optional trusted shell file, empty by default.
 # It may define fm_spawn_extension for publisher-check, git-hook-args and launch.
 # git-hook-args may append to strip_args; launch may update LAUNCH.
@@ -5444,6 +5446,10 @@ fi
 # tab's original project directory.
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
+
+if [ "$KIND" != host ]; then
+  "$FM_ROOT/bin/fm-git-identity.sh" "$WT" "$PROJ_ABS" "$FM_HOME" || exit 1
+fi
 
 # Pre-register Claude's workspace trust for the directory this launch starts in,
 # at the first point that directory is known and before any per-task state is

@@ -32,6 +32,8 @@ make_case() {
   touch "$HOME_DIR/state/.last-watcher-beat"
   git init --quiet -b main "$PROJECT_DIR"
   printf 'base\n' > "$PROJECT_DIR/README.md"
+  git -C "$PROJECT_DIR" config user.name "Project Public"
+  git -C "$PROJECT_DIR" config user.email public@example.invalid
   git -C "$PROJECT_DIR" add README.md
   git -C "$PROJECT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
   git clone --quiet --bare "$PROJECT_DIR" "$ORIGIN_DIR"
@@ -130,11 +132,40 @@ test_local_only_startup_with_disposable_terminal() {
   expect_code 0 "$status" "local-only startup should succeed: $out"
   assert_present "$HOME_DIR/state/$id.meta" "local-only startup did not publish its task record"
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$HOME_DIR/state/$id.git-hooks" \
-    git -C "$POOL_DIR" -c user.name=cbriseno -c user.email=4805447+cbriseno@users.noreply.github.com \
-      commit --quiet --allow-empty -m 'Exercise local task hooks' || fail "local-only commit could not run its installed hooks"
+    git -C "$POOL_DIR" commit --quiet --allow-empty -m 'Exercise local task hooks' || fail "local-only commit could not run its installed hooks"
+  assert_equals 'Project Public <public@example.invalid>|Project Public <public@example.invalid>' \
+    "$(git -C "$POOL_DIR" show -s --format='%an <%ae>|%cn <%ce>')" "spawn pins author and committer"
   pass "local-only startup publishes task metadata and commits through the installed hooks without a provider call"
 }
 
+test_identity_fallback_and_stale_copy() {
+  local id=identity-fallback-r1 out status
+  make_case identity-fallback "$id" local-only
+  git init --quiet "$HOME_DIR"
+  git -C "$HOME_DIR" config user.name 'Home Public'
+  git -C "$HOME_DIR" config user.email home@example.invalid
+  git -C "$PROJECT_DIR" config --unset user.name
+  git -C "$PROJECT_DIR" config --unset user.email
+  git -C "$POOL_DIR" config extensions.worktreeConfig true
+  git -C "$POOL_DIR" config --worktree user.name Codex
+  git -C "$POOL_DIR" config --worktree user.email codex@openai.com
+  sed -i.bak 's/Delivery contract: mode=direct-PR forge=external/Delivery contract: mode=local-only/' "$HOME_DIR/data/$id/brief.md"
+  out=$(run_spawn "$id" --mode local-only --yolo off); status=$?
+  expect_code 0 "$status" "home identity fallback should launch: $out"
+  git -C "$POOL_DIR" commit --quiet --allow-empty -m 'Home identity fallback' || fail 'fallback commit failed'
+  assert_equals 'Home Public <home@example.invalid>|Home Public <home@example.invalid>' \
+    "$(git -C "$POOL_DIR" show -s --format='%an <%ae>|%cn <%ce>')" 'home fallback replaces stale worktree identity'
+  git -C "$HOME_DIR" config --unset user.name
+  git -C "$HOME_DIR" config --unset user.email
+  git -C "$PROJECT_DIR" config --unset user.name
+  git -C "$PROJECT_DIR" config --unset user.email
+  out=$(bash "$ROOT/bin/fm-git-identity.sh" "$POOL_DIR" "$PROJECT_DIR" "$HOME_DIR" 2>&1); status=$?
+  [ "$status" -ne 0 ] || fail 'missing public configuration was accepted'
+  assert_contains "$out" 'configure public git' 'missing identity explains configuration needed'
+  pass 'home fallback replaces a stale worktree identity and missing identity refuses'
+}
+
+test_identity_fallback_and_stale_copy
 test_spawn_refusals_before_launch
 test_spawn_keeps_the_normal_push_guard
 test_local_only_startup_with_disposable_terminal
