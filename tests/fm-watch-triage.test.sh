@@ -782,12 +782,12 @@ test_undeclared_worker_turnend_wakes_once() {
     fi
     watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
     pid=$!
+    # Complete startup for every variant, including progress without a turn-end.
+    # Cold-start reconciliation is not part of the signal delivery budget.
+    wait_poll_cycle "$state" "$pid" \
+      || { reap "$pid"; fail "$variant watcher did not arm: $(cat "$out")"; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant woke before turn-end"; }
     if [ "$variant" != progress ]; then
-      # Arm before the worker ends its turn. Cold-start reconciliation can cost
-      # more than the exit budget; wait for a full cycle before testing delivery.
-      wait_poll_cycle "$state" "$pid" \
-        || { reap "$pid"; fail "$variant watcher did not arm: $(cat "$out")"; }
-      [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant woke before turn-end"; }
       : > "$state/task.turn-ended"
     fi
     case "$variant" in
