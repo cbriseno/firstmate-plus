@@ -4,7 +4,11 @@
 # Usage:
 #   fm-inactive-reconcile.sh scan [--startup]
 #   fm-inactive-reconcile.sh report <task-id>
+#   fm-inactive-reconcile.sh cleanup-report
 #   fm-inactive-reconcile.sh acknowledge <fingerprint>
+#   fm-inactive-reconcile.sh disposition <fingerprint> closed|retained|blocked [reason]
+# Use the fingerprint from `cleanup-disposition:<fingerprint>`; closed requires
+# task metadata and status to be gone, while retained and blocked require a reason.
 #
 # This is an adjunct to the existing watcher poll loop and session-start path,
 # not a watcher, daemon, PR poll, or forge client of its own.
@@ -88,11 +92,15 @@
 # only after its corresponding inactive-outcome wake is handled.
 # A pending main-home presentation is reminded at most once every four hours;
 # acknowledgement stops reminders. A new terminal ledger event is independent.
+# Acknowledging presentation does not close the worker's cleanup obligation.
+# The presented receipt remains until the owner records closed, retained, or
+# blocked; scans keep the unresolved disposition on the ordinary check queue.
 # A receipt is intentionally independent of .hb-surfaced-* bookkeeping.
 #
 # New fm-terminal-outcome.v1 receipts contain schema, fingerprint, task_id,
 # incarnation, state, outcome_key, origin, phase, pr, created_epoch, and
-# notice_emitted, plus optional status_head, presentation_epoch, and ledger_claim fields. The
+# notice_emitted, plus optional status_head, presentation_epoch, ledger_claim,
+# cleanup_disposition, and cleanup_reason fields. The
 # inactive-path fingerprint binds the spawn incarnation, task id, terminal
 # state, and PR text, plus the terminal ledger event in a main home, so a child that keeps
 # appending routine prose after one terminal outcome yields at most one parent
@@ -276,6 +284,40 @@ publish_actionable() { # <key> <payload>
   queue_key_exists "$key" && return 1
   fm_wake_append check "$key" "$payload" || return 2
   printf 'actionable: %s\n' "$payload"
+}
+
+cleanup_payload() { # <record>
+  printf 'actionable: finished worker still needs a cleanup disposition: task=%s state=%s fingerprint=%s\n' \
+    "$(record_value "$1" task_id)" "$(record_value "$1" state)" "$(record_value "$1" fingerprint)"
+}
+
+queue_cleanup_disposition() { # <record>
+  local record=$1 fingerprint key payload disposition
+  fingerprint=$(record_value "$record" fingerprint)
+  disposition=$(record_value "$record" cleanup_disposition)
+  [ -z "$disposition" ] || return 0
+  key="cleanup-disposition:$fingerprint"
+  payload=$(cleanup_payload "$record")
+  payload=${payload#actionable: }
+  publish_actionable "$key" "$payload" || { [ "$?" -eq 1 ] && return 0; return 1; }
+}
+
+publish_cleanup_dispositions() {
+  local record rc=0
+  for record in "$OUTCOME_DIR"/*.presented; do
+    [ -f "$record" ] && [ ! -L "$record" ] || continue
+    queue_cleanup_disposition "$record" || rc=$?
+  done
+  return "$rc"
+}
+
+report_cleanup_dispositions() {
+  local record
+  for record in "$OUTCOME_DIR"/*.presented; do
+    [ -f "$record" ] && [ ! -L "$record" ] || continue
+    [ -z "$(record_value "$record" cleanup_disposition)" ] || continue
+    cleanup_payload "$record"
+  done
 }
 
 queue_notice_once() { # <record> <key> <payload>
@@ -736,6 +778,7 @@ scan() {
   if [ "$startup" != 1 ] && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
     return 0
   fi
+  publish_cleanup_dispositions || true
   cursor=$(scan_marker_cursor)
   valid_id "$cursor" || cursor=''
   write_scan_marker "$cursor" || return 1
@@ -767,7 +810,36 @@ acknowledge() { # <fingerprint>
   [ -f "$pending" ] && [ ! -L "$pending" ] || return 0
   phase=$(record_value "$pending" phase)
   [ "$phase" = presentation ] || return 0
-  mv -f "$pending" "$presented"
+  mv -f "$pending" "$presented" || return 1
+  queue_cleanup_disposition "$presented"
+}
+
+disposition() { # <fingerprint> <closed|retained|blocked> [reason]
+  local fingerprint=$1 value=$2 reason=${3:-} record task
+  case "$fingerprint" in ''|*[!A-Fa-f0-9]*) return 2 ;; esac
+  case "$value" in closed|retained|blocked) ;; *) return 2 ;; esac
+  record=$(record_path "$fingerprint" presented)
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  task=$(record_value "$record" task_id)
+  if [ "$value" = closed ]; then
+    if [ -e "$STATE/$task.meta" ] || [ -L "$STATE/$task.meta" ]; then
+      printf 'cleanup disposition: task %s still has metadata; teardown has not closed it\n' "$task" >&2
+      return 1
+    fi
+    if [ -e "$STATE/$task.status" ] || [ -L "$STATE/$task.status" ]; then
+      printf 'cleanup disposition: task %s still has status; teardown has not closed it\n' "$task" >&2
+      return 1
+    fi
+    record_field_set "$record" cleanup_reason '' || return 1
+  else
+    reason=$(clean_field "$reason")
+    [ -n "$reason" ] || {
+      printf 'cleanup disposition: %s requires a reason\n' "$value" >&2
+      return 2
+    }
+    record_field_set "$record" cleanup_reason "$reason" || return 1
+  fi
+  record_field_set "$record" cleanup_disposition "$value"
 }
 
 acknowledge_notice() { # <fingerprint>
@@ -811,6 +883,11 @@ case "$mode" in
     fi
     report_child "$2"
     ;;
+  cleanup-report)
+    fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
+    trap 'fm_lock_release "$SCAN_LOCK"' EXIT
+    report_cleanup_dispositions
+    ;;
   acknowledge)
     [ "$#" -eq 2 ] || { printf 'usage: fm-inactive-reconcile.sh acknowledge <fingerprint>\n' >&2; exit 2; }
     fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
@@ -822,6 +899,15 @@ case "$mode" in
     fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     acknowledge_notice "$2"
+    ;;
+  disposition)
+    [ "$#" -ge 3 ] && [ "$#" -le 4 ] || {
+      printf 'usage: fm-inactive-reconcile.sh disposition <fingerprint> closed|retained|blocked [reason]\n' >&2
+      exit 2
+    }
+    fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
+    trap 'fm_lock_release "$SCAN_LOCK"' EXIT
+    disposition "$2" "$3" "${4:-}"
     ;;
   -h|--help)
     sed -n '2,40{s/^# \{0,1\}//;p;}' "$0"

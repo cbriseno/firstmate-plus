@@ -379,6 +379,29 @@ EOF
   pass "fm-startup-network: an actionable state=done report still queues a wake"
 }
 
+test_startup_report_lists_unresolved_cleanup_dispositions() {
+  local rec home root log report
+  rec=$(new_world unresolved-cleanup)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  mkdir -p "$home/state/terminal-outcomes"
+  cat > "$home/state/terminal-outcomes/abcdef0123456789abcdef0123456789.presented" <<'EOF'
+schema=fm-terminal-outcome.v1
+fingerprint=abcdef0123456789abcdef0123456789
+task_id=host1
+state=done
+phase=presentation
+EOF
+  printf '%s\n' $$ > "$home/state/.lock"
+  FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" run --locked 1
+  report=$(run_stage "$home" "$root" report)
+  assert_contains "$report" \
+    'finished worker still needs a cleanup disposition: task=host1 state=done fingerprint=abcdef0123456789abcdef0123456789' \
+    "startup report omitted the unresolved worker cleanup: $report"
+  pass "fm-startup-network: startup report keeps unresolved cleanup visible after acknowledgement"
+}
+
 test_deferred_invalid_secondmate_markers_queue_durable_findings() {
   local kind rec home root log target report err seq generation
   for kind in malformed symlink; do
@@ -866,6 +889,7 @@ test_a_claimant_crash_after_publish_still_queues_the_wake
 test_a_report_publication_failure_is_failed_and_still_wakes
 test_a_successful_result_never_queues_a_wake
 test_an_actionable_successful_result_still_queues_a_wake
+test_startup_report_lists_unresolved_cleanup_dispositions
 test_deferred_invalid_secondmate_markers_queue_durable_findings
 test_mutating_sweeps_are_refused_when_the_lock_changed_hands
 test_the_stage_bound_is_reported_not_swallowed

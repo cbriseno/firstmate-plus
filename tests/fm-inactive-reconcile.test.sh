@@ -173,7 +173,41 @@ test_main_direct_terminal_presentation_receipt() {
   [ -n "$seq" ] && [ -n "$generation" ] || fail "main presentation did not require durable acknowledgement"
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$DRAIN" --ack-through "$seq" --recovery-generation "$generation"
   [ "$(outcome_count "$MAIN" presented)" = 1 ] || fail "acknowledged presentation did not receive its own receipt"
+  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 1 ] || fail "acknowledging the result did not surface cleanup"
   pass "main direct terminal presentation has a durable receipt"
+}
+
+test_cleanup_disposition_requires_close_or_reason() {
+  local record fingerprint err
+  make_world cleanup-disposition
+  write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup >/dev/null
+  record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' | head -1)
+  fingerprint=$(sed -n 's/^fingerprint=//p' "$record")
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" acknowledge "$fingerprint"
+  record=${record%.pending}.presented
+  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 1 ] || fail "acknowledged outcome did not create a cleanup wake"
+
+  err="$WORLD/disposition.err"
+  if FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" closed 2>"$err"; then
+    fail "cleanup was marked closed while the task record still existed"
+  fi
+  grep -F 'teardown has not closed it' "$err" >/dev/null || fail "closed refusal did not explain its gate"
+  if FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" retained 2>"$err"; then
+    fail "retention without a reason was accepted"
+  fi
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" blocked 'teardown refused: dirty worktree'
+  grep -Fxq 'cleanup_disposition=blocked' "$record" || fail "blocked disposition was not recorded"
+  grep -Fxq 'cleanup_reason=teardown refused: dirty worktree' "$record" || fail "teardown refusal was not retained"
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" FM_INACTIVE_RECONCILE_NOW="$(date +%s)" \
+    PATH="$WORLD/fakebin:$PATH" FM_INACTIVE_RECONCILE_SECS=60 \
+    FM_INACTIVE_CREW_STATE_BIN="$WORLD/fakebin/fm-crew-state.sh" "$RECON" scan --startup >/dev/null
+  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 1 ] || fail "recorded blocker was re-announced"
+
+  rm -f -- "$MAIN/state/child.meta" "$MAIN/state/child.status"
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" closed
+  grep -Fxq 'cleanup_disposition=closed' "$record" || fail "successful teardown could not close the disposition"
+  pass "cleanup remains actionable until teardown closes it or a reasoned disposition is recorded"
 }
 
 test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes() {
@@ -1169,6 +1203,7 @@ test_idle_in_flight_call_that_cannot_open_is_reported_once() {
 }
 
 test_main_direct_terminal_presentation_receipt
+test_cleanup_disposition_requires_close_or_reason
 test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published
