@@ -833,6 +833,7 @@ test_keep_running_closes_records_but_leaves_endpoint_and_copy() {
   mkdir -p "$case_dir/tasktmp"
   mkdir -p "$case_dir/wt/.claude"
   printf '{}\n' > "$case_dir/wt/.claude/settings.local.json"
+  printf '{"hooks":{}}\n' > "$case_dir/state/task-x1.claude-settings.json"
   log_endpoint_and_copy_calls "$case_dir"
   ( cd "$case_dir/wt" && exec sleep 300 ) &
   pid=$!
@@ -857,8 +858,10 @@ test_keep_running_closes_records_but_leaves_endpoint_and_copy() {
   assert_present "$case_dir/tasktmp" "residual-keep-running: the running agent's temp root was removed"
   git -C "$case_dir/project" rev-parse --verify -q refs/heads/fm/task-x1 >/dev/null \
     || fail "residual-keep-running: the kept copy's branch was deleted"
-  assert_absent "$case_dir/wt/.claude/settings.local.json" \
-    "residual-keep-running: firstmate's turn-end wiring was left in the kept copy"
+  assert_present "$case_dir/wt/.claude/settings.local.json" \
+    "residual-keep-running: teardown removed repository-local Claude settings"
+  assert_absent "$case_dir/state/task-x1.claude-settings.json" \
+    "residual-keep-running: firstmate's turn-end settings were left behind"
   body=$(residual_row_field "$case_dir" body)
   assert_contains "$body" "endpoint firstmate:fm-task-x1 on tmux, local copy $case_dir/wt" \
     "residual-keep-running: the residual does not name the kept endpoint and copy"

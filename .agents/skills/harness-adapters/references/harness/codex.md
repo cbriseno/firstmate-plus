@@ -29,9 +29,9 @@ For the hook-review dialog observed on macOS, Down then Enter selected the accep
 Use that sequence only with operator approval covering the displayed hooks, through a backend that supports arrow keys; the supervisor cannot grant this security consent itself.
 If the choice or approval is unclear, leave the dialog for the operator rather than sending blind keys.
 Writing Codex's own trust store to pre-accept it would manufacture an operator consent that was never given.
-So crewmate and scout launches request that Codex disable its hook layer (`bin/fm-spawn.sh`'s launch template owns the flag), which is the opposite of `--dangerously-bypass-hook-trust` - that flag RUNS the untrusted hooks.
-A managed policy can override the requested disablement, so a worker can still encounter a policy-provided hook or its review; Firstmate does not modify the operator's Codex settings to bypass either outcome.
-A crewmate loses nothing: its turn-end signal is the `-c notify=` program on the same launch, and the Firstmate hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
+Firstmate ship and scout launches preserve the normal hook layers; Codex may stop at this review until the operator decides whether to trust the displayed hooks.
+Firstmate does not modify the operator's Codex settings, write hook trust, or bypass the review.
+The turn-end signal is the `-c notify=` program on the same launch, and Firstmate's hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
 A secondmate is a primary in its own home and keeps its hooks, so hook review there can also require the operator's scoped consent.
 
 ## Fresh host-task folders

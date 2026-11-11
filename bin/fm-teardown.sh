@@ -3753,7 +3753,7 @@ cleanup_firstmate_home_children() {
         if [ "$child_kind" = scout ]; then
           teardown_backup_scout "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
         fi
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+        rm -f "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
@@ -3775,7 +3775,7 @@ cleanup_firstmate_home_children() {
         if [ "$child_kind" = scout ]; then
           teardown_backup_scout "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
         fi
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+        rm -f "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.opencode/plugins/fm-busy-state.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
         if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
@@ -4121,7 +4121,7 @@ fi
 if [ "$KEEP_RUNNING" = 1 ]; then
   # Header: --keep-running. Only firstmate's own turn-end wiring leaves the copy.
   if teardown_owns_worktree && [ -d "$WT" ]; then
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    rm -f "$WT/.opencode/plugins/fm-turn-end.js" \
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
     remove_harness_worktree_wiring "$WT"
@@ -4144,7 +4144,7 @@ elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
         exit 1
       fi
     fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    rm -f "$WT/.opencode/plugins/fm-turn-end.js" \
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
     remove_harness_worktree_wiring "$WT"
@@ -4166,8 +4166,8 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
       exit 1
     fi
   fi
-  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+  # Retire task-owned hook wiring so a reused pool worktree cannot fire signals for a dead task.
+  rm -f "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   remove_harness_worktree_wiring "$WT"
   # Kills remaining processes in the worktree (including the agent), resets, returns

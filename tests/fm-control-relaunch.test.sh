@@ -680,16 +680,19 @@ test_harness_switch_moves_the_record_and_clears_prior_wiring() {
   local dir out rc
   dir=$(new_case switch rl4)
   add_ship_task "$dir" rl4 claude
-  # Wiring the previous claude incarnation left in the worktree.
+  # A repository-local settings file belongs to the project and survives relaunch.
   mkdir -p "$dir/wt/.claude"
-  printf '{"hooks":{}}\n' > "$dir/wt/.claude/settings.local.json"
+  printf '{"permissions":{"allow":["Bash(*)"]}}\n' > "$dir/wt/.claude/settings.local.json"
+  printf '{"hooks":{}}\n' > "$dir/home/state/rl4.claude-settings.json"
   printf 'codex' > "$dir/fake/becomes"
   out=$(run_control "$dir" rl4 relaunch --harness codex --note "switching runtime"); rc=$?
   expect_code 0 "$rc" "a harness switch should succeed"$'\n'"$out"
   assert_contains "$out" "harness=codex from=claude" "the outcome should name both harnesses"
   [ "$(meta_field "$dir" rl4 harness)" = codex ] || fail "the record should follow the switch"
-  [ ! -e "$dir/wt/.claude/settings.local.json" ] \
-    || fail "the previous harness's per-task wiring must be cleared on a switch"
+  [ ! -e "$dir/home/state/rl4.claude-settings.json" ] \
+    || fail "the previous harness's firstmate-owned settings file must be cleared on a switch"
+  assert_grep 'Bash(\*)' "$dir/wt/.claude/settings.local.json" \
+    "relaunch removed the repository's native local settings"
   assert_grep "codex" "$dir/fake/literal" "the replacement launch should be the new harness"
   [ "$(journal_field "$dir" rl4 from_harness)" = claude ] || fail "the journal should record the origin harness"
   [ "$(journal_field "$dir" rl4 to_harness)" = codex ] || fail "the journal should record the target harness"
@@ -1135,8 +1138,7 @@ test_wiring_removal_failure_refuses_before_replacement_arm() {
   local dir hook out rc real_rm
   dir=$(new_case wiring-failure rl29)
   add_ship_task "$dir" rl29 claude
-  hook="$dir/wt/.claude/settings.local.json"
-  mkdir -p "${hook%/*}"
+  hook="$dir/home/state/rl29.claude-settings.json"
   printf '{}\n' > "$hook"
   real_rm=$(command -v rm)
   make_rm_failure_stub "$dir"
@@ -1929,8 +1931,8 @@ test_prepublication_abort_retires_replacement_wiring_and_busy_state() {
   expect_code 1 "$rc" "a failed metadata publication should fail closed"$'\n'"$out"
   [ "$(meta_field "$dir" rl28 harness)" = claude ] \
     || fail "a failed publication should retain the prior durable record"
-  [ ! -e "$dir/wt/.claude/settings.local.json" ] \
-    || fail "an aborted replacement should remove its harness wiring"
+  [ ! -e "$dir/home/state/rl28.claude-settings.json" ] \
+    || fail "an aborted replacement should remove its firstmate-owned settings"
   [ ! -e "$dir/home/state/rl28.busy-gen" ] \
     || fail "an aborted replacement should retire its busy generation"
   [ ! -e "$dir/home/state/rl28.busy-state" ] \

@@ -466,9 +466,8 @@
 #     __CLAUDEADDDIRS__ quoted --add-dir flags granting exactly this task's
 #                  Firstmate channel directories (claude_add_dirs_flag below;
 #                  supplies its own trailing space, empty never used)
-#     __CLAUDESETTINGS__ the single claude --settings value: a quoted inline
-#                  JSON object for a crewmate or scout, or a quoted path to
-#                  state/<task-id>.claude-settings.json for a secondmate
+#     __CLAUDESETTINGS__ the quoted path to the firstmate-owned
+#                  state/<task-id>.claude-settings.json passed to Claude
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
@@ -2516,25 +2515,11 @@ launch_template() {
     # naming it is passed. A record that cannot be published stops the spawn.
     printf '%s' '__MODELFLAG____EFFORTFLAG____BRIEFDOORBELL__'
     ;;
-  # --disable hooks (equivalent to -c features.hooks=false) requests that codex
-  # turn its whole lifecycle-hook layer off for CREWMATE and SCOUT launches only.
-  # Without it a crewmate launch parks forever on codex's hook-trust modal
-  # ("N hooks are new or changed"), whose selection sits on "Review hooks" -
-  # neither trusting nor declining. Firstmate's key plane carries Enter, Escape
-  # and Ctrl-C with no arrow navigation, so the selection cannot be moved, and
-  # pre-accepting the prompt by writing codex's own trust store would manufacture
-  # an operator consent that was never given. The hooks it asks about are the
-  # OPERATOR's machine-level ~/.codex/hooks.json plus any project-local
-  # .codex/hooks.json, and a crewmate needs none of them: its turn-end signal is
-  # the -c notify= program on this same launch (verified still firing with hooks
-  # disabled, codex-cli 0.151.0), and firstmate's own .codex/hooks.json registers
-  # PRIMARY-session infrastructure that already stands down in a child worktree.
-  # This is the opposite of --dangerously-bypass-hook-trust, which RUNS untrusted
-  # hooks; when honored, disabling the feature runs none of them and leaves the
-  # operator's ~/.codex untouched. An unknown feature name is a hard codex error, so a future
-  # release that drops this flag stops the launch rather than silently restoring
-  # the modal. A managed policy can override the requested disablement, so its
-  # effective hook state is not guaranteed.
+  # Preserve Codex's normal hook layers for ship and scout workers. Project and
+  # user hooks remain subject to Codex's own trust review; Firstmate never writes
+  # Codex's trust store or bypasses that review. Firstmate's turn-end signal is
+  # the -c notify= program on this same launch, while repository hooks remain
+  # available to the worker under their native trust policy.
   # --approve-for-me uses Codex's automatic approval review with its workspace-write
   # sandbox. When selected, it replaces complete bypass because managed settings
   # can override its approval component while accepting the sandbox bypass. The
@@ -2549,7 +2534,7 @@ launch_template() {
     if [ "$kind" = secondmate ]; then
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     else
-      printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' __OPENCODEBIN__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -5732,15 +5717,11 @@ BUSY_GEN=
     # the ordinary Stop idle hook, without the parent turn-ended touch. Every
     # hook command tolerates a refused event (|| true) so a stale-gen writer
     # can never break Claude's own lifecycle.
-    # A crewmate writes those hooks into the disposable worktree's
-    # .claude/settings.local.json. A secondmate does not: that file in a
-    # persistent home is where Claude Code stores the captain's "don't ask
-    # again" rules, and rewriting it drops them. The secondmate hooks go in
-    # a firstmate-owned state/<id>.claude-settings.json passed through
-    # --settings. Claude Code merges hook entries across settings files
-    # (https://code.claude.com/docs/en/hooks) and keeps any key
-    # the flag omits (https://code.claude.com/docs/en/cli-reference), so the
-    # home's tracked Stop guard and its settings.local.json both stay.
+    # Every task's hooks go in the firstmate-owned state/<id>.claude-settings.json
+    # passed through --settings. Claude Code merges hook entries across settings
+    # files (https://code.claude.com/docs/en/hooks) and keeps any key the flag
+    # omits (https://code.claude.com/docs/en/cli-reference), so the repository's
+    # settings.local.json and project hooks remain intact.
     busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
     busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source claude-hook"
     session_cmd="python3 $(shell_quote "$FM_ROOT/bin/fm_task_sessions.py") bind $(shell_quote "$STATE_REAL") $(shell_quote "$ID") $(shell_quote "$BUSY_GEN")"
@@ -5776,17 +5757,11 @@ BUSY_GEN=
       stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"},$perm_clear_hook]}],"
     fi
     hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"},$perm_clear_hook]}],${stop_entry}${perm_entries}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
-    if [ "$KIND" = secondmate ]; then
-      session_keys='"feedbackDrafts":"off",'
-      if [ "$KEEP_AI_TRAILERS" != 1 ]; then
-        session_keys='"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},'
-      fi
-      printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
-    else
-      mkdir -p "$WT/.claude"
-      printf '{%s}\n' "$hooks_json" >"$WT/.claude/settings.local.json"
-      exclude_path '.claude/settings.local.json'
+    session_keys='"feedbackDrafts":"off",'
+    if [ "$KEEP_AI_TRAILERS" != 1 ]; then
+      session_keys='"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},'
     fi
+    printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
     ;;
   devin)
     if [ "$RAW_LAUNCH" -eq 0 ]; then
@@ -6579,12 +6554,7 @@ LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
-  if [ "$KIND" = secondmate ]; then
-    LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$(shell_quote "$STATE_REAL/$ID.claude-settings.json")}
-  else
-    claude_settings="'{\"feedbackDrafts\":\"off\"__CLAUDEATTRIBUTION__}'"
-    LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
-  fi
+  LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$(shell_quote "$STATE_REAL/$ID.claude-settings.json")}
   ;;
 esac
 LAUNCH=${LAUNCH//__CODEXAPPROVALFLAG__/$CODEX_APPROVAL_FLAG}

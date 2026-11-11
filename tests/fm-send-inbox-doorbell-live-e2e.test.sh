@@ -95,12 +95,9 @@ launch_cmd() {  # <name>
   esac
 }
 
-# codex's crewmate launch in bin/fm-spawn.sh carries --disable hooks because the
-# hook-trust modal ("N hooks are new or changed") opens on "Review hooks" and
-# firstmate's key plane has no arrow navigation to move off it. Without the flag
-# this guard parks on that dialog for the whole timeout and reports the doorbell
-# unhonored, which is a dialog verdict rather than a doorbell one, so pin the
-# switch here instead of letting the codex check go quietly unprovable again.
+# This doorbell-only guard uses a private hook-disabled Codex launch so a native
+# hook-trust review cannot mask the inbox result. Production launches preserve
+# hooks and leave their trust decision to Codex and the operator.
 case "$(launch_cmd codex)" in
   *'--disable hooks'*) ;;
   *) fail 'codex launch recipe lost --disable hooks; the check would park on the hook-trust modal instead of judging the doorbell' ;;

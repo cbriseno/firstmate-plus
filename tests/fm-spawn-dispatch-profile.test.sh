@@ -165,7 +165,7 @@ assert_meta_profile() {
 }
 
 test_no_profile_keeps_claude_profile_defaults() {
-  local rec id out status expected launch
+  local rec id out status launch
   id=profile-off-z1
   rec=$(make_spawn_case profile-off claude "$id")
   read_case_record "$rec"
@@ -177,8 +177,8 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions)
-  [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_contains "$launch" "$HOME_DIR/state/$id.claude-settings.json" \
+    "claude launch did not use its firstmate-owned task settings file"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
 
@@ -690,11 +690,10 @@ test_codex_omits_max_effort_for_unsupported_model() {
   pass "codex omits max for models without the catalog capability"
 }
 
-# Codex parks a crewmate launch forever on its unanswerable hook-trust modal
-# unless the launch turns the hook layer off. These two cases pin the split:
-# a crewmate runs hook-free, a secondmate keeps the project hooks that carry its
-# own primary-session turn-end guard and session-start digest.
-test_codex_crewmate_launch_disables_the_hook_layer() {
+# Firstmate never pre-accepts Codex's hook-trust review. Every launch keeps the
+# native project and user hook layers enabled, with turn-end notification also
+# carried by the launch command.
+test_codex_crewmate_launch_preserves_the_hook_layer() {
   local rec id out status launch
   id=profile-codex-hooks-z4c
   rec=$(make_spawn_case profile-codex-hooks codex "$id")
@@ -705,12 +704,10 @@ test_codex_crewmate_launch_disables_the_hook_layer() {
   status=$?
   expect_code 0 "$status" "codex crewmate spawn should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "--disable hooks" \
-    "codex crewmate launch did not disable the hook layer that blocks it on a trust modal"
-  # The opposite posture: this flag RUNS the untrusted hooks instead of
-  # disabling them, so a launch must never reach for it.
+  assert_not_contains "$launch" "--disable hooks" \
+    "codex crewmate launch disabled the repository's native hook layer"
   assert_not_contains "$launch" "--dangerously-bypass-hook-trust" \
-    "codex crewmate launch ran the operator's untrusted hooks instead of disabling them"
+    "codex crewmate launch bypassed Codex's native hook trust review"
   assert_contains "$launch" "--approve-for-me" \
     "codex crewmate launch did not use automatic approval review"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
@@ -719,7 +716,7 @@ test_codex_crewmate_launch_disables_the_hook_layer() {
   # launch rather than any hook.
   assert_contains "$launch" "notify=" \
     "codex crewmate launch lost the turn-end notify program"
-  pass "a codex crewmate requests no hook layer and keeps its turn-end signal"
+  pass "a codex crewmate preserves native hooks and keeps its turn-end signal"
 }
 
 test_codex_secondmate_launch_keeps_the_hook_layer() {
@@ -736,7 +733,7 @@ test_codex_secondmate_launch_keeps_the_hook_layer() {
   expect_code 0 "$status" "codex secondmate spawn should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
   assert_not_contains "$launch" "--disable hooks" \
-    "codex secondmate launch disabled the project hooks its own primary supervision depends on"
+    "codex secondmate launch disabled its native project hooks"
   assert_contains "$launch" "--approve-for-me" \
     "codex secondmate launch did not use automatic approval review"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
@@ -1822,10 +1819,13 @@ test_batch_forwards_shared_profile_flags() {
 }
 
 test_claude_forwards_firstmate_config_dir_when_set() {
-  local rec id out status launch
+  local rec id out status launch prior settings
   id=profile-claude-cfgdir-z17
   rec=$(make_spawn_case profile-claude-cfgdir claude "$id")
   read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude"
+  prior='{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"printf native"}]}]}}'
+  printf '%s\n' "$prior" > "$WT_DIR/.claude/settings.local.json"
 
   # A creatable path: this spawn now pre-registers workspace trust in that store
   # (bin/fm-claude-trust.sh), so an unwritable directory is a genuine blocker.
@@ -1835,8 +1835,15 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "$CASE_DIR/claude-work" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
+  assert_contains "$launch" "$HOME_DIR/state/$id.claude-settings.json" \
+    "claude launch did not use its firstmate-owned task settings file"
+  [ "$(cat "$WT_DIR/.claude/settings.local.json")" = "$prior" ] \
+    || fail "claude spawn overwrote repository-local settings"
+  settings=$(cat "$HOME_DIR/state/$id.claude-settings.json")
+  printf '%s' "$settings" | jq -e '.feedbackDrafts == "off" and .attribution == {"commit":"","pr":"","sessionUrl":false} and (.hooks.UserPromptSubmit | length > 0)' >/dev/null \
+    || fail "claude's firstmate-owned settings file lost session policy or hooks: $settings"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
 
@@ -2451,7 +2458,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '$2/state/$3.claude-settings.json' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 test_claude_permission_mode_absent_defaults_to_bypass() {
@@ -2672,7 +2679,7 @@ test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_threads_model_and_max_effort
 test_codex_omits_max_effort_for_unsupported_model
-test_codex_crewmate_launch_disables_the_hook_layer
+test_codex_crewmate_launch_preserves_the_hook_layer
 test_codex_secondmate_launch_keeps_the_hook_layer
 test_codex_approval_mode_contract
 test_grok_threads_model_and_reasoning_effort

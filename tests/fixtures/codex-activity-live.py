@@ -17,6 +17,10 @@ state, workspace, home = lab / "home/state", lab / "wt", lab / "codex"
 task = "activity-proof"
 socket = "fm-codex-activity-" + str(os.getpid())
 launch = (lab / "launch").read_text().strip()
+# This guard tests Codex's native rollout activity and Firstmate's notify hook,
+# not Codex project-hook trust. Its private fixture disables only that layer so
+# an unrelated review dialog cannot mask the activity verdict.
+launch = launch.replace("codex ", "codex --disable hooks ", 1)
 brief = lab / "home/data" / task / "launch-brief.md"
 gen = (state / (task + ".busy-gen")).read_text().strip()
 busy_lib = root / "bin/fm-busy-lib.sh"

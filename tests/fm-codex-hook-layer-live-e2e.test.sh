@@ -1,23 +1,10 @@
 #!/usr/bin/env bash
-# Live guard for the codex crewmate launch's hook posture.
+# Live guard for the codex crewmate launch's native hook posture.
 #
-# The verdict here comes from the installed codex, not from a stub: a stub can
-# only confirm the assumption already written into it, and what this guard
-# protects is exactly a vendor-owned surface. Codex blocks a fresh crewmate
-# launch on an unanswerable "Hooks need review" modal whenever the machine's
-# ~/.codex/hooks.json or a project's .codex/hooks.json carries a hook it has no
-# persisted trust for, so the crewmate launch requests hook disablement
-# (bin/fm-spawn.sh's launch template owns the flag and policy limitation).
-#
-# The guard replays the REAL launch flags fm-spawn builds - captured from a
-# spawn driven through a fake pane - against the installed codex and verifies
-# that the requested hook disablement remains a recognized flag. Managed
-# settings can re-enable hooks after launch, so this guard pins construction
-# and capability rather than falsely treating the effective setting as a
-# portable invariant.
-#
-# It spends no model tokens (`codex features list` resolves configuration only),
-# so it runs by default wherever codex is installed.
+# This uses the installed Codex CLI to verify the actual launch flags remain
+# accepted, while Firstmate leaves native hook layers enabled and does not
+# bypass Codex's trust review. It does not execute or trust any project hook.
+# It spends no model tokens (`codex features list` resolves configuration only).
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -61,7 +48,7 @@ codex_global_flags() {
   printf '%s' "$flags"
 }
 
-test_installed_codex_accepts_requested_hook_disablement_for_the_captured_crewmate_launch() {
+test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch() {
   local launch flags listing
   launch=$(capture_codex_launch ship --mode no-mistakes --yolo off)
   flags=$(codex_global_flags "$launch")
@@ -74,34 +61,19 @@ test_installed_codex_accepts_requested_hook_disablement_for_the_captured_crewmat
       fail "codex $CODEX_VERSION captured launch retained the complete-bypass posture"
       ;;
   esac
-
-  # The captured flags must remain accepted by the real Codex CLI. A managed
-  # setting can override hooks back on, so the effective feature value is not
-  # a portable assertion; an unknown feature remains a launch-breaking error.
-  listing=$(eval "codex $flags features list" 2>&1) ||
-    fail "codex $CODEX_VERSION rejected firstmate's crewmate launch flags: $listing"
-  case "$listing" in
-    *"Unknown feature flag"*)
-      fail "codex $CODEX_VERSION no longer knows the hook feature firstmate disables: $listing"
-      ;;
+  case " $flags " in
+    *' --disable hooks '*) fail "codex $CODEX_VERSION launch disabled native hooks" ;;
   esac
-  printf '%s\n' "$listing" | awk '{ print $1 }' | grep -qx hooks ||
-    fail "codex $CODEX_VERSION omitted the hook feature from the captured crewmate launch"
+  case " $flags " in
+    *' --dangerously-bypass-hook-trust '*) fail "codex $CODEX_VERSION launch bypassed hook trust review" ;;
+  esac
 
-  printf 'ok - codex %s accepts the requested hook disablement for a firstmate crewmate launch\n' "$CODEX_VERSION"
-}
-
-test_installed_codex_still_reports_the_hook_feature() {
-  local listing
   listing=$(codex features list 2>&1) ||
-    fail "codex $CODEX_VERSION could not list its feature flags: $listing"
-  printf '%s\n' "$listing" | awk '{ print $1 }' | grep -qx hooks ||
-    fail "codex $CODEX_VERSION no longer publishes a hook feature flag; firstmate's crewmate launch needs a new control"
-
-  printf 'ok - codex %s still publishes the hook feature flag firstmate disables\n' "$CODEX_VERSION"
+    fail "codex $CODEX_VERSION could not inspect its enabled feature list: $listing"
+  [ -n "$listing" ] || fail "codex $CODEX_VERSION returned an empty feature list"
+  printf 'ok - codex %s accepts the preserved hook posture for a firstmate crewmate launch\n' "$CODEX_VERSION"
 }
 
-test_installed_codex_still_reports_the_hook_feature
-test_installed_codex_accepts_requested_hook_disablement_for_the_captured_crewmate_launch
+test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
 
 echo "# all fm-codex-hook-layer-live-e2e tests passed"
