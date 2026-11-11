@@ -2520,21 +2520,20 @@ launch_template() {
   # Codex's trust store or bypasses that review. Firstmate's turn-end signal is
   # the -c notify= program on this same launch, while repository hooks remain
   # available to the worker under their native trust policy.
-  # --approve-for-me uses Codex's automatic approval review with its workspace-write
-  # sandbox. When selected, it replaces complete bypass because managed settings
-  # can override its approval component while accepting the sandbox bypass. The
-  # workspace-write sandbox starts with network access disabled and reviews writes
-  # outside the worktree, so networked operations and external task channels may
-  # need automatic review before they proceed.
+  # The interactive CLI does not expose same-session instruction-source and
+  # skill-activation evidence to Firstmate. Ship/scout workers therefore get an
+  # explicit unsupported notice and a read-only sandbox until that adapter can
+  # collect the evidence before assignment delivery. Secondmates keep their
+  # configured approval posture because they are independent firstmate primaries.
   # A secondmate is a firstmate PRIMARY in its own home, and its turn-end guard,
   # session-start digest, and cd/arm seatbelts are exactly those project hooks
   # (docs/turnend-guard.md, docs/sessionstart-nudge.md, docs/cd-guard.md), so the
-  # secondmate launch deliberately keeps hooks on but shares this approval posture.
+  # secondmate launch deliberately keeps hooks on and its configured approval posture.
   codex)
     if [ "$kind" = secondmate ]; then
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     else
-      printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      printf '%s' '__CODEXACTIVITY__codex --sandbox read-only __MODELFLAG____EFFORTFLAG__ -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' __OPENCODEBIN__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -3783,6 +3782,9 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
       FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID" &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
+      if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
+        printf '\n## Native loader status\nUnsupported: this interactive Codex adapter cannot expose effective instruction sources for the worker or register and activate Claude-format skill roots. This launch is read-only; do not edit project files, and report the limitation before any affected edit.\n'
+      fi &&
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"
       fi
@@ -6352,7 +6354,13 @@ preserve_relaunch_meta() {
   if [ "$RAW_LAUNCH" = 0 ]; then
     case "$HARNESS" in
       claude) echo "approval_mode=$CLAUDE_PERMISSION_MODE" ;;
-      codex) echo "approval_mode=$CODEX_APPROVAL_MODE" ;;
+      codex)
+        if [ "$KIND" = secondmate ]; then
+          echo "approval_mode=$CODEX_APPROVAL_MODE"
+        else
+          echo 'approval_mode=read-only'
+        fi
+        ;;
     esac
   fi
   echo "kind=$KIND"

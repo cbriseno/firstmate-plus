@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Live guard for the codex crewmate launch's native hook posture.
+# Live guard for the Codex crewmate launch's native hook posture and read-only gate.
 #
 # This uses the installed Codex CLI to verify the actual launch flags remain
-# accepted, while Firstmate leaves native hook layers enabled and does not
-# bypass Codex's trust review. It does not execute or trust any project hook.
-# It spends no model tokens (`codex features list` resolves configuration only).
+# accepted, while Firstmate leaves native hook layers enabled, preserves Codex's
+# trust review, and blocks edits because this interactive adapter cannot report
+# same-session native loading evidence. It spends no model tokens.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -53,8 +53,13 @@ test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
   launch=$(capture_codex_launch ship --mode no-mistakes --yolo off)
   flags=$(codex_global_flags "$launch")
   case " $flags " in
-    *' --approve-for-me '*) ;;
-    *) fail "codex $CODEX_VERSION captured launch omitted --approve-for-me" ;;
+    *' --sandbox read-only '*) ;;
+    *) fail "codex $CODEX_VERSION captured launch omitted the native-loader read-only gate" ;;
+  esac
+  case " $flags " in
+    *' --approve-for-me '*|*' --dangerously-bypass-approvals-and-sandbox '*)
+      fail "codex $CODEX_VERSION captured launch allowed edits despite unsupported native loading"
+      ;;
   esac
   case " $flags " in
     *' --dangerously-bypass-approvals-and-sandbox '*)
@@ -68,10 +73,10 @@ test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
     *' --dangerously-bypass-hook-trust '*) fail "codex $CODEX_VERSION launch bypassed hook trust review" ;;
   esac
 
-  listing=$(codex features list 2>&1) ||
-    fail "codex $CODEX_VERSION could not inspect its enabled feature list: $listing"
+  listing=$(codex --sandbox read-only features list 2>&1) ||
+    fail "codex $CODEX_VERSION rejected the read-only worker launch flags: $listing"
   [ -n "$listing" ] || fail "codex $CODEX_VERSION returned an empty feature list"
-  printf 'ok - codex %s accepts the preserved hook posture for a firstmate crewmate launch\n' "$CODEX_VERSION"
+  printf 'ok - codex %s accepts the preserved-hook, unsupported-loader read-only launch\n' "$CODEX_VERSION"
 }
 
 test_installed_codex_accepts_preserved_hook_posture_for_captured_crewmate_launch
