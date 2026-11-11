@@ -59,6 +59,7 @@ def run():
         command = ['bash', str(BIN / 'fm-captain-hold.sh'), 'hold', task,
                    '--title', 'Acciones pendientes de actualización',
                    '--reason', 'Aceptar o posponer las acciones de actualización',
+                   '--category', 'product-design',
                    '--question', question, '--context', labels[:200],
                    '--option', 'apply=Aplicarlas', '--option', 'skip=Dejarlas pendientes',
                    '--recommended', 'apply', '--link', str(notes)]

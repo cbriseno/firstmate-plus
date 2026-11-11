@@ -197,7 +197,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
                   'malformed cache stays unknown and preserves valid peer usage: '+repr(invalid))
         bad_cache.unlink()
         cache.write_bytes(saved)
-        held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
+        held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--category','product-design','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
         check(held.returncode==0, held.stderr+held.stdout)
         projected = ucli('work','snapshot')['requests'][0]['usage']
         check(not projected['usd_complete'] and projected['tasks']['no_agent']==1 and projected['tasks']['unknown']==1 and any(r['task']=='missing' for r in projected['unknown']), 'agent-free decisions and missing launched sessions are distinct')
@@ -574,7 +574,7 @@ exec /bin/bash "$@"
     cli('done','origin',raw=True)
     for key in ('question-a','question-b','question-c'):
         p=subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold',key,'--title','Cache decision','--origin','origin',
-                          '--reason','Decision unanswered','--question','Clean this cache?', '--option','yes=Clean','--option','no=Keep'],env=env,text=True,capture_output=True)
+                          '--reason','Decision unanswered','--category','product-design','--question','Clean this cache?', '--option','yes=Clean','--option','no=Keep'],env=env,text=True,capture_output=True)
         check(p.returncode==0,('real unanswered call',p.stdout,p.stderr))
     original_backlog=(home/'data/backlog.md').read_bytes()
     original_registry=(home/'data/projects.md').read_bytes()

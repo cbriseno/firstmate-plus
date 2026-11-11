@@ -5006,7 +5006,7 @@ hold_route_call() {  # <home> <task-id> [extra hold args...]
   local home=$1 id=$2
   shift 2
   run_captain "$home" hold "$id" --title "Choose the sample route" \
-    --reason "captain sample route choice pending" --repo sample \
+    --reason "captain sample route choice pending" --repo sample --category product-design \
     --question "Which sample route do we take?" \
     --option "north=Go north|Shorter, but steeper" --option "south=Go south" \
     --recommended north --context "Both routes reach the sample camp." \
@@ -5019,12 +5019,12 @@ test_structured_call_fields_reach_the_snapshots() {
   local home snap json toon rc
   home=$(make_home structured-call)
   run_captain "$home" hold sample-plain-call --title "Choose the sample plain route" \
-    --reason "captain plain route choice pending" --repo sample \
+    --reason "captain plain route choice pending" --repo sample --category captain-only-fact \
     --no-options "the captain answers this one in words" >/dev/null \
     || fail "a hold with the recorded no-options escape was refused"
   hold_route_call "$home" sample-route-call >/dev/null || fail "hold refused valid structured call fields"
   run_captain "$home" hold sample-dated-call --title "Revisit the sample route" \
-    --reason "captain deferred the sample route" --repo sample --until 2026-08-01 \
+    --reason "captain deferred the sample route" --repo sample --category product-design --until 2026-08-01 \
     --question "Revisit the sample route?" --option "yes=Revisit it" --option "no=Drop it" >/dev/null \
     || fail "a deferred hold refused call fields"
 
@@ -5068,24 +5068,24 @@ test_structured_call_fields_reach_the_snapshots() {
     rc=0
     # shellcheck disable=SC2086  # Each case is a deliberately word-split flag list.
     run_captain "$home" hold sample-refused-call --title "Refused sample call" \
-      --reason "captain choice" --repo sample $args > "$home/refused.out" 2> "$home/refused.err" || rc=$?
+      --reason "captain choice" --repo sample --category product-design $args > "$home/refused.out" 2> "$home/refused.err" || rc=$?
     assert_equals 1 "$rc" "hold accepted invalid call fields: $args"
     assert_no_grep sample-refused-call "$home/data/backlog.md" "an invalid call field still created the task: $args"
   done
   rc=0
   run_captain "$home" hold sample-refused-call --title "Refused sample call" --reason "captain choice" \
-    --question Pick --option north=Go --option south=Go --link "two words" \
+    --category product-design --question Pick --option north=Go --option south=Go --link "two words" \
     > "$home/refused.out" 2> "$home/refused.err" || rc=$?
   assert_grep "link must not contain spaces" "$home/refused.err" "a link with spaces was refused for another reason"
   assert_equals 1 "$rc" "hold accepted a link with spaces"
   rc=0
   run_captain "$home" hold sample-refused-call --title "Refused sample call" --reason "captain choice" \
-    --question "$(printf 'q%.0s' $(seq 1 161))" --option north=Go --option south=Go \
+    --category product-design --question "$(printf 'q%.0s' $(seq 1 161))" --option north=Go --option south=Go \
     > "$home/refused.out" 2> "$home/refused.err" || rc=$?
   assert_equals 1 "$rc" "hold accepted a question over its bound"
   assert_grep "keep it within 160" "$home/refused.err" "an over-long question did not name its bound"
   run_captain "$home" hold sample-spanish-call --title "Elegir la ruta" --reason "ruta pendiente" \
-    --question "¿Qué ruta tomamos?" --option "norte=Sí, ir al norte por la cañada del cañón." \
+    --category product-design --question "¿Qué ruta tomamos?" --option "norte=Sí, ir al norte por la cañada del cañón." \
     --option "si=Sí, cámbialo|Tarda 5 min" >/dev/null \
     || fail "a label within 40 characters but over 40 bytes was refused"
   jq -e '.call.options == [{"id":"norte","label":"Sí, ir al norte por la cañada del cañón.","detail":null},
@@ -5101,7 +5101,7 @@ test_structured_call_answer_by_option_id() {
   home=$(make_home structured-answer)
   hold_route_call "$home" sample-route-call >/dev/null || fail "could not hold the structured call"
   run_captain "$home" hold sample-free-call --title "Choose the free sample route" \
-    --reason "captain free route choice pending" --repo sample \
+    --reason "captain free route choice pending" --repo sample --category product-design \
     --question "Which free route?" --option "east=Go east" --option "west=Go west" >/dev/null \
     || fail "could not hold the free-text call"
   hold_route_call "$home" sample-release-call >/dev/null || fail "could not hold the release call"
@@ -5158,7 +5158,7 @@ test_structured_call_follows_its_hold_lifecycle() {
   FM_CAPTAIN_HOLD_NOW=2026-07-14T10:00:00Z hold_route_call "$home" sample-route-call >/dev/null \
     || fail "could not hold the structured call"
   FM_CAPTAIN_HOLD_NOW=2026-07-14T11:00:00Z run_captain "$home" hold sample-route-call \
-    --reason "captain sample route choice still pending" >/dev/null \
+    --reason "captain sample route choice still pending" --category product-design >/dev/null \
     || fail "could not repeat the active hold without call fields"
   snap=$(run_fleet_snapshot "$home") || fail "fleet snapshot failed after a repeated hold"
   printf '%s' "$snap" | jq -e --argjson want "$ROUTE_CALL" \
@@ -5169,7 +5169,7 @@ test_structured_call_follows_its_hold_lifecycle() {
     | run_captain "$home" answers --source "synthetic deck" >/dev/null || fail "could not release the call"
   rc=0
   FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-route-call \
-    --reason "captain route choice again" > "$home/rehold.out" 2> "$home/rehold.err" || rc=$?
+    --reason "captain route choice again" --category product-design > "$home/rehold.out" 2> "$home/rehold.err" || rc=$?
   assert_equals 1 "$rc" "a re-hold after a release reused the previous lifecycle's options"
   show=$(tasks_in "$home" show sample-route-call --full)
   assert_contains "$show" "held: no" "a refused re-hold still held the released work"
@@ -5188,7 +5188,7 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
 
   rc=0
   run_captain "$home" hold sample-bare-call --title "Choose the bare route" \
-    --reason "captain bare route choice pending" --repo sample > "$home/bare.out" 2> "$home/bare.err" || rc=$?
+    --reason "captain bare route choice pending" --repo sample --category product-design > "$home/bare.out" 2> "$home/bare.err" || rc=$?
   assert_equals 1 "$rc" "hold opened a captain call with no choices"
   assert_grep "has no captain call fields" "$home/bare.err" "the refusal did not say what was missing"
   assert_grep 'hold sample-bare-call --reason' "$home/bare.err" "the refusal did not show the expected call shape"
@@ -5199,8 +5199,32 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
   assert_absent "$home/data/sample-bare-call" "a refused call left a call record behind"
 
   rc=0
+  run_captain "$home" hold sample-bare-call --title "Choose the bare route" --reason "routine integration" \
+    --repo sample --question "Which route?" --option north=North --option south=South \
+    > "$home/missing-category.out" 2> "$home/missing-category.err" || rc=$?
+  assert_equals 1 "$rc" "hold accepted a missing category"
+  assert_grep '--category is required' "$home/missing-category.err" "the missing-category refusal did not explain the requirement"
+  assert_grep 'hazlo y repórtalo' "$home/missing-category.err" "the missing category refusal omitted the instruction"
+  assert_no_grep sample-bare-call "$home/data/backlog.md" "a missing category still created its task"
+
+  rc=0
+  run_captain "$home" hold sample-bare-call --title "Choose the bare route" --reason "routine integration" \
+    --repo sample --category integration --question "Which route?" --option north=North --option south=South \
+    > "$home/category.out" 2> "$home/category.err" || rc=$?
+  assert_equals 1 "$rc" "hold accepted a category outside the closed list"
+  assert_grep 'hazlo y repórtalo' "$home/category.err" "the unsupported category refusal omitted the instruction"
+  assert_no_grep sample-bare-call "$home/data/backlog.md" "an unsupported category still created its task"
+
+  local category
+  for category in product-design unbacked-destructive money credentials-security captain-only-fact; do
+    run_captain "$home" hold "sample-category-$category" --title "Allowed category" --reason "captain decision" \
+      --repo sample --category "$category" --question "Which route?" --option yes=Yes --option no=No >/dev/null \
+      || fail "hold rejected allowed category $category"
+  done
+
+  rc=0
   run_captain "$home" hold sample-bare-call --title "Choose the bare route" --reason "captain choice" \
-    --repo sample --question "Which route?" --option north=North > "$home/one.out" 2> "$home/one.err" || rc=$?
+    --repo sample --category product-design --question "Which route?" --option north=North > "$home/one.out" 2> "$home/one.err" || rc=$?
   assert_equals 1 "$rc" "hold opened a captain call with a single choice"
   assert_grep "at least two --option choices" "$home/one.err" "the one-option refusal did not name the minimum"
   assert_grep '--no-options' "$home/one.err" "the one-option refusal did not show the escape"
@@ -5220,25 +5244,25 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
     rc=0
     # shellcheck disable=SC2086  # Each case is a deliberately word-split flag list.
     run_captain "$home" hold sample-wait-call --title "Wait for the sample login" \
-      --reason "captain login pending" --repo sample --no-options "the captain must log in" $args \
+      --reason "captain login pending" --repo sample --category credentials-security --no-options "the captain must log in" $args \
       > "$home/escape.out" 2> "$home/escape.err" || rc=$?
     assert_equals 1 "$rc" "hold accepted a malformed escape: $args"
     assert_no_grep sample-wait-call "$home/data/backlog.md" "a refused escape still created its task: $args"
   done
   rc=0
   run_captain "$home" hold sample-wait-call --title "Wait for the sample login" --reason "captain login pending" \
-    --repo sample --no-options "" > "$home/escape.out" 2> "$home/escape.err" || rc=$?
+    --repo sample --category credentials-security --no-options "" > "$home/escape.out" 2> "$home/escape.err" || rc=$?
   assert_equals 1 "$rc" "hold accepted an empty escape reason"
   assert_no_grep sample-wait-call "$home/data/backlog.md" "an empty escape reason still created its task"
 
   run_captain "$home" hold sample-wait-call --title "Wait for the sample login" --reason "captain login pending" \
-    --repo sample --no-options "the captain must log in to the sample registry" >/dev/null \
+    --repo sample --category credentials-security --no-options "the captain must log in to the sample registry" >/dev/null \
     || fail "hold refused a recorded escape for a wait with no choices"
   jq -e '.call == null and .no_options == "the captain must log in to the sample registry"' \
     "$home/data/sample-wait-call/captain-call.json" >/dev/null \
     || fail "the escape reason was not recorded: $(cat "$home/data/sample-wait-call/captain-call.json")"
   run_captain "$home" hold sample-open-call --title "Name the sample release" --reason "captain names the release" \
-    --repo sample --question "What should we call the sample release?" \
+    --repo sample --category product-design --question "What should we call the sample release?" \
     --no-options "the captain names it in their own words" >/dev/null \
     || fail "hold refused an open question with a recorded escape"
   snap=$(run_fleet_snapshot "$home") || fail "fleet snapshot failed with escaped calls"
@@ -5250,7 +5274,7 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
   ' >/dev/null || fail "escaped calls were not exported as a plain wait and an open question: $snap"
 
   FM_CAPTAIN_HOLD_NOW=2026-07-14T11:00:00Z run_captain "$home" hold sample-wait-call \
-    --reason "captain login still pending" --until 2026-08-01 >/dev/null \
+    --reason "captain login still pending" --category credentials-security --until 2026-08-01 >/dev/null \
     || fail "a deferral of an active escaped hold needed its fields again"
   jq -e '.no_options == "the captain must log in to the sample registry"' \
     "$home/data/sample-wait-call/captain-call.json" >/dev/null \
@@ -5654,7 +5678,7 @@ test_expected_identity_corrections() {
   printf 'Corrected answer\n' > "$home/correction"
   for mode in 'done' release; do
     FM_CAPTAIN_HOLD_NOW=2026-11-08T12:00:00Z run_captain "$home" hold "cas-$mode" \
-      --title Question --reason choose --no-options 'Free response' >/dev/null || fail 'cannot seed correction'
+      --title Question --reason choose --category captain-only-fact --no-options 'Free response' >/dev/null || fail 'cannot seed correction'
     identity=$(run_captain "$home" open "cas-$mode" --identity)
     if [ "$mode" = release ]; then
       tasks_in "$home" start "cas-$mode" >/dev/null
@@ -5681,7 +5705,7 @@ test_expected_identity_corrections() {
     expect_intake_refusal "$home" 3 identity-conflict mismatch correct "cas-$mode" \
       --decision-file "$home/correction" --expected-identity "$current"
     if [ "$mode" = release ]; then
-      run_captain "$home" hold "cas-$mode" --reason 'choose again' --no-options 'Free response' >/dev/null
+      run_captain "$home" hold "cas-$mode" --reason 'choose again' --category captain-only-fact --no-options 'Free response' >/dev/null
       current=$(run_captain "$home" open "cas-$mode" --identity)
       if run_captain "$home" correct "cas-$mode" --decision-file "$home/correction" --expected-identity "$current" \
         > /dev/null 2> "$home/reheld.err"; then fail 'correction answered a re-held question'; fi
@@ -5699,7 +5723,7 @@ test_free_answer_attachments_and_correction() {
   printf '%s\n' '- sample [local-only] - Sample' > "$home/data/projects.md"
   tasks_in "$home" add origin-work 'Origin work' --repo sample >/dev/null
   run_captain "$home" hold free-call --title Question --reason choose --repo sample --origin origin-work \
-    --no-options 'Free response' >/dev/null || fail 'could not hold free response'
+    --category captain-only-fact --no-options 'Free response' >/dev/null || fail 'could not hold free response'
   printf 'Primera línea\n\nSegunda línea\n' > "$home/answer"
   printf 'image-one' > "$home/image.png"
   run_captain "$home" answer free-call --decision-file "$home/answer" --attach "$home/image.png" >/dev/null || fail 'free answer failed'
@@ -5796,15 +5820,15 @@ test_explicit_action_persists_until_authoritative_completion() {
       options) set -- --option 'yes=Yes' ;;
       until) set -- --until 2026-12-01 ;;
     esac
-    if run_captain "$home" hold invalid-action --title 'Invalid action' --reason 'Pending action' --repo sample \
+    if run_captain "$home" hold invalid-action --title 'Invalid action' --reason 'Pending action' --repo sample --category captain-only-fact \
       --call-kind action --instruction 'Act in chat' --where chat "$@" >/dev/null 2>&1; then fail 'invalid action shape was accepted'; fi
     assert_equals "$before" "$(cat "$home/data/backlog.md")" 'invalid action mutated the backlog'
   done
-  if run_captain "$home" hold real-work --reason 'Pending action' --call-kind action --instruction 'Act in chat' --where chat >/dev/null 2>&1; then
+  if run_captain "$home" hold real-work --reason 'Pending action' --category captain-only-fact --call-kind action --instruction 'Act in chat' --where chat >/dev/null 2>&1; then
     fail 'an action replaced the actual work card'
   fi
   assert_equals "$before" "$(cat "$home/data/backlog.md")" 'refused work conversion mutated work'
-  run_captain "$home" hold action-call --title 'Action required' --reason 'Chat action pending' --repo sample --origin real-work \
+  run_captain "$home" hold action-call --title 'Action required' --reason 'Chat action pending' --repo sample --origin real-work --category captain-only-fact \
     --call-kind action --instruction 'Record the requested instruction in the Firstmate chat.' --where chat \
     --context 'Keep the existing policy unchanged until review.' --link data/real-work/report.md >/dev/null || fail 'action hold failed'
   tasks_in "$home" block real-work --by action-call >/dev/null
@@ -5829,7 +5853,7 @@ test_explicit_action_persists_until_authoritative_completion() {
   printf '%s' "$snapshot" | jq -e '.decisions_open[] | select(.id == "action-call") | .call.kind == "action" and .call.where == "chat" and .call.options == []' >/dev/null \
     || fail 'bearings stripped or converted the explicit action facet'
   before=$(cat "$home/data/backlog.md")
-  run_captain "$home" hold action-call --reason 'Chat action pending' >/dev/null || fail 'action repeat could not keep the existing call'
+  run_captain "$home" hold action-call --reason 'Chat action pending' --category captain-only-fact >/dev/null || fail 'action repeat could not keep the existing call'
   assert_equals "$call" "$(cat "$home/data/action-call/captain-call.json")" 'repeat changed the action record'
   printf 'The chat was opened, but the requested action has not occurred.\n' > "$home/evidence.txt"
   if run_captain "$home" answer action-call --decision-file "$home/evidence.txt" >/dev/null 2>&1; then fail 'normal answer dismissed action'; fi
@@ -5839,7 +5863,7 @@ test_explicit_action_persists_until_authoritative_completion() {
     if FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" bash "$ROOT/bin/fm-tasks-axi.sh" "$verb" action-call >/dev/null 2>&1; then fail 'generic writer dismissed action'; fi
   done
   if run_captain "$home" hold action-call "${FM_TEST_CALL[@]}" --reason 'Make it a question' >/dev/null 2>&1; then fail 'outstanding action became a question'; fi
-  if run_captain "$home" hold action-call --reason 'Expire it' --until 2026-12-01 >/dev/null 2>&1; then fail 'action gained a time expiry'; fi
+  if run_captain "$home" hold action-call --reason 'Expire it' --category captain-only-fact --until 2026-12-01 >/dev/null 2>&1; then fail 'action gained a time expiry'; fi
   note=$(FM_HOME="$home" bash "$ROOT/bin/fm-inbox.sh" note --json 'Opened the chat; action still pending.' | jq -r .id) || fail 'could not save ACK-only note'
   FM_HOME="$home" bash "$ROOT/bin/fm-inbox.sh" reply "$note" 'Read only; action remains pending.' >/dev/null || fail 'ACK-only reply failed'
   FM_HOME="$home" bash "$ROOT/bin/fm-inbox.sh" drain --ack "$note" >/dev/null || fail 'ACK-only note failed'
@@ -5872,7 +5896,7 @@ test_moot_retirement_waits_for_all_work_and_preserves_evidence() {
   for kind in question action; do
     call="$kind-call"
     if [ "$kind" = action ]; then
-      run_captain "$home" hold "$call" --title 'Act in chat' --reason 'Pending action' --repo sample --origin origin \
+      run_captain "$home" hold "$call" --title 'Act in chat' --reason 'Pending action' --repo sample --origin origin --category captain-only-fact \
         --call-kind action --instruction 'Confirm the requested permission in chat.' --where chat >/dev/null || fail 'action fixture failed'
     else
       run_captain "$home" hold "$call" --title 'Choose the approach' --reason 'Pending choice' --repo sample --origin origin \
@@ -5960,7 +5984,7 @@ test_session_reconcile_sweeps_moot_calls_without_worker_records() {
   home=$(make_home moot-session)
   tasks_in "$home" add origin 'Completed origin' --kind ship --repo sample >/dev/null
   tasks_in "$home" "done" origin >/dev/null
-  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin \
+  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin --category captain-only-fact \
     --call-kind action --instruction 'Confirm the obsolete request.' --where chat >/dev/null
   tasks_in "$home" add gated 'Superseded residual' --kind residual --repo sample >/dev/null
   tasks_in "$home" block gated --by stale >/dev/null
@@ -5978,7 +6002,7 @@ test_moot_retirement_recovers_close_failures_and_refuses_unreadable_graphs() {
   home=$(make_home moot-retry)
   tasks_in "$home" add origin 'Completed origin' --kind ship --repo sample >/dev/null
   tasks_in "$home" "done" origin >/dev/null
-  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin \
+  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin --category captain-only-fact \
     --call-kind action --instruction 'Confirm the obsolete request.' --where chat >/dev/null
   tasks_in "$home" add gated 'Completed gated work' --kind residual --repo sample >/dev/null
   tasks_in "$home" block gated --by stale >/dev/null
@@ -6019,7 +6043,7 @@ test_teardown_sweeps_moot_calls_with_archived_origins() {
   local home id wt out
   home=$(make_home moot-teardown)
   tasks_in "$home" add origin 'Archived origin' --kind ship --repo sample >/dev/null
-  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin \
+  run_captain "$home" hold stale --title 'Obsolete action' --reason 'Act in chat' --repo sample --origin origin --category captain-only-fact \
     --call-kind action --instruction 'Confirm the obsolete request.' --where chat >/dev/null
   # A normal retention operation archives the origin through its public owner.
   tasks_in "$home" "done" origin --keep 0 >/dev/null || fail 'could not archive origin'
@@ -6046,7 +6070,7 @@ test_moot_origin_proof_never_falls_back_from_current_work_to_an_old_archive() {
   tasks_in "$home" add origin 'Historical origin' --kind ship --repo sample >/dev/null
   tasks_in "$home" "done" origin --keep 0 >/dev/null
   tasks_in "$home" add origin 'Current live origin' --kind ship --repo sample >/dev/null
-  run_captain "$home" hold call --title 'Still needed action' --reason 'Act in chat' --repo sample --origin origin \
+  run_captain "$home" hold call --title 'Still needed action' --reason 'Act in chat' --repo sample --origin origin --category captain-only-fact \
     --call-kind action --instruction 'Confirm the current request.' --where chat >/dev/null
   tasks_in "$home" add gated 'Closed gated work' --kind residual --repo sample >/dev/null
   tasks_in "$home" block gated --by call >/dev/null

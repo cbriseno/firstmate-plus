@@ -20,6 +20,7 @@
 # and secondmate-home ownership aligned with the work that discovered the call.
 #
 # Usage:
+#   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact.
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
 #     (--question <line> --option <id>=<label>[|<detail>] --option <id>=<label>[|<detail>]... \
@@ -1158,13 +1159,20 @@ refuse_without_choices() {  # <task-id> <why>
   printf 'fm-captain-hold: %s\n' "$2" >&2
   cat >&2 <<EOF
 A captain call needs real choices the captain can click. Hold it as:
-  fm-captain-hold.sh hold $id --reason "<short summary>" \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> \\
     --question "<the question>" --option <id>="<choice>" --option <id>="<choice>" \\
     [--recommended <id>] [--context "<one line>"] [--link <report path or URL>]
 Only for a genuinely open question or a wait with no choices (a human action, a date):
-  fm-captain-hold.sh hold $id --reason "<short summary>" \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> \\
     --no-options "<why there are no choices>" [--question "<the question>"]
 EOF
+  exit 1
+}
+
+refuse_category() {
+  printf 'fm-captain-hold: %s\n' "$1" >&2
+  printf '%s\n' 'Allowed --category values: product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
+  printf '%s\n' 'Solo pregunta al capitán por producto/diseño, acciones destructivas o irreversibles sin respaldo, dinero, credenciales/seguridad, o un dato que solo el capitán tiene. Para cualquier otra cosa, hazlo y repórtalo.' >&2
   exit 1
 }
 
@@ -1463,7 +1471,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
-  local question='' recommended='' context='' link='' no_options='' call_given=0 call_kind=question instruction='' where='' existing_call_kind
+  local question='' recommended='' context='' link='' no_options='' category='' call_given=0 call_kind=question instruction='' where='' existing_call_kind
   local -a call_options=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1474,6 +1482,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --category) shift; category=${1:-} ;;
       --question) shift; question=${1:-}; call_given=1 ;;
       --call-kind) shift; call_kind=${1:-}; call_given=1 ;;
       --instruction) shift; instruction=${1:-}; call_given=1 ;;
@@ -1492,6 +1501,11 @@ command_hold() {
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
+  case "$category" in
+    product-design|unbacked-destructive|money|credentials-security|captain-only-fact) ;;
+    '') refuse_category '--category is required' ;;
+    *) refuse_category "unsupported --category: $category" ;;
+  esac
   if [ "$call_given" = 1 ]; then
     build_call_json "$id" "$question" "$recommended" "$context" "$link" "$no_options" "$call_kind" "$instruction" "$where" \
       "${call_options[@]+"${call_options[@]}"}"

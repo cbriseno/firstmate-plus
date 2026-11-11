@@ -94,7 +94,7 @@ TOML
 # The minimal captain card bin/fm-captain-hold.sh hold requires, for fixtures
 # whose subject is not the card itself: pass "${FM_TEST_CALL[@]}" to a hold.
 # shellcheck disable=SC2034
-FM_TEST_CALL=(--question 'Which way should this go?' --option left=Left --option right=Right)
+FM_TEST_CALL=(--category product-design --question 'Which way should this go?' --option left=Left --option right=Right)
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.

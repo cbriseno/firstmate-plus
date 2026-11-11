@@ -124,13 +124,13 @@ with tempfile.TemporaryDirectory(prefix='fm-creation-time-') as folder:
         env.update(FM_TASKS_AXI_COMPATIBLE=verdict[0],FM_TASKS_AXI_CHECK_REASON=verdict[1])
         captain=['bash',str(root/'bin/fm-captain-hold.sh')]
         run(captain,'hold','call','--title','A question','--reason','Choose','--repo','alpha',
-            '--question','Proceed?','--option','yes=Yes','--option','no=No',raw=True)
+            '--category','product-design','--question','Proceed?','--option','yes=Yes','--option','no=No',raw=True)
         original_call=receipt('call').read_bytes(); call_created=task_created('call'); instant(call_created)
-        run(captain,'hold','call','--reason','Choose',raw=True)
-        run(captain,'hold','call','--reason','Act in chat','--call-kind','action','--instruction','Record the requested instruction in chat.','--where','chat',raw=True)
+        run(captain,'hold','call','--reason','Choose','--category','product-design',raw=True)
+        run(captain,'hold','call','--reason','Act in chat','--category','captain-only-fact','--call-kind','action','--instruction','Record the requested instruction in chat.','--where','chat',raw=True)
         assert receipt('call').read_bytes()==original_call
         run(captain,'hold','action','--title','Action required','--reason','Chat action','--repo','alpha',
-            '--call-kind','action','--instruction','Act in chat.','--where','chat',raw=True)
+            '--category','captain-only-fact','--call-kind','action','--instruction','Act in chat.','--where','chat',raw=True)
         action_created=task_created('action'); instant(action_created)
         # Internal residual/follow-up creation uses the same timestamp writer.
         script='. "$1/fm-tasks-axi-lib.sh"\n. "$1/fm-backlog-transition-lib.sh"\nfm_backlog_mutate "$2/data" add internal "Internal card" --repo alpha\n'

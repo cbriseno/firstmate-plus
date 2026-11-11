@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         cli('hold', name, '--kind', 'parked', '--reason', 'Parked by owner')
     cli('hold', 'layered', '--kind', 'external', '--reason', 'Retained external condition')
     execute(['bash', str(root / 'bin/fm-captain-hold.sh'), 'hold', 'captain', '--title', 'Fixture captain',
-        '--reason', 'Deliberately held', '--question', 'Keep this paused?', '--option', 'yes=Keep', '--option', 'no=Release'])
+        '--reason', 'Deliberately held', '--category', 'product-design', '--question', 'Keep this paused?', '--option', 'yes=Keep', '--option', 'no=Release'])
     apply('set_pause', 'project:held')
     apply('set_pause', 'task:layered')
     seed = home / 'aliases.json'

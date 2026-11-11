@@ -333,7 +333,7 @@ r=subprocess.run(['python3',str(root/'bin/fm_delivery.py'),'ledger-task','--task
 assert r.returncode==0, r.stderr
 assert rows()[-1]['value']['task']['priority']==2
 assert 'priority: 2' in run('fm-tasks-axi.sh','show','one','--full')
-run('fm-captain-hold.sh','hold','answer-one','--title','Question','--repo','alpha','--reason','Test original words',
+run('fm-captain-hold.sh','hold','answer-one','--title','Question','--repo','alpha','--reason','Test original words','--category','product-design',
     '--question','Proceed?','--option','yes=Proceed','--option','no=Wait','--recommended','yes')
 call=json.loads((home/'data/answer-one/captain-call.json').read_text())
 answer_file=home/'answer.txt'; answer_file.write_text('Adelante.')

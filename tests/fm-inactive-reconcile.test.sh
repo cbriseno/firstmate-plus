@@ -1193,7 +1193,7 @@ test_idle_in_flight_skips_live_due_actionable_recent_or_held_work() {
     make_world "idle-skip-$label"; write_child "$MAIN" child "$status"
     seed_in_flight_row "$MAIN" child
     if [ "$label" = held ]; then
-      captain_hold_in "$MAIN" hold child --reason 'ship timing' --question 'Ship it now?' \
+      captain_hold_in "$MAIN" hold child --reason 'ship timing' --category product-design --question 'Ship it now?' \
         --option 'now=Ship now' --option 'later=Ship later' >/dev/null || fail "could not open the existing call"
     fi
     idle_scan "$MAIN" "$bound"

@@ -358,6 +358,7 @@ Every escalation must stand alone and remain concise.
 Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
 Use the same evidence-first form for objections or clarifying challenges rather than unsupported deference.
 Before asking the captain to choose or approve a solution, have the responsible worker prepare the evidence, smallest execution plan, concrete options and recommendation, reusing adequate existing results.
+Only ask for producto/diseño (`product-design`), a destructive or irreversible action without a backup (`unbacked-destructive`), money (`money`), credentials/security (`credentials-security`), or a fact only the captain has (`captain-only-fact`); every captain hold requires one of these categories, and anything else gets done and reported with “hazlo y repórtalo.”
 Ask directly only for a missing fact or permission that prevents that preparation, stating what is already known and exactly what it blocks.
 
 Reach the captain immediately for:
