@@ -260,6 +260,10 @@ One bound holds: this covers the open work you are actually holding in context, 
 It is not a reconciliation of durable records against repository or forge reality, cannot become one on input this volatile, and must never be reported as one.
 Where the right correction is a judgment you cannot make, leave the record alone and raise the question instead of guessing.
 
+For a handoff, inventory every open question for the captain that this session still holds, keeping the semantic classification with the agent rather than scraping prose.
+Map each question to its authoritative captain-held task, its durable recorded answer, or its dated deferral; a question carried only in prose is unresolved.
+Do not complete the handoff or claim the session is safe to reset while any question lacks one of those records.
+
 ## One-time migration of unmarked entries
 
 Legacy entries carry no markers; an unmarked entry is its file's default tier with unknown age, and unknown age is not guilt.
@@ -282,6 +286,7 @@ Report the outcome in plain captain-facing language with all of these facts:
 - each archived entry's reason, each autonomous offload's live destination and actual relief, and, when a pinned candidate was proposed, the `proposed-offload` section with every candidate's fields;
 - every unresolved exception, including a primary-owned shared-file constraint in a secondmate home, and every concrete captain decision opened for an over-budget result;
 - each open record this pass filed or corrected, and each one it deliberately left alone with the judgment it is waiting on;
+- each open captain question from the session and its authoritative hold, recorded answer, or dated deferral;
 - whether the session is safe to reset, only when all durable findings are captured, no tier-owned finding is waiting on an unreachable declared tier, every open record this session held is filed or explicitly left with its reason, and the post-pass result is within budget with no exception or pending budget decision.
 
 State what reset-safe means in the same breath as the claim: nothing this session knew has been lost.
