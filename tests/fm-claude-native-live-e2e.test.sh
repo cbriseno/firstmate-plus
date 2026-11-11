@@ -33,14 +33,14 @@ from pathlib import Path
 p=Path(sys.argv[1]);layout=sys.argv[2];marks={k:secrets.token_hex(12) for k in ['instruction','skill','hook']}
 def put(name,text):
  f=p/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(text)
-put('AGENTS.md',f'When validating native configuration: invoke native-validation via the Skill tool, then edit proof.txt to include INSTRUCTION={marks["instruction"]} and the activated skill marker. Do not inspect configuration files or search for markers.\n')
+put('AGENTS.md',f'When updating proof.txt: invoke native-validation via the Skill tool with INSTRUCTION={marks["instruction"]} as its argument before reading configuration files, then edit proof.txt to include INSTRUCTION={marks["instruction"]} and every required field supplied by the activated native steps. Do not inspect configuration files or search for markers.\n')
 root='.claude' if layout=='claude' else '.agents'
-put(root+'/skills/native-validation/SKILL.md',f'---\nname: native-validation\ndescription: Required before native configuration validation edits.\n---\nInclude SKILL={marks["skill"]} in proof.txt.\n')
+put(root+'/skills/native-validation/SKILL.md',f'---\nname: native-validation\ndescription: Required before updating proof.txt to the project format.\n---\nThe project file format requires SKILL={marks["skill"]} in proof.txt.\n')
 if layout=='claude':
  marks.update({k:secrets.token_hex(12) for k in ['claude','command','agent','mcp','local']})
- put('CLAUDE.md',f'@AGENTS.md\nInclude CLAUDE={marks["claude"]} and the SessionStart hook marker in proof.txt. Invoke /native-command; use the native-check agent once, call the native-proof MCP tool, and read NATIVE_LOCAL_MARKER from the environment.\n')
- put('.claude/commands/native-command.md',f'Include COMMAND={marks["command"]} in proof.txt.\n')
- put('.claude/agents/native-check.md',f'---\nname: native-check\ndescription: Native validation marker.\ntools: []\n---\nReply only AGENT={marks["agent"]}. Do not call tools.\n')
+ put('CLAUDE.md',f'@AGENTS.md\nInclude CLAUDE={marks["claude"]} and the SessionStart hook marker in proof.txt. Invoke /native-command; use the native-check agent once, call the native-proof MCP tool, and read NATIVE_LOCAL_MARKER from the environment. Retain all returned fields and the environment value in proof.txt.\n')
+ put('.claude/commands/native-command.md',f'The project file format requires COMMAND={marks["command"]} in proof.txt.\n')
+ put('.claude/agents/native-check.md',f'---\nname: native-check\ndescription: Provides a required project format field.\ntools: []\n---\nReply only AGENT={marks["agent"]}. Do not call tools.\n')
  put('.claude/settings.local.json',json.dumps({'env':{'NATIVE_LOCAL_MARKER':marks['local']}}))
  marks['shared_skill']=secrets.token_hex(12)
  put('.agents/skills/native-shared/SKILL.md',f'---\nname: native-shared\ndescription: Additional required native validation step.\n---\nInclude SHARED_SKILL={marks["shared_skill"]} in proof.txt.\n')
@@ -51,7 +51,7 @@ if layout=='claude':
 for line in sys.stdin:
  r=json.loads(line);m=r.get('method');v={}
  if m=='initialize':v={'protocolVersion':'2024-11-05','capabilities':{'tools':{}},'serverInfo':{'name':'native-proof','version':'1'}}
- elif m=='tools/list':v={'tools':[{'name':'native_proof','description':'Native validation marker','inputSchema':{'type':'object','properties':{}}}]}
+ elif m=='tools/list':v={'tools':[{'name':'native_proof','description':'Required project format field','inputSchema':{'type':'object','properties':{}}}]}
  elif m=='tools/call':v={'content':[{'type':'text','text':MARKER}]}
  if 'id' in r:print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':v}),flush=True)
 '''.replace('MARKER',repr('MCP='+marks['mcp'])))
@@ -70,7 +70,7 @@ PY
     TASK_HOME="$LAB/home-$ID"
     git -C "$PROJECT" worktree add --quiet -b "fixture-$ID" "$WT"
     fm_test_spawn_home "$TASK_HOME" claude
-    fm_test_spawn_brief "$TASK_HOME" "$ID" 'Validate native configuration of this project and update proof.txt. Do not inspect configuration files or search for markers. If a capability is unsupported, report it and continue editing. Then stop.'
+    fm_test_spawn_brief "$TASK_HOME" "$ID" 'Update proof.txt using the prescribed project format. Do not inspect configuration files or search for markers. If a capability is unsupported, report it and continue editing. Then stop.'
     FAKEBIN=$(fm_test_make_spawn_fakebin "$LAB/fake-$ID")
     LAUNCH_LOG="$LAB/$ID.launch"
     ARGS=(--harness claude --model "${FM_CLAUDE_NATIVE_MODEL:-claude-sonnet-5-5}" --effort medium)
@@ -96,7 +96,7 @@ with open(sys.argv[1],'w') as out:
  if r.returncode:raise SystemExit(r.returncode)
 PY
     ) || { cat "$LAB/$ID.jsonl" >&2; fail "$VERSION: $layout $kind worker failed"; }
-    python3 - "$WT" "$LAB/$layout-markers.json" "$LAB/$ID.jsonl" <<'PY'
+    python3 - "$WT" "$LAB/$layout-markers.json" "$LAB/$ID.jsonl" <<'PY' || fail "$VERSION: $layout $kind native evidence rejected"
 import json,os,shutil,sys
 from pathlib import Path
 wt,marks,log=map(Path,sys.argv[1:]);values=json.loads(marks.read_text());proof=(wt/'proof.txt').read_text()
@@ -110,7 +110,9 @@ init=next(e for e in events if e.get('subtype')=='init')
 assert init['cwd']==str(wt),init['cwd']
 assert 'native-validation' in init['skills'], init['skills']
 calls=[c for e in events if e.get('type')=='assistant' for c in e.get('message',{}).get('content',[]) if c.get('type')=='tool_use']
-assert any(c['name']=='Skill' and 'native-validation' in str(c['input']) for c in calls)
+first=next(i for i,c in enumerate(calls) if c['name']=='Skill' and c['input'].get('skill')=='native-validation')
+assert values['instruction'] in str(calls[first]['input'].get('args','')), 'instruction canary missing from first native activation'
+assert all(not any(x in str(c['input']) for x in ['AGENTS.md','CLAUDE.md','SKILL.md']) for c in calls[:first] if c['name'] in ['Read','Bash'])
 assert any(c['name'] in ['Edit','Write'] and Path(c['input'].get('file_path','')).name=='proof.txt' for c in calls)
 for c in calls:
  if c['name']=='Read':assert not any(s in str(c['input']) for s in ['AGENTS.md','CLAUDE.md','SKILL.md','settings.json']),c
@@ -118,6 +120,13 @@ if 'mcp' in values:
  assert any(s['name']=='native-proof' and s['status']=='connected' for s in init['mcp_servers'])
  assert 'native-check' in init['agents'] and 'native-command' in init['slash_commands']
  assert any(c['name']=='mcp__native-proof__native_proof' for c in calls)
+ assert any(c['name']=='Skill' and c['input'].get('skill')=='native-command' for c in calls)
+ assert any(c['name']=='Skill' and c['input'].get('skill')=='native-shared' for c in calls)
+ assert any(c['name'] in ['Agent','Task'] and c['input'].get('subagent_type')=='native-check' for c in calls)
+ mcp_ids={c['id'] for c in calls if c['name']=='mcp__native-proof__native_proof'}
+ results=[c for e in events if e.get('type')=='user' for c in e.get('message',{}).get('content',[]) if c.get('type')=='tool_result']
+ assert any(c.get('tool_use_id') in mcp_ids and not c.get('is_error') and values['mcp'] in str(c.get('content')) for c in results)
+ assert any(e.get('subtype')=='hook_response' and e.get('exit_code')==0 and values['hook'] in e.get('output','') for e in events)
 PY
     pass "$VERSION: $layout $kind native markers reached an actual worker edit"
     git -C "$PROJECT" worktree remove --force "$WT"

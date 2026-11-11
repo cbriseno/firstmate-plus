@@ -9,6 +9,10 @@ Use the router's detection and safety sections for static crew and secondmate ha
 For a profile array, load `quota-array-dispatch` after establishing harness and provider facts here.
 When the opt-in `bin/fm-dispatch-resolve.sh` is on, its `clear` answer already names the concrete axes; `docs/configuration.md` "Typed dispatch resolution" owns that contract.
 
+When authoring a ship or scout brief, leave native project instructions and skills in the repository for the worker's own loader.
+Do not copy discovered skill names, bodies, activation steps or embedded values into the brief merely to make the worker apply them; preserve skill invocations the captain actually supplied.
+State the requested outcome and task-specific constraints, and launch from the isolated project copy so native discovery supplies its own guidance.
+
 `../secondmate-provisioning/SKILL.md` owns inherited local material.
 Its harness consequence is that a secondmate's workers receive literal `config/crew-harness` and `config/crew-dispatch.json`, while the primary-only `config/secondmate-harness` is never inherited because secondmates do not spawn secondmates.
 A concrete crew value such as `codex` carries that runtime into the secondmate home.

@@ -99,13 +99,14 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ## Claude native repository configuration
 
-Portable discovery wiring verified 2026-11-11 on Linux with Python 3.11.2 and Bash 5.2; actual native loading was observed on Claude Code 2.1.322.
+Verified 2026-11-11 on Linux with Claude Code 2.1.322, claude-sonnet-5-5 at medium effort, Python 3.11.2 and Bash 5.2.
 `FM_CLAUDE_NATIVE_LIVE_E2E=1 FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-claude-native-live-e2e.test.sh --jobs 1` executes captured `fm-spawn.sh` ship and scout commands against real Claude processes in disposable repository copies.
 Pane and worktree acquisition are stubbed; the same worker's native init event, Skill calls and edited file prove loading, without naming a skill or marker in its assignment.
 The `claude` fixture covers CLAUDE.md importing AGENTS.md, separate `.claude/skills` and `.agents/skills`, a command, an agent, project hooks, local settings and a project stdio MCP server.
 The `shared` fixture has only AGENTS.md and `.agents/skills`.
 A successful four-case run prints `ok - 2.1.322 (Claude Code): <claude|shared> <scout|ship> native markers reached an actual worker edit`.
-The final guard run with its deployed-model default, `claude-sonnet-5-5` at medium effort, remains pending.
+All four cases passed with the deployed-model default, `claude-sonnet-5-5` at medium effort.
+The first native Skill activation carries a hidden AGENTS.md value before any configuration read, and a distinct hidden skill-body value reaches the edited file.
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-claude-native-skills.test.sh --jobs 1` checks the portable discovery wiring, native-directory preservation and retargeting after relaunch.
 `bin/fm-claude-native-skills.sh` owns the task-local discovery bridge; `bin/fm-spawn.sh` owns native instruction selection.
 This changes only Claude ship/scout launch arguments, shared by the supported runtime backends; other harnesses, secondmates and primaries keep their own native loaders.
