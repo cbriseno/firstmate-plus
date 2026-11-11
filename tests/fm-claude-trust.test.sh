@@ -133,6 +133,8 @@ seed_secondmate_home() {
       fm_git_init_commit "$home"
       ;;
   esac
+  git -C "$home" config user.name fmtest
+  git -C "$home" config user.email fmtest@example.invalid
   mkdir -p "$home/bin" "$home/data" "$home/state" "$home/config" "$home/projects"
   printf '# Firstmate\n' > "$home/AGENTS.md"
   printf 'charter\n' > "$home/data/charter.md"
@@ -242,28 +244,25 @@ JSON
 # project-root entry is a human's explicit "No, disable" answer, recorded in the SAME store their own
 # interactive sessions read. A spawn must never flip that to true on their
 # behalf: doing so would grant every later interactive session in that
-# checkout silent external-file inclusion the human declined. The whole
-# registration refuses instead, and the store - including the worktree entry,
-# which is never reached - must come back byte-for-byte unchanged.
+# checkout silent external-file inclusion the human declined. Register workspace
+# trust independently, preserving that decision and unrelated project settings.
 test_project_root_entry_declined_external_imports_is_not_overridden() {
-  local rec store out before after
+  local rec store out
   rec=$(make_case project-decline)
   read_case "$rec"
   store="$CONFIG/.claude.json"
   cat > "$store" <<JSON
 {"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true,"allowedTools":["Read"]}}}
 JSON
-  before=$(cat "$store")
   out=$(run_trust "$CONFIG" "$WT" "$PROJ")
-  expect_code 1 $? "a project that already declined external imports must be refused: $out"
-  assert_contains "$out" "declined external CLAUDE.md imports" \
-    "the refusal did not name the declined-consent reason"
-  assert_contains "$out" "approve the imports dialog interactively" \
-    "the refusal did not name the recovery"
-  after=$(cat "$store")
-  [ "$before" = "$after" ] || fail "the store was modified despite the refusal"
-  assert_not_trusted "$store" "$WT" "the worktree entry was registered despite the refusal"
-  pass "fm-claude-trust.sh: refuses to override a project's declined external-imports consent"
+  expect_code 0 $? "declining imports must not prevent workspace trust: $out"
+  assert_trusted "$store" "$WT" "the worktree was not trusted with imports disabled"
+  assert_trusted "$store" "$PROJ" "the project lost workspace trust"
+  assert_store_value "$store" false "the import decline was overwritten" projects "$PROJ" hasClaudeMdExternalIncludesApproved
+  assert_store_value "$store" true "the prior dialog answer was lost" projects "$PROJ" hasClaudeMdExternalIncludesWarningShown
+  assert_store_value "$store" '["Read"]' "unrelated project settings were lost" projects "$PROJ" allowedTools
+  assert_trust_only_no_import_consent "$store" "$WT" "the worktree gained unapproved imports"
+  pass "fm-claude-trust.sh: registers workspace trust while preserving declined external imports"
 }
 
 # Claude Code's own default project entry carries BOTH external-imports flags as
@@ -610,6 +609,8 @@ test_refused_spawn_leaves_no_task_state() {
   fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
   fm_test_spawn_home "$home" claude
   fm_git_worktree "$proj" "$wt" wt-refused
+  git -C "$proj" config user.name fmtest
+  git -C "$proj" config user.email fmtest@example.invalid
   fm_test_spawn_brief "$home" "$id"
   out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude \
@@ -627,9 +628,24 @@ test_refused_spawn_leaves_no_task_state() {
 
 # Resolve the final prompt argument using the same shell argument splitting the
 # pane sees after the leading export statements.
+claude_launch_command() {  # <launch command>
+  local command=$1
+  (
+    # fm-spawn's process-scope wrapper carries the actual pane command as argv 7;
+    # its final arguments name the home and config, not the Claude prompt.
+    case "$command" in
+      env\ FM_WORKER_PROCESS_SCOPE=*)
+        eval "set -- $command"
+        command=$7
+        ;;
+    esac
+    fm_test_launch_command "$command"
+  )
+}
+
 claude_launch_doorbell() {  # <launch command>
   local command
-  command=$(fm_test_launch_command "$1")
+  command=$(claude_launch_command "$1")
   (
     eval "set -- $command"
     printf '%s' "${!#}"
@@ -651,13 +667,18 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
   fm_test_spawn_home "$home" claude
   fm_git_worktree "$proj" "$wt" wt-spawn
+  git -C "$proj" config user.name fmtest
+  git -C "$proj" config user.email fmtest@example.invalid
   fm_test_spawn_brief "$home" trustspawn
+  printf '{"projects":{"%s":{"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true}}}\n' \
+    "$proj" > "$config/.claude.json"
   out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" FM_FAKE_LAUNCH_LOG="$launch_log" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" trustspawn "$proj" claude \
     --mode no-mistakes --yolo off)
   expect_code 0 $? "the claude spawn must succeed: $out"
   assert_trusted "$config/.claude.json" "$wt" \
     "the claude spawn did not pre-register trust for its worktree"
+  assert_store_value "$config/.claude.json" false "the spawn overrode declined imports" projects "$proj" hasClaudeMdExternalIncludesApproved
   assert_present "$launch_log" "the claude spawn sent no launch command"
   assert_grep 'claude --dangerously-skip-permissions' "$launch_log" \
     "the launch command was not the claude worker launch"
@@ -671,7 +692,7 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
     || fail "the worker could not read its launch brief from the record"
   # The worker must read the SAME store the registration wrote, or the trust
   # would land somewhere the pane never looks.
-  assert_grep "CLAUDE_CONFIG_DIR='$config'" "$launch_log" \
+  assert_contains "$(claude_launch_command "$launch")" "CLAUDE_CONFIG_DIR='$config'" \
     "the launch command did not point the worker at the store that was trusted"
   pass "fm-spawn.sh: a claude spawn pre-trusts its worktree and launches with a readable brief doorbell"
 }
@@ -703,7 +724,7 @@ test_secondmate_standalone_clone_home_is_trusted() {
     || fail "the secondmate could not read its charter from the record"
   # The pane must read the SAME store the registration wrote, or the trust would
   # land somewhere it never looks and the dialog would appear anyway.
-  assert_grep "CLAUDE_CONFIG_DIR='$case_dir/claude-config'" "$case_dir/launch.log" \
+  assert_contains "$(claude_launch_command "$launch")" "CLAUDE_CONFIG_DIR='$case_dir/claude-config'" \
     "the launch command did not point the secondmate at the store that was trusted"
   pass "fm-spawn.sh: a claude secondmate spawn pre-trusts a standalone-clone home"
 }

@@ -99,8 +99,11 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ## Claude workspace trust
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
+Verified 2026-11-11 on Linux with Claude Code 2.1.322: a linked Firstmate task worktree reached its interactive prompt and edited a disposable file while the canonical project's external-import decision remained `Approved=false, WarningShown=true`.
+Workspace trust and external-import approval are independent; the declined import decision does not require rejecting workspace registration.
+Refresh with `FM_CLAUDE_TRUST_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-claude-trust-live-e2e.test.sh` from an isolated linked task worktree; the exact success output is `ok - 2.1.322 (Claude Code): interactive worktree edit completed with external imports declined`.
+The guard uses a private config copy, a private tmux server, and an external-import fixture without modifying the operator's real config.
+The portable registration regression is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-claude-trust.test.sh`; macOS interactive execution remains unverified.
 
 ### Secondmate homes
 
