@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import threading
 import time
 
@@ -82,6 +83,13 @@ def rows(generation):
     return []
 
 
+def session_bound():
+    path = lab / "home/data" / task / "sessions.jsonl"
+    if not path.is_file():
+        return False
+    return any(json.loads(line).get("session") for line in path.read_text().splitlines())
+
+
 def events(generation):
     return [r["payload"] for r in rows(generation) if r.get("type") == "event_msg"]
 
@@ -103,6 +111,7 @@ try:
     brief.write_text(prompt(marker, 20))
     tmux("new-session", "-d", "-s", "proof", "-x", "160", "-y", "45", "-c", str(workspace))
     start("first", launch)
+    wait_for(session_bound, "launch did not bind its open rollout for spend collection")
     wait_state("busy")
     wait_for(marker.exists, "real foreground tool never started")
     for _ in range(4):
@@ -110,6 +119,11 @@ try:
         assert verdict() == "busy codex-rollout"
         time.sleep(1)
     wait_state("idle")
+    usage = lab / "home/data" / task / "usage.json"
+    subprocess.run([sys.executable, str(root / "bin/fm_task_usage.py"), "refresh",
+                    str(usage.parent)], check=True, timeout=15)
+    assert "no-session" not in json.loads(usage.read_text()).get("unknown", []), \
+        "bound Codex rollout still reports no-session after refresh"
     assert any(e["type"] == "task_complete" for e in events(gen))
     print("ok - codex-cli 0.166.0: captured launch, task start, quiet long tool and ordinary completion", flush=True)
     if os.environ.get("FM_CODEX_ACTIVITY_NOTIFY_ONLY") == "1":

@@ -233,7 +233,7 @@ def create_task(arguments):
             if request is None:
                 request = dict(id=task_id if len(task_id) <= 80 else str(uuid.uuid4()),
                                label=' '.join(row['title'].split())[:80],
-                               project=row.get('repo') if row.get('repo') not in (None, '-') else None)
+                               project=row.get('repo') if row.get('repo') not in (None, '-') else 'workspace')
             # The creation owner already holds the work lock; presentation uses
             # the same declaration format without another backlog transition.
             presentation(data.parent, argparse.Namespace(task=task_id, data=str(data),

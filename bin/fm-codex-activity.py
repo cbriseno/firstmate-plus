@@ -31,12 +31,15 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
-from fm_task_sessions import bind
+from fm_task_sessions import bind, metadata
 
 
 VERSION = "0.166.0"
 LIMIT = 32 * 1024 * 1024
+BIND_SECONDS = 120
+BIND_POLL_SECONDS = .5
 TOKEN = re.compile(r"[A-Za-z0-9._-]+\Z")
 UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 ROLLOUT = re.compile(r"rollout-.+-(" + UUID + r")\.jsonl\Z")
@@ -76,6 +79,18 @@ def identity(pid):
 
 
 def launch(state, task, gen, workspace, command):
+    # Keep launch metadata useful on both Linux and macOS.  The activity
+    # classifier below still has its own Linux-only kernel proof, but spend
+    # binding needs only this process's open Codex rollout.
+    if shutil.which("lsof"):
+        try:
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "bind-session",
+                              str(state), task, gen, str(Path(workspace).resolve()),
+                              str(os.getpid())], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             close_fds=True)
+        except OSError:
+            pass
     binary = shutil.which(command[0])
     try:
         if sys.platform != "linux" or not binary or generation(state, task) != gen:
@@ -102,6 +117,69 @@ def launch(state, task, gen, workspace, command):
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     os.execvp(command[0], command)
+
+
+def open_rollout(pid, codex_home, workspace):
+    lsof = shutil.which("lsof")
+    if not lsof:
+        return None
+    try:
+        result = subprocess.run([lsof, "-a", "-p", str(pid), "-Fn"],
+                                capture_output=True, text=True, timeout=3)
+        if result.returncode:
+            return None
+        root = (Path(codex_home) / "sessions").resolve()
+        candidates = []
+        for line in result.stdout.splitlines():
+            if not line.startswith("n"):
+                continue
+            path = Path(line[1:])
+            match = ROLLOUT.fullmatch(path.name)
+            if not match or path.is_symlink():
+                continue
+            resolved = path.resolve(strict=True)
+            if root not in resolved.parents or not resolved.is_file():
+                continue
+            with resolved.open(encoding="utf-8", errors="replace") as stream:
+                first = json.loads(stream.readline())
+            if not isinstance(first, dict):
+                continue
+            payload = first.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            if (first.get("type") != "session_meta" or payload.get("id") != match[1]
+                    or payload.get("cli_version") != VERSION or payload.get("source") != "cli"
+                    or str(Path(payload.get("cwd", "")).resolve()) != workspace):
+                continue
+            candidates.append(str(resolved))
+        candidates = list(dict.fromkeys(candidates))
+        return candidates[0] if len(candidates) == 1 else None
+    except (OSError, ValueError, subprocess.SubprocessError, TypeError):
+        return None
+
+
+def bind_open_session(state, task, gen, workspace, pid):
+    # This helper is a child of the launched Codex process.  Reparenting means
+    # that process exited, so PID reuse can never bind an unrelated session.
+    if os.getppid() != pid:
+        return False
+    try:
+        meta = metadata(state, task)
+    except OSError:
+        return False
+    if meta.get("busy_gen") != gen or meta.get("harness") != "codex":
+        return False
+    codex_home = str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve())
+    deadline = time.monotonic() + BIND_SECONDS
+    while time.monotonic() < deadline and os.getppid() == pid:
+        session = open_rollout(pid, codex_home, workspace)
+        if os.getppid() != pid:
+            return False
+        if session:
+            bind(state, task, gen, session)
+            return True
+        time.sleep(BIND_POLL_SECONDS)
+    return False
 
 
 def sample(binding):
@@ -242,6 +320,8 @@ def main():
     state = Path(state)
     if action == "launch" and len(args) >= 3 and TOKEN.fullmatch(args[0]):
         launch(state, task, args[0], args[1], args[2:])
+    elif action == "bind-session" and len(args) == 3:
+        bind_open_session(state, task, args[0], str(Path(args[1]).resolve()), int(args[2]))
     elif action == "classify" and not args:
         print(classify(state, task))
     else:
