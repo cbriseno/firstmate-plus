@@ -5764,8 +5764,12 @@ BUSY_GEN=
     fi
     hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"},$perm_clear_hook]}],${stop_entry}${perm_entries}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
     session_keys='"feedbackDrafts":"off",'
+    if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+      # Native @AGENTS.md imports are deduplicated when both files load.
+      session_keys="$session_keys\"pluginConfigs\":{\"cc-plugin-agents-md@builtin\":{\"options\":{\"instructionFiles\":\"claude-md-and-agents-md\"}}},"
+    fi
     if [ "$KEEP_AI_TRAILERS" != 1 ]; then
-      session_keys='"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},'
+      session_keys="$session_keys\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},"
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
     ;;
@@ -6659,6 +6663,17 @@ case "$LAUNCH" in
     echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant" >&2
     exit 1
   }
+  if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+    # Native discovery stays in the task copy. Never expose the primary's
+    # project configuration or replace .claude/skills to add shared skills.
+    claude_native_dir=$(bash "$SCRIPT_DIR/fm-claude-native-skills.sh" "$WT" "$DATA/$ID") || {
+      echo "warning: Claude shared skills could not be exposed; continuing with native project configuration and editing enabled" >&2
+      claude_native_dir=
+    }
+    if [ -n "$claude_native_dir" ]; then
+      CLAUDE_ADD_DIRS="$CLAUDE_ADD_DIRS--add-dir $(shell_quote "$claude_native_dir") "
+    fi
+  fi
   if [ "$KIND" = host ]; then
     for host_path in "${HOST_DECLARED[@]}"; do
       [ -d "$host_path" ] || host_path=$(dirname "$host_path")
