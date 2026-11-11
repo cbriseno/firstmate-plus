@@ -473,8 +473,8 @@ test_active_dispatch_profile_allows_explicit_harness() {
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --sandbox read-only --model 'gpt-5' -c 'model_reasoning_effort=\"high\"'" \
-    "explicit harness launch did not thread model, effort, and unsupported-loader read-only mode"
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+    "explicit harness launch did not thread model, effort, and Codex bypass flag"
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
 
@@ -652,8 +652,8 @@ test_codex_threads_model_and_effort() {
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --sandbox read-only --model 'gpt-5' -c 'model_reasoning_effort=\"high\"'" \
-    "codex launch did not thread model, reasoning effort config, and read-only mode"
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread model, reasoning effort config, and Codex bypass flag"
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
@@ -668,8 +668,8 @@ test_codex_threads_model_and_max_effort() {
   expect_code 0 "$status" "codex Luna spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.6-luna max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --sandbox read-only --model 'gpt-5.6-luna' -c 'model_reasoning_effort=\"max\"'" \
-    "codex launch did not thread Luna's max reasoning effort config and read-only mode"
+  assert_contains "$launch" "codex --model 'gpt-5.6-luna' -c 'model_reasoning_effort=\"max\"' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread Luna's max reasoning effort config and Codex bypass flag"
   pass "codex Luna receives --model and model_reasoning_effort max profile flags"
 }
 
@@ -684,14 +684,15 @@ test_codex_omits_max_effort_for_unsupported_model() {
   expect_code 0 "$status" "codex spawn with an unsupported model max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --sandbox read-only --model 'gpt-5'" \
-    "codex launch did not preserve the model flag and read-only mode when max effort was omitted"
+  assert_contains "$launch" "codex --model 'gpt-5' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not preserve the model flag and Codex bypass flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported model max reasoning effort"
   pass "codex omits max for models without the catalog capability"
 }
 
-# Codex crewmate launches preserve hooks, declare the unavailable native loader,
-# and use read-only mode until same-session evidence can be collected.
+# Firstmate never pre-accepts Codex's hook-trust review. Every launch keeps the
+# native project and user hook layers enabled, with turn-end notification also
+# carried by the launch command.
 test_codex_crewmate_launch_preserves_the_hook_layer() {
   local rec id out status launch
   id=profile-codex-hooks-z4c
@@ -707,18 +708,10 @@ test_codex_crewmate_launch_preserves_the_hook_layer() {
     "codex crewmate launch disabled the repository's native hook layer"
   assert_not_contains "$launch" "--dangerously-bypass-hook-trust" \
     "codex crewmate launch bypassed Codex's native hook trust review"
-  assert_contains "$launch" "--sandbox read-only" \
-    "codex crewmate launch did not prevent edits when native loading is unsupported"
-  assert_not_contains "$launch" "--approve-for-me" \
-    "codex crewmate launch enabled writable approval for unsupported native loading"
+  assert_contains "$launch" "--approve-for-me" \
+    "codex crewmate launch did not use automatic approval review"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
-    "codex crewmate launch retained complete bypass despite unsupported native loading"
-  assert_contains "$(cat "$HOME_DIR/state/$id.meta")" 'approval_mode=read-only' \
-    "codex task metadata did not prevent bypass failover for a read-only launch"
-  assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" \
-    "Native loader status" "crewmate launch brief omitted the unsupported native-loader status"
-  assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" \
-    "do not edit project files" "crewmate launch brief did not identify the editing restriction"
+    "codex crewmate launch retained the managed-settings-fragile complete-bypass posture"
   # Firstmate goes blind without the turn-end signal, which rides this same
   # launch rather than any hook.
   assert_contains "$launch" "notify=" \
@@ -775,12 +768,16 @@ test_codex_approval_mode_contract() {
       fi
       expect_code 0 "$status" "$id spawn failed: $out"
       launch=$(cat "$LAUNCH_LOG")
-      assert_contains "$launch" '--sandbox read-only' 'unsupported native loading did not force read-only mode'
-      assert_not_contains "$launch" '--approve-for-me' 'read-only task launch used approval-for-me'
-      assert_not_contains "$launch" '--dangerously-bypass-approvals-and-sandbox' 'read-only task launch used complete bypass'
+      if [ "$value" = approve-for-me ]; then
+        assert_contains "$launch" '--approve-for-me' 'persistent fallback was not used directly'
+        assert_not_contains "$launch" '--dangerously-bypass-approvals-and-sandbox' 'fallback retried bypass'
+      else
+        assert_contains "$launch" '--dangerously-bypass-approvals-and-sandbox' 'Codex bypass default changed'
+        assert_not_contains "$launch" '--approve-for-me' 'unconfigured launch opted into fallback'
+      fi
     done
   done
-  pass 'Codex ship/scout launches remain read-only regardless of configured approval posture; invalid values refuse'
+  pass 'Codex defaults remain bypass; persistent fallback is direct and invalid values refuse'
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -1824,27 +1821,15 @@ test_batch_forwards_shared_profile_flags() {
 test_claude_forwards_firstmate_config_dir_when_set() {
   local rec id out status launch prior settings
   id=profile-claude-cfgdir-z17
-  local case_dir="$TMP_ROOT/profile-claude-cfgdir"
-  local home="$case_dir/home" proj="$case_dir/project" wt="$case_dir/wt"
-  local fakebin launchlog="$case_dir/launch.log"
-  mkdir -p "$case_dir"
-  fakebin=$(make_spawn_fakebin "$case_dir/fake")
-  fm_test_spawn_home "$home" claude
-  fm_test_spawn_brief "$home" "$id"
-  fm_git_init_commit "$proj"
-  mkdir -p "$proj/.claude"
-  prior='{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"printf native"}]}]}}'
-  printf '%s\n' "$prior" > "$proj/.claude/settings.local.json"
-  git -C "$proj" add -f .claude/settings.local.json
-  git -C "$proj" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm 'native Claude settings fixture'
-  fm_git_add_origin "$proj" "$proj.origin.git"
-  git -C "$proj" worktree add --quiet -b wt-profile-claude-cfgdir "$wt"
-  rec="$case_dir|$home|$proj|$wt|$fakebin|$launchlog"
+  rec=$(make_spawn_case profile-claude-cfgdir claude "$id")
   read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude"
+  prior='{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"printf native"}]}]}}'
+  printf '%s\n' "$prior" > "$WT_DIR/.claude/settings.local.json"
 
-  # The repository-local settings are part of the fixture's clean base commit.
-  # The spawn can therefore refresh its pooled worktree before testing that the
-  # file survives Firstmate's additive settings carrier.
+  # A creatable path: this spawn now pre-registers workspace trust in that store
+  # (bin/fm-claude-trust.sh), so an unwritable directory is a genuine blocker.
+  # The forwarding assertion below is what this case proves and is unchanged.
   out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?

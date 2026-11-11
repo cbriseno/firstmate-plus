@@ -29,9 +29,7 @@ For the hook-review dialog observed on macOS, Down then Enter selected the accep
 Use that sequence only with operator approval covering the displayed hooks, through a backend that supports arrow keys; the supervisor cannot grant this security consent itself.
 If the choice or approval is unclear, leave the dialog for the operator rather than sending blind keys.
 Writing Codex's own trust store to pre-accept it would manufacture an operator consent that was never given.
-Firstmate ship and scout launches preserve the normal hook layers and Codex's hook-trust review.
-The interactive CLI does not expose the worker's effective instruction sources or process-local Claude-format skill activation to Firstmate.
-Until the adapter supports that same-session evidence, the launch reports native loading as unsupported and uses Codex's read-only sandbox so the affected task cannot edit project files.
+Firstmate ship and scout launches preserve the normal hook layers; Codex may stop at this review until the operator decides whether to trust the displayed hooks.
 Firstmate does not modify the operator's Codex settings, write hook trust, or bypass the review.
 The turn-end signal is the `-c notify=` program on the same launch, and Firstmate's hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
 A secondmate is a primary in its own home and keeps its hooks, so hook review there can also require the operator's scoped consent.
