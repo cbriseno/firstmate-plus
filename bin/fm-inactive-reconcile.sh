@@ -100,7 +100,7 @@
 # New fm-terminal-outcome.v1 receipts contain schema, fingerprint, task_id,
 # incarnation, state, outcome_key, origin, phase, pr, created_epoch, and
 # notice_emitted, plus optional status_head, presentation_epoch, ledger_claim,
-# cleanup_disposition, and cleanup_reason fields. The
+# cleanup_disposition, cleanup_reason, and cleanup_notice_emitted fields. The
 # inactive-path fingerprint binds the spawn incarnation, task id, terminal
 # state, and PR text, plus the terminal ledger event in a main home, so a child that keeps
 # appending routine prose after one terminal outcome yields at most one parent
@@ -291,15 +291,28 @@ cleanup_payload() { # <record>
     "$(record_value "$1" task_id)" "$(record_value "$1" state)" "$(record_value "$1" fingerprint)"
 }
 
+cleanup_task_live() { # <record>
+  local task state
+  task=$(record_value "$1" task_id)
+  state=${FM_STATE_OVERRIDE:-$STATE}
+  [ -e "$state/$task.meta" ] || [ -L "$state/$task.meta" ] \
+    || [ -e "$state/$task.status" ] || [ -L "$state/$task.status" ]
+}
+
 queue_cleanup_disposition() { # <record>
-  local record=$1 fingerprint key payload disposition
+  local record=$1 fingerprint key payload disposition notified rc=0
   fingerprint=$(record_value "$record" fingerprint)
   disposition=$(record_value "$record" cleanup_disposition)
   [ -z "$disposition" ] || return 0
+  cleanup_task_live "$record" || return 0
+  notified=$(record_value "$record" cleanup_notice_emitted)
+  [ "$notified" != 1 ] || return 0
   key="cleanup-disposition:$fingerprint"
   payload=$(cleanup_payload "$record")
   payload=${payload#actionable: }
-  publish_actionable "$key" "$payload" || { [ "$?" -eq 1 ] && return 0; return 1; }
+  publish_actionable "$key" "$payload" || rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || return "$rc"
+  record_field_set "$record" cleanup_notice_emitted 1
 }
 
 publish_cleanup_dispositions() {
@@ -316,6 +329,7 @@ report_cleanup_dispositions() {
   for record in "$OUTCOME_DIR"/*.presented; do
     [ -f "$record" ] && [ ! -L "$record" ] || continue
     [ -z "$(record_value "$record" cleanup_disposition)" ] || continue
+    cleanup_task_live "$record" || continue
     cleanup_payload "$record"
   done
 }

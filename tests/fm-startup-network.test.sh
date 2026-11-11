@@ -393,6 +393,7 @@ task_id=host1
 state=done
 phase=presentation
 EOF
+  printf 'done: host finished\n' > "$home/state/host1.status"
   printf '%s\n' $$ > "$home/state/.lock"
   FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" run --locked 1
   report=$(run_stage "$home" "$root" report)

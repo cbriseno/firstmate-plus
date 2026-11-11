@@ -178,15 +178,34 @@ test_main_direct_terminal_presentation_receipt() {
 }
 
 test_cleanup_disposition_requires_close_or_reason() {
-  local record fingerprint err
+  local record fingerprint err out historical
   make_world cleanup-disposition
   write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  historical="$MAIN/state/terminal-outcomes/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.presented"
+  mkdir -p "$MAIN/state/terminal-outcomes"
+  cat > "$historical" <<'EOF'
+schema=fm-terminal-outcome.v1
+fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+task_id=closed-history
+state=done
+phase=presentation
+EOF
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup >/dev/null
   record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' | head -1)
   fingerprint=$(sed -n 's/^fingerprint=//p' "$record")
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" acknowledge "$fingerprint"
   record=${record%.pending}.presented
   [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 1 ] || fail "acknowledged outcome did not create a cleanup wake"
+  out=$(FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" cleanup-report)
+  assert_contains "$out" 'task=child state=done' "live cleanup obligation was omitted: $out"
+  assert_not_contains "$out" 'closed-history' "closed historical task was reported: $out"
+
+  : > "$MAIN/state/.wake-queue"
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" FM_INACTIVE_RECONCILE_NOW="$(date +%s)" \
+    PATH="$WORLD/fakebin:$PATH" FM_INACTIVE_RECONCILE_SECS=60 \
+    FM_INACTIVE_CREW_STATE_BIN="$WORLD/fakebin/fm-crew-state.sh" "$RECON" scan --startup >/dev/null
+  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 0 ] || fail "acknowledged cleanup episode woke again"
+  grep -Fxq 'cleanup_notice_emitted=1' "$record" || fail "cleanup wake episode was not recorded"
 
   err="$WORLD/disposition.err"
   if FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" closed 2>"$err"; then
@@ -202,7 +221,7 @@ test_cleanup_disposition_requires_close_or_reason() {
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" FM_INACTIVE_RECONCILE_NOW="$(date +%s)" \
     PATH="$WORLD/fakebin:$PATH" FM_INACTIVE_RECONCILE_SECS=60 \
     FM_INACTIVE_CREW_STATE_BIN="$WORLD/fakebin/fm-crew-state.sh" "$RECON" scan --startup >/dev/null
-  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 1 ] || fail "recorded blocker was re-announced"
+  [ "$(wake_count "$MAIN" 'cleanup-disposition:')" = 0 ] || fail "recorded blocker was re-announced"
 
   rm -f -- "$MAIN/state/child.meta" "$MAIN/state/child.status"
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$RECON" disposition "$fingerprint" closed
