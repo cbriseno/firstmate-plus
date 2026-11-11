@@ -2,12 +2,13 @@
 # Firstmate watcher.
 # Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
 # and keeps blocking; it queues and exits only for actionable wakes.
-# Status wakes require a captain-relevant status event; routine progress and
-# turn-end signals without one are absorbed after the coalescing grace. Stale
+# Status wakes require a captain-relevant status event. A worker's turn-end also
+# wakes once when it has neither a result, a declared wait nor execution proof.
+# Routine progress and healthy secondmate turn-ends stay silent. Stale
 # panes wake only when the recorded endpoint is confirmed dead or missing.
 # While state/.afk exists, the daemon owns triage for eligible durable wakes.
 # Printed reason lines:
-#   signal: <file>...      a newly classified captain-relevant status event
+#   signal: <file>...      a new status event or an undeclared worker stop
 #   stale: <window>        a confirmed dead/missing endpoint needing recovery
 #                          (live, quiet, or unknown endpoints stay silent)
 #                          A dead endpoint is reported once per pane state; it is
@@ -3015,9 +3016,7 @@ EOF
 # hiding the `needs-decision`, `blocked`, `failed`, or `done` event that arrived
 # just before it: the .seen-* marker advances either way, so an event absorbed
 # here is never re-read. Non-.status arguments (.turn-ended markers, which carry
-# no verb) are skipped. A 1 here is NOT "benign" on its own: a no-verb signal
-# still needs an already-classified log, authoritative working proof, or the
-# eligible opt-in bare turn-end pane-churn proof before it is benign.
+# no verb) are skipped; signal_worker_stopped handles their undeclared stops.
 # Also populates FM_SIGNAL_NEEDS_DECISION_FILES (space-separated status-file
 # paths) with exactly the files whose newly classified span carries one of the
 # decision-owned classes defined by the status-span contract, so the caller can
@@ -3055,6 +3054,28 @@ signal_files_actionable() {  # <status-file> ...
     fi
   done
   return "$found"
+}
+
+# A completed worker turn needs supervision when it left no result or wait and
+# has not resumed execution. Read only changed turn-end markers: working notes
+# alone remain routine, and the existing .seen-* marker bounds this to one wake.
+# Unknown activity is not execution proof, including on macOS adapters without
+# a verified busy source. Secondmates are expected to idle between requests.
+signal_worker_stopped() {  # <signal-file> ...
+  local f task meta last
+  for f in "$@"; do
+    case "$f" in *.turn-ended) ;; *) continue ;; esac
+    task=${f##*/}; task=${task%.turn-ended}
+    meta="$STATE/$task.meta"
+    [ -f "$meta" ] || continue
+    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
+    last=$(last_status_line "$STATE/$task.status")
+    status_is_captain_relevant "$last" && continue
+    [ -z "$(status_declared_wait_line "$STATE/$task.status")" ] || continue
+    [ "$(crew_absorb_class "$task")" = none ] || continue
+    return 0
+  done
+  return 1
 }
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
@@ -3813,9 +3834,8 @@ EOF
 $pending
 EOF
     reason="signal:$files"
-    # Only a newly classified captain-relevant status event becomes a wake.
-    # Routine progress and bare turn-end signals still advance their markers but
-    # do not create a model turn, including while AFK owns durable-wake handling.
+    # Status events and undeclared worker stops need supervision. Routine
+    # progress still advances its markers without creating a model turn.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
@@ -3832,7 +3852,7 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if [ "$signal_actionable" -eq 0 ]; then
+    if [ "$signal_actionable" -eq 0 ] || signal_worker_stopped $files; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
