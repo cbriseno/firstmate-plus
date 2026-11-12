@@ -9,9 +9,9 @@
 # Fixture Git processes must not inherit host signing, hooks, or other global and
 # system preferences: with commit.gpgsign=true set globally and no secret key for
 # the fixture identities, every fixture commit fails before its assertion.
-# Isolation is limited to those two layers on purpose, so repository-local config,
-# inline `git -c`, GIT_CONFIG_COUNT, and a GIT_CONFIG_GLOBAL the caller supplies
-# after sourcing all stay authoritative - the Git-config suites assert on them.
+# Inherited command-scope configuration is cleared too, including worker hooks.
+# Repository-local config, inline `git -c`, and configuration supplied after
+# sourcing remain authoritative - the Git-config suites assert on them.
 # The export reaches only the sourcing shell and its children, so the developer's
 # own config files are never written and real project commits made outside the
 # fixtures keep their configuration and signing.
@@ -30,3 +30,4 @@
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS

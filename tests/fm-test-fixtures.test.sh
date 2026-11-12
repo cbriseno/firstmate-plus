@@ -51,7 +51,7 @@ git -C "$repo" config user.name 'Runner Fixture'
 git -C "$repo" config user.email runner@example.invalid
 git -C "$repo" commit -q --allow-empty -m initial
 [ "$(git -C "$repo" log -1 --format='%s:%an:%ae')" = 'initial:Runner Fixture:runner@example.invalid' ]
-[ "$(git -C "$repo" config --get fixture.input)" = preserved ]
+! git -C "$repo" config --get fixture.input
 [ "$(GIT_CONFIG_GLOBAL="$FM_TEST_GIT_CONFIG" git config --global --get commit.gpgsign)" = true ]
 SH
   chmod +x "$dir/runner/tests/fm-test-run.test.sh"
@@ -390,6 +390,26 @@ SH
   pass "shared helpers and runner keep fixture Git off an inherited repository location"
 )
 
+test_inherited_hook_isolation() (
+  local dir="$TMP_ROOT/inherited-hook"
+  mkdir -p "$dir/hooks"
+  printf '#!/bin/sh\nexit 1\n' > "$dir/hooks/pre-push"
+  chmod +x "$dir/hooks/pre-push"
+  git init -q --bare "$dir/origin.git"
+  git init -q "$dir/repo"
+  git -C "$dir/repo" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m initial
+  git -C "$dir/repo" remote add origin "$dir/origin.git"
+  if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$dir/hooks" \
+    git -C "$dir/repo" push origin HEAD > "$dir/outside.log" 2>&1; then
+    fail "inherited hook did not refuse the control push"
+  fi
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$dir/hooks" \
+    bash -eu -c '. "$1"; git -C "$2" push origin HEAD' _ "$ROOT/tests/lib.sh" "$dir/repo" \
+    > "$dir/fixture.log" 2>&1 || fail "fixture inherited the refusing hook: $(cat "$dir/fixture.log")"
+  pass "fixture push ignores inherited command-scope hooks"
+)
+
+test_inherited_hook_isolation || fail "Git fixture hook isolation"
 test_git_config_isolation || fail "Git fixture config isolation"
 test_inherited_git_location_isolation || fail "Git fixture location isolation"
 test_agent_standin_survives_a_multicall_sleep || fail "agent stand-in multicall case"
