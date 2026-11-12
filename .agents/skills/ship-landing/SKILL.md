@@ -27,13 +27,13 @@ Retain delivery gate facts with `presentation <id> --reconcile` and settle any p
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
 Use `--preserve` only for a ship or scout with an attached task branch; a host or detached scout uses ordinary teardown.
-Landed work is closed now, even when something must stay alive to protect it or a real-world check remains that may never happen: neither is a wait, so never keep the task in flight or declare it `paused:` for either.
-Close it with `bin/fm-teardown.sh <id> --residual "<what is left, in the captain's language>"`, which files that residual as its own held Queued item where it stays visible; add `--keep-running` only when cleanup itself would destroy what must be kept, because it leaves the task's endpoint and local copy untouched and names them in that item (the script header owns both flags).
+Complete the applicable verification and installation within the same task before closing it.
+When something must stay alive to protect landed work, close with `bin/fm-teardown.sh <id> --residual "<what is left, in the captain's language>"`; add `--keep-running` only when cleanup itself would destroy what must be kept, because it leaves the task's endpoint and local copy untouched and names them in that item (the script header owns both flags).
 Recheck a residual item whenever its condition can have changed, close it with `bin/fm-tasks-axi.sh done <id>-residual` once it is settled, and ask the captain before closing anything it kept running, since it was kept for them.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 When a `cleanup-disposition:<fingerprint>` wake names that task, record `closed` after teardown succeeds, or record `retained` with its reason or `blocked` with the teardown refusal through `fm-inactive-reconcile.sh disposition`; the startup scan keeps an unresolved disposition visible after wake acknowledgement.
-When teardown prints an `Install follow-up:` line, the project links a local installation and the captain's request is not finished yet: in the same turn, run the `bin/fm-install-followup.sh brief` command it names and dispatch the follow-up through the ordinary intake, without asking the captain.
-Until that follow-up lands, report the landing as on its way to the captain's local installation rather than as finished work.
+When the applicable delivery procedure requires installed verification, complete it within the same task before treating the request as finished.
+Report a landed change as on its way until that verification is complete.
 
 A secondmate is persistent and an empty queue is healthy.
 Retire one only on an explicit captain or main-firstmate decision, after loading `secondmate-provisioning`; its home must contain no work under way, and forced discard still requires explicit captain authority.

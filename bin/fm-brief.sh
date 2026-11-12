@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Scaffold a crewmate brief or persistent secondmate charter at
 # data/<task-id>/brief.md under the active firstmate home.
-# For ordinary tasks, the standard Setup/Rules/Definition-of-done contract is
-# filled in. Ship, scout, and host `# Task` sections have two subsections Firstmate
+# Ship and scout briefs carry task-specific facts and load the worker-contract
+# skill for shared rules. Ship, scout, and host `# Task` sections have two subsections Firstmate
 # fills before dispatch: `{TASK}` under `## Captain's intent` (the captain's
 # own ask plus the context needed to read it, including the substance of any
 # report, decision, or PR the ask refers to, without added speaker labels or
@@ -105,10 +105,9 @@
 # disagrees, so an adjusted brief and the recorded task metadata cannot drift
 # apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
-# Both crewmate scaffolds carry one shared rule against administering the
-# infrastructure every lane shares - the no-mistakes daemon and the worktree pool
-# their own slot came from - so ship and scout cannot drift apart. A secondmate
-# charter omits it: that home allocates and returns slots for its own crewmates.
+# Both crewmate scaffolds load worker-contract, which owns the shared rule against
+# administering the no-mistakes daemon or worktree pool. A secondmate charter
+# omits it because that home allocates and returns its own crewmates' slots.
 # --mode, --forge, and --shape are refused on scout and secondmate scaffolds: a
 # scout's deliverable is a report rather than a merge, and a charter is not a
 # delivery contract.
@@ -129,7 +128,7 @@
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
-# Ship tasks include a project-memory section bounding crewmate edits to a
+# The worker-contract skill bounds ship crewmate edits to a
 # project's AGENTS.md/CLAUDE.md: only corrections of factually wrong
 # information, including wrong information the task itself introduced - never
 # additions of missing knowledge. A correction edits only the wrong text and
@@ -512,6 +511,7 @@ if [ -e "$CONFIG/wait-no-turns" ]; then
   INBOX_SECTION+="Do not poll or list the inbox while waiting; a waiting instruction rings."$'\n'
 fi
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
+SHORT_INBOX="# Firstmate instruction inbox${INBOX_SECTION#*"# Firstmate instruction inbox"}"
 
 # How a crewmate or scout waits. Every model turn resends the whole context, so
 # a wait must cost no turns: a decision wait ends the turn, and an external
@@ -689,47 +689,7 @@ else
   SIMPLICITY_LINE=''
 fi
 
-# One shared string keeps the ship and scout infrastructure rule identical.
-# Rule 2 governs file edits, so it does not prohibit pool administration.
-# The secondmate charter deliberately omits this rule because a secondmate
-# legitimately allocates and returns slots for crewmates in its own home.
-IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares. Two things are shared:
-   - The `no-mistakes` daemon - one instance serving every lane/home, so stopping, restarting, or
-     updating it kills other lanes' in-flight pipeline runs; only firstmate manages the daemon.
-     Before you append `blocked:` about the pipeline, run `no-mistakes daemon status` and
-     `no-mistakes axi status`. If the daemon socket refuses connections or is missing, append
-     `blocked [at=<epoch>]: {the daemon error}` and stop even when the local run record still says running or
-     fixing, because that record can be stale after the daemon exits. A run record failed with a
-     daemon error is also a real block.
-     Only after ruling out socket refusal, if the run is still running or fixing, reattach and keep
-     going. A drive-call error, timeout, slow read, or generic unreachability is NOT a daemon error:
-     the daemon accepts `respond` immediately and runs the round in the background, so a killed or
-     timed-out call was only waiting for a read while the run kept working.
-   - The worktree pool your own worktree came from, and the repository every lane's worktree
-     shares. Never create, remove, return, prune, move, or reassign a worktree or pool slot, and
-     never write into a sibling slot's directory. Rule 2 does not cover this: removing a worktree
-     is administration rather than an edit outside your directory, and it lands on lanes that are
-     running right now. The act is the rule and commands are only examples of it - `treehouse`
-     get/return/remove/prune, the equivalent operations on any other worktree provider or runtime
-     backend, and `git worktree add|remove|move|prune`. A slot that looks unused is not evidence
-     that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
-   If you genuinely need a second checkout, another slot, or the daemon touched, append
-   `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
-EOF
-SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
-
-# One shared string keeps the ship and scout shell-path rule identical.
-IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true
-8. Never start a shell command with `cd`, and never run a search whose path depends on the current directory.
-   Use absolute paths, `git -C <abs>`, or a `( cd <abs> && ... )` subshell.
-   Quote every variable in `rm` and other destructive commands (`rm -rf -- "$dir"`) and prefer literal paths or a `mktemp -d` directory for scratch data: an unquoted expansion triggers the harness's safety prompt and stalls you.
-   Write a variable glob as `rm -f -- "${dir:?}"/*`, and remove a `$(...)` result only by the literal paths it printed: Claude Code holds `$dir/*`, `"$dir"/*` and substitution targets on a permission dialog even in bypass mode and denies them after two minutes.
-   Pass this rule to every sub-agent you launch.
-EOF
-SHARED_NO_CD_RULE=${SHARED_NO_CD_RULE%$'\n'}
-
-# One retry boundary for ship and scout work: a failed optional path must not
+# A failed optional path must not
 # park independent authorized work, and escalation must name the action owner.
 IFS= read -r -d '' CREWMATE_OBSTACLE_INSTRUCTIONS <<'EOF' || true
 5. Apply any command-specific bounded recovery first; bin/fm-tasks-axi.sh --help owns work-lock contention recovery.
@@ -796,7 +756,8 @@ else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION
 $SIMPLICITY_LINE
@@ -805,43 +766,21 @@ $HERDR_SECTION
 
 # Setup
 $SETUP_BASE
-This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is disposable - edit and make scratch commits freely; the worktree is discarded at teardown after changed work is backed up.
-Teardown preserves local changes in a recoverable backup; the report must still stand alone for review.
+This is a SCOUT task: deliver a written report, not a PR.
+The worktree is your laboratory; teardown preserves local changes in a recoverable backup, but the report must stand alone.
 
-# Rules
-1. Never push to any remote and never open a PR.
-2. Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
-   Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status file and the card record below.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
-   \`$STATUS_APPEND\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
-   Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
-   FYI progress lines; firstmate reads your pane for that.
-   Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
-   https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
-   copies that URL from your line rather than assembling one.
-$CARD_RULE
-$CREWMATE_PAUSE_INSTRUCTIONS
-$CREWMATE_OBSTACLE_INSTRUCTIONS
-6. If a decision belongs to a human (product choices, destructive actions),
-   prepare the decision evidence required by AGENTS.md section 9 for firstmate before stopping; stop before the action that needs that decision.
-   append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
-   A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
-$SHARED_INFRA_RULE
-$SHARED_NO_CD_RULE
-
-$WAIT_BLOCK$INBOX_SECTION
-
+# Task-specific rules and paths
+Never push or open a PR.
+Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
+Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
+Status command: \`$STATUS_APPEND\`
+Card command: \`$CARD_UPDATE\`
+$SHORT_INBOX
+Declared external-wait status: $PAUSED_VERB
+$WAIT_BLOCK
 # Definition of done
-Write your findings to \`$DATA/$ID/report.md\`.
-The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), what you recommend, and the unresolved work to route under AGENTS.md section 7.
-For a diagnosis, read the always-on diagnostic logs in the directory above \`$FM_ROOT/bin/fm-diag.sh path\` first and cite their numbers, as \`diagnostic-reasoning\` describes.
-For a diagnosis with local changes, include the applied diff (including new files), commands to reproduce, and the result.
+Write findings to \`$DATA/$ID/report.md\` with what you did, findings, evidence, recommendations and unresolved work.
+For a diagnosis, follow diagnostic-reasoning and cite the always-on diagnostic logs; with local changes include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
 Before reporting done, load \`captain-hold-lifecycle\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
@@ -874,7 +813,8 @@ RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exi
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT") || exit 1
 
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION
 $SIMPLICITY_LINE
@@ -883,50 +823,21 @@ $HERDR_SECTION
 
 # Setup
 $SETUP_BASE
-
-**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
-The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree\` to the status file and stop.
-
+Verify \`pwd -P\` and \`git rev-parse --show-toplevel\` both name your disposable task worktree, not firstmate's primary checkout; if not, report blocked and stop before branching.
 1. First action: create your branch: \`git checkout -b $BRANCH_Q --\`$SETUP2
 
-# Rules
+# Task-specific rules and paths
 $RULE1
 2. Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
    Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
    Leave the worktree clean before reporting done.
 3. $FORGE_RULE_LINE
-4. Report status by appending one line:
-   \`$STATUS_APPEND\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
-   Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on (setup done, bug reproduced, fix implemented, validation passed) and the
-   needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;
-   firstmate reads your pane for that.
-   Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
-   https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
-   copies that URL from your line rather than assembling one.
-   A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
-   turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
-$CARD_RULE
-$CREWMATE_PAUSE_INSTRUCTIONS
-$CREWMATE_OBSTACLE_INSTRUCTIONS
-6. If a decision belongs above the implementation worker (product choices, destructive actions),
-   prepare the decision evidence required by AGENTS.md section 9 for firstmate before stopping; stop before the action that needs that decision.
-   append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
+Status command: \`$STATUS_APPEND\`
+Card command: \`$CARD_UPDATE\`
+$SHORT_INBOX
+Declared external-wait status: $PAUSED_VERB
 $ASK_USER_BLOCK
-   A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
-$SHARED_INFRA_RULE
-$SHARED_NO_CD_RULE
-
-$WAIT_BLOCK$INBOX_SECTION
-
-# Project memory
-A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.
-A correction edits only the wrong text: do not run \`$FM_ROOT/bin/fm-ensure-agents-md.sh\`, create either file, or add sections, headings, or pointers alongside it.
-
+$WAIT_BLOCK
 $DOD
 EOF
 append_brief_include

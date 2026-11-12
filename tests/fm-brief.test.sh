@@ -213,13 +213,13 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
-    assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
-    assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
+    assert_grep 'never a bare number such as "PR 108"' "$ROOT/.agents/skills/worker-contract/SKILL.md" "$id: brief missing the full-PR-URL rule"
+    assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
-    assert_grep 'stop retrying that path' "$brief" "$id: no bounded retry rule"
-    assert_grep 'Continue independent authorized work' "$brief" "$id: an optional obstacle parks the whole ship"
-    assert_grep 'failed path; evidence; affected work; next action needed from firstmate' "$brief" "$id: technical escalation has no scope or action owner"
-    assert_grep 'This does not relax safety gates, required validation' "$brief" "$id: independent progress bypasses safety or validation"
+    assert_grep 'stop retrying that path' "$ROOT/.agents/skills/worker-contract/SKILL.md" "$id: no bounded retry rule"
+    assert_grep 'Continue independent authorized work' "$ROOT/.agents/skills/worker-contract/SKILL.md" "$id: an optional obstacle parks the whole ship"
+    assert_grep 'failed path; evidence; affected work; next action needed from firstmate' "$ROOT/.agents/skills/worker-contract/SKILL.md" "$id: technical escalation has no scope or action owner"
+    assert_grep 'This does not relax safety gates, required validation' "$ROOT/.agents/skills/worker-contract/SKILL.md" "$id: independent progress bypasses safety or validation"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
   done
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
@@ -634,6 +634,8 @@ test_ship_project_memory_wording() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "brief was not scaffolded"
+  assert_grep "worker-contract/SKILL.md" "$brief" "brief must load worker contract"
+  brief="$ROOT/.agents/skills/worker-contract/SKILL.md"
   assert_grep "loaded into every agent session" "$brief" \
     "project-memory contract lost the per-session cost rationale"
   assert_grep "only to correct information that is factually wrong" "$brief" \
@@ -644,7 +646,7 @@ test_ship_project_memory_wording() {
     "project-memory contract still permits additions of missing knowledge"
   assert_no_grep "if this task produced durable project-intrinsic knowledge" "$brief" \
     "project-memory contract still invites additions for durable knowledge"
-  assert_grep "A correction edits only the wrong text: do not run \`$ROOT/bin/fm-ensure-agents-md.sh\`" "$brief" \
+  assert_grep "A correction edits only the wrong text: do not run \`fm-ensure-agents-md.sh\`" "$brief" \
     "project-memory contract no longer forbids the ensure helper on a correction"
   pass "fm-brief.sh: ship project-memory wording bounds edits to corrections of wrong information"
 }
@@ -990,6 +992,13 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
         ;;
     esac
     brief="$home/data/$id/brief.md"
+    if [ "$kind" != secondmate ]; then
+      assert_grep 'worker-contract/SKILL.md' "$brief" "$kind must load its contract"
+      assert_grep 'Declared external-wait status: awaiting' "$brief" "$kind must bind its pause verb"
+      cat "$brief" > "$home/data/$id/effective-contract"
+      sed 's/paused/awaiting/g' "$ROOT/.agents/skills/worker-contract/SKILL.md" >> "$home/data/$id/effective-contract"
+      brief="$home/data/$id/effective-contract"
+    fi
     # Fill the scaffold's generated status-append command the way a worker does
     # and run it. The stamp must be a value the worker supplies, so the command
     # may not carry an unevaluated substitution that a file-write tool would
@@ -1075,15 +1084,15 @@ test_ship_and_scout_teach_validation_round_pause() {
       "$kind brief's Waiting section does not declare the validation round once and then hold it"
     assert_no_grep "is not a \`paused:\` wait" "$brief" \
       "$kind brief still tells workers never to declare a wait they hold in a command"
-    assert_grep "your own validation round" "$brief" \
+    assert_grep "your own validation round" "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$kind brief did not teach workers to declare their validation-round wait"
-    assert_grep 'Before ending your turn with your own background shell or monitor still running' "$brief" \
+    assert_grep 'Before ending your turn with your own background shell or monitor still running' "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$kind brief did not require declaring a background-work wait"
-    assert_grep 'before waiting on your own pipeline run or a long foreground command' "$brief" \
+    assert_grep 'before waiting on your own pipeline run or a long foreground command' "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$kind brief did not require declaring a pipeline or foreground wait"
-    assert_grep 'Firstmate may still raise one first-sight alert' "$brief" \
+    assert_grep 'Firstmate may still raise one first-sight alert' "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$kind brief incorrectly promised to suppress the first alert"
-    assert_grep 'Do not declare active implementation or reasoning as a wait' "$brief" \
+    assert_grep 'Do not declare active implementation or reasoning as a wait' "$ROOT/.agents/skills/worker-contract/SKILL.md" \
       "$kind brief did not limit the declaration to actual waits"
   done
   pass "fm-brief.sh: ship and scout scaffolds declare a validation-round pause once, then hold it"
@@ -1098,7 +1107,7 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   scout="$home/data/sample-investigation/brief.md"
   assert_grep "load \`captain-hold-lifecycle\`" "$scout" \
     "scout brief did not name the captain-call skill before done"
-  assert_no_grep '/.agents/skills/' "$scout" "scout brief primed home-based skill paths"
+  assert_no_grep '/.agents/skills/captain-hold-lifecycle/' "$scout" "scout brief primed a home-based captain-hold path"
   assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
     "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
@@ -1161,8 +1170,8 @@ test_scout_and_secondmate_scaffold() {
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
   assert_grep 'Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm' "$brief" "scout brief missing simplicity-rules reference"
   assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
-  assert_grep 'Continue independent authorized work' "$brief" 'an optional obstacle parks the whole scout'
-  assert_grep 'stop the whole task only when no such work remains' "$brief" 'scout lacks a whole-task stop boundary'
+  assert_grep 'Continue independent authorized work' "$ROOT/.agents/skills/worker-contract/SKILL.md" 'an optional obstacle parks the whole scout'
+  assert_grep 'stop the whole task only when no such work remains' "$ROOT/.agents/skills/worker-contract/SKILL.md" 'scout lacks a whole-task stop boundary'
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
@@ -1590,6 +1599,8 @@ test_crewmate_scaffolds_forbid_pool_administration() {
     FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --mode "$mode" >/dev/null 2>&1 \
       || fail "fm-brief.sh --mode $mode exited non-zero"
     brief="$home/data/$id/brief.md"
+    assert_grep "worker-contract/SKILL.md" "$brief" "$mode must load the contract"
+    brief="$ROOT/.agents/skills/worker-contract/SKILL.md"
     assert_grep "worktree pool" "$brief" \
       "$mode ship brief did not name the shared worktree pool"
     assert_grep "create, remove, return, prune, move, or reassign" "$brief" \
@@ -1611,6 +1622,8 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-pool-scout alpha --scout >/dev/null 2>&1 \
     || fail "fm-brief.sh --scout exited non-zero"
   brief="$home/data/brief-pool-scout/brief.md"
+  assert_grep "worker-contract/SKILL.md" "$brief" "scout must load the contract"
+  brief="$ROOT/.agents/skills/worker-contract/SKILL.md"
   assert_grep "worktree pool" "$brief" "scout brief did not name the shared worktree pool"
   # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
   assert_grep 'blocked [at=<epoch>]: {what you need}' "$brief" "scout brief gave the prohibition no exit"
@@ -1618,13 +1631,13 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   # One shared string, not two copies: the emitted rule must be byte-identical
   # across the ship and scout scaffolds so a later edit cannot fix one and miss
   # the other.
-  ship_rule=$(awk '/^7\. Never administer/,/^$/' "$home/data/brief-pool-no-mistakes/brief.md")
+  ship_rule=$(awk '/^7\. Never administer/,/^$/' "$ROOT/.agents/skills/worker-contract/SKILL.md")
   scout_rule=$(awk '/^7\. Never administer/,/^$/' "$brief")
   [ -n "$ship_rule" ] || fail "ship brief emitted no shared-infrastructure rule to compare"
   [ "$ship_rule" = "$scout_rule" ] \
     || fail "ship and scout shared-infrastructure rules have drifted apart"
 
-  ship_cd_rule=$(awk '/^8\. Never start a shell command with/,/^$/' "$home/data/brief-pool-no-mistakes/brief.md")
+  ship_cd_rule=$(awk '/^8\. Never start a shell command with/,/^$/' "$ROOT/.agents/skills/worker-contract/SKILL.md")
   scout_cd_rule=$(awk '/^8\. Never start a shell command with/,/^$/' "$brief")
   [ -n "$ship_cd_rule" ] || fail "ship brief emitted no leading-cd rule"
   [ "$ship_cd_rule" = "$scout_cd_rule" ] \
@@ -1632,7 +1645,7 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   assert_grep "every sub-agent you launch" "$brief" "scout brief did not pass the leading-cd rule to sub-agents"
   # shellcheck disable=SC2016 # Literal backticks and dollar signs must remain unexpanded.
   assert_grep 'rm -rf -- "$dir"' "$brief" "scout brief did not tell workers to quote variables in deletions"
-  assert_grep 'Quote every variable' "$home/data/brief-pool-no-mistakes/brief.md" \
+  assert_grep 'Quote every variable' "$ROOT/.agents/skills/worker-contract/SKILL.md" \
     "ship brief did not tell workers to quote variables in deletions"
 
   # The daemon half of the rule survived the fold.
@@ -1670,17 +1683,15 @@ test_crewmate_card_command_writes_the_task_card() {
     || fail "fm-brief.sh --scout exited non-zero"
   brief="$home/data/brief-card/brief.md"
   assert_grep "presentation 'brief-card' --card-status" "$brief" "ship brief did not render the card command"
-  assert_grep "add \`--summary" "$brief" "ship brief did not ask for the summary with done"
-  assert_grep "the card record below" "$home/data/brief-card-scout/brief.md" \
+  assert_grep "add \`--summary" "$ROOT/.agents/skills/worker-contract/SKILL.md" "ship brief did not ask for the summary with done"
+  assert_grep "status, card, and steering-inbox records authorized" "$ROOT/.agents/skills/worker-contract/SKILL.md" \
     "scout brief did not authorize its card write outside the worktree"
-  ship_rule=$(awk '/also refresh the card/,/status line stays authoritative/' "$brief" | sed 's/brief-card/ID/')
-  scout_rule=$(awk '/also refresh the card/,/status line stays authoritative/' "$home/data/brief-card-scout/brief.md" \
-    | sed 's/brief-card-scout/ID/')
-  [ -n "$ship_rule" ] || fail "ship brief emitted no card rule to compare"
-  [ "$ship_rule" = "$scout_rule" ] || fail "ship and scout card rules have drifted apart"
+  assert_grep "worker-contract/SKILL.md" "$brief" "ship brief must load card protocol"
+  assert_grep "worker-contract/SKILL.md" "$home/data/brief-card-scout/brief.md" "scout brief must load card protocol"
 
   if command -v tasks-axi >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
-    command=$(awk '/also refresh the card/ { getline; print; exit }' "$brief" \
+    # shellcheck disable=SC2016 # The backticks and dollar sign match literal brief text.
+    command=$(sed -n 's/^Card command: `\(.*\)`$/\1/p' "$brief" \
       | sed -e 's/^ *`//' -e 's/`$//' -e 's/{what is happening now}/Probando los cambios/')
     out=$( (cd "$TMP_ROOT" && env -u FM_HOME -u FM_DATA_OVERRIDE bash -c "$command") 2>&1)
     rc=$?
@@ -1719,6 +1730,22 @@ test_task_temporary_storage() {
 }
 
 test_task_temporary_storage
+test_ship_brief_is_short_and_actionable() {
+  local home brief bytes
+  home="$TMP_ROOT/short-brief-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" short-example example --mode local-only >/dev/null || fail "ship scaffold failed"
+  brief="$home/data/short-example/brief.md"
+  bytes=$(wc -c < "$brief")
+  [ "$bytes" -lt 7000 ] || fail "ship brief must be shorter than 7000 bytes, got $bytes"
+  assert_contains "$(cat "$brief")" "## Captain's intent" "brief must retain intent"
+  assert_contains "$(cat "$brief")" '## Firstmate spec' "brief must retain spec"
+  assert_contains "$(cat "$brief")" 'Delivery contract: mode=local-only' "brief must retain delivery"
+  assert_contains "$(cat "$brief")" 'worker-contract/SKILL.md' "brief must load worker contract"
+  pass "ship brief is short and preserves task and delivery facts"
+}
+
+test_ship_brief_is_short_and_actionable
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
