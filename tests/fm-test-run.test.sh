@@ -1773,6 +1773,109 @@ PYTEST
   pass "host slots wait and resume after release"
 }
 
+test_heavy_sessions() {
+  python3 - "$ROOT" <<'PYTEST' || fail "heavy-session serialization contract failed"
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+root = Path(sys.argv[1])
+wrapper = str(root / "bin/fm-heavy-run.sh")
+with tempfile.TemporaryDirectory() as tmp:
+    lab = Path(tmp)
+    env = dict(os.environ, FM_HEAVY_LOCK_DIR=tmp, FM_TEST_SKIP_HOST_LOCK="1", FM_LIVE="0")
+    for key in ("FM_HEAVY_HOST_LOCKED", "FM_HEAVY_SKIP_HOST_LOCK"):
+        env.pop(key, None)
+    processes = []
+    def launch(command, name):
+        log = open(lab / name, "w")
+        proc = subprocess.Popen(command, env=env, stdout=log, stderr=log)
+        log.close()
+        processes.append(proc)
+        return proc
+    def until(predicate):
+        deadline = time.monotonic() + 15
+        while not predicate():
+            assert time.monotonic() < deadline, "condition timed out"
+            time.sleep(0.05)
+    try:
+        # Hold the slot through the public command interface, as a browser walk
+        # would. The nested wrapper must share that session rather than wait.
+        held = lab / "held"
+        release = lab / "release"
+        holder = launch(["bash", wrapper, "bash", wrapper, "bash", "-c",
+                         'touch "$1"; while [ ! -e "$2" ]; do sleep 0.1; done',
+                         "_", str(held), str(release)], "holder.log")
+        until(held.exists)
+        # Independent checkout roots and temporary directories must still use
+        # the same host slot; no real harness or Herdr resource is opened.
+        runners = []
+        for i, name in enumerate(("fm-codex-activity-live-e2e.test.sh",
+                                  "fm-bearings-board-lavish-live-e2e.test.sh")):
+            repo = lab / str(i)
+            (repo / "bin").mkdir(parents=True)
+            (repo / "tests").mkdir()
+            for script in ("fm-test-run.sh", "fm-heavy-run.sh"):
+                shutil.copy(root / "bin" / script, repo / "bin" / script)
+            shutil.copy(root / "tests/git-config-helpers.sh", repo / "tests")
+            (repo / "tmp").mkdir()
+            marker = lab / f"ran-{i}"
+            (repo / "tests" / name).write_text(f'touch "{marker}"\nsleep 0.2\n')
+            env["TMPDIR"] = str(repo / "tmp")
+            runners.append(launch(["bash", str(repo / "bin/fm-test-run.sh"),
+                                   "tests/" + name], f"runner-{i}.log"))
+        until(lambda: all("waiting for heavy session held by PID" in
+                          (lab / f"runner-{i}.log").read_text() for i in range(2)))
+        for i in range(2):
+            log = (lab / f"runner-{i}.log").read_text()
+            assert log.count("waiting for heavy session") == 1, log
+            assert "skip: FM_HEAVY_SKIP_HOST_LOCK=1" in log
+            assert not (lab / f"ran-{i}").exists(), "heavy command ran while slot held"
+        # The bypass and ordinary suites remain usable while a session is held.
+        bypass = dict(env, FM_HEAVY_SKIP_HOST_LOCK="1")
+        subprocess.run(["bash", wrapper, "true"], env=bypass, check=True, timeout=10)
+        ordinary = lab / "ordinary.test.sh"
+        ordinary.write_text("exit 0\n")
+        subprocess.run(["bash", str(root / "bin/fm-test-run.sh"), str(ordinary)],
+                       env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
+        release.touch()
+        assert holder.wait(timeout=15) == 0
+        for i, proc in enumerate(runners):
+            assert proc.wait(timeout=15) == 0, (lab / f"runner-{i}.log").read_text()
+            assert (lab / f"ran-{i}").exists()
+        # Preserve input and failure status, and release after a failed command.
+        result = subprocess.run(["bash", wrapper, "cat"], input=b"walk input\n",
+                                capture_output=True, env=env, timeout=10)
+        assert result.returncode == 0 and result.stdout == b"walk input\n", result
+        result = subprocess.run(["bash", wrapper, "bash", "-c", "exit 7"], env=env, timeout=10)
+        assert result.returncode == 7
+        # Background services cannot retain the wrapper's descriptor after the
+        # walkthrough exits. The fixture cleans up its own disposable service.
+        pidfile = lab / "background-pid"
+        subprocess.run(["bash", wrapper, "bash", "-c",
+                        'sleep 60 </dev/null >/dev/null 2>&1 & echo $! > "$1"',
+                        "_", str(pidfile)], env=env, check=True, timeout=10)
+        try:
+            subprocess.run(["bash", wrapper, "true"], env=env, check=True, timeout=10)
+        finally:
+            os.kill(int(pidfile.read_text()), signal.SIGTERM)
+    finally:
+        release.touch()
+        for proc in processes:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=15)
+PYTEST
+  pass "heavy sessions serialize across worktrees; bypass, nesting, stdin and exit release work"
+}
+
+test_heavy_sessions
+
 test_host_test_slots
 test_list_all_exact_suite_coverage
 test_family_selection

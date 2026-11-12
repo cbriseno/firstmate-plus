@@ -5,7 +5,8 @@
 #
 # Test runs share two host slots across homes and worktrees. When both are
 # occupied, a line names their PIDs and FM_TEST_SKIP_HOST_LOCK=1 bypasses the
-# limit. Nested runners inherit their parent's slot.
+# limit. Nested runners inherit their parent's slot. Live-harness and real-Herdr
+# suites additionally use bin/fm-heavy-run.sh's single heavy-session host slot.
 #
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
 # --proven-isolated, or script paths):
@@ -2549,6 +2550,11 @@ run_script_bounded() (  # <script> <out> <stream> <id>
     *) eval "exec ${FM_TEST_HOST_LOCK_FD}>&-"; unset FM_TEST_HOST_LOCK_FD ;;
   esac
   local script=$1 out=$2 stream=$3 id=$4
+  local command=(bash "$script")
+  case "$(family_for_basename "$(basename "$script")")" in
+    live-harness-optin|real-herdr-gated)
+      command=(bash "$ROOT/bin/fm-heavy-run.sh" "${command[@]}") ;;
+  esac
   # Declaring the variables local first keeps the helper's export scoped to this
   # call and its child script, so the runner's own environment is left as the
   # caller had it.
@@ -2563,17 +2569,17 @@ run_script_bounded() (  # <script> <out> <stream> <id>
       # Expansion is intentionally deferred to the child bash passed to -c.
       # shellcheck disable=SC2016
       fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
-        'bash "$1" 2>&1 | tee "$2"; exit "${PIPESTATUS[0]}"' _ "$script" "$out"
+        'out=$1; shift; "$@" 2>&1 | tee "$out"; exit "${PIPESTATUS[0]}"' _ "$out" "${command[@]}"
       rc=$?
     else
-      bash "$script" 2>&1 | tee "$out"
+      "${command[@]}" 2>&1 | tee "$out"
       rc=${PIPESTATUS[0]}
     fi
   elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$script" >"$out" 2>&1
+    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" "${command[@]}" >"$out" 2>&1
     rc=$?
   else
-    bash "$script" >"$out" 2>&1
+    "${command[@]}" >"$out" 2>&1
     rc=$?
   fi
   if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ] && [ "$rc" -eq 124 ]; then
