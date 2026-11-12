@@ -5495,7 +5495,7 @@ test_paused_bg_job_until_timeout_rechecks_after_the_job_ends() {
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
-  exit 0
+  exit $?
 fi
 
 test_status_span_actionable_classifier
@@ -5517,7 +5517,7 @@ test_signal_crew_provably_working_classifier
 test_secondmate_status_routine_absorbed_routed_surfaced_classifier
 test_provably_working_signal_absorbed
 test_turn_ended_provably_working_absorbed
-test_undeclared_worker_turnend_wakes_once
+test_undeclared_worker_turnend_wakes_once || exit 1
 test_turn_ended_not_working_surfaced
 test_new_status_with_turnend_surfaces
 test_turn_ended_churning_pane_absorbed
