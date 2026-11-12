@@ -1826,6 +1826,59 @@ assert len(doc["scripts"])==3
   pass "aggregate-json merges lane timing artifacts"
 }
 
+test_host_test_slots() {
+  python3 - "$RUNNER" <<'PYTEST' || fail "host test slots did not wait and release"
+import fcntl
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+fds = []
+for slot in (1, 2):
+    fd = os.open(f"/tmp/firstmate-test-{os.getuid()}-{slot}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fds.append(fd)
+    except BlockingIOError:
+        os.close(fd)
+assert fds, "no test slot available for fixture"
+with tempfile.TemporaryDirectory() as tmp:
+    fixture = os.path.join(tmp, "fixture.test.sh")
+    with open(fixture, "w") as out:
+        out.write("#!/usr/bin/env bash\nexit 0\n")
+    env = os.environ.copy()
+    env.pop("FM_TEST_HOST_LOCKED", None)
+    env.pop("FM_TEST_SKIP_HOST_LOCK", None)
+    with tempfile.TemporaryFile(mode="w+") as log:
+        proc = subprocess.Popen(["bash", sys.argv[1], fixture], stdout=log, stderr=log, env=env)
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                log.seek(0)
+                if "waiting for host test slots held by PIDs" in log.read():
+                    break
+                assert proc.poll() is None, "runner exited without waiting"
+                time.sleep(0.1)
+            else:
+                raise AssertionError("no waiting message")
+            assert proc.poll() is None
+            for fd in fds:
+                os.close(fd)
+            fds.clear()
+            assert proc.wait(timeout=20) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            for fd in fds:
+                os.close(fd)
+PYTEST
+  pass "host slots wait and resume after release"
+}
+
+test_host_test_slots
 test_list_all_exact_suite_coverage
 test_family_selection
 test_single_script_selection

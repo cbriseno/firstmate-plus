@@ -3,6 +3,10 @@
 # composition for portable CI shards, local --jobs for proven-concurrent work,
 # timing markers, and the complete-regression coverage guard.
 #
+# Test runs share two host slots across homes and worktrees. When both are
+# occupied, a line names their PIDs and FM_TEST_SKIP_HOST_LOCK=1 bypasses the
+# limit. Nested runners inherit their parent's slot.
+#
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
 # --proven-isolated, or script paths):
 #   fm-test-run.sh --all
@@ -150,6 +154,7 @@
 # tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
 # above those also name individual tests/ files explicitly.
 set -eu
+ORIGINAL_ARGS=("$@")
 
 now_ms() {
   if command -v python3 >/dev/null 2>&1; then
@@ -2322,6 +2327,40 @@ if [ "${#SCRIPTS[@]}" -eq 0 ]; then
     rm -f "$empty_rec" "$empty_fam"
   fi
   exit "$empty_rc"
+fi
+
+# Use the same inherited fcntl lock pattern as fm-lint, with two slots.
+if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1 ]; then
+  exec python3 - "${BASH:-bash}" "$ROOT/bin/fm-test-run.sh" "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}" <<'PYLOCK'
+import fcntl
+import os
+import sys
+import time
+
+fds = [os.open(f"/tmp/firstmate-test-{os.getuid()}-{slot}.lock",
+               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in (1, 2)]
+reported = False
+while True:
+    for fd in fds:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            continue
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        os.set_inheritable(fd, True)
+        os.environ["FM_TEST_HOST_LOCKED"] = "1"
+        os.execvp(sys.argv[1], sys.argv[1:])
+    if not reported:
+        holders = []
+        for fd in fds:
+            os.lseek(fd, 0, os.SEEK_SET)
+            holders.append(os.read(fd, 32).decode(errors="replace") or "unknown")
+        print("fm-test-run.sh: waiting for host test slots held by PIDs " +
+              ", ".join(holders) + "; skip: FM_TEST_SKIP_HOST_LOCK=1", file=sys.stderr, flush=True)
+        reported = True
+    time.sleep(0.1)
+PYLOCK
 fi
 
 # Verify selected scripts exist before starting.
