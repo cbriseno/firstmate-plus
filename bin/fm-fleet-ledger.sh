@@ -211,11 +211,13 @@ if [ "$cmd" = capture ]; then
   [ -n "$grown" ] || exit 0
 fi
 
-# Sample before the ledger lock, using the same local facts as Bearings.
+# Sample status and dispatch before the ledger lock, using Bearings' local facts.
+# Entity producers can hold the shared work lock; publish their supplied value
+# without a fleet snapshot that would block unrelated card/backlog mutations.
 # A failed observation never prevents the underlying event from being recorded.
 observation=null
 case "$cmd:${2:-}" in
-  appended:*|dispatched:*|entity:task.changed|entity:task.presentation)
+  appended:*|dispatched:*)
     observation=$(FM_HOME="$FM_HOME" bash "$SCRIPT_DIR/fm-fleet-snapshot.sh" --work-observation </dev/null 2>/dev/null | jq -ce 'select(type == "object")') || observation=null
     ;;
 esac

@@ -54,7 +54,8 @@ Readers must ignore members and events they do not recognize, so later versions 
 
 For entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
 `call.opened` and `call.resolved` values carry the canonical task row and `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
-Direct status appends, task dispatches, and task-change and presentation events carry an optional `observation` containing local `main_inventory` and task `wait_until` and `run_step` facts from the canonical fleet snapshot.
+Direct status appends and task dispatches carry an optional `observation` containing local `main_inventory` and task `wait_until` and `run_step` facts from the canonical fleet snapshot.
+Entity events publish their supplied resulting value without sampling the fleet while the producer holds the shared work lock.
 Validation samples expire according to their own timestamp and TTL.
 Presentation values carry the presentation owner's read result: declaration, outcome occurrence, checkpoint, lifecycle and evidence.
 Replays replace the value for that identity; they do not increment counters.
