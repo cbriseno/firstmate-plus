@@ -459,6 +459,30 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
   pass "a bin reference selects the referencing scripts, and consumers still select their curated families"
 }
 
+test_changed_codex_activity_selects_its_subjects() {
+  local tmp repo script listed expected
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-codex-scope.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  expected=$(printf '%s\n' \
+    tests/fm-codex-session-bind.test.sh tests/fm-busy-state.test.sh \
+    tests/fm-busy-adapter-wiring.test.sh tests/fm-codex-hook-layer-live-e2e.test.sh \
+    tests/fm-codex-activity-live-e2e.test.sh | LC_ALL=C sort)
+  while IFS= read -r script; do
+    printf '#!/usr/bin/env bash\n' >"$repo/$script"
+  done <<<"$expected"
+  : >"$repo/bin/fm-codex-activity.py"
+  printf '# fm-codex-activity.py\n' >"$repo/bin/fm-spawn.sh"
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm codex-fixture
+  printf '\n' >>"$repo/bin/fm-codex-activity.py"
+  printf '\n' >>"$repo/tests/fm-codex-session-bind.test.sh"
+  listed=$(FM_LIVE=0 "$repo/bin/fm-test-run.sh" --changed --base HEAD --list | LC_ALL=C sort)
+  [ "$listed" = "$expected" ] || fail "Codex helper change must select exactly its five subjects: $listed"
+  rm -rf "$tmp"
+  pass "a Codex helper change selects its subjects without expanding the spawn families"
+}
+
 # Exercise begin/end markers from real fixture processes to prove the automatic
 # changed-suite default and its explicit serial override.
 test_changed_uses_bounded_automatic_concurrency() {
@@ -915,6 +939,7 @@ test_a_run_that_ran_records_no_skip_reason() {
   cat >"$ran_f" <<'SH'
 #!/usr/bin/env bash
 echo "ok - ran"
+echo "skip: a later line must not hide work that already ran"
 exit 0
 SH
   chmod +x "$ran_f"
@@ -932,25 +957,59 @@ assert record["gate_skip_reason"] == "", record
 }
 
 test_live_guards_expect_a_capability_skip_class() {
-  local tmp out
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-liveclass.XXXXXX")
-  out="$tmp/out.txt"
-  # FM_LIVE=0 makes every live guard refuse without touching a harness, so this
-  # exercises the real family through the real runner in bounded time.
-  FM_LIVE=0 "$RUNNER" --json "$tmp/timing.json" \
-    tests/fm-composer-matrix-live-e2e.test.sh >"$out" 2>"$tmp/err.txt" \
-    || fail "a disabled live guard must not fail the runner: $(cat "$tmp/err.txt")"
-  grep -q 'expected_gate_skip=live-capability' "$out" \
-    || fail "the live-harness family must expect a capability skip: $(grep FM_TEST_BEGIN "$out")"
-  python3 -c '
-import json, sys
-doc = json.load(open(sys.argv[1]))
-record = doc["scripts"][0]
-assert record["expected_gate_skip"] == "live-capability", record
-assert record["gate_skip"] is True, record
-assert record["gate_skip_reason"].startswith("live: "), record
-' "$tmp/timing.json" || { rm -rf "$tmp"; fail "the live guard record is wrong"; }
-  rm -rf "$tmp"
+  # Use private locks so another lane cannot make this case wait on a real
+  # session. Force the wait notice too: it precedes the guard's own skip line.
+  python3 - "$RUNNER" <<'PYTEST' || fail "the live guard record is wrong"
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+with tempfile.TemporaryDirectory() as tmp:
+    lab = Path(tmp)
+    env = dict(os.environ, FM_LIVE="0", FM_HEAVY_LOCK_DIR=tmp, FM_TEST_LOCK_DIR=tmp)
+    for key in ("FM_COMPOSER_MATRIX_LIVE", "FM_HEAVY_HOST_LOCKED", "FM_HEAVY_SKIP_HOST_LOCK",
+                "FM_TEST_HOST_LOCKED", "FM_TEST_SKIP_HOST_LOCK"):
+        env.pop(key, None)
+    for contended in (False, True):
+        artifact = lab / "timing.json"
+        fd = os.open(lab / f"firstmate-heavy-{os.getuid()}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        if contended:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.ftruncate(fd, 0)
+            os.write(fd, str(os.getpid()).encode())
+        with (lab / "output").open("w") as output:
+            proc = subprocess.Popen(["bash", sys.argv[1], "--json", str(artifact),
+                                     "tests/fm-composer-matrix-live-e2e.test.sh"],
+                                    stdout=output, stderr=output, env=env)
+            try:
+                if contended:
+                    for _ in range(400):
+                        if "waiting for heavy session" in (lab / "output").read_text():
+                            break
+                        assert proc.poll() is None, "guard exited before the private lock wait"
+                        time.sleep(0.05)
+                    else:
+                        raise AssertionError("no heavy-lock wait notice")
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                assert proc.wait(timeout=30) == 0
+            finally:
+                os.close(fd)
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=10)
+        doc = json.loads(artifact.read_text())
+        record = doc["scripts"][0]
+        assert record["exit"] == 0, record
+        assert record["expected_gate_skip"] == "live-capability", record
+        assert record["gate_skip"] is True, record
+        assert record["gate_skip_reason"] == "live: disabled by FM_LIVE=0", record
+        assert doc["summary"]["skipped_gate"] == 1, doc
+PYTEST
   pass "live guards are recorded as a capability class, not a bare env opt-in"
 }
 
@@ -1886,6 +1945,7 @@ test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
+test_changed_codex_activity_selects_its_subjects
 test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
 test_script_list_uses_bounded_automatic_concurrency

@@ -1444,6 +1444,15 @@ families_for_changed_path() {
       # resolution in the caller; emit a marker family of __script__
       printf '%s\n' "__script__:$(basename "$path")"
       ;;
+    bin/fm-codex-activity.py)
+      # Launch and activity subjects, without widening through shared consumers.
+      printf '%s\n' \
+        __script__:fm-codex-session-bind.test.sh \
+        __script__:fm-busy-state.test.sh \
+        __script__:fm-busy-adapter-wiring.test.sh \
+        __script__:fm-codex-hook-layer-live-e2e.test.sh \
+        __script__:fm-codex-activity-live-e2e.test.sh
+      ;;
     bin/fm-lock-release.sh|bin/fm-lock-release.py|tests/fixtures/lock-release-*.py)
       printf '%s\n' __script__:fm-lock-release.test.sh
       printf '%s\n' __script__:fm-lock-release-live.test.sh
@@ -1850,10 +1859,18 @@ select_changed() {
   fi
 }
 
+first_suite_output_line() {
+  # The heavy wrapper can report a lock wait before the suite emits anything.
+  awk '
+    /^fm-heavy-run\.sh: waiting for heavy session held by PID ([0-9]+|unknown); skip: FM_HEAVY_SKIP_HOST_LOCK=1$/ { next }
+    NF { print; exit }
+  ' "$1" 2>/dev/null || true
+}
+
 detect_gate_skip() {
   # True when the first non-empty output line is a skip: gate message.
   local file=$1 first
-  first=$(awk 'NF { print; exit }' "$file" 2>/dev/null || true)
+  first=$(first_suite_output_line "$file")
   case "$first" in
     skip:*) return 0 ;;
     *) return 1 ;;
@@ -1866,7 +1883,7 @@ detect_gate_skip() {
 # from. Callers only use this once detect_gate_skip has already said yes.
 gate_skip_reason() {
   local file=$1 first
-  first=$(awk 'NF { print; exit }' "$file" 2>/dev/null || true)
+  first=$(first_suite_output_line "$file")
   first=${first#skip:}
   printf '%s\n' "$first" | tr '\t' ' ' | sed -e 's/^ *//' -e 's/ *$//'
 }
