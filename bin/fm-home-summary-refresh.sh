@@ -27,6 +27,9 @@
 # for tests and diagnostics.
 set -u
 
+# Publication always uses the real observation time and live crew records.
+unset FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"

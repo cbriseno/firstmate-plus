@@ -7,7 +7,7 @@ set -u
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-WRITER="$ROOT/bin/fm-home-summary-refresh.sh"
+REAL_WRITER="$ROOT/bin/fm-home-summary-refresh.sh"
 SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 WATCH="$ROOT/bin/fm-watch.sh"
 TMP_ROOT=$(fm_test_tmproot fm-home-summary-refresh)
@@ -19,6 +19,30 @@ STATELESS_HOME="$TMP_ROOT/stateless-home"
 LARGE_CHILD_HOME="$TMP_ROOT/large-child-home"
 LARGE_PARENT_HOME="$TMP_ROOT/large-parent-home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
+WRITER="$TMP_ROOT/writer"
+REAL_DATE=$(command -v date)
+mkdir -p "$TMP_ROOT/clock-bin"
+cat > "$TMP_ROOT/clock-bin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = '-u +%Y-%m-%dT%H:%M:%SZ' ] && [ -n "${FM_TEST_CLOCK_NOW:-}" ]; then
+  printf '%s\n' "$FM_TEST_CLOCK_NOW"
+elif [ "${!#}" = '+%s' ] && [ -n "${FM_TEST_CLOCK_EPOCH:-}" ] && [ "$#" -gt 1 ]; then
+  printf '%s\n' "$FM_TEST_CLOCK_EPOCH"
+else
+  exec "$FM_TEST_REAL_DATE" "$@"
+fi
+SH
+cat > "$WRITER" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${FM_SNAPSHOT_NOW:-}" ]; then
+  export FM_TEST_CLOCK_NOW="$FM_SNAPSHOT_NOW" FM_TEST_CLOCK_EPOCH="${FM_SNAPSHOT_NOW_EPOCH:-}"
+  export FM_TEST_REAL_DATE="$TEST_REAL_DATE"
+  export PATH="$TEST_CLOCK_BIN:$PATH"
+fi
+exec "$TEST_REAL_WRITER" "$@"
+SH
+chmod +x "$TMP_ROOT/clock-bin/date" "$WRITER"
+export TEST_REAL_DATE="$REAL_DATE" TEST_CLOCK_BIN="$TMP_ROOT/clock-bin" TEST_REAL_WRITER="$REAL_WRITER"
 WATCH_PID=
 SLOW_WRITER_PID=
 SLOW_WORKER_PGID=
@@ -115,12 +139,49 @@ wait_for_ledger_generation() {  # <generated> [tenths]
   local want=$1 attempts=${2:-150} i=0 got
   while [ "$i" -lt "$attempts" ]; do
     got=$(jq -r '.generated // ""' "$HOME_DIR/state/home-summary.json" 2>/dev/null || true)
-    [ "$got" = "$want" ] && return 0
+    if [ "$want" = current ]; then
+      [ -n "$got" ] && [ "$got" != "$NOW_ONE" ] && [ "$got" != "$NOW_TWO" ] && return 0
+    elif [ "$got" = "$want" ]; then
+      return 0
+    fi
     sleep 0.1
     i=$((i + 1))
   done
   return 1
 }
+
+# The automatic publication path must not pass fixture overrides to its worker.
+ENV_BIN="$TMP_ROOT/env-probe"
+mkdir -p "$ENV_BIN"
+REAL_ENV=$(command -v env)
+cat > "$ENV_BIN/env" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *' --_worker '*)
+    : > "$FM_TEST_ENV_SEEN"
+    for name in FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE; do
+      if [ "${!name+x}" = x ]; then printf '%s\n' "$name" >> "$FM_TEST_ENV_LOG"; fi
+    done
+    ;;
+esac
+exec "$FM_TEST_REAL_ENV" "$@"
+SH
+chmod +x "$ENV_BIN/env"
+PATH="$ENV_BIN:$FAKEBIN:$PATH" FM_TEST_REAL_ENV="$REAL_ENV" FM_TEST_ENV_LOG="$TMP_ROOT/inherited-env" FM_TEST_ENV_SEEN="$TMP_ROOT/env-seen" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_SNAPSHOT_NOW="$NOW_ONE" FM_SNAPSHOT_NOW_EPOCH="$EPOCH_ONE" \
+  FM_CREW_STATE_META_OVERRIDE=/tmp/fixture.meta FM_CREW_STATE_STATUS_OVERRIDE=/tmp/fixture.status \
+  "$REAL_WRITER" --best-effort || fail "automatic publication failed"
+[ -e "$TMP_ROOT/env-seen" ] || fail "automatic publication did not start its worker"
+[ ! -s "$TMP_ROOT/inherited-env" ] || fail "automatic publication inherited fixture overrides"
+jq -e --arg stale "$NOW_ONE" '.generated != $stale' "$HOME_DIR/state/home-summary.json" >/dev/null \
+  || fail "automatic publication used the inherited test clock"
+PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+  FM_SNAPSHOT_NOW="$NOW_ONE" FM_SNAPSHOT_NOW_EPOCH="$EPOCH_ONE" \
+  FM_CREW_STATE_META_OVERRIDE=/tmp/fixture.meta FM_CREW_STATE_STATUS_OVERRIDE=/tmp/fixture.status \
+  "$REAL_WRITER" || fail "direct publication failed"
+jq -e --arg stale "$NOW_ONE" '.generated != $stale' "$HOME_DIR/state/home-summary.json" >/dev/null \
+  || fail "direct publication used the inherited test clock"
+pass "direct and automatic publication clear inherited fixture overrides"
 
 run_writer "$NOW_ONE" "$EPOCH_ONE" || fail "initial home-summary publication failed"
 jq -e --arg home "$HOME_DIR" --arg now "$NOW_ONE" --argjson epoch "$EPOCH_ONE" '
@@ -147,12 +208,14 @@ done
   || fail "the real watcher did not begin polling: $(cat "$TMP_ROOT/watch.err" 2>/dev/null)"
 printf 'blocked [key=fixture-dependency]: waiting for the fixture dependency\n' \
   >> "$HOME_DIR/state/ledger-task.status"
-wait_for_ledger_generation "$NOW_TWO" \
+wait_for_ledger_generation current \
   || fail "a status append did not refresh the ledger within the watcher cadence"
 wait "$WATCH_PID" >/dev/null 2>&1 || true
 WATCH_PID=
 
-run_producer "$NOW_TWO" "$EPOCH_TWO" > "$TMP_ROOT/fresh-summary.json" \
+published_now=$(jq -r .generated "$HOME_DIR/state/home-summary.json")
+published_epoch=$(jq -r .generated_epoch "$HOME_DIR/state/home-summary.json")
+run_producer "$published_now" "$published_epoch" > "$TMP_ROOT/fresh-summary.json" \
   || fail "fresh secondmate-home-summary production failed"
 jq -S 'del(.generated, .generated_epoch)' "$HOME_DIR/state/home-summary.json" \
   > "$TMP_ROOT/published-normalized.json"

@@ -3785,6 +3785,18 @@ test_normalize_key() {
 
 # --- capture / send_key / kill / current_path --------------------------------
 
+test_capture_does_not_start_stopped_server() {
+  local dir fb
+  dir="$TMP_ROOT/capture-stopped"; mkdir -p "$dir"
+  fb=$(make_herdr_server_env_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_HERDR_SERVER_MARKER="$dir/started" FM_HERDR_SERVER_ENV_LOG="$dir/env" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture test:w1:p1 1' "$ROOT"; then
+    fail "capture should fail for a stopped server"
+  fi
+  [ ! -e "$dir/started" ] || fail "passive capture started the server"
+  pass "passive capture leaves a stopped server stopped"
+}
+
 test_capture_calls_pane_read() {
   local dir log resp fb out
   dir="$TMP_ROOT/capture"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -3828,10 +3840,10 @@ test_capture_preserves_pane_read_failure() {
   status=$?
   [ "$status" -ne 0 ] || fail "capture should fail when pane read fails, got output '$out'"
   assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''status'$'\x1f''--json' \
-    "capture did not ensure the herdr server before reading the pane"
+    "capture did not check the herdr server before reading the pane"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
     "capture did not try to read the requested pane"
-  pass "fm_backend_herdr_capture: ensures the session and preserves pane read failure"
+  pass "fm_backend_herdr_capture: checks the session and preserves pane read failure"
 }
 
 test_send_key_normalizes_and_targets_pane() {
@@ -6078,6 +6090,7 @@ test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
 test_parse_target
 test_normalize_key
+test_capture_does_not_start_stopped_server
 test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
 test_capture_preserves_pane_read_failure

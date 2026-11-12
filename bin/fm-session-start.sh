@@ -240,6 +240,9 @@
 #             again, while an equal baseline emits no instruction refresh.
 set -u
 
+# Startup children must not inherit snapshot fixture overrides.
+unset FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-platform-lib.sh
 . "$SCRIPT_DIR/fm-platform-lib.sh"
