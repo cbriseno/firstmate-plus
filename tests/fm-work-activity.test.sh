@@ -217,3 +217,39 @@ with tempfile.TemporaryDirectory(prefix='prueba-liveness-paths-') as directory:
     assert all(e['home'] == str(home) and e['task'] == 'prueba-worker' for e in events)
 print('ok - explicit home and config preserve liveness with external state paths')
 PY
+
+# A real-sized backlog must retain observation and capacity when those reads
+# depend on overlapping. The fake readers make a serial regression deterministic.
+python3 - <<'PY'
+import json, os, pathlib, shutil, subprocess, tempfile
+root = pathlib.Path(os.environ['ROOT'])
+with tempfile.TemporaryDirectory(prefix='fm-work-large-') as directory:
+    tmp = pathlib.Path(directory)
+    home, bin_dir = tmp / 'home', tmp / 'bin'
+    for part in ('data', 'state', 'config'): (home / part).mkdir(parents=True)
+    shutil.copytree(root / 'bin', bin_dir)
+    (home / '.tasks.toml').write_text('backend = "markdown"\n[markdown]\npath = "data/backlog.md"\n')
+    rows = ''.join(f'- [ ] task-{i} - Task {i} (repo: sample)\n' for i in range(730))
+    (home / 'data/backlog.md').write_text('## In flight\n\n## Queued\n' + rows + '\n## Done\n')
+    observation = bin_dir / 'fm-fleet-snapshot.sh'
+    observation.write_text('''#!/usr/bin/env bash
+for ((i=0; i<200; i++)); do
+  [ ! -e "$FM_HOME/capacity-started" ] || { echo '{"main_inventory":{"valid":true},"tasks":[]}'; exit 0; }
+  sleep 0.1
+done
+exit 1
+''')
+    capacity = bin_dir / 'fm-capacity.sh'
+    capacity.write_text('''#!/usr/bin/env bash
+touch "$FM_HOME/capacity-started"
+echo '{"lanes":{"count":0},"cap":{"target":3,"status":"ok"},"verdict":{"reasons":[]}}'
+''')
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'TASKS_AXI_'))}
+    env.update(FM_HOME=str(home), FM_LIVE='0')
+    output = subprocess.check_output(['bash', str(bin_dir / 'fm-tasks-axi.sh'), 'work', 'snapshot'], env=env, text=True, timeout=60)
+    snapshot = json.loads(output)
+    assert len(snapshot['tasks']) == 730
+    assert snapshot['main_inventory'] == {'valid': True}, snapshot['main_inventory']
+    assert snapshot['crew']['agents_cap'] == 3
+print('ok - 730-task snapshot overlaps observation and capacity without losing either')
+PY

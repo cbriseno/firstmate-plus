@@ -3,6 +3,7 @@
 import argparse
 from fm_progress import tr
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
 import hashlib
 import json
@@ -625,7 +626,7 @@ class Owner:
                     and (safe != 'reached' or closing) and worker['state'] != 'dead')
         return hold, inherited, task_pause, safe, request_id, running, worker, stopping
 
-    def snapshot(self, facts=None, previous=None, affected=None, controls_only=False):
+    def snapshot(self, facts=None, previous=None, affected=None, controls_only=False, crew=None):
         tasks = []
         observations = {t['id']: t for t in self.observation.get('tasks', [])}
         edges = self.edges()
@@ -879,7 +880,7 @@ class Owner:
             return dict(tasks=tasks, sigue=sigue)
         # Who gives way when there is no room: the running work lowest in the
         # work order, only for ready work the captain placed above it.
-        crew = self.capacity()
+        crew = self.capacity() if crew is None else crew
         running = sorted((t for t in tasks if t['state'] == 'running'), key=lambda t: position[unit[t['key']]])
         yields = None
         if sigue and running and unit[sigue[0]] in placed and position[unit[sigue[0]]] < position[unit[running[-1]['key']]]:
@@ -1942,9 +1943,18 @@ def main():
                     if (authored.get('evidence') or {}).get('available') is not False:
                         authored['lifecycle'], _ = reconcile_progress(owner.home, task_id,
                             authored['presentation'], authored['progress_record'], read_text)
-                owner.observation = work_observation(observation_process)
-                observation_process = None
-                result = owner.snapshot()
+                # These independent live reads can take seconds each on a large
+                # home; overlap them with the fleet observation already running.
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    capacity = pool.submit(owner.capacity)
+                    workers = [pool.submit(owner.worker_liveness, task_id)
+                               for task_id, row in owner.rows.items() if row['state'] == 'in_flight']
+                    owner.observation = work_observation(observation_process)
+                    observation_process = None
+                    for worker in workers:
+                        worker.result()
+                    crew = capacity.result()
+                result = owner.snapshot(crew=crew)
                 DIAG['tasks'] = len(result.get('tasks', []))
             elif args.verb == 'reconcile':
                 result = owner.reconcile_controls()
