@@ -245,7 +245,7 @@ test_pi_pin_selects_the_root_and_the_declared_provider() {
   assert_grep "account_provider=openai-codex" "$HOME_DIR/state/$id.meta" "the task record should carry the pinned provider"
   [ "$(cat "$CASE/pi-checks")" = "$CASE/pi-work openai-codex" ] \
     || fail "the sign-in check should ask the pinned root about the model's provider: $(cat "$CASE/pi-checks")"
-  launch=$(cat "$CASE/launch.log")
+  launch=$(fm_test_launch_payload "$(cat "$CASE/launch.log")")
   assert_contains "$launch" "--provider 'openai-codex' --model 'openai-codex/gpt-5.5'" \
     "the launch should confine Pi's model lookup to the declared provider"
   run_pane
@@ -368,6 +368,7 @@ test_local_secondmate_reads_the_launching_home_pin() {
   sm="$CASE/secondmate-home"
   mkdir -p "$sm/bin" "$sm/data" "$sm/config" "$CASE/sm-own"
   git init -q -b main "$sm"
+  fm_git_config_identity "$sm"
   printf '# Firstmate\n' > "$sm/AGENTS.md"
   printf '%s\n' "$id" > "$sm/.fm-secondmate-home"
   printf 'charter for %s\n' "$id" > "$sm/data/charter.md"
@@ -390,6 +391,7 @@ spawn_account_secondmate() {
   shift
   mkdir -p "$sm/bin" "$sm/data" "$sm/config"
   git init -q -b main "$sm"
+  fm_git_config_identity "$sm"
   printf '# Firstmate\n' > "$sm/AGENTS.md"
   printf '%s\n' "$id" > "$sm/.fm-secondmate-home"
   printf 'charter for %s\n' "$id" > "$sm/data/charter.md"

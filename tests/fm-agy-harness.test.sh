@@ -635,7 +635,7 @@ test_agy_launch_carries_the_brief_with_model_effort_and_autonomy() {
     --model gemini-3.8-flash-low --effort low)
   rc=$?
   expect_code 0 "$rc" "agy spawn with a listed model should succeed"
-  launch=$(cat "$CASE_DIR/launch.log")
+  launch=$(fm_test_launch_payload "$(cat "$CASE_DIR/launch.log")")
   assert_contains "$launch" "$FAKEBIN_DIR/agy" "agy launch did not pin the resolved absolute binary"
   assert_contains "$launch" "--prompt-interactive" "agy launch did not carry the brief via --prompt-interactive"
   assert_contains "$launch" "--model 'gemini-3.8-flash-low'" "agy launch did not carry the requested model"
@@ -661,7 +661,7 @@ test_agy_effort_xhigh_is_recorded_but_omitted() {
     --model gemini-3.8-flash-low --effort xhigh)
   rc=$?
   expect_code 0 "$rc" "agy spawn with an unsupported effort should still succeed"
-  launch=$(cat "$CASE_DIR/launch.log")
+  launch=$(fm_test_launch_payload "$(cat "$CASE_DIR/launch.log")")
   assert_not_contains "$launch" "--effort" "agy launch passed a known-bad effort value"
   meta="$HOME_DIR/state/$id.meta"
   assert_grep 'effort=xhigh' "$meta" "agy meta did not retain the unsupported effort axis"
@@ -710,7 +710,7 @@ test_agy_hung_listing_is_cut_off_and_launches() {
   [ "$elapsed" -lt 20 ] || fail "the model probe was not cut off by its bound (took ${elapsed}s)"
   assert_contains "$out" "did not answer within 1s" "a hung listing launched without its timeout notice"
   [ -s "$CASE_DIR/launch.log" ] || fail "a hung listing produced no launch command"
-  assert_contains "$(cat "$CASE_DIR/launch.log")" "--model 'gemini-3.8-flash-low'" \
+  assert_contains "$(fm_test_launch_payload "$(cat "$CASE_DIR/launch.log")")" "--model 'gemini-3.8-flash-low'" \
     "a hung listing dropped the requested model instead of launching it unvalidated"
   pass "fm-spawn: a hung agy listing is cut off by the shared bound and launches unvalidated"
 }
@@ -850,12 +850,13 @@ test_agy_pre_trusted_path_that_never_turns_busy_fails_the_spawn() {
 }
 
 test_agy_missing_binary_refuses_before_pane_creation() {
-  local id rec out rc
+  local id rec out rc BASE_PATH=$BASE_PATH
   id="agy-missing-z5-$$"
   rec=$(make_agy_spawn_case missing "$id")
   read_agy_spawn_record "$rec"
   rm "$FAKEBIN_DIR/agy"
   rc=0
+  BASE_PATH=$(fm_test_base_path_sans "$BASE_PATH" agy)
   out=$(run_agy_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "a missing agy executable should refuse the spawn"
   assert_contains "$out" "agy executable not found on PATH" "missing agy diagnostic lacked its concrete reason"

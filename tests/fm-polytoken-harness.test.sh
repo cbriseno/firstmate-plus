@@ -914,7 +914,7 @@ test_polytoken_launch_carries_the_hybrid_contract() {
   # The raw launch line (what the pane shell was told to run) carries the
   # launch-boundary contract; the fake polytoken's argv (launch.log) carries
   # what the command actually received after the shell consumed the quoting.
-  raw=$(cat "$CASE_DIR/launch-line.log")
+  raw=$(fm_test_launch_payload "$(cat "$CASE_DIR/launch-line.log")")
   launch=$(cat "$CASE_DIR/launch.log")
   assert_contains "$raw" "--model 'zai/glm-5.3-flash(low)'" \
     "the launch line must carry the composed model reference"
@@ -993,7 +993,7 @@ test_polytoken_effort_maps_to_nearest_listed_level() {
   assert_contains "$launch" "--model zai/glm-5.3-flash(low)" \
     "the launch must carry the nearest supported effort"
   assert_not_contains "$launch" "(medium)" "the launch must not pass the unlisted effort variant"
-  raw=$(cat "$CASE_DIR/launch-line.log")
+  raw=$(fm_test_launch_payload "$(cat "$CASE_DIR/launch-line.log")")
   assert_contains "$raw" "--model 'zai/glm-5.3-flash(low)'" \
     "the raw launch line must carry the mapped reference"
   meta="$HOME_DIR/state/$id.meta"

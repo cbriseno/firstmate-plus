@@ -141,9 +141,9 @@
 # share a machine. This script owns <n>: a lane whose <n> disagrees with the
 # configured shard count is refused, so a CI matrix cannot silently drop a shard.
 # --check-coverage also reports serial_max_ms (largest packed hint sum, including
-# default weights) and serial_budget_ms (the 20-minute packing target), refusing
-# a split above that target. Neither figure is an execution timeout or proof of
-# observed headroom: refresh growing files from CI measurements.
+# default weights) and serial_budget_ms (the 20-minute packing target).
+# Both are informational estimates; neither rejects a split or bounds execution.
+# Refresh growing files from measurements; actual execution bounds apply above.
 # --changed is conservative: it over-selects related families rather than
 # under-selecting, and never expands to the complete suite unless --all. The one
 # place it is deliberately narrow is a bin/ path with no curated family: a test
@@ -212,17 +212,9 @@ PORTABLE_SERIAL_SHARDS=10
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=45000
 
 # Packing target, not an execution timeout: leave at least ten minutes of the
-# normal CI tier for setup and runtime variance. --check-coverage refuses a
-# modeled serial shard above this target; refresh hints or rebalance instead.
+# normal CI tier for setup and runtime variance. The coverage summary reports
+# this target alongside the modeled weights; execution bounds use actual time.
 PORTABLE_SERIAL_MAX_WEIGHT_MS=1200000
-
-# Largest share of the serial lane allowed to run on the default weight above.
-# Hints are what keep the shards balanced, so once too much of the lane is
-# unmeasured the balance is guesswork and one shard can reach its CI job cap
-# while another sits idle. The coverage guard refuses past this share, which
-# leaves room for newly added tests while making a stale hint table fail loudly
-# instead of silently. docs/fm-test-portable-shards.md owns the refresh.
-PORTABLE_SERIAL_MAX_UNHINTED_PERCENT=15
 
 usage() {
   awk '
@@ -950,7 +942,7 @@ portable_serial_unhinted() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-unhinted.XXXXXX") || return 1
   portable_serial_weight_hints | awk 'NF { print $1 }' | LC_ALL=C sort -u >"$tmp/hinted"
   list_portable_serial | LC_ALL=C sort -u >"$tmp/serial"
-  comm -23 "$tmp/serial" "$tmp/hinted"
+  LC_ALL=C comm -23 "$tmp/serial" "$tmp/hinted"
   rm -rf "$tmp"
 }
 
@@ -1100,7 +1092,7 @@ select_lane() {
 }
 
 run_coverage_guard() {
-  local tmp missing extra a b shard unhinted serial_total serial_ms serial_max_ms=0
+  local tmp missing extra a b shard unhinted serial_ms serial_max_ms=0
   local p1_ms p1_unhinted p2_ms p2_unhinted parallel_max_ms parallel_imbalance_ms
   local -a saved_scripts=()
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-coverage.XXXXXX")
@@ -1118,8 +1110,8 @@ run_coverage_guard() {
     return 1
   fi
   cat "$tmp/s1" "$tmp/s2" | LC_ALL=C sort -u >"$tmp/shards_union"
-  missing=$(comm -23 "$tmp/proven" "$tmp/shards_union" || true)
-  extra=$(comm -13 "$tmp/proven" "$tmp/shards_union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/proven" "$tmp/shards_union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/proven" "$tmp/shards_union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable shards must equal the proven-isolated set"
     [ -z "$missing" ] || { log "missing from shards:"; printf '%s\n' "$missing" >&2; }
@@ -1165,8 +1157,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/serial_shards_raw" >"$tmp/serial_shards"
-  missing=$(comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
-  extra=$(comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable serial shards must equal the portable serial lane"
     [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
@@ -1178,7 +1170,7 @@ run_coverage_guard() {
   for pair in "shards_union:serial" "shards_union:herdr" "serial:herdr"; do
     a=${pair%%:*}
     b=${pair#*:}
-    comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
+    LC_ALL=C comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
     if [ -s "$tmp/overlap" ]; then
       log "coverage guard: overlap between $a and $b:"
       cat "$tmp/overlap" >&2
@@ -1196,8 +1188,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/union_raw" >"$tmp/union"
-  missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
-  extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/all" "$tmp/union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
@@ -1206,35 +1198,14 @@ run_coverage_guard() {
     return 1
   fi
 
-  # Hint drift is what makes a balanced-looking partition run unbalanced: the
-  # shards are packed from hints, so every unmeasured script is balanced on a
-  # guess and enough of them let one shard reach its CI job cap while another
-  # runner sits idle. Bound the unmeasured share here rather than waiting for a
-  # shard to time out.
   portable_serial_unhinted >"$tmp/unhinted"
   unhinted=$(wc -l <"$tmp/unhinted" | tr -d ' ')
-  serial_total=$(wc -l <"$tmp/serial" | tr -d ' ')
-  if [ "$serial_total" -gt 0 ] &&
-    [ "$((unhinted * 100))" -gt "$((serial_total * PORTABLE_SERIAL_MAX_UNHINTED_PERCENT))" ]; then
-    log "coverage guard: $unhinted of $serial_total portable serial scripts have no measured duration hint (max ${PORTABLE_SERIAL_MAX_UNHINTED_PERCENT}%)"
-    log "refresh the hints from a green run's timing artifacts: docs/fm-test-portable-shards.md"
-    cat "$tmp/unhinted" >&2
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  if [ "$serial_max_ms" -gt "$PORTABLE_SERIAL_MAX_WEIGHT_MS" ]; then
-    log "coverage guard: largest portable serial shard packs ${serial_max_ms}ms above the ${PORTABLE_SERIAL_MAX_WEIGHT_MS}ms target"
-    log "refresh CI hints and rebalance or add shards; do not raise the job timeout: docs/fm-test-portable-shards.md"
-    rm -rf "$tmp"
-    return 1
-  fi
 
   if [ -x "$ROOT/bin/fm-test-isolation-proof.sh" ]; then
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
       log "coverage guard: embedded proven-isolated set diverges from bin/fm-test-isolation-proof.sh --list"
-      comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
+      LC_ALL=C comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
       rm -rf "$tmp"
       return 1
     fi

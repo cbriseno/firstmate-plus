@@ -6,16 +6,8 @@
 # fm-teardown.sh used to run inline into named adapter functions. This suite:
 #
 #   1. Unit-tests bin/fm-backend.sh's selection, meta, and dispatch helpers.
-#   2. Runs the PRE-REFACTOR versions of fm-send.sh, fm-peek.sh, fm-spawn.sh,
-#      and fm-teardown.sh (checked out from the merge-base with `main`, the
-#      commit this branch started from) against the SAME fake tmux/treehouse
-#      binaries and fixtures as the REFACTORED versions in this checkout, then
-#      diffs the two command logs byte-for-byte - the report's P1 checklist
-#      item "run current main scripts and refactored scripts against the same
-#      fake tools and compare command logs". The teardown old-vs-new case also
-#      overlays a content-historical permissive tmux kill fixture: after the
-#      exact-selector change lands on the default branch, merge-base with main
-#      collapses to HEAD and can no longer supply that baseline.
+#   2. Exercises send and spawn against isolated fake tools; peek and teardown
+#      compare complete adapter command logs with their baseline.
 #   3. Asserts the `--backend`/`FM_BACKEND` selection refuses unknown backends
 #      and the blocked `codex-app` backend loudly.
 #
@@ -126,30 +118,6 @@ backend_base_ref() {
   printf '%s\n' "$BASE_REF"
 }
 
-# Newest first-parent revision whose bin/backends/tmux.sh still uses the
-# pre-exact permissive kill-window target. Content-addressed from history so the
-# fixture stays historical on default-branch CI and on branches cut after the
-# exact-selector change, where merge-base with main is self-referential.
-resolve_permissive_tmux_kill_ref() {
-  local commit body
-  while IFS= read -r commit; do
-    [ -n "$commit" ] || continue
-    body=$(git -C "$ROOT" show "$commit:bin/backends/tmux.sh" 2>/dev/null) || continue
-    # shellcheck disable=SC2016
-    case "$body" in
-      *'tmux kill-window -t "=$session:=$window"'*) continue ;;
-    esac
-    # shellcheck disable=SC2016
-    case "$body" in
-      *'tmux kill-window -t "$1"'*|*'tmux kill-window -t "$target"'*)
-        printf '%s\n' "$commit"
-        return 0
-        ;;
-    esac
-  done < <(git -C "$ROOT" log --first-parent --format='%H' HEAD -- bin/backends/tmux.sh)
-  return 1
-}
-
 # --- shared: a pre-refactor bin/ shim --------------------------------------
 #
 # build_old_bin echoes a directory whose bin/ subdir is the complete bin/ tree
@@ -160,8 +128,6 @@ resolve_permissive_tmux_kill_ref() {
 # before it reaches the behavior under test.
 # FM_ROOT_OVERRIDE pointed at this dir's root makes
 # "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
-# The teardown conformance case applies its explicitly historical tmux adapter
-# after this complete baseline has been materialized.
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
   local name=$1 root archive base_ref
@@ -967,7 +933,7 @@ SH
 run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> -- <spawn args...>
   local bin=$1 fb=$2 log=$3 state=$4 data=$5 config=$6 proj=$7 home; shift 7
   [ "${1:-}" = -- ] && shift
-  home="$TMP_ROOT/spawn-home"
+  home="$TMP_ROOT"
   mkdir -p "$home/state"
   : > "$log"
   env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$bin" FM_HOME="$home" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
@@ -1089,7 +1055,7 @@ test_spawn_symlinked_project_prefix_avoids_false_refusal() {
   pass "fm-spawn.sh: a project reached through a symlinked prefix (e.g. macOS /tmp -> /private/tmp) does not trip the isolation guard's false refusal"
 }
 
-# --- old vs new: fm-teardown.sh ----------------------------------------------
+# --- current contract: fm-teardown.sh ----------------------------------------------
 
 make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse calls
   local dir=$1 fb="$1/fakebin"
@@ -1122,11 +1088,6 @@ SH
 }
 
 # run_teardown_case <script> <fm-root-override> <fakebin> <log> <state> <data> <config> <id>
-# FM_ROOT_OVERRIDE is passed separately from <script> so both the old and new
-# runs can point it at the SAME neutral (non-git) shim root - that root's
-# bin/fm-guard.sh is a symlink to the real, unchanged script, so the
-# worktree-tangle check runs identically (and silently) for both, regardless
-# of which fm-teardown.sh (old or new) is actually being invoked.
 run_teardown_case() {
   local script=$1 fmroot=$2 fb=$3 log=$4 state=$5 data=$6 config=$7 id=$8
   : > "$log"
@@ -1137,64 +1098,38 @@ run_teardown_case() {
 }
 
 test_teardown_conformance_old_vs_new() {
-  local old_bin fb proj wt id old_tmux_ref saved_base_ref
-  local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
-  # Force the post-squash topology inside this case: merge-base with main may
-  # equal HEAD on default-branch CI, and that must not make the legacy kill
-  # fixture self-referential. build_old_bin still uses BASE_REF for entrypoints;
-  # only the tmux kill adapter is pinned to the content-historical permissive ref.
-  saved_base_ref=$BASE_REF
-  BASE_REF=$(git -C "$ROOT" rev-parse HEAD)
-  old_tmux_ref=$(resolve_permissive_tmux_kill_ref) \
-    || { BASE_REF=$saved_base_ref; fail "unable to locate a historical bin/backends/tmux.sh with permissive kill-window selectors"; }
-  old_bin=$(build_old_bin teardown-old)
-  git -C "$ROOT" show "$old_tmux_ref:bin/backends/tmux.sh" > "$old_bin/bin/backends/tmux.sh" \
-    || { BASE_REF=$saved_base_ref; fail "could not materialize historical tmux adapter from $old_tmux_ref"; }
-  BASE_REF=$saved_base_ref
+  local fb proj wt id home state config data log out rc baseline version script
   proj="$TMP_ROOT/teardown-project"; wt="$TMP_ROOT/teardown-wt"
-  id="teardownconform1"
+  id=teardownconform1
   fm_git_worktree "$proj" "$wt" "fm/$id"
   fb=$(make_teardown_fakebin "$TMP_ROOT/teardown-fake")
-
-  data="$TMP_ROOT/teardown-data"
-  mkdir -p "$data/$id"
-  printf 'scout findings\n' > "$data/$id/report.md"
-
-  state_old="$TMP_ROOT/teardown-state-old"; state_new="$TMP_ROOT/teardown-state-new"
-  config_old="$TMP_ROOT/teardown-config-old"; config_new="$TMP_ROOT/teardown-config-new"
-  mkdir -p "$state_old" "$state_new" "$config_old" "$config_new"
-
-  fm_write_meta "$state_old/$id.meta" \
-    "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "decisions_reviewed=1" "decision_keys="
-  fm_write_meta "$state_new/$id.meta" \
-    "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "decisions_reviewed=1" "decision_keys="
-  touch "$state_old/.last-watcher-beat" "$state_new/.last-watcher-beat"
-
-  log_old="$TMP_ROOT/teardown-old.log"; log_new="$TMP_ROOT/teardown-new.log"
-  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$state_old" "$data" "$config_old" "$id" 2>&1)
-  rc_old=$?
-  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$state_new" "$data" "$config_new" "$id" 2>&1)
-  rc_new=$?
-
-  expect_code 0 "$rc_old" "old fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_old"
-  expect_code 0 "$rc_new" "new fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_new"
-  assert_contains "$(cat "$log_new")" "treehouse"$'\x1f''return'$'\x1f''--force'$'\x1f'"$wt" \
+  # A fixed published tree makes the sequence comparison meaningful after merge.
+  baseline=$(BASE_REF=d5f4d0a66b51c5a71b50f82c2f6356517f68d7a2 build_old_bin teardown-baseline) \
+    || fail "could not materialize the fixed teardown baseline"
+  for version in baseline candidate; do
+    home="$TMP_ROOT/teardown-$version-home"
+    state="$home/state"; data="$home/data"; config="$home/config"
+    mkdir -p "$state" "$data/$id" "$config"
+    fm_test_tasks_toml "$home/.tasks.toml"
+    printf 'scout findings\n' > "$data/$id/report.md"
+    fm_write_meta "$state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=scout" \
+      "decisions_reviewed=1" "decision_keys="
+    touch "$state/.last-watcher-beat"
+    log="$TMP_ROOT/teardown-$version.log"
+    script="$ROOT/bin/fm-teardown.sh"
+    [ "$version" != baseline ] || script="$baseline/bin/fm-teardown.sh"
+    out=$(FM_HOME="$home" run_teardown_case "$script" "$baseline" "$fb" "$log" "$state" "$data" "$config" "$id" 2>&1)
+    rc=$?
+    expect_code 0 "$rc" "$version teardown should succeed"$'\n'"$out"
+  done
+  diff -u "$TMP_ROOT/teardown-baseline.log" "$log" \
+    || fail "teardown changed the complete adapter operation sequence"
+  assert_contains "$(cat "$log")" "treehouse"$'\x1f''return'$'\x1f''--force'$'\x1f'"$wt" \
     "teardown did not call treehouse return --force <worktree>"
-  # The legacy fixture's adapter comes from BASE_REF, so its selector form is
-  # whatever the merge-base carried: permissive while the exact-selector change
-  # was still on a branch, exact for every branch cut after it landed on main.
-  # Pinning the old form here would make this case pass once and then fail
-  # forever, so the '=' exactness markers are normalized away and the legacy run
-  # is only required to have reached tmux window cleanup for this task. The
-  # exact-selector contract belongs to the current script, asserted below.
-  assert_contains "$(tr -d '=' < "$log_old")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"firstmate:fm-$id" \
-    "legacy teardown fixture did not exercise tmux window cleanup for the task"
-  assert_contains "$(cat "$log_new")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"=firstmate:=fm-$id" \
+  assert_contains "$(cat "$log")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"=firstmate:=fm-$id" \
     "teardown did not call tmux kill-window with exact session and window selectors"
-
-  pass "fm-teardown.sh: treehouse return remains compatible while tmux cleanup uses exact selectors"
+  pass "fm-teardown.sh: the complete adapter sequence matches its fixed baseline and uses exact selectors"
 }
 
 # --- backend selection loudly refuses an unknown backend --------------------
@@ -1245,7 +1180,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   state="$TMP_ROOT/nobackend-state"; config="$TMP_ROOT/nobackend-config"
   mkdir -p "$state" "$config"
 
-  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMP_ROOT/nobackend.log" \
@@ -1269,7 +1204,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
 
   # HERDR_ENV=1 is present (as if firstmate itself were running under herdr),
   # but an explicit --backend tmux flag must still win outright.
-  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
     FM_TMUX_LOG="$TMP_ROOT/explicit-backend.log" \
@@ -1296,7 +1231,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   # (tmux nested inside a herdr pane) - the full fm-spawn.sh pipeline, not just
   # fm_backend_name, must resolve this to tmux and stay completely silent about
   # it (today's default path, byte-identical).
-  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
     FM_TMUX_LOG="$TMP_ROOT/nest.log" \

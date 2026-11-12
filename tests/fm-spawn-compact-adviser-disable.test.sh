@@ -133,7 +133,7 @@ test_ship_allowlist_enabled() {
   status=$?
   expect_code 0 "$status" "ship spawn under an allowlist should succeed: $out"
   assert_pane_export_precedes_launch "$PANE_LOG" "ship, allowlist enabled"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" '/usr/bin/env -i' \
     "an enabled allowlist should launch under a cleared environment"
   install_env_probe "$FAKEBIN_DIR" codex
@@ -157,7 +157,7 @@ test_launch_command_carries_the_switch_without_the_pane_export() {
     status=$?
     expect_code 0 "$status" "allowlist=$setting spawn should succeed: $out"
     install_env_probe "$FAKEBIN_DIR" codex
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
     seen=$(env -i HOME="$TMP_ROOT/pane-home" PATH="$FAKEBIN_DIR:$PATH" TERM=xterm \
       TMUX=synthetic-pane COMPACT_ADVISER_DISABLE="$CONTRARY" \
       /bin/sh -c "$launch") \
@@ -181,8 +181,7 @@ test_secondmate_launch() {
     printf 'charter for sm-%s\n' "$setting" > "$sm/data/charter.md"
     printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sm/.gitignore"
     git -C "$sm" init -q -b main
-    git -C "$sm" config user.name "Firstmate Tests"
-    git -C "$sm" config user.email "tests@example.invalid"
+    fm_git_config_identity "$sm"
     out=$(run_case_spawn "sm-$setting" "$sm" --secondmate)
     status=$?
     expect_code 0 "$status" "secondmate spawn with allowlist=$setting should succeed: $out"
@@ -222,8 +221,7 @@ test_launch_exports_task_inbox() {
       printf 'charter for %s\n' "$id" > "$sm/data/charter.md"
       printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sm/.gitignore"
       git -C "$sm" init -q -b main
-    git -C "$sm" config user.name "Firstmate Tests"
-    git -C "$sm" config user.email "tests@example.invalid"
+      fm_git_config_identity "$sm"
       out=$(run_case_spawn "$id" "$sm" --secondmate)
     fi
     status=$?
@@ -384,7 +382,7 @@ SH
     "cd $probe_dir && ./probe")
   status=$?
   expect_code 0 "$status" "raw compound launch spawn should succeed: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
   [ -n "$launch" ] || fail "raw compound launch spawn sent no launch command"
   seen=$(env -i HOME="$TMP_ROOT/pane-home" PATH="$FAKEBIN_DIR:$PATH" TERM=xterm \
     TMUX=synthetic-pane COMPACT_ADVISER_DISABLE="$CONTRARY" \

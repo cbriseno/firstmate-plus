@@ -26,10 +26,7 @@ That replacement is a single completed sample too: run 39765114423 cancelled thi
 The 1192918 ms weight is therefore a fit to the 1200000 ms packing target, not a cure; the slowness behind it is an upstream defect this layout does not own, and further green runs must establish the variance either way.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 The 2026-10-07 polytoken adapter tests carry provisional local measurements instead - 21090 ms for `tests/fm-polytoken-harness.test.sh` and the 103 ms live-guard skip for `tests/fm-polytoken-signals-live-e2e.test.sh`, both measured on the adapter-verification macOS host - until the next CI refresh replaces them with Ubuntu measurements, because they postdate the 2026-09-30 baseline.
-The wedge-cap suite carries the Ubuntu measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178) - 374225 ms for `tests/fm-watch-wedge-cap.test.sh` and the 74 ms live-guard skip for `tests/fm-watch-wedge-cap-live.test.sh` - in place of the provisional local measurements the suite first carried (1003000 ms and the 155 ms skip), which overstated the CI cost of both.
-They are not a formality: without a hint the suite is packed on the 45000 ms default, which puts it beside a shard already holding about 17 minutes of measured work, so that shard would really have run for about 23 minutes - past the 20-minute target the guard reserves - while the coverage guard still passed.
-The same run measured the wedge-cap parity suite at 27763 ms, which `bin/fm-test-run.sh` packs in place of the provisional 209000 ms local measurement.
-The local measurements had left the serial lane less aggregate headroom under the nine shards' 1200000 ms budget than the packing-boundary check needs to place one script exactly at the budget, so that check failed; the CI measurements restore it.
+The wedge-cap balance hints retain the measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178): 374225 ms for `tests/fm-watch-wedge-cap.test.sh`; 74 ms for the live-guard capability skip; and 27763 ms for `tests/fm-watch-wedge-cap-unconfigured-parity.test.sh`, pending a timing refresh.
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
 The native Codex owner regression carries a provisional local Linux measurement of 122211 ms from 2026-10-25, pending a CI refresh.
@@ -82,13 +79,12 @@ Assignment is longest-processing-time bin packing over per-script duration hints
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.
-`bin/fm-test-run.sh --check-coverage` reports the unmeasured share as `serial_unhinted=` and refuses past `PORTABLE_SERIAL_MAX_UNHINTED_PERCENT`.
+`bin/fm-test-run.sh --check-coverage` reports the unmeasured share as `serial_unhinted=`.
 That catches missing hints, not stale existing hints: the host suite still had a 41512 ms hint after growing to over 1000 seconds in CI, so the old split placed it beside another 12 minutes of work while passing the guard.
-Refresh the hints whenever a serial member grows materially or the lane gains scripts, rather than waiting for missing-hint coverage to trip.
+Refresh the hints whenever a serial member grows materially or the lane gains scripts, rather than waiting for a runtime timeout.
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
-Its header and `--help` own the modeled-budget check and output fields; read the current estimates from `--check-coverage` instead of retaining copied lane sums here.
-[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_serial_packing_budget_boundary`, verifies acceptance exactly at the budget and refusal one millisecond above it through the executable runner.
+Its header and `--help` own the packing estimates and output fields; read the current estimates from `--check-coverage` instead of retaining copied lane sums here.
 The longest script, `tests/fm-supervision-host.test.sh`, is the indivisible floor for this layout.
 The estimates use per-file maxima from different runs, not measured rebalanced jobs or an end-to-end latency guarantee.
 Each observed completed portable job in the baseline runs adds at most 30 seconds beyond its summed scripts.

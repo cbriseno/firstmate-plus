@@ -1,26 +1,8 @@
 #!/usr/bin/env bash
-# tests/fm-watch-wedge-cap-unconfigured-parity.test.sh - the unconfigured-home
-# parity proof for the wedge cap. FM_WEDGE_MAX_ESCALATIONS unset or 0 must leave
-# the watcher's escalation ladder IDENTICAL to upstream main, including that a
-# stuck pane still receives the demand-deep-inspection prompt. This drives ONE
-# stuck-pane scenario twice - once against upstream main's bin/fm-watch.sh and
-# once against this branch's - and asserts the same observable outcome on both.
-#
-# The scenario is the one route where an unconditional counter reset inside
-# wedge_episode_end diverges from upstream on a live pane: the busy-pane ladder
-# (a pane rendering one frame with a live foreground command and no completed
-# turn) accumulates a consecutive-escalation count that neither upstream nor
-# this branch resets, and the pane then going idle takes the hot non-terminal
-# first-sight surface, whose pre-cap shape kept that count standing. Upstream
-# shows escalation 3 with the demand-deep-inspection prompt on the re-wedge; a
-# watcher that resets the counter at that surface restarts at 1 without it. The
-# ladder continues to 4 afterwards, which is the rung the unchanged behaviour
-# rests on.
-#
-# The baseline is read from git (origin/main), so the comparison tracks the main
-# this branch targets rather than a frozen copy. A checkout without that ref
-# fails loudly instead of skipping: the test is the proof, and a silent skip
-# would be no proof at all.
+# Differential proof that an unconfigured cap preserves the complete wedge
+# trace across busy/idle turns, inspection rungs, counters and markers.
+# Pin the pre-eligibility-regression tree 3064a12f; both watchers use their own
+# complete bin tree. Missing history and failed scenarios fail explicitly.
 set -u
 
 # shellcheck source=tests/wake-helpers.sh
@@ -49,18 +31,18 @@ mark_status_seen() {
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$1" "$2"
 }
 
-# upstream_tree <dest-dir>: materialise upstream main's own bin/ tree, so the
+# baseline_tree <dest-dir>: materialise the fixed bin tree, so the
 # baseline watcher runs against the libraries it was written for rather than
 # this branch's. The comparison is then watcher-against-watcher, with nothing
 # else differing.
-upstream_tree() {  # <dest-dir>
+baseline_tree() {  # <dest-dir>
   local dest=$1 ref
   # The baseline is read in a command substitution, so `fail` (which exits)
   # would end only the SUBSHELL and leave the caller with an empty baseline -
   # a silent skip, not a failure. Report here and return non-zero so the
   # caller's guard aborts the whole test with the specific reason.
-  if ! ref=$(git -C "$ROOT" rev-parse --verify --quiet origin/main); then
-    printf 'not ok - no origin/main ref in %s - the parity baseline cannot be resolved; fetch origin/main and re-run\n' "$ROOT" >&2
+  if ! ref=$(git -C "$ROOT" rev-parse --verify --quiet '3064a12fc700fa6a57b06e010bebe22dc2facf87^{commit}'); then
+    printf 'not ok - missing fixed baseline 3064a12f in %s - fetch its history and re-run\n' "$ROOT" >&2
     return 1
   fi
   rm -rf "$dest"
@@ -199,39 +181,38 @@ run_scenario() {  # <watch> <tag> [cap-env] [rounds]: drive the stuck-pane scena
   printf '%s\n' "$dir/trace"
 }
 
-test_unconfigured_ladder_matches_upstream_main() {
+test_unconfigured_ladder_matches_fixed_base() {
   local baseline candidate base_trace
-  baseline=$(upstream_tree "$TMP_ROOT/upstream-main") || fail "could not materialise upstream main's bin/ tree for the parity baseline"
+  baseline=$(baseline_tree "$TMP_ROOT/fixed-baseline") || fail "could not materialise the fixed bin tree for the parity baseline"
   candidate="$ROOT/bin/fm-watch.sh"
-  base_trace=$(run_scenario "$baseline" upstream)
-  PARITY_BRANCH_TRACE=$(run_scenario "$candidate" branch)
-  local cand_trace=$PARITY_BRANCH_TRACE
-
-  if ! diff -u "$base_trace" "$cand_trace" > "$TMP_ROOT/parity.diff"; then
-    fail "unconfigured-home ladder diverged from upstream main:
+  base_trace=$(run_scenario "$baseline" upstream) || fail "fixed baseline scenario failed"
+  # The scenario itself must be the proof the maintainer asked for, not just a
+  # pair of matching failures: the re-wedge after the first-sight surface
+  # reaches escalation 3 with the demand-deep-inspection prompt on the fixed
+  # baseline, the ladder continues to 4, and no round fires PERMANENTLY-WEDGED.
+  grep -F 'rung3-after-surface esc=3 inspect=1 capped=0' "$base_trace" >/dev/null \
+    || fail "scenario did not reach escalation 3 with demand-deep-inspection after the first-sight surface: $(cat "$base_trace")"
+  grep -F 'rung4 esc=4 inspect=1 capped=0' "$base_trace" >/dev/null \
+    || fail "the ladder did not continue to escalation 4: $(cat "$base_trace")"
+  if grep -F 'capped=1' "$base_trace" >/dev/null; then
+    fail "unconfigured scenario fired PERMANENTLY-WEDGED: $(cat "$base_trace")"
+  fi
+  grep -F 'final counter=4 marker=0' "$base_trace" >/dev/null \
+    || fail "scenario did not end at counter 4 with no cap marker: $(cat "$base_trace")"
+  pass "the fixed parity baseline reaches rungs 3 and 4 with inspection and no cap marker"
+  PARITY_BRANCH_TRACE=$(run_scenario "$candidate" branch) || fail "candidate scenario failed"
+  if ! diff -u "$base_trace" "$PARITY_BRANCH_TRACE" > "$TMP_ROOT/parity.diff"; then
+    fail "unconfigured-home ladder diverged from the fixed baseline:
 --- upstream trace: $base_trace
---- branch trace:   $cand_trace
+--- branch trace:   $PARITY_BRANCH_TRACE
 --- diff:
 $(cat "$TMP_ROOT/parity.diff")"
   fi
 
-  # The scenario itself must be the proof the maintainer asked for, not just a
-  # pair of matching failures: the re-wedge after the first-sight surface
-  # reaches escalation 3 with the demand-deep-inspection prompt on BOTH
-  # watchers, the ladder continues to 4, and no round fires PERMANENTLY-WEDGED.
-  grep -F 'rung3-after-surface esc=3 inspect=1 capped=0' "$cand_trace" >/dev/null \
-    || fail "scenario did not reach escalation 3 with demand-deep-inspection after the first-sight surface: $(cat "$cand_trace")"
-  grep -F 'rung4 esc=4 inspect=1 capped=0' "$cand_trace" >/dev/null \
-    || fail "the ladder did not continue to escalation 4: $(cat "$cand_trace")"
-  if grep -F 'capped=1' "$cand_trace" >/dev/null; then
-    fail "unconfigured scenario fired PERMANENTLY-WEDGED: $(cat "$cand_trace")"
-  fi
-  grep -F 'final counter=4 marker=0' "$cand_trace" >/dev/null \
-    || fail "scenario did not end at counter 4 with no cap marker: $(cat "$cand_trace")"
-  pass "unconfigured-home wedge ladder is observably identical to upstream main across the busy ladder and the first-sight surface, and still reaches the demand-deep-inspection prompt"
+  pass "unconfigured-home wedge ladder is observably identical to the fixed baseline across every trace field"
 }
 
-test_unconfigured_ladder_matches_upstream_main
+test_unconfigured_ladder_matches_fixed_base
 
 # Every value the normalization maps to "off" must behave EXACTLY like the
 # unset case - including through the keep-count routes, since the cap-gated

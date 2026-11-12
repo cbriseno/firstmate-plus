@@ -109,7 +109,7 @@ case "${1:-}" in
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
-            /bin/sleep 1
+            while [ ! -e "$FM_FAKE_CWD_RACE_READY.release" ]; do /bin/sleep 0.01; done
           fi
           cat "$D/cwd"; printf '\n'; exit 0 ;;
       esac
@@ -227,6 +227,10 @@ EOF
   printf '%s' "$ses" > "$dir/fake/session-name"
   printf '%s' "$wt" > "$dir/fake/cwd"
   TASK_TMPS+=("/tmp/fm-$id")
+}
+
+recorded_launch() {  # <case-dir>: the replacement follows the prior exit command
+  fm_test_launch_payload "$(tail -n 1 "$1/fake/literal")"
 }
 
 run_control() {  # <case-dir> <args...>
@@ -596,9 +600,9 @@ test_disabled_relaunch_clears_prior_trace_context() {
   expect_code 0 "$rc" "disabled relaunch should succeed"$'\n'"$out"
   [ -z "$(meta_field "$dir" rl33 traceparent)" ] \
     || fail "disabled relaunch must remove the prior trace carrier from metadata"
-  grep -q '^unset TRACEPARENT; .*claude' "$dir/fake/literal" \
+  recorded_launch "$dir" | grep -Eq '(^|; )unset TRACEPARENT; .*claude' \
     || fail "disabled relaunch must clear the pane carrier before replacement launch"
-  ! grep -q '^export TRACEPARENT=' "$dir/fake/literal" \
+  ! recorded_launch "$dir" | grep -Eq '(^|; )export TRACEPARENT=' \
     || fail "disabled relaunch must not export a replacement trace carrier"
   pass "fm-control relaunch: disabling tracing clears metadata and pane context"
 }
@@ -691,7 +695,7 @@ test_harness_switch_moves_the_record_and_clears_prior_wiring() {
   [ "$(meta_field "$dir" rl4 harness)" = codex ] || fail "the record should follow the switch"
   [ ! -e "$dir/home/state/rl4.claude-settings.json" ] \
     || fail "the previous harness's firstmate-owned settings file must be cleared on a switch"
-  assert_grep 'Bash(\*)' "$dir/wt/.claude/settings.local.json" \
+  assert_grep 'Bash(*)' "$dir/wt/.claude/settings.local.json" \
     "relaunch removed the repository's native local settings"
   assert_grep "codex" "$dir/fake/literal" "the replacement launch should be the new harness"
   [ "$(journal_field "$dir" rl4 from_harness)" = claude ] || fail "the journal should record the origin harness"
@@ -917,8 +921,8 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   expect_code 0 "$rc" "native Ultra relaunch failed: $out"
   [ "$(meta_field "$dir" "$id" effort)" = ultra ] || fail "relaunch lost Ultra metadata"
   [ "$(meta_field "$dir" "$id" model)" = codex-native/gpt-6-astra ] || fail "relaunch lost native model"
-  assert_contains "$(cat "$dir/fake/literal")" "--codex-effort 'ultra'" "relaunch lost native flag"
-  assert_not_contains "$(cat "$dir/fake/literal")" "--thinking 'ultra'" "relaunch used an invalid Pi level"
+  assert_contains "$(recorded_launch "$dir")" "--codex-effort 'ultra'" "relaunch lost native flag"
+  assert_not_contains "$(recorded_launch "$dir")" "--thinking 'ultra'" "relaunch used an invalid Pi level"
   pass "native Ultra relaunch preserves its profile and rejects an unsupported model before stopping"
 }
 
@@ -962,14 +966,14 @@ test_worker_account_pin_follows_the_relaunch() {
   out=$(run_control "$dir" "$id" relaunch --note "pinned account"); rc=$?
   expect_code 0 "$rc" "a relaunch under a signed-in account pin should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" "$id" account)" = "$dir/work" ] || fail "the relaunched record should carry the pinned account"
-  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/work'" \
+  assert_contains "$(recorded_launch "$dir")" "CLAUDE_CONFIG_DIR='$dir/work'" \
     "the replacement should launch under the pinned root"
   rm "$dir/home/config/claude-account"
   : > "$dir/fake/literal"
   out=$(run_control "$dir" "$id" relaunch --note "pin removed"); rc=$?
   expect_code 0 "$rc" "a relaunch after the pin is removed should succeed"$'\n'"$out"
   assert_no_grep "account=" "$dir/home/state/$id.meta" "a relaunch without a pin must drop the previous account from the record"
-  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" \
+  assert_not_contains "$(recorded_launch "$dir")" "CLAUDE_CONFIG_DIR=" \
     "an unpinned replacement must launch exactly as before"
   pass "fm-control relaunch: the replacement follows the home's current worker account pin"
 }
@@ -1022,14 +1026,14 @@ SH
     [ "$harness" = claude ] || printf 'openai-codex\n' >> "$pin"
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "the secondmate should relaunch on its $harness pin: $out"
-    assert_contains "$(cat "$dir/fake/literal")" "$variable='$dir/mate'" "the replacement must use the mate's pin"
+    assert_contains "$(recorded_launch "$dir")" "$variable='$dir/mate'" "the replacement must use the mate's pin"
     [ "$(meta_field "$dir" "$id" account)" = "$dir/mate" ] || fail "the record must name the mate's account"
     printf '%s\n' "$dir/new-mate" > "$pin"
     [ "$harness" = claude ] || printf 'openai-codex\n' >> "$pin"
     : > "$dir/fake/literal"
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "a changed durable pin should govern relaunch: $out"
-    assert_contains "$(cat "$dir/fake/literal")" "$variable='$dir/new-mate'" "relaunch must not reuse the old recorded account"
+    assert_contains "$(recorded_launch "$dir")" "$variable='$dir/new-mate'" "relaunch must not reuse the old recorded account"
     rm "$dir/new-mate/.credentials.json" "$dir/new-mate/signed-in"
     cp "$dir/home/state/$id.meta" "$dir/meta-before"
     : > "$dir/fake/literal"
@@ -1043,7 +1047,7 @@ SH
     rm "$pin"
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "removing the mate pin should restore the primary's pin: $out"
-    assert_contains "$(cat "$dir/fake/literal")" "$variable='$dir/primary'" "an absent mate setting must restore the primary's pin"
+    assert_contains "$(recorded_launch "$dir")" "$variable='$dir/primary'" "an absent mate setting must restore the primary's pin"
   done
   pass "fm-control relaunch: mate pins are re-read for Claude and Pi, and unusable pins refuse before stopping the agent"
 }
@@ -1060,14 +1064,14 @@ test_pi_exclude_tools_follow_the_relaunch() {
   printf '%s\n' '# hide writes' 'mcp__srv__writeTool' 'mcp__srv__adminTool' > "$dir/home/config/crew-exclude-tools"
   out=$(run_control "$dir" "$id" relaunch --note "keep exclusions"); rc=$?
   expect_code 0 "$rc" "a Pi relaunch with exclusions should succeed"$'\n'"$out"
-  assert_contains "$(cat "$dir/fake/literal")" "--exclude-tools 'mcp__srv__writeTool,mcp__srv__adminTool'" \
+  assert_contains "$(recorded_launch "$dir")" "--exclude-tools 'mcp__srv__writeTool,mcp__srv__adminTool'" \
     "the relaunched Pi worker must keep the home's tool exclusions"
   rm "$dir/home/config/crew-exclude-tools"
   : > "$dir/fake/literal"
   printf pi > "$dir/fake/command"
   out=$(run_control "$dir" "$id" relaunch --note "exclusions removed"); rc=$?
   expect_code 0 "$rc" "a Pi relaunch after the file is removed should succeed"$'\n'"$out"
-  assert_not_contains "$(cat "$dir/fake/literal")" "--exclude-tools" \
+  assert_not_contains "$(recorded_launch "$dir")" "--exclude-tools" \
     "a relaunch without the file must launch with no exclusions"
   pass "fm-control relaunch: a Pi replacement keeps the home's tool exclusions"
 }
@@ -1829,7 +1833,7 @@ test_launch_failure_keeps_the_prior_record_and_reports_it() {
 }
 
 test_prepublication_failure_keeps_concurrent_durable_metadata() {
-  local dir control_pid link_out rc i=0
+  local dir control_pid link_pid rc i=0
   dir=$(new_case rollback-race rl30)
   add_ship_task "$dir" rl30 claude
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
@@ -1838,20 +1842,32 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
       > "$dir/control.out" &
   control_pid=$!
   while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 200 ]; do
+    kill -0 "$control_pid" 2>/dev/null \
+      || fail "relaunch exited before its pre-publication endpoint check: $(cat "$dir/control.out")"
     /bin/sleep 0.01
     i=$((i + 1))
   done
-  [ -e "$dir/cwd-race-ready" ] || {
-    kill "$control_pid" 2>/dev/null || true
-    wait "$control_pid" 2>/dev/null || true
-    fail "relaunch did not reach its pre-publication endpoint check"
-  }
-  link_out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  [ -e "$dir/cwd-race-ready" ] || fail "relaunch never reached its pre-publication endpoint check"
+  env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_FAKE_LOCK_WAITING="$dir/writer-waiting" \
     "$X_LINK" rl30 request-30 --carry-count 2 --carry-ts 1700000000 \
-      --carry-platform x --carry-max 280 2>&1); rc=$?
-  expect_code 0 "$rc" "concurrent durable metadata publication should succeed"$'\n'"$link_out"
+      --carry-platform x --carry-max 280 > "$dir/link.out" 2>&1 &
+  link_pid=$!
+  i=0
+  while [ ! -e "$dir/writer-waiting" ] && [ "$i" -lt 200 ]; do
+    kill -0 "$link_pid" 2>/dev/null \
+      || fail "metadata writer exited before waiting for relaunch: $(cat "$dir/link.out")"
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -e "$dir/writer-waiting" ] || fail "metadata writer never waited for relaunch"
+  [ -z "$(meta_field "$dir" rl30 x_request)" ] \
+    || fail "the metadata writer bypassed the relaunch lock"
+  : > "$dir/cwd-race-ready.release"
   wait "$control_pid"; rc=$?
   expect_code 1 "$rc" "the staged pre-publication launch failure should fail closed"
+  wait "$link_pid"; rc=$?
+  expect_code 0 "$rc" "concurrent durable metadata publication should succeed"$'\n'"$(cat "$dir/link.out")"
   [ "$(meta_field "$dir" rl30 x_request)" = request-30 ] \
     || fail "rollback erased the concurrent X request"
   [ "$(meta_field "$dir" rl30 x_followups)" = 2 ] \
@@ -2645,6 +2661,8 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
       return 0
     }
     dir=$HERDR_CASE_DIR
+    printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
+    chmod +x "$dir/fakebin/pi"
     rm -f "$dir/fake/herdr-stopped"
     sed -i.bak 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
     rm -f "$dir/home/state/resume-$registered.meta.bak"
@@ -2654,7 +2672,7 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
       "$registered" > "$dir/fake/herdr-agent-registration"
     out=$(run_spawn "$dir" "resume-$registered" --relaunch --harness pi) || rc=$?
     expect_code 0 "$rc" "Herdr Pi relaunch should complete ($registered registration)"$'\n'"$out"
-    command=$(cat "$dir/fake/launched-command")
+    command=$(fm_test_launch_payload "$(cat "$dir/fake/launched-command")")
     if [ "$registered" = pi ]; then
       assert_contains "$command" "--session '/tmp/pi-bound-session.jsonl'" \
         "the replacement Pi must resume the session that owns Herdr status authority"

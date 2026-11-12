@@ -14,7 +14,8 @@ make_case() {  # <name>
   mkdir -p "$TMP_ROOT/$dir/home/state" "$TMP_ROOT/$dir/home/data" \
     "$TMP_ROOT/$dir/home/config" "$TMP_ROOT/$dir/fakebin" \
     "$TMP_ROOT/$dir/worktree" "$TMP_ROOT/$dir/project"
-  git init -q "$TMP_ROOT/$dir/project"
+  fm_git_init_commit "$TMP_ROOT/$dir/project"
+  git -C "$TMP_ROOT/$dir/project" worktree add --quiet -b fm/fixture "$TMP_ROOT/$dir/worktree"
   : > "$TMP_ROOT/$dir/worktree/sentinel"
   : > "$TMP_ROOT/$dir/runtime.log"
   cat > "$TMP_ROOT/$dir/fakebin/tmux" <<'SH'
@@ -238,8 +239,9 @@ test_metadata_lock_serializes_destructive_cleanup() {
 
   : > "$release"
   wait "$holder" || fail "metadata lock holder failed"
-  wait "$teardown_pid"; rc=$?
-  expect_code 0 "$rc" "teardown should complete after the metadata writer releases"
+  rc=0
+  wait "$teardown_pid" || rc=$?
+  expect_code 0 "$rc" "teardown should complete after the metadata writer releases: $(cat "$dir/stderr")"
   assert_absent "$dir/home/state/$id.meta" \
     "serialized teardown left a task record that a completed writer could resurrect"
   pass "fm-teardown: destructive cleanup serializes with metadata writers"

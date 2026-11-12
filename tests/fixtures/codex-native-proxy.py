@@ -165,7 +165,9 @@ while True:
         row = turns[index] if index < len(turns) else None
         status = (home / "outcome").read_text().strip() if (home / "outcome").exists() else "inProgress"
         if status == "capacity-once":
-            status = "capacity" if row and row["id"] == "turn-two" else "inProgress"
+            status = "capacity:turn-two"
+        if status.startswith("capacity:"):
+            status = "capacity" if row and row["id"] == status.split(":", 1)[1] else "inProgress"
         error = None
         if status == "capacity":
             status = "failed"

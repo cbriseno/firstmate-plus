@@ -1502,18 +1502,14 @@ test_partial_github_failure_degrades() {
 }
 
 test_perl_fallback_bounds_github_call() {
-  local home fakebin toolbin cmd json started elapsed
+  local home fakebin toolbin json started elapsed
   home=$(make_home perl-timeout); write_fixture "$home"
   fakebin=$(make_fakebin "$home")
-  toolbin="$home/toolbin"
-  mkdir -p "$toolbin"
-  for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find mktemp rm mkdir chmod mv cp awk; do
-    ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
-  done
-  for cmd in shasum sha256sum; do
-    command -v "$cmd" >/dev/null 2>&1 || continue
-    ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
-  done
+  toolbin=$(fm_test_base_path_sans "$PATH" timeout gtimeout) || fail "could not hide timeout tools"
+  PATH="$fakebin:$toolbin" bash -c '
+    . "$1/bin/fm-timeout-lib.sh"
+    [ "$(fm_timeout_mechanism)" = perl ]
+  ' _ "$ROOT" || fail "the integrated fallback fixture did not select Perl"
   started=$(date +%s)
   json=$(PATH="$fakebin:$toolbin" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
     FM_BEARINGS_PR_TIMEOUT=1 NET_LOG="$home/net.log" FAKE_GH_SLEEP=1 "$BEARINGS" --include-prs --json)
@@ -3581,7 +3577,8 @@ EOF
   assert_equals "$(printf '%s' "$json" | jq -cS '[.gates[],.decisions_open[],.in_flight[],.landed[]] | map({id,card_time}) | sort_by(.id)')" \
     "$(printf '%s' "$again" | jq -cS '[.gates[],.decisions_open[],.in_flight[],.landed[]] | map({id,card_time}) | sort_by(.id)')" \
     'repeated observation or timezone rewrote historical events'
-  summary=$(PATH="$fb:$PATH" FM_HOME="$home" NET_LOG="$home/net.log" "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary)
+  summary=$(PATH="$fb:$PATH" FM_HOME="$home" NET_LOG="$home/net.log" FM_SNAPSHOT_NOW=2026-10-24T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary)
   printf '%s' "$summary" | jq -e '
     (.active_children[] | select(.id == "ship-task") | .card_time.kind == "updated")
     and (.decisions_open[] | select(.id == "ask") | .card_time.value == "2026-10-24T12:34:56Z")

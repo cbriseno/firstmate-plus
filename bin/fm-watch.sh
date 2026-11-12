@@ -3977,6 +3977,7 @@ EOF
             continue
             ;;
           *)
+            [ "$agent_state" != alive ] || rm -f "$STATE/.dead-reported-$key"
             printf '%s' "$h" > "$sf"
             wedge_episode_end "$key"
             clear_write_tracking "$key"

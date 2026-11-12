@@ -156,7 +156,7 @@ spawn_case() {  # <id> <model> <effort>
     --scout --harness commandcode --model "$2" --effort "$3" 2>&1
 }
 out=$(spawn_case cc-low deepseek/deepseek-v4.1-flash low) || fail "spawn failed: $out"
-launch=$(cat "$case_dir/cc-low.launch")
+launch=$(fm_test_launch_payload "$(cat "$case_dir/cc-low.launch")")
 gen=$(cat "$home/state/cc-low.busy-gen")
 assert_contains "$launch" '--yolo --trust --skip-onboarding --no-auto-update' 'autonomy/trust flags missing'
 assert_contains "$launch" "--model 'deepseek/deepseek-v4.1-flash' --effort 'low' " 'model or verified effort lost'

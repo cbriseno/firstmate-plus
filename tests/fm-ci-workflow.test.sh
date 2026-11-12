@@ -325,8 +325,8 @@ test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop() {
   heavy=$(tier_timeout heavy $HEAVY_TIER_JOBS) || exit 1
   [ "$heavy" -gt "$normal" ] \
     || fail "heavy tier backstop ($heavy) must exceed the normal tier ($normal)"
-  [ "$heavy" -ge 60 ] && [ "$heavy" -le 75 ] \
-    || fail "heavy tier backstop must stay a 60-75 minute last resort, got $heavy"
+  [ "$heavy" -eq 75 ] \
+    || fail "heavy tier backstop must stay exactly 75 minutes, got $heavy"
   step=$(ruby -ryaml -e '
 steps = YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("steps")
 index = steps.index { |s| s["id"] == "run-real-herdr-family" }

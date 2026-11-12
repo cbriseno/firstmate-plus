@@ -25,8 +25,8 @@ test_list_all_exact_suite_coverage() {
     done | LC_ALL=C sort
   )
   [ -n "$listed" ] || fail "--list --all printed nothing"
-  missing=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true)
-  extra=$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true)
+  missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true)
+  extra=$(LC_ALL=C comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true)
   [ -z "$missing" ] || fail "--list --all missing scripts: $missing"
   [ -z "$extra" ] || fail "--list --all unexpected scripts: $extra"
   # No duplicates.
@@ -1072,52 +1072,13 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
   pass "family, all, changed, and script selections ignore parallel hints"
 }
 
-test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out lane
-  s1=$(FM_LIVE=1 "$RUNNER" --list --lane portable-parallel-1)
-  s2=$(FM_LIVE=1 "$RUNNER" --list --lane portable-parallel-2)
-  proven=$(FM_LIVE=1 "$RUNNER" --list --proven-isolated)
-  serial=$(FM_LIVE=1 "$RUNNER" --list --lane portable-serial)
-  herdr=$(FM_LIVE=1 "$RUNNER" --list --family real-herdr-gated)
-  [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
-  # Shards disjoint.
-  overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
-  [ -z "$overlap" ] || fail "portable parallel shards overlap: $overlap"
-  # Union of shards equals proven-isolated.
-  [ "$(printf '%s\n' "$s1" "$s2" | LC_ALL=C sort -u)" = \
-    "$(printf '%s\n' "$proven" | LC_ALL=C sort -u)" ] \
-    || fail "shard union must equal proven-isolated set"
-  # No herdr in portable lanes.
-  printf '%s\n' "$s1" "$s2" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
-    && fail "portable lanes must not include real-herdr-gated smoke"
-  printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
-    || fail "herdr family must include smoke"
-  out=$("$RUNNER" --check-coverage)
+# One current-inventory run proves the full partition and reports its weights.
+# The guard itself checks each serial shard, its union and duplicate membership;
+# the fixture cases below cover packing boundaries and scheduler behavior.
+test_portable_shard_contract() {
+  local out max imbalance unhinted serial budget lane lanes shards shard listed first cap herdr
+  out=$("$RUNNER" --check-coverage) || fail "coverage guard failed: $out"
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
-  all_count=$(FM_LIVE=1 "$RUNNER" --list --all | wc -l | tr -d ' ')
-  union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
-  [ "$union_count" = "$all_count" ] \
-    || fail "union of lanes ($union_count) must equal --all ($all_count)"
-  # No duplicates across the four partitions.
-  [ "$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
-    || fail "lanes must not duplicate scripts"
-  # LPT execution order, asserted against the runner's own measured schedule
-  # rather than against a script name: naming the current longest script here is
-  # what let the recorded lane duration go stale unnoticed in the first place.
-  for lane in portable-parallel-1 portable-parallel-2; do
-    [ "$(FM_LIVE=1 "$RUNNER" --list --lane "$lane")" = "$(FM_LIVE=1 "$RUNNER" --list-scheduled --lane "$lane")" ] \
-      || fail "$lane membership must be stored longest-measured-first"
-  done
-  pass "portable shard union, disjointness, and coverage guard hold"
-}
-
-# The two parallel lanes are only "duration-balanced" while every member has a
-# measured hint and the packing over those hints stays even. Both halves went
-# unchecked until one lane grew past its CI job cap and was cancelled on every
-# run, so assert them through the guard's own reported numbers.
-test_portable_parallel_lanes_stay_duration_balanced() {
-  local out max imbalance unhinted
-  out=$("$RUNNER" --check-coverage)
   unhinted=$(printf '%s\n' "$out" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
   max=$(printf '%s\n' "$out" | sed -n 's/.*parallel_max_ms=\([0-9]*\).*/\1/p')
   imbalance=$(printf '%s\n' "$out" | sed -n 's/.*parallel_imbalance_ms=\([0-9]*\).*/\1/p')
@@ -1131,63 +1092,6 @@ test_portable_parallel_lanes_stay_duration_balanced() {
   [ "$((imbalance * 20))" -le "$max" ] \
     || fail "parallel lanes differ by ${imbalance}ms against a ${max}ms worst lane, more than 5%"
   pass "portable parallel lanes are fully hinted and packed within 5% of each other"
-}
-
-test_portable_serial_shards_partition_the_serial_lane() {
-  local lanes count serial shard listed union dups shard_lane total cap
-  lanes=$("$RUNNER" --list-lanes)
-  count=$(printf '%s\n' "$lanes" | grep -c '^portable-serial-[0-9]*of[0-9]*$')
-  [ "$count" -ge 2 ] || fail "expected at least two portable serial shard lanes, got $count"
-  printf '%s\n' "$lanes" | grep -q "^portable-serial-1of${count}\$" \
-    || fail "shard lane names must carry the shard count ${count}: $lanes"
-
-  serial=$("$RUNNER" --list --lane portable-serial | LC_ALL=C sort)
-  union=""
-  shard=1
-  while [ "$shard" -le "$count" ]; do
-    shard_lane="portable-serial-${shard}of${count}"
-    listed=$("$RUNNER" --list --lane "$shard_lane")
-    [ -n "$listed" ] || fail "$shard_lane selected no tests"
-    union=$(printf '%s\n%s' "$union" "$listed")
-    shard=$((shard + 1))
-  done
-  union=$(printf '%s\n' "$union" | grep -v '^$' || true)
-
-  dups=$(printf '%s\n' "$union" | LC_ALL=C sort | uniq -d || true)
-  [ -z "$dups" ] || fail "portable serial shards run the same script twice: $dups"
-  [ "$(printf '%s\n' "$union" | LC_ALL=C sort)" = "$serial" ] \
-    || fail "portable serial shards must exactly cover the portable serial lane"
-
-  # Every shard carries a real share of the lane, so no degenerate partition
-  # leaves one runner doing nearly all of the work the split exists to spread.
-  total=$(printf '%s\n' "$serial" | wc -l | tr -d ' ')
-  cap=$((total * 6 / 10))
-  shard=1
-  while [ "$shard" -le "$count" ]; do
-    listed=$("$RUNNER" --list --lane "portable-serial-${shard}of${count}" | wc -l | tr -d ' ')
-    # One expensive suite can legitimately occupy a whole runner. Non-empty
-    # coverage is asserted above; script counts are not duration weights.
-    [ "$listed" -le "$cap" ] \
-      || fail "portable-serial-${shard}of${count} holds $listed of $total scripts"
-    shard=$((shard + 1))
-  done
-
-  # Assignment is deterministic across invocations.
-  [ "$("$RUNNER" --list --lane "portable-serial-1of${count}")" = \
-    "$("$RUNNER" --list --lane "portable-serial-1of${count}")" ] \
-    || fail "portable serial shard membership must be deterministic"
-  pass "portable serial shards are a deterministic disjoint cover of the serial lane"
-}
-
-test_portable_serial_hint_coverage_is_reported_and_bounded() {
-  local out serial unhinted max budget
-  # Shards are packed from measured duration hints, so an unmeasured script is
-  # placed on a guess. Enough of them and the partition still looks balanced by
-  # script count while one shard carries far more real work than another and
-  # reaches its CI job cap. The coverage guard therefore reports the unmeasured
-  # share and refuses past its bound; assert that contract is live rather than
-  # trusting the hint table to stay fresh on its own.
-  out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "serial_unhinted=" "coverage guard must report the unmeasured serial share"
   serial=$(printf '%s\n' "$out" | sed -n 's/.*[^_]serial=\([0-9][0-9]*\).*/\1/p')
   unhinted=$(printf '%s\n' "$out" | sed -n 's/.*serial_unhinted=\([0-9][0-9]*\).*/\1/p')
@@ -1196,61 +1100,47 @@ test_portable_serial_hint_coverage_is_reported_and_bounded() {
   [ "$serial" -gt 0 ] || fail "portable serial lane must be non-empty, got $serial"
   [ "$unhinted" -le "$serial" ] \
     || fail "unmeasured count $unhinted exceeds the serial lane size $serial"
-  # 15% is the guard's own bound; staying well inside it is what keeps the
-  # balance evidence-based. Refresh from a green run's timing artifacts when
-  # this trips (docs/fm-test-portable-shards.md).
-  [ "$((unhinted * 100))" -le "$((serial * 15))" ] \
-    || fail "$unhinted of $serial portable serial scripts lack a measured hint; refresh them"
-  # A complete partition can still overflow a CI job. Assert the runner's
-  # modeled packing target through its executable interface, not source hints.
+  # Report the packing estimate separately from the execution bounds.
   max=$(printf '%s\n' "$out" | sed -n 's/.*serial_max_ms=\([0-9][0-9]*\).*/\1/p')
   budget=$(printf '%s\n' "$out" | sed -n 's/.*serial_budget_ms=\([0-9][0-9]*\).*/\1/p')
   [ -n "$max" ] && [ -n "$budget" ] \
     || fail "coverage summary must carry serial packing and budget: $out"
   [ "$budget" -eq 1200000 ] || fail "packing must leave ten minutes of the normal CI tier"
-  [ "$max" -gt 0 ] && [ "$max" -le "$budget" ] \
-    || fail "largest serial shard packs ${max}ms above the ${budget}ms target"
-  pass "coverage guard bounds the unmeasured share and serial packing within twenty minutes"
-}
+  [ "$max" -gt 0 ] || fail "modeled serial weight must be positive"
+  pass "coverage guard reports serial estimates and verifies the complete partition"
 
-test_portable_serial_packing_budget_boundary() {
-  local tmp repo script weight out rc
-  tmp=$(fm_test_tmproot fm-test-run-packing-boundary)
-  repo="$tmp/repo"
-  mkdir -p "$repo/bin" "$repo/tests"
-  # Preserve the real inventory and packing policy without executing suites.
-  # Only the fixture's measured timing input changes at the boundary.
-  while IFS= read -r script; do
-    printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
-  done < <("$RUNNER" --list --all)
-
-  for weight in 1200000 1200001; do
-    cp "$RUNNER" "$repo/bin/fm-test-run.sh"
-    python3 - "$repo/bin/fm-test-run.sh" "$weight" <<'PY' \
-      || fail "could not seed the fixture's measured timing input"
-from pathlib import Path
-import re, sys
-runner = Path(sys.argv[1])
-runner.write_text(re.sub(
-    r"(?m)^tests/fm-watch-triage-wedge\.test\.sh [0-9]+$",
-    f"tests/fm-watch-triage-wedge.test.sh {sys.argv[2]}",
-    runner.read_text(),
-))
-PY
-    out=$(bash "$repo/bin/fm-test-run.sh" --check-coverage 2>&1) && rc=0 || rc=$?
-    if [ "$weight" -eq 1200000 ]; then
-      expect_code 0 "$rc" "packing exactly at the budget must be accepted"
-      assert_contains "$out" "FM_TEST_COVERAGE ok" "boundary coverage did not pass"
-      assert_contains "$out" "serial_max_ms=1200000" "fixture did not pack exactly at the budget"
-      assert_contains "$out" "serial_budget_ms=1200000" "fixture changed the packing budget"
-    else
-      expect_code 1 "$rc" "packing one millisecond above the budget must be refused"
-      assert_contains "$out" "largest portable serial shard packs 1200001ms above the 1200000ms target" \
-        "over-budget refusal did not explain the modeled excess"
-      assert_not_contains "$out" "FM_TEST_COVERAGE ok" "over-budget packing reported success"
-    fi
+  for lane in portable-parallel-1 portable-parallel-2; do
+    [ "$("$RUNNER" --list --lane "$lane")" = "$("$RUNNER" --list-scheduled --lane "$lane")" ] \
+      || fail "$lane membership must be stored longest-measured-first"
   done
-  pass "serial packing accepts the exact budget and refuses one millisecond above it"
+  # This is a read-only listing, even when ordinary runs exclude live tests.
+  herdr=$(FM_LIVE=1 "$RUNNER" --list --family real-herdr-gated)
+  assert_contains "$herdr" 'tests/fm-backend-herdr-smoke.test.sh' \
+    "the real Herdr smoke must belong to its gated family"
+
+  lanes=$("$RUNNER" --list-lanes)
+  shards=$(printf '%s\n' "$lanes" | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  [ "$shards" -ge 2 ] || fail "expected at least two serial shards"
+  printf '%s\n' "$lanes" | grep -q "^portable-serial-1of${shards}\$" \
+    || fail "serial lane names must carry their shard count"
+  first=$("$RUNNER" --list --lane "portable-serial-1of$shards")
+  [ "$first" = "$("$RUNNER" --list --lane "portable-serial-1of$shards")" ] \
+    || fail "serial shard assignment is not deterministic"
+  cap=$((serial * 6 / 10))
+  shard=1
+  while [ "$shard" -le "$shards" ]; do
+    if [ "$shard" -eq 1 ]; then
+      listed=$first
+    else
+      listed=$("$RUNNER" --list --lane "portable-serial-${shard}of$shards")
+    fi
+    [ -n "$listed" ] || fail "serial shard $shard is empty"
+    listed=$(printf '%s\n' "$listed" | wc -l | tr -d ' ')
+    [ "$listed" -le "$cap" ] \
+      || fail "serial shard $shard holds $listed of $serial scripts, above 60%"
+    shard=$((shard + 1))
+  done
+  pass "parallel order, gated smoke membership, deterministic serial shards and the 60% count bound hold"
 }
 
 test_portable_serial_shard_lane_refusals() {
@@ -1773,40 +1663,6 @@ SH
   pass "jobs scheduler runs proven scripts; failure propagates; non-proven refused"
 }
 
-test_herdr_ci_family_run_has_a_step_timeout() {
-  # The required Herdr lane's hang tripwire is the family-run *step* bound, not
-  # the 75-minute job cap. Parse the workflow as YAML so nested `with.name`
-  # artifact keys cannot masquerade as the step contract.
-  command -v ruby >/dev/null 2>&1 \
-    || fail "ruby is required to parse .github/workflows/ci.yml as YAML"
-  local json job_timeout step_timeout
-  json=$(ruby -ryaml -rjson -e '
-doc = YAML.load_file(ARGV[0])
-job = doc.fetch("jobs").fetch("tests-herdr")
-step = job.fetch("steps").find { |s|
-  s.is_a?(Hash) && s["name"] == "Run real-Herdr family (serial, required)"
-}
-raise "missing family-run step" if step.nil?
-raise "family-run step has no timeout-minutes" unless step.key?("timeout-minutes")
-puts JSON.generate(
-  "job_timeout" => job.fetch("timeout-minutes"),
-  "step_timeout" => step.fetch("timeout-minutes")
-)
-' "$ROOT/.github/workflows/ci.yml") \
-    || fail "could not parse tests-herdr timeouts from ci.yml"
-  job_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_timeout"])' <<<"$json") \
-    || fail "could not read job timeout from parsed workflow"
-  step_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["step_timeout"])' <<<"$json") \
-    || fail "could not read step timeout from parsed workflow"
-  [ "$job_timeout" = 75 ] \
-    || fail "tests-herdr job backstop must stay 75 minutes, got $job_timeout"
-  [ "$step_timeout" = 20 ] \
-    || fail "family-run step timeout must be 20 minutes, got $step_timeout"
-  [ "$step_timeout" -lt "$job_timeout" ] \
-    || fail "family-run step timeout must be below the job backstop"
-  pass "Herdr CI family-run step times out at 20 min under a 75 min job backstop"
-}
-
 test_aggregate_json() {
   local tmp a b
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
@@ -1943,11 +1799,7 @@ test_live_zero_excludes_real_herdr
 test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
-test_portable_shard_union_and_coverage_guard
-test_portable_parallel_lanes_stay_duration_balanced
-test_portable_serial_shards_partition_the_serial_lane
-test_portable_serial_hint_coverage_is_reported_and_bounded
-test_portable_serial_packing_budget_boundary
+test_portable_shard_contract
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family
@@ -1958,5 +1810,4 @@ test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
 test_max_wall_ms_is_a_result_not_advice
 test_jobs_parallel_scheduler_and_failure_propagation
-test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json

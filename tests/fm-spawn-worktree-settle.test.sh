@@ -239,6 +239,7 @@ test_unborn_head_project_is_refused_at_once() {
   read_settle_record "$rec"
   PROJ_DIR="$TMP_ROOT/settle-unborn/unborn-project"
   git init -q "$PROJ_DIR"
+  fm_git_config_identity "$PROJ_DIR"
 
   started=$SECONDS
   out=$(run_settle_spawn "$id")

@@ -89,6 +89,7 @@ write_child() { # <home> <id> <status> [spawn-gen]
   local home=$1 id=$2 status=$3 spawn_gen=${4:-s${BASHPID:-$$}.$RANDOM} sha
   mkdir -p "$home/projects/$id"
   git -C "$home/projects/$id" init -q
+  fm_git_config_identity "$home/projects/$id"
   git -C "$home/projects/$id" commit -q --allow-empty -m init
   sha=$(git -C "$home/projects/$id" rev-parse HEAD)
   git -C "$home/projects/$id" update-ref refs/remotes/origin/main "$sha"
@@ -1016,12 +1017,13 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
 # A stalled authoritative state read consumes only the aggregate scan budget.
 # The durable scan position lets the next invocation reach the following child.
 test_stalled_state_read_is_bounded_and_scan_progresses() {
-  local started elapsed
+  local started elapsed first
   make_world bounded
   write_child "$MAIN" a 'working: state read will stall'
   cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
-if [ "$1" = a ]; then
+printf '%s\n' "$1" >> "$FM_STATE_OVERRIDE/crew-reads"
+if [ "$1" = a ] && [ ! -e "$FM_STATE_OVERRIDE/unstalled" ]; then
   sleep 30
 else
   printf 'state: done · source: fake\n'
@@ -1034,8 +1036,13 @@ SH
   elapsed=$(( $(date +%s) - started ))
   [ "$elapsed" -le 3 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
 
+  grep -qx a "$MAIN/state/crew-reads" || fail "the bounded read never entered the stalled child"
+  : > "$MAIN/state/unstalled"
+  : > "$MAIN/state/crew-reads"
   write_child "$MAIN" b 'done: green'
   FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  first=$(head -n 1 "$MAIN/state/crew-reads")
+  [ "$first" = b ] || fail "next scan read $first before the following child b"
   grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
     || fail "next bounded scan did not resume with the following child"
   pass "stalled state reads are bounded without starving later children"
@@ -1172,7 +1179,7 @@ idle_scan() { # <home> [bound-seconds]
 # Work in flight whose worker is gone and that waits on nothing due is asked
 # about once as a captain call with real choices, never re-absorbed as a wait.
 test_idle_in_flight_work_opens_one_captain_call() {
-  local call
+  local call err seq generation
   make_world idle-call; write_child "$MAIN" child 'paused: waiting for a real case to verify the cancel path'
   seed_in_flight_row "$MAIN" child
   idle_scan "$MAIN"
@@ -1186,6 +1193,13 @@ test_idle_in_flight_work_opens_one_captain_call() {
   idle_scan "$MAIN"
   [ "$(idle_wakes "$MAIN" 'idle-in-flight:')" = 1 ] || fail "idle captain call was surfaced again on the next scan"
 
+  err="$WORLD/idle-drain.err"
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$DRAIN" > "$WORLD/idle-drain.out" 2> "$err" || fail "idle call drain failed"
+  seq=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation .*/\1/p' "$err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$DRAIN" --ack-through "$seq" --recovery-generation "$generation" \
+    || fail "idle call acknowledgement failed"
+
   printf '%s\n' 'keep it as it is' > "$WORLD/keep.txt"
   captain_hold_in "$MAIN" answer child --decision-file "$WORLD/keep.txt" --release >/dev/null \
     || fail "could not record the keep answer"
@@ -1195,7 +1209,7 @@ test_idle_in_flight_work_opens_one_captain_call() {
   age "$MAIN/state/child.status"
   idle_scan "$MAIN"
   captain_hold_in "$MAIN" open child >/dev/null 2>&1 || fail "a kept task was not asked again after a new status event"
-  [ "$(idle_wakes "$MAIN" 'idle-in-flight:')" = 2 ] || fail "the second idle call did not wake the supervisor"
+  [ "$(idle_wakes "$MAIN" 'idle-in-flight:')" = 1 ] || fail "the second idle call did not wake the supervisor"
   pass "idle in-flight work is held once for the captain with close, keep, and restart choices"
 }
 

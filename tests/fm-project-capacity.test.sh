@@ -278,6 +278,7 @@ test_spaced_project_name_is_declared() {
   home="$case_dir/home"
   spaced="$case_dir/my  heavy project"
   git clone -q "$(git -C "$case_dir/project" remote get-url origin)" "$spaced"
+  fm_git_config_identity "$spaced"
   declare_capacity "$home" "   # my  heavy project 9" "my  heavy project 1" "project 5"
   write_live "$home" live-a "$spaced"
   out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$spaced" --mode no-mistakes --yolo off) || rc=$?
@@ -299,7 +300,9 @@ test_hash_prefixed_project_name_is_declared() {
   hashed="$case_dir/#hash-project"
   spaced="$case_dir/# serves"
   git clone -q "$(git -C "$case_dir/project" remote get-url origin)" "$hashed"
+  fm_git_config_identity "$hashed"
   git clone -q "$(git -C "$case_dir/other-project" remote get-url origin)" "$spaced"
+  fm_git_config_identity "$spaced"
   declare_capacity "$home" "# serves 2" "#not-a-capacity" "#hash-project 1"
   write_live "$home" live-a "$hashed"
   out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$hashed" --mode no-mistakes --yolo off) || rc=$?
@@ -431,6 +434,7 @@ test_capacity_is_shared_by_every_local_home() {
   make_home "$mate" task-m
   mate_project="$mate/projects/project"
   git clone -q "$(git -C "$case_dir/project" remote get-url origin)" "$mate_project"
+  fm_git_config_identity "$mate_project"
   printf '%s\n' schema=fm-secondmate-parent.v1 route=local "parent_home=$root" > "$mate/.fm-secondmate-parent"
   printf -- '- mate - a local mate (home: %s; scope: project work; projects: project; added 2026-09-01)\n' "$mate" \
     > "$root/data/secondmates.md"
@@ -608,6 +612,7 @@ exit 1
 SH
   chmod +x "$case_dir/fakebin/orca"
   git clone -q "$(git -C "$case_dir/project" remote get-url origin)" "$case_dir/project-2"
+  fm_git_config_identity "$case_dir/project-2"
   declare_capacity "$home" "project 1"
 
   # shellcheck disable=SC2016 # expanded by the holder's own shell

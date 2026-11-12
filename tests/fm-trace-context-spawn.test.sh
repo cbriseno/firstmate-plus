@@ -232,6 +232,7 @@ run_two_level() {
   printf 'sm-%s\n' "$name" > "$sm/.fm-secondmate-home"
   printf 'charter\n' > "$sm/data/charter.md"
   git -C "$sm" init -q -b main
+  fm_git_config_identity "$sm"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sm/.gitignore"
 
   # Spawn 1: the primary launches the secondmate; capture what it injects.
@@ -394,7 +395,7 @@ test_failed_metadata_append_unsets_carrier_and_still_launches() {
 
   ! grep -q '^traceparent=' "$meta" \
     || fail "failed metadata append must not leave a traceparent= claim in meta"
-  grep -q '^unset TRACEPARENT; .*claude' "$LAUNCH_LOG" \
+  fm_test_launch_payload "$(cat "$LAUNCH_LOG")" | grep -Eq '(^|; )unset TRACEPARENT; .*claude' \
     || fail "failed metadata append must unset TRACEPARENT in the launch command"
   pass "failed traceparent metadata append removes the carrier from the launched task"
 }
@@ -417,6 +418,7 @@ test_duplicate_secondmate_spawn_does_not_converge_trace_context() {
   printf '%s\n' "$id" > "$sm/.fm-secondmate-home"
   printf 'charter\n' > "$sm/data/charter.md"
   git -C "$sm" init -q -b main
+  fm_git_config_identity "$sm"
   fake=$(make_spawn_fakebin "$base/fake")
 
   # A claude secondmate spawn pre-registers workspace trust for the HOME it

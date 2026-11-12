@@ -113,7 +113,7 @@ fm_git_worktree "$proj" "$wt" devin-test
 fm_test_spawn_brief "$home" devin-worker
 if ! out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch" fm_test_run_spawn "$home" "$wt" "$fakebin" devin-worker "$proj" --scout --harness devin --model fusion-claude-fable-5-1-high-sidekick-swe-2-medium --effort xhigh 2>&1)
 then fail "spawn failed: $out"; fi
-launch=$(cat "$case_dir/launch")
+launch=$(fm_test_launch_payload "$(cat "$case_dir/launch")")
 assert_contains "$launch" '--permission-mode dangerous --respect-workspace-trust false' 'autonomy/trust flags missing'
 assert_contains "$launch" "--config '$home/state/devin-worker.devin-config.json'" 'private config missing'
 assert_contains "$launch" "--model 'fusion-claude-fable-5-1-high-sidekick-swe-2-medium'" 'Fusion model lost'

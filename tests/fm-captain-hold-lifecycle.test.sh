@@ -28,6 +28,7 @@ TASKS_AXI_BIN=$(command -v tasks-axi || true)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
+TASKS_AXI_READER=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().parent.parent / "src")' "$TASKS_AXI_BIN")
 
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin
@@ -41,6 +42,8 @@ make_home() {  # <name>
 ## Done
 EOF
   fakebin=$(fm_fakebin "$home")
+  # Fault-injection wrappers retain the installed CLI's canonical reader.
+  ln -s "$TASKS_AXI_READER" "$home/src"
   fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
   printf '%s\n' "$home"
 }
@@ -3149,7 +3152,7 @@ test_interrupted_cleanup_keeps_the_captain_call_recoverable() {
   id=sample-held-cleanup-failure
   wt="$home/projects/$id"
   mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
-  git -C "$home/projects/sample" init -q || fail "could not initialize cleanup-failure project fixture"
+  fm_git_worktree "$home/projects/sample" "$wt" "fm/$id"
   tasks_in "$home" add "$id" "Investigate failed sample cleanup" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the cleanup-failure fixture"
   fm_write_meta "$home/state/$id.meta" \
@@ -3209,6 +3212,7 @@ test_answer_before_cleanup_replay_preserves_the_retained_report() {
   id=sample-answer-before-cleanup-replay
   wt="$home/projects/$id"
   mkdir -p "$home/data/$id" "$wt" "$home/projects/sample"
+  fm_git_worktree "$home/projects/sample" "$wt" "fm/$id"
   tasks_in "$home" add "$id" "Investigate answer before cleanup replay" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the answer-before-replay fixture"
   fm_write_meta "$home/state/$id.meta" \
@@ -3320,6 +3324,7 @@ test_unusable_pending_close_record_names_its_reason() {
   wt="$home/projects/$id"
   marker="$home/state/$id.backlog-close"
   mkdir -p "$home/data/$id" "$wt" "$home/projects/sample" "$home/elsewhere"
+  fm_git_worktree "$home/projects/sample" "$wt" "fm/$id"
   tasks_in "$home" add "$id" "Investigate the unusable pending close" --kind scout \
     --repo sample --start >/dev/null || fail "could not create the unusable pending-close fixture"
   fm_write_meta "$home/state/$id.meta" \
@@ -3371,6 +3376,7 @@ test_relocated_report_does_not_wedge_an_answer_before_replay() {
   id=sample-relocated-answer-before-replay
   wt="$home/projects/$id"
   mkdir -p "$home/data" "$data/$id" "$wt" "$home/projects/sample"
+  fm_git_worktree "$home/projects/sample" "$wt" "fm/$id"
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -5314,7 +5320,7 @@ test_independent_calls_from_one_origin_each_keep_their_card() {
   printf 'done: report complete\n' > "$home/state/$id.status"
   hold_route_call "$home" sample-route-call --origin "$id" >/dev/null \
     || fail "could not hold the route call for the review"
-  run_captain "$home" hold sample-budget-call --title "Approve the sample budget" \
+  run_captain "$home" hold sample-budget-call --category money --title "Approve the sample budget" \
     --reason "captain sample budget approval pending" --repo sample --origin "$id" \
     --question "Approve the sample budget?" --option "yes=Approve it" --option "no=Not now" >/dev/null \
     || fail "could not hold the budget call for the same review"
@@ -5342,7 +5348,7 @@ test_work_item_blocked_by_several_calls_waits_for_every_answer() {
   tasks_in "$home" add sample-trip-work "Plan the sample trip" --repo sample >/dev/null \
     || fail "could not create the queued work item"
   hold_route_call "$home" sample-route-call >/dev/null || fail "could not hold the route call"
-  run_captain "$home" hold sample-budget-call --title "Approve the sample budget" \
+  run_captain "$home" hold sample-budget-call --category money --title "Approve the sample budget" \
     --reason "captain sample budget approval pending" --repo sample \
     --question "Approve the sample budget?" --option "yes=Approve it" --option "no=Not now" >/dev/null \
     || fail "could not hold the budget call"
@@ -5760,7 +5766,7 @@ test_saved_answer_waits_for_application_without_reasking() {
 {"schema":"fm-work-structure.v1","groups":{},"membership":{},"order":[],"edge_meta":{},"freeze":{"reason":"Preserve inherited freeze","except":[]}}
 JSON
   before=$(cat "$home/data/work-structure.json")
-  run_captain "$home" hold saved-call --title "Allow only this exception" --reason "choose exception" --repo sample --origin origin-work \
+  run_captain "$home" hold saved-call --title "Allow only this exception" --reason "choose exception" --repo sample --origin origin-work --category captain-only-fact \
     --question 'Allow only this exception?' --option 'allow=Allow exception' --option 'keep=Keep freeze' >/dev/null || fail 'could not hold saved-answer fixture'
   before_call=$(cat "$home/data/saved-call/captain-call.json")
   printf 'saved-call\tallow\tAllow exception\n' | run_captain "$home" answers --source kanban >/dev/null || fail 'could not record kanban answer'

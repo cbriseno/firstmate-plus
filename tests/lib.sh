@@ -112,6 +112,16 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
+# Inspect the shell payload carried by the worker process owner's argv.
+fm_test_launch_payload() {  # <launch>
+  case "$1" in
+    'env FM_WORKER_PROCESS_SCOPE='*)
+      python3 -c 'import shlex, sys; print(shlex.split(sys.argv[1])[6], end="")' "$1"
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # Harness argument assertions reuse the emitted prefix rather than duplicating
 # its per-spawn env-file path. The dispatch suite executes it separately to prove
 # credential preservation, hooks-path selection and invalid-count refusal.
@@ -131,7 +141,8 @@ fm_test_launch_git_prefix() {  # <launch>
 # The command a pane runs after the launch's Git configuration prefix and its
 # leading export statements, for suites that split it into arguments.
 fm_test_launch_command() {  # <launch>
-  local command=$1 end=' || return 1 2>/dev/null || exit 1; '
+  local command end=' || return 1 2>/dev/null || exit 1; '
+  command=$(fm_test_launch_payload "$1")
   case "$command" in *"$end"*) command=${command#*"$end"} ;; esac
   while [[ "$command" == export\ *\;* ]]; do
     command=${command#*; }
@@ -823,9 +834,15 @@ fm_git_identity() {
   export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 }
 
+# Pin a fixture identity that the real spawn boundary can resolve locally.
+fm_git_config_identity() {  # <repo>
+  git -C "$1" config user.name 'Firstmate Tests'
+  git -C "$1" config user.email tests@example.invalid
+}
+
 # fm_git_init_commit <dir>: create a git repo at <dir> with a README and one
-# commit. Uses an inline identity so it works whether or not fm_git_identity was
-# called. The initial branch is pinned rather than inherited from
+# commit. Pin its public identity locally so later worker launches can read it.
+# The initial branch is pinned rather than inherited from
 # init.defaultBranch, so a fixture that names main resolves the same on a
 # developer machine and on a runner that still defaults to master.
 fm_git_init_commit() {
@@ -834,7 +851,8 @@ fm_git_init_commit() {
   git -C "$dir" init -q -b main
   printf '# %s\n' "$(basename "$dir")" > "$dir/README.md"
   git -C "$dir" add README.md
-  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  fm_git_config_identity "$dir"
+  git -C "$dir" commit -qm initial
 }
 
 # fm_git_add_origin <repo> <bare>: clone <repo> bare into <bare> and register it

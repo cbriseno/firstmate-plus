@@ -1082,10 +1082,10 @@ test_watcher_pays_fire_and_forget_retry_once() {
 
 # One watcher inbox check against an idle pane, through the production watcher
 # functions, so a status log the case writes is not also read as a wake.
-steer_check_once() {  # <case-dir>
+steer_check_once() {  # <case-dir> [output-file]
   PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" FM_SEND_LOG="$1/send.log" \
     FM_FAKE_TMUX_CAPTURE="$(idle_capture "$1")" FM_TASK_INBOX_GRACE_SECS=1 \
-    bash -c '. "$1" && inbox_steer_check sess:fm-t1 t1' _ "$WATCH" >/dev/null 2>&1
+    bash -c '. "$1" && inbox_steer_check sess:fm-t1 t1' _ "$WATCH" >"${2:-/dev/null}" 2>&1
 }
 
 test_watcher_holds_retry_while_the_worker_decides() {

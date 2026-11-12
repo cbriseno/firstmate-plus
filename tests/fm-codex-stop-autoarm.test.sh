@@ -690,7 +690,21 @@ PY
         [ -s "$STATE/.codex-native-fallback" ] || fail 'lease expiry omitted latch'
         assert_contains "$(cat "$STATE/.wake-queue")" 'lease-ended' 'lease expiry omitted durable escalation'
       elif [ "$scenario" = capacity-exhausted ]; then
-        printf 'capacity\n' > "$CASE_HOME/outcome"
+        # Drive each correlated failure separately, as in the single-retry case.
+        # The phase bound observes one recovery, rather than three deliveries.
+        for failed_turn in turn-two turn-three; do
+          expected=2
+          [ "$failed_turn" != turn-three ] || expected=3
+          printf 'capacity:%s\n' "$failed_turn" > "$CASE_HOME/outcome"
+          for i in $(seq 250); do
+            [ "$(queue_count)" -lt "$expected" ] || break
+            fm_pid_alive "$callback" || fail 'capacity recovery lost its owner'
+            sleep 0.1
+          done
+          assert_equals "$expected" "$(queue_count)" 'correlated capacity failure did not recover'
+          wait_phase queued
+        done
+        printf 'capacity:turn-four\n' > "$CASE_HOME/outcome"
         wait_phase retry-exhausted
         wait "$callback" 2>/dev/null || true
         callback=

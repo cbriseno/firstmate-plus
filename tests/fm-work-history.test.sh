@@ -105,7 +105,8 @@ for name in ('data', 'state', 'config'):
     (home/name).mkdir(parents=True)
 code.mkdir(); (code/'bin').symlink_to(root/'bin', target_is_directory=True)
 notes = code/'UPGRADING.md'
-notes.write_bytes((root/'UPGRADING.md').read_bytes())
+notes.write_text('## v11b - 2026-11-10\n\nAction: Migrate historical results.\n\n'
+                 'Command: `bash bin/fm-migrate-v11b.sh --apply`\n')
 (home/'data/backlog.md').write_text('## Queued\n\n## In flight\n\n## Done\n')
 env = dict(os.environ, FM_HOME=str(home), FM_ROOT_OVERRIDE=str(code))
 def call(script, *args, status=0):

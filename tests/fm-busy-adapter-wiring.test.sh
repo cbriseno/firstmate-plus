@@ -343,7 +343,7 @@ run_claude_hook() {  # <settings.json> <hook-event>
   local cmd
   cmd=$(jq -r ".hooks[\"$2\"][0].hooks[0].command" "$1")
   [ -n "$cmd" ] && [ "$cmd" != null ] || fail "no $2 hook command in $1"
-  sh -c "$cmd"
+  printf '{}\n' | sh -c "$cmd"
 }
 
 test_claude_hooks_semantic_lifecycle() {
@@ -353,7 +353,7 @@ test_claude_hooks_semantic_lifecycle() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
-  settings="$WT_DIR/.claude/settings.local.json"
+  settings="$state/$id.claude-settings.json"
   assert_present "$settings" "claude spawn did not write hook settings"
   jq -e . "$settings" >/dev/null || fail "claude hook settings are not valid JSON"
   for ev in UserPromptSubmit Stop StopFailure SessionEnd; do
@@ -392,7 +392,7 @@ test_claude_permission_dialog_writes_status_blocker() {
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
   status="$state/$id.status"
-  settings="$WT_DIR/.claude/settings.local.json"
+  settings="$state/$id.claude-settings.json"
   open=$(jq -r '.hooks.PermissionRequest[0].hooks[0].command' "$settings")
   clear=$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$settings")
   [ -n "$open" ] && [ "$open" != null ] || fail "claude settings lack a PermissionRequest hook"
@@ -423,7 +423,7 @@ test_claude_hooks_stale_incarnation_harmless() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
-  settings="$WT_DIR/.claude/settings.local.json"
+  settings="$state/$id.claude-settings.json"
   "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
   run_claude_hook "$settings" UserPromptSubmit \
     || fail "a stale-gen hook must still exit 0 so Claude's lifecycle is never broken"
@@ -612,8 +612,8 @@ spawn_secondmate_harness() { # <case-dir> <id> <harness> [extra fake tools...]
     fm_test_run_spawn "$primary" "$sm" "$fakebin" "$id" "$sm" "$harness" --secondmate
 }
 
-secondmate_stall_watch() { # <primary> <id> <out> [seconds]
-  local primary=$1 id=$2 out=$3 seconds=${4:-4} state window fakebin
+secondmate_stall_watch() { # <primary> <id> <out> [seconds|ticks]
+  local primary=$1 id=$2 out=$3 seconds=${4:-30} state window fakebin
   state="$primary/state"
   window=$(grep '^window=' "$state/$id.meta" | cut -d= -f2-)
   # A previous quiet checkpoint leaves a downtime marker. The next watcher
@@ -644,6 +644,24 @@ case "\${1:-}" in
 esac
 SH
   chmod +x "$fakebin/tmux"
+  if [ "$seconds" = ticks ]; then
+    # Drive the same frozen row through observation, one idle ring and the
+    # next stall interval. Backdate only its observation time; semantic busy
+    # state and all ring/queue effects still come from the production owners.
+    PATH="$fakebin:$PATH" FM_HOME="$primary" FM_ROOT_OVERRIDE="$ROOT" \
+      FM_STATE_OVERRIDE="$state" FM_BACKEND=tmux FM_SECONDMATE_WAKE_STALL_SECS=1 \
+      bash -c '
+        . "$1"
+        for attempt in 1 2 3; do
+          marker="$STATE/.secondmate-wake-progress-$2"
+          if read -r observed key < "$marker" 2>/dev/null; then
+            printf "%s %s\n" "$(( $(date +%s) - 2 ))" "$key" > "$marker"
+          fi
+          secondmate_wake_stall_tick || exit 1
+        done
+      ' _ "$ROOT/bin/fm-watch.sh" "$id" > "$out" 2>"$out.err"
+    return
+  fi
   PATH="$fakebin:$PATH" FM_HOME="$primary" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_BACKEND=tmux \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 \
@@ -694,7 +712,7 @@ test_secondmate_claude_spawn_arms_busy_for_the_stall_gate() {
   # be inside the one-second threshold when the idle checkpoint starts, so
   # wait out the threshold before asking the same frozen row to surface.
   sleep 2
-  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-idle.out" 8
+  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-idle.out" 30
   grep -F "check: secondmate wake-loop stalled: mate=$id row=7" "$case_dir/watch-idle.out" >/dev/null \
     || fail "the same frozen queue stayed hidden after the secondmate turn ended: $(cat "$case_dir/watch-idle.out")"
   pass "a claude secondmate spawn arms the busy contract the stall gate can see, and Stop does not wake the parent"
@@ -765,7 +783,7 @@ test_secondmate_claude_stop_guard_owns_the_stop_verdict() {
   done
   printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$(( $(date +%s) - 10 ))" \
     > "$sm/state/.wake-queue"
-  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-blocked.out"
+  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-blocked.out" ticks
   grep -F 'secondmate wake-loop stalled' "$case_dir/watch-blocked.out" >/dev/null \
     && fail "a secondmate inside a guard-forced continuation was escalated as stalled: $(cat "$case_dir/watch-blocked.out")"
 
@@ -777,8 +795,7 @@ test_secondmate_claude_stop_guard_owns_the_stop_verdict() {
     out=$(classify claude "$id" "$state")
     [ "$out" = "idle claude-hook" ] || fail "an allowed Stop must record idle ($order), got '$out'"
   done
-  sleep 2
-  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-allowed.out" 8
+  secondmate_stall_watch "$primary" "$id" "$case_dir/watch-allowed.out" ticks
   grep -F "check: secondmate wake-loop stalled: mate=$id row=7" "$case_dir/watch-allowed.out" >/dev/null \
     || fail "the frozen queue stayed hidden after an allowed Stop: $(cat "$case_dir/watch-allowed.out")"
 

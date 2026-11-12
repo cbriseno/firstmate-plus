@@ -56,7 +56,7 @@ export NODE_NO_WARNINGS=1
 make_named_shells() {  # <dir> -> echoes <bindir>
   local dir=$1 name
   mkdir -p "$dir"
-  for name in omp ompd comp; do
+  for name in omp ompd comp claude; do
     ln -sf /bin/bash "$dir/$name"
   done
   printf '%s' "$dir"
@@ -85,7 +85,7 @@ test_detection_anchored_name_and_marker_precedence() {
   # ...and is inert when it leaks into a worker with no omp ancestor.
   # shellcheck disable=SC2016 # the quoted body expands inside the named shell
   out=$(env -u PI_CODING_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS CLAUDECODE=1 FM_OMP_HARNESS=omp \
-    bash -c '"$1"; :' _ "$HARNESS")
+    "$bin/claude" -c '"$1"; :' _ "$HARNESS")
   [ "$out" = claude ] || fail "a leaked FM_OMP_HARNESS without an omp ancestor must not relabel a claude worker, got '$out'"
   pass "fm-harness: omp detects by its anchored name; the marker is a precedence override that needs real omp ancestry"
 }
@@ -163,7 +163,7 @@ test_spawn_launch_line_and_worker_wiring() {
   assert_grep "model=openai-codex/gpt-6-astra" "$state/$id.meta" "meta missing the pinned model"
   assert_grep "effort=medium" "$state/$id.meta" "meta missing the pinned effort"
   assert_present "$state/$id.omp-ext.ts" "omp spawn did not write the per-task extension"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 '$FAKEBIN_DIR/omp'" \
     "omp launch did not clear foreign markers and establish its own at the launch boundary"
   assert_contains "$launch" "--config '$ROOT/.omp/fm-worker-overlay.yml' --auto-approve --cwd '$WT_DIR'" \
@@ -198,7 +198,7 @@ test_spawn_model_validation_scoped_to_listed_providers() {
   status=$?
   expect_code 0 "$status" "an extension-registered provider must pass through: $out"
   assert_contains "$out" "notice: omp provider 'claude-bridge' is not in 'omp models --json'" "pass-through did not state its reason"
-  assert_contains "$(cat "$LAUNCH_LOG")" "--model 'claude-bridge/claude-opus-4-8'" "pass-through model did not reach the launch line"
+  assert_contains "$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")" "--model 'claude-bridge/claude-opus-4-8'" "pass-through model did not reach the launch line"
 
   rec=$(make_spawn_case model-fuzzy omp omp-model-fuzzy-q4)
   read_case_record "$rec"
@@ -223,6 +223,7 @@ test_secondmate_launch_relies_on_discovery() {
   printf 'charter\n' > "$home/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$home/.gitignore"
   git -C "$home" init -q -b main
+  fm_git_config_identity "$home"
   fakebin=$(make_spawn_fakebin "$world/fake" claude)
   make_fake_omp "$fakebin"
   launchlog="$world/launch.log"
@@ -238,7 +239,7 @@ test_secondmate_launch_relies_on_discovery() {
   status=$?
   expect_code 0 "$status" "omp secondmate spawn should succeed: $out"
   assert_grep "harness=omp" "$world/home/state/sm.meta" "secondmate meta missing harness=omp"
-  launch=$(cat "$launchlog")
+  launch=$(fm_test_launch_payload "$(cat "$launchlog")")
   [ "$(printf '%s\n' "$launch" | grep -o ' -e ' | wc -l | tr -d ' ')" = 1 ] \
     || fail "an omp secondmate launch must name exactly one -e: omp auto-discovers .omp/extensions and a file named both ways loads twice: $launch"
   assert_contains "$launch" "-e '$world/home/state/sm.omp-ext.ts'" "an omp secondmate launch must load the parent-home busy extension: $launch"
@@ -263,6 +264,7 @@ test_secondmate_config_pinned_model_is_validated() {
   printf 'charter\n' > "$home/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$home/.gitignore"
   git -C "$home" init -q -b main
+  fm_git_config_identity "$home"
   printf 'omp openai-codex/gpt-nope\n' > "$world/home/config/secondmate-harness"
   fakebin=$(make_spawn_fakebin "$world/fake" claude)
   make_fake_omp "$fakebin"

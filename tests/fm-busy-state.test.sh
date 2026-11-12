@@ -875,7 +875,7 @@ test_claude_session_launch() {
     || fail "session launch failed: $(cat "$dir/spawn.log")"
   sessions="$home/data/proof/sessions.jsonl"
   jq -e '.harness == "claude" and .session == null and (.started_at | length > 0)' "$sessions" >/dev/null || fail "launch metadata missing"
-  hook=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$dir/wt/.claude/settings.local.json")
+  hook=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$home/state/proof.claude-settings.json")
   printf '{"transcript_path":"/tmp/transcript with spaces.jsonl"}\n' | bash -c "$hook" || fail "emitted hook failed"
   printf '{"transcript_path":"/tmp/transcript with spaces.jsonl"}\n' | bash -c "$hook" || fail "repeated hook failed"
   [ "$(wc -l < "$sessions" | tr -d ' ')" = 1 ] || fail "hook duplicated launch"
