@@ -826,7 +826,7 @@ $HERDR_SECTION
 
 # Setup
 $SETUP_BASE
-Verify \`pwd -P\` and \`git rev-parse --show-toplevel\` both name your disposable task worktree, not firstmate's primary checkout; if not, report blocked and stop before branching.
+Run \`pwd -P\` and \`git rev-parse --show-toplevel\` in a separate tool call, then inspect their output and verify both name your disposable task worktree, not firstmate's primary checkout; if not, report blocked and stop before branching.
 1. First action: create your branch: \`git checkout -b $BRANCH_Q --\`$SETUP2
 
 # Task-specific rules and paths
