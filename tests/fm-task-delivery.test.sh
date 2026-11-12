@@ -321,15 +321,17 @@ STUB
   chmod +x "$sendroot/bin/fm-send.sh"
 
   for mode in no-mistakes direct-PR local-only; do
-    id="promote-dod-$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
+    id="fm-promote-dod-$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
     meta="$home/state/$id.meta"
-    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+    printf 'window=%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
     FM_HOME="$home" "$BRIEF" "$id" fixture-project --scout >/dev/null 2>&1 \
       || fail "$mode: scout brief generation should succeed"
     fill_brief_subsections "$home/data/$id/brief.md" \
       "Ship the delivery-contract change." "Preserve the selected delivery mode."
     out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1) \
       || fail "$mode: promotion should succeed"
+    assert_contains "$out" "fm-send.sh $id" \
+      "$mode: promotion's next command must use the exact task id"
 
     payload="$TMP_ROOT/promote-dod/payload-$id"
     # Run the delivery command promotion printed, so the assertions below are made
@@ -383,20 +385,20 @@ STUB
       || fail "$mode: promotion and ordinary brief generation delivered different Definitions of done"
   done
 
-  payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
+  payload="$TMP_ROOT/promote-dod/payload-fm-promote-dod-no-mistakes"
   assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user escalation rule"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user-only snapshot contract"
   # shellcheck disable=SC2016  # single quotes are deliberate: the placeholders must stay literal
-  assert_grep 'needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/promote-dod-no-mistakes/nm-<run>-findings.txt" "$payload" \
+  assert_grep 'needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/fm-promote-dod-no-mistakes/nm-<run>-findings.txt" "$payload" \
     "promoted no-mistakes worker did not receive the structured escalation event"
   assert_grep "NEVER pass \`--yes\` (or \`-y\`)" "$payload" \
     "promoted no-mistakes worker did not receive the --yes prohibition"
   assert_grep "It is banned fleet-wide" "$payload" \
     "promoted no-mistakes worker did not receive the fleet-wide ban wording"
 
-  payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
+  payload="$TMP_ROOT/promote-dod/payload-fm-promote-dod-direct-pr"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
     "promoted worker retained the scout delivery contract"
   assert_grep "status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule" "$payload" \
@@ -405,9 +407,9 @@ STUB
   # The faster paths keep their own contracts rather than inheriting the pipeline's.
   assert_grep "Do NOT run /no-mistakes" "$payload" \
     "promoted direct-PR worker lost its no-pipeline contract"
-  assert_grep "Do NOT push, do NOT open a PR, do NOT merge" "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
+  assert_grep "Do NOT push, do NOT open a PR, do NOT merge" "$TMP_ROOT/promote-dod/payload-fm-promote-dod-local-only" \
     "promoted local-only worker lost its no-remote contract"
-  assert_no_grep "no-mistakes axi respond" "$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr" \
+  assert_no_grep "no-mistakes axi respond" "$TMP_ROOT/promote-dod/payload-fm-promote-dod-direct-pr" \
     "promoted direct-PR worker received the pipeline gate contract"
   pass "fm-promote: a promoted worker receives the same mode-specific delivery contract a briefed one does"
 }
