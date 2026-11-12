@@ -769,7 +769,7 @@ $HERDR_SECTION
 # Setup
 $SETUP_BASE
 This is a SCOUT task: deliver a written report, not a PR.
-The worktree is your laboratory; teardown preserves local changes in a recoverable backup, but the report must stand alone.
+The worktree is disposable; teardown preserves local changes in a recoverable backup, but the report must stand alone.
 
 # Task-specific rules and paths
 Never push or open a PR.
