@@ -36,6 +36,23 @@ test_technical_blocker_keeps_an_action_owner() {
   pass 'technical and dependency blocks surface with a supervisor action obligation without fabricating a human gate'
 }
 
+test_paused_firstmate_wait_surfaces_as_open_decision() {
+  local dir state out
+  dir=$(make_case paused-firstmate)
+  state="$dir/state"
+  printf 'paused [key=main-fix]: waiting for dependency repair in main before rebase\n' > "$state/waiter.status"
+  printf 'working: unrelated progress\n' >> "$state/waiter.status"
+  out=$(FM_STATE_OVERRIDE="$state" "$DRAIN" 2>/dev/null) || fail 'main-wait drain failed'
+  assert_contains "$out" 'waiter [key=main-fix] needs-decision:' 'main wait was lost from open decisions'
+  assert_contains "$out" 'waiting for dependency repair in main before rebase' 'main wait lost its condition'
+  printf 'resolved [key=main-fix]: dependency landed and worker resumed\n' >> "$state/waiter.status"
+  out=$(FM_STATE_OVERRIDE="$state" "$DRAIN" 2>/dev/null) || fail 'resolved main-wait drain failed'
+  assert_not_contains "$out" 'waiter [key=main-fix] needs-decision:' 'resolved main wait still surfaced'
+  pass 'paused main dependency survives progress and reaches the supervisor open-decision drain'
+}
+
+test_paused_firstmate_wait_surfaces_as_open_decision
+
 test_buried_decision_still_surfaces() {
   local dir state out
   dir=$(make_case buried)

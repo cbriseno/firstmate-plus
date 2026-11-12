@@ -22,17 +22,49 @@
 # is committed, so a failed commit stays eligible for at-least-once retry and
 # may rarely duplicate rather than leave a merge silent.
 #
-# Sourced by bin/fm-pr-merge.sh, bin/fm-watch.sh, and tests. No side effects on
-# source beyond its sourced libraries.
+# Sourced by bin/fm-pr-merge.sh, bin/fm-merge-local.sh, bin/fm-watch.sh, and tests.
+# No side effects on source beyond its sourced libraries.
 
 _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$_FM_MERGE_OUTCOME_LIB_DIR/fm-backend.sh"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
+
+# Notify this home's same-project main waiters through their existing inbox.
+# A landing is new information, not proof that every wait condition cleared;
+# the worker checks its condition and resolves its own wait before resuming.
+fm_merge_notify_waiters() {  # <home> <state> <landed-task> <project>
+  local home=$1 state=$2 landed=$3 project=$4 meta id key verb note decisions
+  [ -n "$project" ] || return 0
+  case "$(fm_meta_get "$state/$landed.meta" base_branch)" in
+    ''|main|master) ;;
+    *) return 0 ;;
+  esac
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    id=${meta##*/}; id=${id%.meta}
+    [ "$id" != "$landed" ] || continue
+    [ "$(fm_meta_get "$meta" project)" = "$project" ] || continue
+    decisions=$(status_open_decisions "$state/$id.status")
+    while IFS=$'\t' read -r key verb note; do
+      [ -n "$key" ] || continue
+      status_note_waits_for_main "$note" || continue
+      FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+        "$_FM_MERGE_OUTCOME_LIB_DIR/fm-send.sh" "$id" \
+        "$landed landed on main. Your open wait [$key]: $note. Check whether this clears the dependency; if so, resolve that wait, rebase and resume." \
+        || echo "warning: $landed landed, but notifying main waiter $id failed; firstmate must relay the landing" >&2
+      break
+    done <<EOF
+$decisions
+EOF
+  done
+}
 
 # fm_merge_outcome_report <home> <state> <task-id> <pr-url> <origin> [authority]
 #
@@ -109,6 +141,9 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
       "$provider" "$host" "$path" "$number" || status=1
   fi
   fm_lock_release "$lock"
+  if [ "$status" -eq 0 ]; then
+    fm_merge_notify_waiters "$home" "$state" "$id" "$(fm_meta_get "$state/$id.meta" project)"
+  fi
   # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
   [ ! -e "${FM_CONFIG_OVERRIDE:-$home/config}/fleet-ledger" ] || [ "$status" -ne 0 ] || FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-fleet-ledger.sh" merged "$id" pr "$FM_PR_URL" || true
   return "$status"

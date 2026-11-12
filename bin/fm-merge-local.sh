@@ -164,6 +164,9 @@ fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+# shellcheck source=bin/fm-merge-outcome-lib.sh
+. "$SCRIPT_DIR/fm-merge-outcome-lib.sh"
+[ "$before" = "$after" ] || fm_merge_notify_waiters "$FM_HOME" "$STATE" "$ID" "$PROJ"
 # A separate integration task can land a previously preserved fm/<id> branch.
 # Reconcile only matching queued rows whose exact branch is now contained in the
 # local default; ordinary task branches and captain-held rows stay untouched.

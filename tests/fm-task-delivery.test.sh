@@ -1793,6 +1793,56 @@ EOF
   pass "fm-project-mode: --branch-prefix resolves order-independently and defaults to the legacy fm/ prefix"
 }
 
+test_local_and_pr_landings_notify_main_waiters() {
+  local home proj fakebin id=dependency waiter out
+  home="$TMP_ROOT/main-wait/home"
+  proj="$TMP_ROOT/main-wait/proj"
+  fakebin="$TMP_ROOT/main-wait/bin"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$proj" "$fakebin"
+  printf 'manual\n' > "$home/config/backlog-backend"
+  # No endpoint is started: the real sender records its inbox even when its
+  # best-effort terminal doorbell fails.
+  printf '#!/bin/sh\nexit 1\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+  git -C "$proj" init -q -b main
+  git -C "$proj" -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m base
+  git -C "$proj" checkout -qb "fm/$id"
+  git -C "$proj" -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m repair
+  git -C "$proj" checkout -q main
+  printf 'project=%s\nmode=local-only\nbranch=fm/%s\n' "$proj" "$id" > "$home/state/$id.meta"
+  for waiter in paused blocked resolved other-project vendor; do
+    printf 'project=%s\nwindow=sess:fm-%s\nkind=ship\nbackend=tmux\n' "$proj" "$waiter" > "$home/state/$waiter.meta"
+    printf 'paused [key=main-fix]: waiting for dependency fixture repair in main before rebase\n' > "$home/state/$waiter.status"
+  done
+  printf 'blocked [key=main-fix]: waiting for dependency in main\n' > "$home/state/blocked.status"
+  printf 'resolved [key=main-fix]: already cleared\n' >> "$home/state/resolved.status"
+  printf 'project=%s\n' "$TMP_ROOT/another-project" >> "$home/state/other-project.meta"
+  printf 'paused: waiting for vendor release\n' > "$home/state/vendor.status"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH" "$MERGE_LOCAL" "$id" 2>&1) \
+    || fail "local landing failed: $out"
+  git -C "$proj" merge-base --is-ancestor "fm/$id" main || fail "branch did not land"
+  for waiter in paused blocked; do
+    assert_grep 'dependency landed on main' "$home/state/$waiter.inbox/001.msg" "landing did not reach $waiter inbox"
+    assert_no_grep '^resolved' "$home/state/$waiter.status" "notification prematurely resolved a wait"
+  done
+  for waiter in resolved other-project vendor; do
+    assert_absent "$home/state/$waiter.inbox" "landing notified unrelated waiter $waiter"
+  done
+  (
+    # shellcheck source=bin/fm-merge-outcome-lib.sh
+    . "$ROOT/bin/fm-merge-outcome-lib.sh"
+    export FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH"
+    fm_merge_outcome_report "$home" "$home/state" "$id" https://github.com/acme/proj/pull/7 poll \
+      || fail "PR landing outcome failed"
+    fm_merge_outcome_report "$home" "$home/state" "$id" https://github.com/acme/proj/pull/7 poll \
+      || fail "repeated PR landing outcome failed"
+  ) || fail "PR landing walk failed"
+  assert_grep 'dependency landed on main' "$home/state/paused.inbox/002.msg" "PR landing did not notify waiter"
+  assert_absent "$home/state/paused.inbox/003.msg" "repeated PR observation duplicated notification"
+  pass "local and PR landings durably notify unresolved same-project main waiters"
+}
+
+test_local_and_pr_landings_notify_main_waiters
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch

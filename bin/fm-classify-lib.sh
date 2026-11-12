@@ -656,10 +656,18 @@ _fm_classify_is_corr_token() {  # <word>
   return 1
 }
 
+# A main-branch dependency is supervisor work even when declared as a pause.
+# Keep this predicate shared by status classification and landing notification.
+status_note_waits_for_main() {  # <note>
+  _fm_classify_matches "$1" '(^|[^[:alnum:]_])(waiting|awaiting|esperando|espera)[[:space:]].*(for|on|in|into|en|a)[[:space:]]+main([^[:alnum:]_-]|$)'
+}
+
 # Printed, or assigned to <out-var> when one is given, so a per-line caller on a
 # hot path can take the verb without forking a command substitution. Under bash's
 # dynamic scope an <out-var> named like one of this function's own locals (v, out,
 # word) would be assigned here and lost, so callers pass a distinct name.
+# Pauses and blockers addressed to firstmate or main normalize here so
+# all supervisor consumers share the same actionable interpretation.
 status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
   local v=${1%%:*} out='' word
   v=${v%%\[*}
@@ -686,6 +694,16 @@ status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
       ;;
     *) out=$v ;;
   esac
+  # Waiting for firstmate or a main landing opens the existing decision path;
+  # ordinary validation/vendor pauses retain their external-wait semantics.
+  if [ "$out" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] || [ "$out" = blocked ]; then
+    _fm_status_unstamped "$1" word
+    word=${word#*:}
+    if status_note_waits_for_main "$word" || _fm_classify_matches "$word" \
+      '(^|[^[:alnum:]_])(waiting|awaiting|esperando|espera)[[:space:]]+((for|on|a)[[:space:]]+)?(firstmate|primary)([^[:alnum:]_-]|$)'; then
+      out=needs-decision
+    fi
+  fi
   if [ "$#" -gt 1 ]; then printf -v "$2" '%s' "$out"; else printf '%s' "$out"; fi
 }
 # 0 when a complete "[key=...]" token sits in the documented position before
@@ -1057,7 +1075,7 @@ status_key_closing_verb() {  # <status-file> <key>
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   candidates=$(grep -E \
-    "^[[:space:]]*(needs-decision|blocked|done|failed|$resolve|$held)[[:space:]:[]" \
+    "^[[:space:]]*(needs-decision|blocked|done|failed|${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}|$resolve|$held)[[:space:]:[]" \
     "$f") || [ "$?" -eq 1 ] || candidates=$(cat "$f")
   while IFS= read -r line || [ -n "$line" ]; do
     status_line_verb "$line" event
@@ -1218,10 +1236,13 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 # malformed worker stamp whose colons used to pose as the head/note separator
 # no longer opens or closes anything; cursors folded under that reading are
 # discarded.
+# 10: pauses waiting for firstmate or main open decisions, so rebuild cursors
+# that previously classified those declarations as ordinary external waits.
+# 11: addressed blockers use the same main-only decision routing as pauses.
 # Version 4 was already spent on the bracketed-tag parser change above, and a
 # cursor persisted under that reading predates this one, so it must still be
 # discarded and rebuilt from byte 0 under the new reading.
-FM_OPEN_DECISIONS_FOLD_VERSION=9
+FM_OPEN_DECISIONS_FOLD_VERSION=11
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity

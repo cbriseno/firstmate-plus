@@ -604,3 +604,40 @@ test_recorded_line_stays_recorded_across_a_resolve() {
 }
 
 test_recorded_line_stays_recorded_across_a_resolve
+
+test_firstmate_and_main_waits_open_decisions() {
+  local dir line expected record needs
+  dir=$(case_dir firstmate-waits)
+  while IFS= read -r line; do
+    printf '%s\n' "$line" > "$dir/worker.status"
+    printf 'kind=ship\n' > "$dir/worker.meta"
+    expected=$(printf 'default\tneeds-decision\t%s' "$(status_line_note "$line")")
+    assert_fold "$dir/worker.status" "$expected" "supervisor wait"
+    status_is_captain_relevant "$line" || fail "supervisor wait did not wake primary"
+    record='' needs=0
+    status_span_first_actionable_record "$dir/worker.status" 0 record needs \
+      || fail "supervisor wait was absent from actionable span"
+    [ "$needs" = 1 ] || fail "supervisor wait lost decision routing"
+    assert_contains "$record" "$line" "actionable span changed the worker's declaration"
+    printf 'working: unrelated progress\n' >> "$dir/worker.status"
+    assert_fold "$dir/worker.status" "$expected" "wait survives progress"
+    printf 'resolved: dependency cleared\n' >> "$dir/worker.status"
+    assert_fold "$dir/worker.status" '' "wait resolved"
+    [ "$(status_key_closing_verb "$dir/worker.status" default)" = resolved ] \
+      || fail "closing-verb scan lost the paused opener"
+  done <<'EOF'
+paused [at=1794449619]: waiting for fm-suite-verde fixture repair in main before rebase and affected revalidation; prior full check had additional failures recorded in report
+paused: waiting for firstmate to answer the fixture question
+paused: waiting on primary for next steps
+paused: esperando a firstmate para continuar
+blocked: waiting for firstmate to answer
+blocked: waiting for dependency repair in main
+EOF
+  printf 'paused: waiting for affected checks to finish\n' > "$dir/worker.status"
+  assert_fold "$dir/worker.status" '' "ordinary validation pause"
+  status_is_captain_relevant 'paused: waiting for vendor release' \
+    && fail "ordinary external wait became actionable"
+  pass "firstmate and main waits wake primary and remain open until explicitly resolved"
+}
+
+test_firstmate_and_main_waits_open_decisions
