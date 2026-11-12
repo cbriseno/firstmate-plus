@@ -6851,6 +6851,7 @@ spawn_record_traceparent() {
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
+spawn_send_text_line "$T" "unset FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE"
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
 # Export the compact-adviser kill switch into the pane shell through the same
 # pre-launch channel, so later commands in that shell inherit it too. The launch
@@ -6938,6 +6939,9 @@ if [ "$KIND" = host ]; then
   # Applied after env filtering and as an export for compound launch commands.
   LAUNCH="export GIT_CEILING_DIRECTORIES=$(shell_quote "$DATA/$ID"); $LAUNCH"
 fi
+# A long-lived backend server can have inherited snapshot fixture overrides.
+# Clear them again in the launch itself, including after an explicit allowlist.
+LAUNCH="unset FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE; $LAUNCH"
 # The wrapper owns temporary processes across all harnesses and backends,
 # including children that detach or clear their environment on Linux.
 if [ "$KIND" != secondmate ]; then

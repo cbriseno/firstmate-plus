@@ -37,6 +37,8 @@ make_case() {
   fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" "$harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
+  git -C "$proj" config user.name "Firstmate Tests"
+  git -C "$proj" config user.email "tests@example.invalid"
   for id in "$@"; do
     fm_test_spawn_brief "$home" "$id"
   done
@@ -80,6 +82,8 @@ emitted_launch_env() {
   preamble=$(grep '^export ' "$panelog")
   env -i HOME="$TMP_ROOT/pane-home" PATH="$fakebin:$PATH" TERM=xterm \
     TMUX=synthetic-pane COMPACT_ADVISER_DISABLE="$CONTRARY" \
+    FM_SNAPSHOT_NOW=frozen FM_SNAPSHOT_NOW_EPOCH=1 \
+    FM_CREW_STATE_META_OVERRIDE=/tmp/task.meta FM_CREW_STATE_STATUS_OVERRIDE=/tmp/task.status \
     /bin/sh -c "$preamble
 $launch"
 }
@@ -165,7 +169,7 @@ test_launch_command_carries_the_switch_without_the_pane_export() {
 }
 
 test_secondmate_launch() {
-  local setting rec sm out status seen
+  local setting rec sm out status seen name
   for setting in absent enabled; do
     rec=$(make_case "secondmate-$setting" codex "sm-$setting")
     read_case "$rec"
@@ -177,6 +181,8 @@ test_secondmate_launch() {
     printf 'charter for sm-%s\n' "$setting" > "$sm/data/charter.md"
     printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sm/.gitignore"
     git -C "$sm" init -q -b main
+    git -C "$sm" config user.name "Firstmate Tests"
+    git -C "$sm" config user.email "tests@example.invalid"
     out=$(run_case_spawn "sm-$setting" "$sm" --secondmate)
     status=$?
     expect_code 0 "$status" "secondmate spawn with allowlist=$setting should succeed: $out"
@@ -186,6 +192,11 @@ test_secondmate_launch() {
       || fail "secondmate, allowlist $setting: the emitted launch failed to run"
     assert_equals 1 "$seen" \
       "a secondmate launched with allowlist=$setting must start with the compact adviser disabled"
+    for name in FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE; do
+      install_env_probe "$FAKEBIN_DIR" codex "$name"
+      seen=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG") || fail "secondmate $setting: emitted launch failed"
+      assert_equals unset "$seen" "secondmate $setting: inherited $name reached the agent"
+    done
   done
   pass "a secondmate launch carries the compact-adviser switch in both allowlist postures"
 }
@@ -211,6 +222,8 @@ test_launch_exports_task_inbox() {
       printf 'charter for %s\n' "$id" > "$sm/data/charter.md"
       printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sm/.gitignore"
       git -C "$sm" init -q -b main
+    git -C "$sm" config user.name "Firstmate Tests"
+    git -C "$sm" config user.email "tests@example.invalid"
       out=$(run_case_spawn "$id" "$sm" --secondmate)
     fi
     status=$?
@@ -403,6 +416,35 @@ test_launch_exports_process_scope() {
   pass 'worker ownership survives both launch environment modes'
 }
 
+test_snapshot_overrides_do_not_reach_worker() {
+  local mode rec out seen name preamble
+  for mode in absent enabled; do
+    rec=$(make_case "snapshot-$mode" codex "snapshot-$mode-a1")
+    read_case "$rec"
+    if [ "$mode" = enabled ]; then
+      printf '%s\n' FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE > "$HOME_DIR/config/launch-env-allowlist"
+    fi
+    out=$(run_case_spawn "snapshot-$mode-a1" "$PROJ_DIR" --mode no-mistakes --yolo off) \
+      || fail "snapshot $mode: spawn failed: $out"
+    preamble=$(grep -E '^(export|unset) ' "$PANE_LOG")
+    seen=$(env -i PATH="$PATH" FM_SNAPSHOT_NOW=frozen FM_SNAPSHOT_NOW_EPOCH=1 \
+      FM_CREW_STATE_META_OVERRIDE=/tmp/task.meta FM_CREW_STATE_STATUS_OVERRIDE=/tmp/task.status \
+      /bin/sh -c "$preamble
+env") || fail "snapshot $mode: pane setup failed"
+    for name in FM_SNAPSHOT_NOW FM_SNAPSHOT_NOW_EPOCH FM_CREW_STATE_META_OVERRIDE FM_CREW_STATE_STATUS_OVERRIDE; do
+      if printf '%s\n' "$seen" | grep -q "^$name="; then
+        fail "snapshot $mode: pane kept $name"
+      fi
+      install_env_probe "$FAKEBIN_DIR" codex "$name"
+      seen=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG") \
+        || fail "snapshot $mode: emitted launch failed"
+      assert_equals unset "$seen" "snapshot $mode: inherited $name reached the worker"
+    done
+  done
+  pass 'workers do not inherit snapshot test overrides from their pane'
+}
+
+test_snapshot_overrides_do_not_reach_worker
 test_launch_exports_process_scope
 test_ship_allowlist_absent
 test_ship_allowlist_enabled
