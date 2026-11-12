@@ -1742,6 +1742,9 @@ test_ship_brief_is_short_and_actionable() {
   assert_contains "$(cat "$brief")" '## Firstmate spec' "brief must retain spec"
   assert_contains "$(cat "$brief")" 'Delivery contract: mode=local-only' "brief must retain delivery"
   assert_contains "$(cat "$brief")" 'worker-contract/SKILL.md' "brief must load worker contract"
+  assert_contains "$(cat "$brief")" 'Own this task end to end' "worker must own technical work through completion"
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" short-scout example --scout >/dev/null || fail "scout scaffold failed"
+  assert_contains "$(cat "$home/data/short-scout/brief.md")" 'Own this task end to end' "scout must own technical work through completion"
   pass "ship brief is short and preserves task and delivery facts"
 }
 

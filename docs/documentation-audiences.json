@@ -622,6 +622,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/worker-contract/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/platforms.md",
       "audience": "operator-current"
     },

@@ -46,9 +46,9 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
    Use `blocked:` when you are stuck and need help.
 
 5. Apply any command-specific bounded recovery first; bin/fm-tasks-axi.sh --help owns work-lock contention recovery.
-   If the same obstacle persists after two attempts, stop retrying that path and append
-   `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`.
+   If the same obstacle persists after two attempts, stop retrying that path and find another authorized way forward.
    Continue independent authorized work that does not depend on that path; stop the whole task only when no such work remains.
+   When no authorized way forward remains and firstmate must act, append `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`.
    Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
    This does not relax safety gates, required validation, shared-infrastructure boundaries, or the ban on reporting done with unresolved required work.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),

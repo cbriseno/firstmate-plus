@@ -713,6 +713,7 @@ if [ "$KIND" = host ]; then
   printf '%s\n' "$HOST_TARGETS" > "$DATA/$ID/host-paths"
   cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
 
 $TASK_SECTION
 
@@ -757,6 +758,7 @@ else
 fi
 cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
 Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION
@@ -814,6 +816,7 @@ DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CO
 
 cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
+Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
 Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION
