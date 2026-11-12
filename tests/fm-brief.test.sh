@@ -1743,6 +1743,7 @@ test_ship_brief_is_short_and_actionable() {
   assert_contains "$(cat "$brief")" 'Delivery contract: mode=local-only' "brief must retain delivery"
   assert_contains "$(cat "$brief")" 'worker-contract/SKILL.md' "brief must load worker contract"
   assert_contains "$(cat "$brief")" 'both name your disposable task worktree, not firstmate' "ship brief must verify isolation from the primary checkout"
+  assert_contains "$(cat "$brief")" 'in a separate tool call, then inspect their output' "ship brief must inspect isolation before branching"
   assert_contains "$(cat "$brief")" 'if not, report blocked and stop before branching' "ship brief must stop when isolation fails"
   assert_grep '1. Follow the task-specific delivery and branch rules in the brief.' "$ROOT/.agents/skills/worker-contract/SKILL.md" "worker contract must begin with rule 1"
   assert_contains "$(cat "$brief")" 'Own this task end to end' "worker must own technical work through completion"
