@@ -17,7 +17,7 @@ assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 
 test_list_all_exact_suite_coverage() {
   local listed expected missing extra f
-  listed=$("$RUNNER" --list --all | LC_ALL=C sort)
+  listed=$(FM_LIVE=1 "$RUNNER" --list --all | LC_ALL=C sort)
   expected=$(
     for f in "$ROOT"/tests/*.test.sh; do
       [ -f "$f" ] || continue
@@ -328,7 +328,7 @@ test_changed_dependency_selection_and_unmapped_failure() {
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm git-config-helper-change
 
   printf '\n' >>"$repo/tests/fm-backend-herdr-eventwait.test.py"
-  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  listed=$(cd "$repo" && FM_LIVE=1 bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-backend-herdr-smoke.test.sh" "eventwait test selects Herdr coverage"
   assert_contains "$listed" "tests/fm-backend.test.sh" "eventwait test selects backend coverage"
   git -C "$repo" add tests/fm-backend-herdr-eventwait.test.py
@@ -440,7 +440,7 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
   init_changed_fixture_repo "$repo"
 
   printf '\n' >>"$repo/bin/shared-probe-lib.sh"
-  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  listed=$(cd "$repo" && FM_LIVE=1 bin/fm-test-run.sh --list --changed --base HEAD)
 
   assert_contains "$listed" "tests/fm-backend-herdr-smoke.test.sh" \
     "the one gated script that names the helper must still be selected"
@@ -978,15 +978,38 @@ SH
   pass "fail-on-gate-skip converts herdr-not-found into a hard failure"
 }
 
+test_live_zero_excludes_real_herdr() {
+  local tmp repo listed script
+  tmp=$(fm_test_tmproot fm-test-run-live-zero)
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  script=tests/fm-backend-herdr-smoke.test.sh
+  printf '\n' >>"$repo/$script"
+  listed=$(cd "$repo" && FM_LIVE=0 bin/fm-test-run.sh --list --changed --base HEAD)
+  [ -z "$listed" ] || fail "FM_LIVE=0 selected a changed real-herdr test: $listed"
+  for selection in all family scripts; do
+    case "$selection" in
+      all) set -- --all ;;
+      family) set -- --family real-herdr-gated ;;
+      scripts) set -- "$script" ;;
+    esac
+    listed=$(cd "$repo" && FM_LIVE=0 bin/fm-test-run.sh --list "$@")
+    case "$listed" in *"$script"*) fail "FM_LIVE=0 selected real-herdr in $selection" ;; esac
+  done
+  listed=$(cd "$repo" && FM_LIVE=1 bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "$script" "FM_LIVE=1 retains the real-herdr selection"
+  pass "FM_LIVE=0 excludes real-herdr tests from every selection"
+}
+
 test_exclude_family() {
   local listed
-  listed=$("$RUNNER" --list --all --exclude-family real-herdr-gated)
+  listed=$(FM_LIVE=1 "$RUNNER" --list --all --exclude-family real-herdr-gated)
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "exclude-family real-herdr-gated left a real-herdr script"
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-lint.test.sh' \
     || fail "exclude-family must retain pure-contract-unit scripts"
   # Explicit family mode still works; exclude of a different family is a no-op.
-  listed=$("$RUNNER" --list --family real-herdr-gated)
+  listed=$(FM_LIVE=1 "$RUNNER" --list --family real-herdr-gated)
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "family real-herdr-gated must list smoke test"
   pass "exclude-family drops the named primary family after selection"
@@ -1051,11 +1074,11 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
 
 test_portable_shard_union_and_coverage_guard() {
   local s1 s2 proven serial herdr all_count union_count overlap out lane
-  s1=$("$RUNNER" --list --lane portable-parallel-1)
-  s2=$("$RUNNER" --list --lane portable-parallel-2)
-  proven=$("$RUNNER" --list --proven-isolated)
-  serial=$("$RUNNER" --list --lane portable-serial)
-  herdr=$("$RUNNER" --list --family real-herdr-gated)
+  s1=$(FM_LIVE=1 "$RUNNER" --list --lane portable-parallel-1)
+  s2=$(FM_LIVE=1 "$RUNNER" --list --lane portable-parallel-2)
+  proven=$(FM_LIVE=1 "$RUNNER" --list --proven-isolated)
+  serial=$(FM_LIVE=1 "$RUNNER" --list --lane portable-serial)
+  herdr=$(FM_LIVE=1 "$RUNNER" --list --family real-herdr-gated)
   [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
   # Shards disjoint.
   overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
@@ -1071,7 +1094,7 @@ test_portable_shard_union_and_coverage_guard() {
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
-  all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
+  all_count=$(FM_LIVE=1 "$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
     || fail "union of lanes ($union_count) must equal --all ($all_count)"
@@ -1082,7 +1105,7 @@ test_portable_shard_union_and_coverage_guard() {
   # rather than against a script name: naming the current longest script here is
   # what let the recorded lane duration go stale unnoticed in the first place.
   for lane in portable-parallel-1 portable-parallel-2; do
-    [ "$("$RUNNER" --list --lane "$lane")" = "$("$RUNNER" --list-scheduled --lane "$lane")" ] \
+    [ "$(FM_LIVE=1 "$RUNNER" --list --lane "$lane")" = "$(FM_LIVE=1 "$RUNNER" --list-scheduled --lane "$lane")" ] \
       || fail "$lane membership must be stored longest-measured-first"
   done
   pass "portable shard union, disjointness, and coverage guard hold"
@@ -1835,9 +1858,10 @@ import sys
 import tempfile
 import time
 
+lock_dir = tempfile.TemporaryDirectory()
 fds = []
 for slot in (1, 2):
-    fd = os.open(f"/tmp/firstmate-test-{os.getuid()}-{slot}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = os.open(os.path.join(lock_dir.name, f"firstmate-test-{os.getuid()}-{slot}.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fds.append(fd)
@@ -1849,6 +1873,7 @@ with tempfile.TemporaryDirectory() as tmp:
     with open(fixture, "w") as out:
         out.write("#!/usr/bin/env bash\nexit 0\n")
     env = os.environ.copy()
+    env["FM_TEST_LOCK_DIR"] = lock_dir.name
     env.pop("FM_TEST_HOST_LOCKED", None)
     env.pop("FM_TEST_SKIP_HOST_LOCK", None)
     with tempfile.TemporaryFile(mode="w+") as log:
@@ -1900,6 +1925,7 @@ test_gate_skip_reason_is_recorded
 test_a_run_that_ran_records_no_skip_reason
 test_live_guards_expect_a_capability_skip_class
 test_fail_on_gate_skip_token
+test_live_zero_excludes_real_herdr
 test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights

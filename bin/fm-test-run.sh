@@ -38,6 +38,7 @@
 #                   exit, duration, whether it gate-skipped, and the reason it
 #                   gave (empty when it ran), so a lane can say which harness or
 #                   tool this host could not exercise.
+#   FM_LIVE=0 excludes the real-herdr-gated family from every selection.
 #   --list          print selected script paths (one per line) and exit 0
 #   --list-scheduled
 #                   print selected paths longest-hint-first and exit 0.
@@ -2265,6 +2266,9 @@ case "${MODE:-}" in
     ;;
 esac
 
+if [ "${FM_LIVE:-}" = 0 ]; then
+  EXCLUDE_FAMILIES+=(real-herdr-gated)
+fi
 apply_exclude_families
 if [ "${#EXCLUDE_FAMILIES[@]}" -gt 0 ]; then
   SELECTION_DESC="${SELECTION_DESC};exclude-family=$(IFS=,; printf '%s' "${EXCLUDE_FAMILIES[*]}")"
@@ -2337,7 +2341,8 @@ import os
 import sys
 import time
 
-fds = [os.open(f"/tmp/firstmate-test-{os.getuid()}-{slot}.lock",
+lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
+fds = [os.open(os.path.join(lock_dir, f"firstmate-test-{os.getuid()}-{slot}.lock"),
                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in (1, 2)]
 reported = False
 while True:
