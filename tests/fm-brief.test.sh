@@ -1107,7 +1107,10 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   scout="$home/data/sample-investigation/brief.md"
   assert_grep "load \`captain-hold-lifecycle\`" "$scout" \
     "scout brief did not name the captain-call skill before done"
-  assert_no_grep '/.agents/skills/captain-hold-lifecycle/' "$scout" "scout brief primed a home-based captain-hold path"
+  assert_grep "$ROOT/.agents/skills/worker-contract/SKILL.md" "$scout" "scout brief did not name its worker contract"
+  if grep -F '/.agents/skills/' "$scout" | grep -vF "$ROOT/.agents/skills/worker-contract/SKILL.md" >/dev/null; then
+    fail "scout brief primed an unrelated home-based skill path"
+  fi
   assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
     "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
