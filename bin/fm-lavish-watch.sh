@@ -64,8 +64,19 @@ perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -MEncode=encode,decode -
   sub load_json {
     my ($path) = @_;
     -f $path && !-l $path or die "unsafe Lavish supervision input: $path\n";
-    open my $f, "<", $path or die "$path: $!\n";
-    local $/; return decode_json(<$f>);
+    my $f;
+    if ($path eq $store) {
+      # Feedback can dwarf session metadata. Project it with the existing jq
+      # dependency before decoding; supervision never reads feedback content.
+      open $f, "-|", "jq", "-c", q({sessions: (.sessions | with_entries(
+        .value |= if type == "object" then {file,status,pending_prompts} else . end
+      ))}), $path or die "$path: $!\n";
+    } else {
+      open $f, "<", $path or die "$path: $!\n";
+    }
+    local $/; my $saved = decode_json(<$f>);
+    close $f or die "could not read Lavish supervision input: $path\n";
+    return $saved;
   }
   sub clean { defined($_[0]) && !ref($_[0]) && $_[0] !~ /[\x00-\x1f\x7f]/ }
   sub within { $_[0] eq $_[1] || index($_[0], "$_[1]/") == 0 }
