@@ -111,7 +111,7 @@ test_flag_on_records_the_task_lifecycle() {
   jq -e -s 'all(.[]; .v == 1 and (.ts | type) == "number" and (.task | type) == "string")' \
     "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null \
     || fail "every record must carry v, ts, event, and task: $(cat "$HOME_DIR/state/fleet-ledger.jsonl")"
-  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home) | to_entries | map(.value))')
+  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home, .declared_at) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
 ["task.dispatched","$TASK","ship","sample","claude",null]
 ["task.status","$TASK","working",null," setup done"]
@@ -123,6 +123,8 @@ test_flag_on_records_the_task_lifecycle() {
 ["task.cleaned_up","$TASK"]
 EOF
 )" "$rows" "ledger rows"
+  jq -e 'select(.event == "task.status" and .state == "working") | .declared_at == 1790000000' "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null || fail "declared status time was lost"
+  jq -e 'select(.event == "task.status" and .state == "done") | .declared_at == null' "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null || fail "unstamped status acquired a declared time"
   assert_not_contains "$LEDGER_AFTER_POLL" "partial line" "the poll recorded a line before its newline arrived"
   assert_contains "$LEDGER_AFTER_POLL" '"state":"needs-decision"' "the watcher poll did not record the status lines"
   assert_absent "$HOME_DIR/state/.$TASK.fleet-ledger-offset" "cleanup left the task's ledger offset behind"

@@ -170,7 +170,9 @@ class Projection(Owner):
                 self.presentations[task] = copy.deepcopy(self.presentations[task])
                 evidence = self.presentations[task]['lifecycle']['evidence']
                 evidence.update(current=False, freshness='unknown', reasons=['source-changed'])
-            self.status[task] = self.status.get(task, '') + '\n' + event.get('line', event.get('state') or '') + ' [at=' + str(event['ts']) + '] [key=' + str(event.get('key') or '') + ']: ' + event.get('text', '')
+            declared = event.get('declared_at')
+            stamp = ' [at=' + str(declared) + ']' if type(declared) is int and 0 <= declared <= 999999999999 else ''
+            self.status[task] = self.status.get(task, '') + '\n' + (event.get('state') or '') + stamp + ' [key=' + str(event.get('key') or '') + ']: ' + event.get('text', '')
         elif name == 'primary.final':
             self.messages.append(value)
         elif name in ('agent.activity', 'agent.retired', 'agent.liveness', 'task.dispatched', 'task.cleaned_up'):
