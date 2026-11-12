@@ -51,7 +51,7 @@ git -C "$repo" config user.name 'Runner Fixture'
 git -C "$repo" config user.email runner@example.invalid
 git -C "$repo" commit -q --allow-empty -m initial
 [ "$(git -C "$repo" log -1 --format='%s:%an:%ae')" = 'initial:Runner Fixture:runner@example.invalid' ]
-! git -C "$repo" config --get fixture.input
+[ "$(git -C "$repo" config --get fixture.input)" = preserved ]
 [ "$(GIT_CONFIG_GLOBAL="$FM_TEST_GIT_CONFIG" git config --global --get commit.gpgsign)" = true ]
 SH
   chmod +x "$dir/runner/tests/fm-test-run.test.sh"
@@ -403,8 +403,9 @@ test_inherited_hook_isolation() (
     git -C "$dir/repo" push origin HEAD > "$dir/outside.log" 2>&1; then
     fail "inherited hook did not refuse the control push"
   fi
-  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$dir/hooks" \
-    bash -eu -c '. "$1"; git -C "$2" push origin HEAD' _ "$ROOT/tests/lib.sh" "$dir/repo" \
+  GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$dir/hooks" \
+    GIT_CONFIG_KEY_1=fixture.input GIT_CONFIG_VALUE_1=preserved \
+    bash -eu -c '. "$1"; [ "$(git -C "$2" config --get fixture.input)" = preserved ]; git -C "$2" push origin HEAD' _ "$ROOT/tests/lib.sh" "$dir/repo" \
     > "$dir/fixture.log" 2>&1 || fail "fixture inherited the refusing hook: $(cat "$dir/fixture.log")"
   pass "fixture push ignores inherited command-scope hooks"
 )

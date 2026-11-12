@@ -9,9 +9,10 @@
 # Fixture Git processes must not inherit host signing, hooks, or other global and
 # system preferences: with commit.gpgsign=true set globally and no secret key for
 # the fixture identities, every fixture commit fails before its assertion.
-# Inherited command-scope configuration is cleared too, including worker hooks.
-# Repository-local config, inline `git -c`, and configuration supplied after
-# sourcing remain authoritative - the Git-config suites assert on them.
+# An inherited command-scope core.hooksPath is removed as well, so worker hooks
+# do not govern fixture pushes. Other command-scope settings, repository-local
+# config, inline `git -c`, and configuration supplied after sourcing remain
+# authoritative - the Git-config suites assert on them.
 # The export reaches only the sourcing shell and its children, so the developer's
 # own config files are never written and real project commits made outside the
 # fixtures keep their configuration and signing.
@@ -30,4 +31,22 @@
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
-unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+fm_test_clear_inherited_hooks() {
+  local count=${GIT_CONFIG_COUNT:-0} read=0 write=0 keyvar valuevar key value
+  case "$count" in ''|*[!0-9]*) return ;; esac
+  while [ "$read" -lt "$count" ]; do
+    keyvar=GIT_CONFIG_KEY_$read valuevar=GIT_CONFIG_VALUE_$read
+    key=${!keyvar-} value=${!valuevar-}
+    case "$key" in
+      [cC][oO][rR][eE].[hH][oO][oO][kK][sS][pP][aA][tT][hH]) ;;
+      *) printf -v "GIT_CONFIG_KEY_$write" '%s' "$key"
+         printf -v "GIT_CONFIG_VALUE_$write" '%s' "$value"
+         export "GIT_CONFIG_KEY_$write" "GIT_CONFIG_VALUE_$write"
+         write=$((write + 1)) ;;
+    esac
+    read=$((read + 1))
+  done
+  if [ "$write" -ne "$count" ]; then export GIT_CONFIG_COUNT=$write; fi
+}
+fm_test_clear_inherited_hooks
+unset -f fm_test_clear_inherited_hooks
