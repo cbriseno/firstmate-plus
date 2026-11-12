@@ -7,7 +7,7 @@ WORKSPACE/.claude/skills root uses an owned app-server: register that root with
 skills/extraRoots/set before the interactive client receives its task. The
 server owns the rollout and activity binding. CLI approval flags are retained;
 unavailable registration prints Unsupported and falls back to the normal CLI.
-Only codex-cli 0.166.0 is qualified for that API. No hook, profile, repository
+The API call itself determines registration support. No hook, profile, repository
 file or shared daemon is changed. Repositories with CLAUDE.md and no native
 AGENTS file use the CLI project_doc_fallback_filenames setting on this launch.
 
@@ -120,13 +120,10 @@ def launch_with_skill_root(state, task, gen, workspace, command, root):
     with tempfile.TemporaryDirectory(prefix="fm-codex-roots-") as folder:
         remote = "unix://" + str(Path(folder) / "server.sock")
         server = None
-        diagnostic = {"phase": "version"}
+        diagnostic = {"phase": "start"}
         try:
             with (Path(folder) / "server.log").open("w") as log:
                 try:
-                    version = subprocess.run([command[0], "--version"], capture_output=True, timeout=5, check=True)
-                    if version.stdout.decode().strip() != "codex-cli " + VERSION:
-                        raise ValueError("unqualified native runtime")
                     options = []
                     arguments = iter(command[1:])
                     for arg in arguments:
