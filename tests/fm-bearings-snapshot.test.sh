@@ -193,7 +193,19 @@ EOF
 }
 
 refresh_local_secondmate_ledgers() {  # <parent-home>
-  local parent=$1 registry line mate refresh_path=$PATH
+  local parent=$1 registry line mate refresh_path=$PATH real_date clock_bin
+  real_date=$(command -v date)
+  clock_bin="$TMP_ROOT/fixture-clock"
+  mkdir -p "$clock_bin"
+  cat > "$clock_bin/date" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  '-u +%Y-%m-%dT%H:%M:%SZ') printf '2026-07-11T18:00:00Z\n' ;;
+  *'2026-07-11T18:00:00Z +%s') printf '1783792800\n' ;;
+  *) exec "$FM_TEST_REAL_DATE" "$@" ;;
+esac
+SH
+  chmod +x "$clock_bin/date"
   registry="$parent/data/secondmates.md"
   [ -f "$registry" ] && [ -r "$registry" ] || return 0
   # Once this fixture's fake backend exists, ledger production must use it too;
@@ -205,8 +217,7 @@ refresh_local_secondmate_ledgers() {  # <parent-home>
     mate=$SECONDMATE_REGISTRY_HOME
     [ -f "$mate/.fm-secondmate-home" ] && [ -f "$mate/AGENTS.md" ] \
       && [ -d "$mate/bin" ] && [ -d "$mate/data" ] && [ -d "$mate/state" ] || continue
-    PATH="$refresh_path" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$mate" \
-      FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z FM_SNAPSHOT_NOW_EPOCH=1783792800 \
+    PATH="$clock_bin:$refresh_path" FM_TEST_REAL_DATE="$real_date" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$mate" \
       "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null 2>&1 || true
   done < "$registry"
 }
@@ -358,6 +369,8 @@ EOF
     i=$((i + 1))
   done
   refresh_local_secondmate_ledgers "$home"
+  jq -e '.generated == "2026-07-11T18:00:00Z" and .generated_epoch == 1783792800' \
+    "$mate/state/home-summary.json" >/dev/null || fail "secondmate summary did not use the fixture clock"
 }
 
 # This is the Domain Alpha failure shape exactly: the structured home says Phase 7 is Done
