@@ -13,6 +13,7 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
 
 ## Rules
 
+1. Follow the task-specific delivery and branch rules in the brief.
 2. Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of `$GOTMPDIR`), which teardown deletes.
    Keep only reports, logs, and captures in the task data directory named in the brief; outside the worktree, also write the status, card, and steering-inbox records authorized there.
    A ship leaves the worktree clean before reporting done; a scout may leave laboratory changes for preservation at teardown.
