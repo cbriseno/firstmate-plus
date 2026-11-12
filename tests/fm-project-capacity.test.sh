@@ -700,7 +700,7 @@ test_resource_verdict_defers_then_admits() {
   command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource beat cases (jq absent)\n'; return; }
   case_dir=$(make_case resources task-c)
   home="$case_dir/home"
-  printf '2\nmax-load1 1\nmin-avail-gb 2\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  printf '2\nmax-load1 12\nmin-avail-gb 2\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
   # A stale published admission must never override the current sample.
   printf '{"verdict":{"admit":true}}\n' > "$home/state/lane-capacity.json"
   before=$(call_count "$case_dir")
@@ -715,10 +715,17 @@ test_resource_verdict_defers_then_admits() {
     assert_contains "$out" "temporarily move $home/config/lane-capacity aside" "resource deferral lost its opt-out instruction"
     assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
   done <<'ROWS'
-1.25|6|load: 1.25 over its max-load1 1
+12.28|6|load: 12.28 over its max-load1 12
 0.25|2.5|memory: no room for a 1 GB lane: 2.5 GB available, 2 GB kept
 ROWS
+  write_capacity_beat "$home" 11.9 6
+  rc=0
+  FM_HOME="$home" bash "$ROOT/bin/fm-capacity.sh" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "11.9 must remain admissible to spawn"
   capacity_watch "$case_dir"; pid=$!
+  wait_poll_cycle "$home/state" "$pid" || fail "watcher woke with less than one load point of headroom"
+  assert_present "$home/state/task-c.spawn-deferred" "load margin lost the retry reminder"
+  write_capacity_beat "$home" 0.25 2.5
   wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet under memory pressure"
   FM_HOME="$home" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1
   wait "$pid" || true
@@ -738,7 +745,7 @@ ROWS
   write_live "$home" live-a "$case_dir/project"
   capacity_watch "$case_dir"; pid=$!
   wait_poll_cycle "$home/state" "$pid" || fail "restarted watcher did not stay quiet under load"
-  write_capacity_beat "$home" 0.25 6
+  write_capacity_beat "$home" 0.00 6
   wait_poll_cycle "$home/state" "$pid" || fail "free host capacity bypassed full project capacity"
   assert_present "$home/state/task-c.spawn-deferred" "full project lost the retry reminder"
   rm -f -- "$home/state/live-a.meta"

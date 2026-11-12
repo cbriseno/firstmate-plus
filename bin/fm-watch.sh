@@ -3254,7 +3254,7 @@ spawn_deferred_tick() {
       continue
     fi
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-      bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || return 0
+      bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice >/dev/null 2>&1 || return 0
     project=$(cat "$marker") || continue
     [ -d "$project" ] || continue
     capacity_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || continue

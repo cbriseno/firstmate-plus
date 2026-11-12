@@ -7,6 +7,7 @@
 #   fm-capacity.sh --json     the fm-lane-capacity.v1 document on stdout
 #   fm-capacity.sh --publish  write that document to state/lane-capacity.json
 #   fm-capacity.sh --admit    this home's own admission verdict as an exit status
+#   fm-capacity.sh --admit-notice  admission with one load point of notice headroom
 #
 # It reads this home's state/*.meta, the optional config/lane-capacity, the
 # pressure files and reserve flags that file names, and the host's own probes.
@@ -110,6 +111,8 @@
 #
 # --admit exits 0 when config/lane-capacity is absent or the verdict admits,
 # and 75 with one `deferred:` line on stderr when it does not.
+# --admit-notice uses the same verdict but requires load at least 1 below a
+# configured max-load1, reducing false retry wakes as load changes.
 #
 # Environment: FM_HOME, FM_STATE_OVERRIDE, FM_CONFIG_OVERRIDE, and
 # FM_PROJECTS_OVERRIDE resolve the home exactly as the other bin/ scripts do.
@@ -136,15 +139,17 @@ QUOTA_TIMEOUT=5
 BOOTS_KEPT=10
 
 mode=report
+notice=0
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
   "") ;;
   --json) mode=json ;;
   --publish) mode=publish ;;
   --admit) mode=admit ;;
-  *) echo "usage: fm-capacity.sh [--json|--publish|--admit|--help]" >&2; exit 2 ;;
+  --admit-notice) mode=admit; notice=1 ;;
+  *) echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2 ;;
 esac
-[ "$#" -le 1 ] || { echo "usage: fm-capacity.sh [--json|--publish|--admit|--help]" >&2; exit 2; }
+[ "$#" -le 1 ] || { echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2; }
 
 is_uint() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
@@ -530,6 +535,10 @@ case "$level" in
 esac
 if [ -n "$max_load1" ] && [ -n "$lim_load1" ] && ! num_lt "$lim_load1" "$max_load1"; then
   add_constraint load "load: $lim_load1 over its max-load1 $max_load1"
+fi
+if [ "$notice" -eq 1 ] && [ -n "$max_load1" ] && [ -n "$lim_load1" ] &&
+  awk -v l="$lim_load1" -v m="$max_load1" 'BEGIN{exit !(l + 1 > m)}'; then
+  add_constraint load "load: $lim_load1 is less than 1 below max-load1 $max_load1"
 fi
 [ "$reserve_flag" != present ] || add_constraint reserve "captain reserve: $reserve_label"
 [ "$on_battery" != true ] || add_constraint battery "on battery"
