@@ -5491,6 +5491,74 @@ test_paused_bg_job_until_timeout_rechecks_after_the_job_ends() {
   pass "until set to a background job's timeout rechecks the worker paused on it once the job must have ended"
 }
 
+test_idle_pause_without_deadline_is_rechecked() {
+  local variant dir state key gen pid verdict activity kind age note job
+  for variant in stranded busy unknown active-run timed secondmate fresh; do
+    dir=$(make_case "idle-pause-$variant"); state="$dir/state"; key=test_fm-paused
+    activity=idle; kind=ship; age=500
+    verdict='state: paused · source: status-log · awaiting own background work'
+    note='paused: waiting for my background job to finish'
+    case "$variant" in
+      stranded) activity=busy ;;
+      busy) activity=busy ;;
+      unknown) activity=unknown ;;
+      active-run) verdict='state: working · source: run-step · validating (background run)' ;;
+      timed) note="paused: waiting for my background job until $(iso_utc_at "$(( $(date +%s) + 600 ))")" ;;
+      secondmate) kind=secondmate ;;
+      fresh) age=0 ;;
+    esac
+    printf 'window=test:fm-paused\nkind=%s\nharness=pi\nbackend=tmux\n' "$kind" > "$state/paused.meta"
+    printf '%s\n' "$note" > "$state/paused.status"
+    set_mtime "$(( $(date +%s) - age ))" "$state/paused.status"
+    printf '%s' "$(seen_sig "$state/paused.status")" > "$state/.seen-paused_status"
+    # A generic pause alert may already have spent the four-hour throttle.
+    printf 'declared:%s' "$(seen_sig "$state/paused.status")" > "$state/.paused-resurfaced-$key"
+    printf 'idle pane after background work\n' > "$dir/pane.txt"
+    printf '%s' "$(hash_text "$(cat "$dir/pane.txt")")" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$verdict" > "$dir/fakebin/fm-crew-state.sh"
+    chmod +x "$dir/fakebin/fm-crew-state.sh"
+    gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" paused)
+    "$ROOT/bin/fm-busy-event.sh" apply "$state" paused "$activity" --gen "$gen" \
+      --source pi-ext --event agent-settled || fail "could not set $variant activity"
+    FM_FAKE_TMUX_WINDOW=test:fm-paused FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=pi watch_bg "$state" "$dir/fakebin" "$dir/watch.out" env \
+      FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999
+    pid=$!
+    if [ "$variant" = stranded ]; then
+      wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "busy worker's pause woke before completion"; }
+      # The real command exits, and the existing activity interface settles.
+      # This is a lifecycle fixture, not evidence for a real harness adapter.
+      sleep 0.1 & job=$!
+      wait "$job"
+      "$ROOT/bin/fm-busy-event.sh" apply "$state" paused idle --gen "$gen" \
+        --source pi-ext --event agent-settled || fail "could not settle after background completion"
+      wait_for_exit "$pid" 100 || { reap "$pid"; fail "idle pause without a deadline was never rechecked"; }
+      grep -F 'paused worker idle without a deadline' "$dir/watch.out" >/dev/null \
+        || fail "idle-pause wake did not name the condition to inspect"
+      grep -F 'possible wedge' "$dir/watch.out" >/dev/null && fail "idle pause became a wedge"
+      grep -F 'stale: test:fm-paused' "$state/.wake-queue" >/dev/null || fail "idle-pause recheck was not durable"
+      # Walk the emitted wake through the away-mode relay as well.
+      (
+        # shellcheck source=bin/fm-supervise-daemon.sh
+        . "$ROOT/bin/fm-supervise-daemon.sh"
+        LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
+          handle_wake "$(cat "$dir/watch.out")" "$state"
+        grep -F 'paused worker idle without a deadline' "$state/.subsuper-escalations" >/dev/null
+      ) || fail "away-mode relay absorbed the idle-pause recheck"
+      ack_stopped_cycle "$state" || fail "could not acknowledge idle-pause recheck"
+      FM_FAKE_TMUX_WINDOW=test:fm-paused FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+        FM_FAKE_TMUX_CURRENT_COMMAND=pi watch_bg "$state" "$dir/fakebin" "$dir/repeat.out" env \
+        FM_WATCH_HANDLING_SUCCESSOR=1 FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999
+      pid=$!
+    fi
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "$variant woke unexpectedly"; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$variant queued an unexpected repeat or control wake"; }
+    reap "$pid"
+  done
+  pass "idle deadline-free pauses recheck once; busy, unknown, active runs, deadlines, secondmates and fresh waits stay quiet"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -5631,6 +5699,7 @@ test_paused_until_wrong_year_is_bounded_by_the_cadence
 test_paused_until_that_passed_is_rechecked_before_the_cadence
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends
+test_idle_pause_without_deadline_is_rechecked
 
 # The recorded Claude background-task exit picker. The footer is the last
 # non-blank row, which is what fm_composer_blocking_dialog requires.

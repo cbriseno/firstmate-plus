@@ -5,12 +5,14 @@
 # Status wakes require a captain-relevant status event. A worker's turn-end also
 # wakes once when it has neither a result, a declared wait nor execution proof.
 # Routine progress and healthy secondmate turn-ends stay silent. Stale
-# panes wake only when the recorded endpoint is confirmed dead or missing.
+# panes wake when the recorded endpoint is confirmed dead or missing, or an idle
+# worker's deadline-free pause has no active validation run to explain its wait.
 # While state/.afk exists, the daemon owns triage for eligible durable wakes.
 # Printed reason lines:
 #   signal: <file>...      a new status event or an undeclared worker stop
-#   stale: <window>        a confirmed dead/missing endpoint needing recovery
-#                          (live, quiet, or unknown endpoints stay silent)
+#   stale: <window>        a confirmed dead/missing endpoint needing recovery,
+#                          or a bounded idle-pause recheck (paused_idle_recheck).
+#                          Other live, quiet, or unknown endpoints stay silent.
 #                          A dead endpoint is reported once per pane state; it is
 #                          never interrupted or restarted automatically.
 #                          The remaining detail below describes wedge bounds and
@@ -452,6 +454,7 @@ hash_pane() {
 # into the contract's harness-scoped rendered-text checks: the Grok/Rovo/AGY
 # busy fallbacks and the launch-prompt backstop that keeps a launch pinned at
 # its fm-spawn seed from reading as provably working.
+# Retains WINDOW_BUSY_VERDICT so idle-pause triage reuses this same read.
 window_is_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 task meta verdict
   task=$(window_to_task "$w" "$STATE")
@@ -462,6 +465,7 @@ window_is_busy() {  # <window> <tail40>
     verdict=$(fm_busy_classify "$(window_backend "$w")" "$w" "$(window_harness "$w")" \
       "${task:-unknown}" "$STATE" "$tail40")
   fi
+  WINDOW_BUSY_VERDICT=$verdict
   [ "${verdict%% *}" = busy ]
 }
 
@@ -658,6 +662,28 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   else
     triage_log "timed-pause resume failed: $win"
   fi
+}
+
+# A deadline-free pause can outlive the worker's own background command without
+# another turn-end event. Once past the ordinary stale threshold, exact semantic
+# idle and no executing validation run warrant a recheck, even on a live pane.
+# This does not claim that idle proves process absence: firstmate checks the job
+# and resumes the worker. Reuse the pause throttle, with a distinct scope so an
+# earlier generic pause alert cannot hide this condition for another four hours.
+paused_idle_recheck() {  # <window> <task> <declared-wait-line> <activity-verdict>
+  local win=$1 task=$2 last=$3 activity=$4 age declaration key
+  status_is_paused "$last" || return 0
+  [ "${activity%% *}" = idle ] || return 0
+  status_paused_until "$last" >/dev/null && return 0
+  age=$(age_of "$STATE/$task.status")
+  [ "$age" -ge "$STALE_ESCALATE_SECS" ] || return 0
+  key=$(window_key "$win")
+  declaration="idle:$(stale_wait_declaration "$task")"
+  stale_wait_throttled "$key" "$declaration" && return 0
+  [ "$(crew_absorb_class "$task")" != working ] || return 0
+  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" \
+    "stale: $win (paused worker idle without a deadline or active validation run; check finished background work and resume if the wait cleared)" \
+    "$declaration" "$STALE_ESCALATE_SECS"
 }
 
 # 0 (benign/absorb) if EVERY task in a no-verb "signal:" wake has positive work
@@ -3998,6 +4024,9 @@ EOF
     # content cannot suppress stale detection. Read once per window per poll and
     # reused below so a busy verdict is consistent within one cycle.
     if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
+    if [ "$kind" != secondmate ]; then
+      paused_idle_recheck "$w" "$task" "$last" "$WINDOW_BUSY_VERDICT"
+    fi
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
