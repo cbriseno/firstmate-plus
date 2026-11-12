@@ -806,12 +806,13 @@ $HERDR_SECTION
 # Setup
 $SETUP_BASE
 This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is your laboratory - install, run, edit, and make scratch commits freely; the worktree is discarded at teardown after changed work is backed up.
+The worktree is disposable - edit and make scratch commits freely; the worktree is discarded at teardown after changed work is backed up.
 Teardown preserves local changes in a recoverable backup; the report must still stand alone for review.
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report, the status file, and the card record below.
+2. Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
+   Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status file and the card record below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
@@ -891,8 +892,8 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.
-   Outside the worktree, write only that task material and the status, card, and steering-inbox records authorized below.
+2. Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
+   Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
    Leave the worktree clean before reporting done.
 3. $FORGE_RULE_LINE
 4. Report status by appending one line:

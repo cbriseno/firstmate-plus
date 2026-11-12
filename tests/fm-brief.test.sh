@@ -1699,6 +1699,26 @@ test_crewmate_card_command_writes_the_task_card() {
   pass "fm-brief.sh: ship and scout briefs render one card command that writes the task card"
 }
 
+test_task_temporary_storage() {
+  local home kind id brief
+  home="$TMP_ROOT/storage-home"
+  mkdir -p "$home/data"
+  for kind in scout ship; do
+    id="storage-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" sample --scout >/dev/null
+    else
+      FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" sample --mode local-only >/dev/null
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_grep 'labs, installations, copies, and other scratch output' "$brief" "$kind: missing lab storage rule"
+    assert_grep "parent of \`\$GOTMPDIR\`" "$brief" "$kind: missing task temp location"
+    assert_grep 'only reports, logs, and captures' "$brief" "$kind: missing data storage rule"
+  done
+  pass "fm-brief.sh: ship and scout use task temp for labs"
+}
+
+test_task_temporary_storage
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
