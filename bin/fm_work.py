@@ -35,12 +35,28 @@ def now():
     return dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def work_observation(home, env):
+def start_work_observation(env):
+    observation_env = dict(env)
+    observation_env.pop('FM_WORK_OWNER_FD', None)
     try:
-        result = subprocess.run(['bash', str(BIN / 'fm-fleet-snapshot.sh'), '--work-observation'],
-                                env=env, capture_output=True, text=True, timeout=30, check=True)
-        return json.loads(result.stdout)
+        return subprocess.Popen(['bash', str(BIN / 'fm-fleet-snapshot.sh'), '--work-observation'],
+            env=observation_env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+
+
+def work_observation(process):
+    if process is None:
+        return dict(main_inventory=None, tasks=[])
+    try:
+        output, _ = process.communicate(timeout=30)
+        if process.returncode != 0:
+            raise ValueError('observation unavailable')
+        return json.loads(output)
     except (subprocess.SubprocessError, ValueError):
+        process.kill()
+        process.communicate()
         return dict(main_inventory=None, tasks=[])
 
 
@@ -1853,6 +1869,7 @@ def main():
     parser.add_argument('--subproject')
     args = parser.parse_args()
     lock = None
+    observation_process = None
     try:
         owner = Owner()
         owner.include_runtime = args.runtime
@@ -1880,6 +1897,8 @@ def main():
             if args.verb == 'bootstrap':
                 from fm_work_projection import position
                 owner.ledger_start = position(owner.home)
+            if args.verb in ('bootstrap', 'snapshot'):
+                observation_process = start_work_observation(owner.env)
             owner.load(include_presentations=args.verb != 'snapshot')
             if args.verb == 'bootstrap':
                 from fm_work_projection import bootstrap
@@ -1887,7 +1906,9 @@ def main():
                 lock = None
                 del owner.lock_fd
                 owner.env.pop('FM_WORK_OWNER_FD', None)
-                result = bootstrap(owner)
+                owner.observation = work_observation(observation_process)
+                observation_process = None
+                result = bootstrap(owner, observation=owner.observation)
             elif args.verb == 'aliases-init':
                 refuse(not REQUEST.fullmatch(args.request_id or ''), 'invalid_value', tr('Invalid activation identity.'))
                 with open(args.map, encoding='utf-8') as stream:
@@ -1921,7 +1942,8 @@ def main():
                     if (authored.get('evidence') or {}).get('available') is not False:
                         authored['lifecycle'], _ = reconcile_progress(owner.home, task_id,
                             authored['presentation'], authored['progress_record'], read_text)
-                owner.observation = work_observation(owner.home, owner.env)
+                owner.observation = work_observation(observation_process)
+                observation_process = None
                 result = owner.snapshot()
                 DIAG['tasks'] = len(result.get('tasks', []))
             elif args.verb == 'reconcile':
@@ -1996,6 +2018,9 @@ def main():
         print(json.dumps(dict(state='failed', code='owner_failed', message=str(exc)), ensure_ascii=False))
         return 1
     finally:
+        if observation_process is not None:
+            observation_process.kill()
+            observation_process.communicate()
         if lock is not None:
             os.close(lock)
 

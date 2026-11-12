@@ -25,6 +25,10 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert base['activity']['activity']['state'] == 'busy', base['activity']
     # Real snapshot reports the orphan instead of inventing a worker.
     assert base['snapshot']['main_inventory']['valid'] is False
+    # Direct users of the bootstrap function receive the same observed facts.
+    direct_code = 'import json,sys; sys.path.insert(0,sys.argv[1]); from fm_work import Owner; from fm_work_projection import bootstrap,position; owner=Owner(); owner.ledger_start=position(owner.home); owner.load(); print(json.dumps(bootstrap(owner)))'
+    direct = json.loads(subprocess.check_output([sys.executable, '-c', direct_code, str(root / 'bin')], env=env, text=True))
+    assert direct['snapshot']['main_inventory']['valid'] is False
     assert 'activity' in base['snapshot']['main_inventory']['orphan_in_flight']
     model = Projection(base)
     observed = dict(main_inventory=dict(valid=True, reason=None), tasks=[dict(

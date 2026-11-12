@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from fm_work import Owner, digest, time_value, read_text, work_observation, fresh_run_step
+from fm_work import Owner, digest, time_value, read_text, fresh_run_step, start_work_observation, work_observation
 import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
 from fm_task_usage import read_usage
@@ -29,7 +29,8 @@ def position(home):
         return [None, None, 0]
 
 
-def bootstrap(owner):
+def bootstrap(owner, observation=None):
+    owner.observation = work_observation(start_work_observation(owner.env)) if observation is None else observation
     try:
         crew = owner.capacity()
     except subprocess.TimeoutExpired:
@@ -54,7 +55,6 @@ def bootstrap(owner):
     owner._workers.update(workers)
     crew = lifecycle_capacity(crew, launches, enabled)
     owner.capacity = lambda: crew
-    owner.observation = work_observation(owner.home, owner.env)
     snapshot = owner.snapshot()
     selector = subprocess.run(['bash', '-c', '. "$1/fm-landed-lib.sh"; printf "%s" "$FM_LANDED_JQ_DEFS"', 'projection', str(BIN)], capture_output=True, text=True, check=True).stdout
     facts = dict(calls={t['key'][5:]: t['question']['call'] for t in snapshot['tasks']},
