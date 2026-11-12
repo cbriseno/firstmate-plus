@@ -463,7 +463,7 @@ FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" bash -c '
   . "$1/bin/fm-wake-lib.sh"
   fm_lock_acquire_wait "$2/state/.home-summary-refresh.lock"
   : > "$3"
-  sleep 30
+  sleep 90
 ' _ "$ROOT" "$HOME_DIR" "$LOCK_MARKER" &
 LOCK_HOLDER_PID=$!
 i=0
@@ -862,7 +862,7 @@ done
 printf 'needs-decision [key=restart-gate]: restart the watcher\n' \
   > "$RESTART_HOME/state/restart-task.status"
 i=0
-while kill -0 "$WATCH_PID" 2>/dev/null && [ "$i" -lt 100 ]; do
+while kill -0 "$WATCH_PID" 2>/dev/null && [ "$i" -lt 600 ]; do
   sleep 0.05
   i=$((i + 1))
 done
@@ -870,6 +870,8 @@ kill -0 "$WATCH_PID" 2>/dev/null \
   && fail "the first restart watcher did not surface its actionable signal"
 wait "$WATCH_PID" >/dev/null 2>&1 || true
 WATCH_PID=
+grep -F "signal: $RESTART_HOME/state/restart-task.status" "$TMP_ROOT/restart-watch-one.out" >/dev/null \
+  || fail "the first restart watcher exited without the actionable signal"
 rm -f "$RESTART_HOME/state/.last-watcher-beat"
 PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$RESTART_HOME" \
   FM_POLL=1 FM_HOME_SUMMARY_INTERVAL=999999 FM_HOME_SUMMARY_TIMEOUT=2 \
