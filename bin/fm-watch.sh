@@ -248,6 +248,10 @@ WATCH_HOME_EXISTED=0
 # and wake emission (secondmate_liveness_tick below).
 # shellcheck source=/dev/null # Analyzed separately as a canonical lint root.
 . "$SCRIPT_DIR/fm-secondmate-liveness-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-project-capacity-lib.sh
+. "$SCRIPT_DIR/fm-project-capacity-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -3213,6 +3217,35 @@ event_wait_or_sleep() {
   esac
 }
 
+# Admission reminders are owned by bin/fm-spawn.sh's capacity contract.
+spawn_deferred_tick() {
+  local marker id project capacity_config project_lock reason
+  for marker in "$STATE"/*.spawn-deferred; do
+    [ -f "$marker" ] || continue
+    id=$(basename "$marker" .spawn-deferred)
+    if [ -f "$STATE/$id.meta" ] || [ ! -f "${FM_DATA_OVERRIDE:-$FM_HOME/data}/$id/brief.md" ]; then
+      rm -f -- "$marker" || return 1
+      continue
+    fi
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || return 0
+    project=$(cat "$marker") || continue
+    [ -d "$project" ] || continue
+    capacity_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || continue
+    fm_project_capacity_lookup "$capacity_config" "$(basename "$project")" || continue
+    if [ -n "$FM_PROJECT_CAPACITY" ]; then
+      project_lock=$(fm_treehouse_project_lock_path "$project") || continue
+      fm_project_capacity_occupants "$project_lock" "$project" "$STATE" "$id" || continue
+      [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -lt "$FM_PROJECT_CAPACITY" ] || continue
+    fi
+    reason="check: capacity available: retry deferred task $id"
+    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
+    rm -f -- "$marker" || return 1
+    wake "$reason"
+  done
+  return 0
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -3565,6 +3598,8 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  spawn_deferred_tick || exit 1
 
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.

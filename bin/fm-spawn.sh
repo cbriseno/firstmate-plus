@@ -223,6 +223,12 @@
 #   under the existing home task-set lock before creating launch resources.
 #   That script owns the opt-in lane ceiling and live resource verdict; exit 75
 #   keeps the item queued, while invalid configuration remains an error.
+#   Either deferral writes state/<id>.spawn-deferred containing the absolute
+#   project path. The watcher rechecks admission each poll and queues a one-shot
+#   `check: capacity available: retry deferred task <id>` when both limits allow
+#   dispatch again. It retires the reminder after queuing that wake, or when the
+#   task already has metadata or no longer has a brief; spawning still owns the
+#   locked admission verdict and Firstmate retries the original dispatch.
 #   Batch pairs run one at a time, rereading capacity after the previous spawn
 #   has published its record. Host tasks retain their separate admission path.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
@@ -3668,7 +3674,8 @@ if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
     FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit || spawn_capacity_rc=$?
   if [ "$spawn_capacity_rc" -ne 0 ]; then
     if [ "$spawn_capacity_rc" -eq 75 ]; then
-      echo "deferred: task $ID was not launched and its backlog item stays queued; retry at the next supervision event; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
+      printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+      echo "deferred: task $ID was not launched and its backlog item stays queued; the watcher will wake dispatch when capacity is available; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
     fi
     exit "$spawn_capacity_rc"
   fi
@@ -3715,7 +3722,8 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
     exit 1
   fi
   if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
-    echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
+    printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+    echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - the watcher will wake dispatch when capacity is available" >&2
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
   fi
 fi

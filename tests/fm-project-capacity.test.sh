@@ -12,8 +12,8 @@
 # alone.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/watch-triage-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/watch-triage-helpers.sh"
 
 unset TASKS_AXI_BACKEND || :
 
@@ -218,6 +218,29 @@ call_count() { wc -l < "$1/calls.log" | tr -d ' '; }
 
 worktree_list() { git -C "$1/project" worktree list --porcelain; }
 
+capacity_watch() {  # <case-dir>
+  local home="$1/home" meta
+  make_fake_crew_state "$1/fakebin" >/dev/null
+  for meta in "$home/state"/*.meta; do
+    [ -f "$meta" ] || continue
+    sed -n 's/^window=firstmate://p' "$meta"
+  done > "$1/calls.log.window"
+  fm_test_track_watcher_state "$home/state"
+  touch "$home/state/.last-check" "$home/state/.last-heartbeat"
+  watch_bg "$home/state" "$1/fakebin" "$home/watch.out" env \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DIAGNOSTICS=0 FM_BACKEND=tmux \
+    FM_FAKE_CALL_LOG="$1/calls.log" FM_FAKE_CREW_STATE='state: working · source: fixture · active holder' \
+    2> "$home/watch.err"
+}
+
+expect_capacity_wake() {  # <home> <pid>
+  wait_for_exit "$2" 200 || fail "capacity watcher did not wake: $(cat "$1/watch.err")"
+  assert_contains "$(cat "$1/watch.out")" 'check: capacity available: retry deferred task task-c' \
+    "capacity recovery did not request the original dispatch"
+  assert_contains "$(cat "$1/state/.wake-queue")" 'spawn-deferred-task-c' "retry wake was not queued durably"
+  assert_absent "$1/state/task-c.spawn-deferred" "the delivered reminder was not retired"
+}
+
 # --- cases ------------------------------------------------------------------
 
 # The reported incident's shape before any declaration: the project is already
@@ -252,7 +275,7 @@ test_available_capacity_admits_the_worker() {
 }
 
 test_exhausted_capacity_defers_without_leaving_anything_behind() {
-  local case_dir home out rc=0 before worktrees
+  local case_dir home out rc=0 before worktrees pid
   case_dir=$(make_case exhausted task-c)
   home="$case_dir/home"
   declare_capacity "$home" "project 2"
@@ -267,6 +290,11 @@ test_exhausted_capacity_defers_without_leaving_anything_behind() {
   assert_contains "$out" "task task-c was not launched and its backlog item stays queued" \
     "the deferral did not say the task stays queued"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  capacity_watch "$case_dir"; pid=$!
+  wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet at full project capacity"
+  assert_present "$home/state/task-c.spawn-deferred" "project deferral has no persistent retry reminder"
+  rm -f -- "$home/state/live-b.meta"
+  expect_capacity_wake "$home" "$pid"
   pass "a spawn beyond capacity is deferred before any record, brief, endpoint, worktree, or backlog move exists"
 }
 
@@ -668,7 +696,7 @@ JSON
 }
 
 test_resource_verdict_defers_then_admits() {
-  local case_dir home out rc before worktrees load avail reason
+  local case_dir home out rc before worktrees load avail reason pid
   command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource beat cases (jq absent)\n'; return; }
   case_dir=$(make_case resources task-c)
   home="$case_dir/home"
@@ -690,6 +718,12 @@ test_resource_verdict_defers_then_admits() {
 1.25|6|load: 1.25 over its max-load1 1
 0.25|2.5|memory: no room for a 1 GB lane: 2.5 GB available, 2 GB kept
 ROWS
+  capacity_watch "$case_dir"; pid=$!
+  wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet under memory pressure"
+  FM_HOME="$home" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1
+  wait "$pid" || true
+  assert_present "$home/state/task-c.spawn-deferred" "watcher stop lost the retry reminder"
+  before=$(call_count "$case_dir")
   rc=0
   out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$case_dir/project" --scout) || rc=$?
   expect_code "$DEFER_EXIT" "$rc" "a scout ignored resource admission: $out"
@@ -700,7 +734,15 @@ ROWS
   expect_code 1 "$rc" "invalid lane configuration became a resource deferral: $out"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
   printf '2\nmax-load1 1\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  declare_capacity "$home" 'project 1'
+  write_live "$home" live-a "$case_dir/project"
+  capacity_watch "$case_dir"; pid=$!
+  wait_poll_cycle "$home/state" "$pid" || fail "restarted watcher did not stay quiet under load"
   write_capacity_beat "$home" 0.25 6
+  wait_poll_cycle "$home/state" "$pid" || fail "free host capacity bypassed full project capacity"
+  assert_present "$home/state/task-c.spawn-deferred" "full project lost the retry reminder"
+  rm -f -- "$home/state/live-a.meta"
+  expect_capacity_wake "$home" "$pid"
   rc=0
   out=$(spawn_ship "$case_dir" task-c) || rc=$?
   expect_code 0 "$rc" "the same queued task was not admitted after pressure cleared: $out"
