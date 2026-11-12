@@ -69,3 +69,41 @@ cmp "$TMP_ROOT/expected-args" "$TMP_ROOT/args"
 [ "$(cat "$workspace/result")" = editable ]
 rg -q 'Unsupported: Codex native skill-root registration unavailable' "$TMP_ROOT/fallback.log"
 printf 'ok - newer Codex attempts native registration; unavailable API retains editable configured launch\n'
+
+# A newer capable server has no qualified activity binding, but its primary
+# completion must still reach the configured callback. Keep real parent/file
+# ownership while the portable lsof fixture projects that open descriptor.
+PATH="$fakebin:$PATH" CODEX_HOME="$codex_home" python3 - \
+  "$ROOT/bin/fm-codex-activity.py" "$state" "$task" "$gen" "$workspace" "$rollout" "$TMP_ROOT" <<'PYNOTIFY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+activity, state, task, gen, workspace, rollout, scratch = sys.argv[1:]
+state, rollout, scratch = Path(state), Path(rollout), Path(scratch)
+workspace = str(Path(workspace).resolve())
+session = json.loads(rollout.read_text().splitlines()[0])["payload"]["id"]
+(state / (task + ".busy-gen")).write_text(gen + "\n")
+rows = [{"type": "session_meta", "payload": {"id": session, "cli_version": "0.167.0", "source": "vscode", "cwd": workspace}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "primary-turn"}},
+        {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "primary-turn"}}]
+rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+delivered = scratch / "notification.json"
+program = [sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])", str(delivered)]
+def notify(thread):
+    subprocess.run([sys.executable, activity, "notify", str(state), task, gen, workspace,
+                    json.dumps(program), json.dumps({"thread-id": thread})], check=True)
+with rollout.open("rb"):
+    notify(session)
+    assert delivered.is_file(), "primary completion was dropped"
+    assert json.loads(delivered.read_text())["thread-id"] == session, "wrong thread completion was forwarded"
+    verdict = subprocess.check_output([sys.executable, activity, "classify", str(state), task], text=True).strip()
+    assert verdict == "unknown codex-unverified", verdict
+    delivered.unlink()
+    notify("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    assert not delivered.exists(), "guardian completion was forwarded"
+    (state / (task + ".busy-gen")).write_text("replacement\n")
+    notify(session)
+    assert not delivered.exists(), "old generation completion was forwarded"
+PYNOTIFY
+printf 'ok - newer native primary notification forwards; guardian and stale callbacks do not; activity stays unqualified\n'

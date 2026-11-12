@@ -159,7 +159,8 @@ The guard checks the initial native skill catalog before the task, the repositor
 The exact verdicts were `ok - codex-cli 0.166.0: native skill, repository instructions, edit and completion verified` and `ok - native catalog and CLAUDE.md loaded before the unnamed task`.
 The launch retained `--approve-for-me`, native hooks, and hook trust review; the disposable profile and project contained no hooks requiring consent.
 `bin/fm-codex-activity.py` owns native root registration, its qualified runtime, completion attribution, and the editable fallback when registration is unsupported.
-`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh` passed with `ok - unavailable native root registration warns and retains editable configured launch`.
+On 2026-11-12, Linux with an isolated `codex-cli 0.167.0` verified native `skills/extraRoots/set`, a first direct read of the indexed worktree skill body, and delivery through the configured primary completion callback. Activity classification for that newer runtime remains `unknown codex-unverified`; registration and notification do not qualify its activity parser.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh` checks newer native registration, editable fallback on unavailable API, primary completion, and rejection of guardian-thread and stale-generation callbacks.
 The Codex case in `tests/fm-busy-state.test.sh` passed with `ok - Codex rollout source proves lifecycle, kernel/session binding and replacement; invalid evidence stays unknown`, including simultaneous automatic review and parent-only completion notification.
 The live guard submits a prompt and is opt-in; `tests/fm-spawn-dispatch-profile.test.sh` also checks configured approval and the absence of forced read-only for ship and scout launches without model calls.
 macOS and other runtime backends were not executed in this guard; all backends consume the same generated brief and Codex launch template.

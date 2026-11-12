@@ -20,7 +20,9 @@ the bound process's open primary rollout and matching writer-lock are read;
 extra open rollouts are accepted only for its explicit native guardian children.
 The private server uses source vscode. Its notify callback forwards the original
 program and payload only for a verified idle primary, never a guardian turn.
-The native executable, boot/start identity, workspace, CLI version, session ID,
+Notifications also accept a parent-owned primary rollout on a newer runtime;
+activity classification retains its qualified version. The native executable,
+boot/start identity, workspace, CLI version, session ID,
 and generation must all agree before and after the read. No descriptor, partial
 JSON, conflicting lifecycle, unsupported version, or unreadable evidence means
 unknown. Logs over 32 MiB are unsupported rather than folded incompletely.
@@ -185,20 +187,27 @@ def native_notify(state, task, gen, workspace, program, payload):
     """Keep guardian completions from invoking the worker's original notify."""
     try:
         data = decode(payload)
-        if sys.platform == "linux":
+        version = VERSION
+        if sys.platform == "linux" and owner_path(state, task, gen).exists():
             binding = decode(owner_path(state, task, gen).read_text())
-            if binding["pid"] != os.getppid() or generation(state, task) != gen:
+            if binding["pid"] != os.getppid():
                 return
             entry, session, _ = sample(binding)
         else:
             home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-            entry = Path(open_rollout(os.getppid(), home, workspace, "vscode"))
+            # Registration can work beyond the activity classifier's version pin.
+            # The callback still proves its parent's unique primary rollout.
+            entry = Path(open_rollout(os.getppid(), home, workspace, "vscode", version=None))
             session = ROLLOUT.fullmatch(entry.name)[1]
+            with entry.open("rb") as handle:
+                version = decode(handle.readline(LIMIT + 1))["payload"]["cli_version"]
+            if not isinstance(version, str):
+                raise ValueError("invalid native version")
             binding = {"workspace": workspace, "source": "vscode"}
-        if data.get("thread-id") != session:
+        if data.get("thread-id") != session or generation(state, task) != gen:
             return
         with entry.open("rb") as handle:
-            if fold(handle, binding, session) != "idle":
+            if fold(handle, binding, session, version=version) != "idle":
                 return
         subprocess.run([*decode(program), payload], check=False)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
@@ -232,7 +241,7 @@ def launch(state, task, gen, workspace, command):
     os.execvp(command[0], command)
 
 
-def open_rollout(pid, codex_home, workspace, source="cli"):
+def open_rollout(pid, codex_home, workspace, source="cli", version=VERSION):
     lsof = shutil.which("lsof")
     if not lsof:
         return None
@@ -261,7 +270,7 @@ def open_rollout(pid, codex_home, workspace, source="cli"):
             if not isinstance(payload, dict):
                 continue
             if (first.get("type") != "session_meta" or payload.get("id") != match[1]
-                    or payload.get("cli_version") != VERSION or payload.get("source") != source
+                    or (version is not None and payload.get("cli_version") != version) or payload.get("source") != source
                     or str(Path(payload.get("cwd", "")).resolve()) != workspace):
                 continue
             candidates.append(str(resolved))
@@ -345,7 +354,7 @@ def sample(binding):
     return entry, session, (name, info.st_dev, info.st_ino)
 
 
-def fold(handle, binding, session):
+def fold(handle, binding, session, version=VERSION):
     data = handle.read(LIMIT + 1)
     if len(data) > LIMIT:
         raise ValueError("oversize rollout")
@@ -361,7 +370,7 @@ def fold(handle, binding, session):
             raise ValueError("invalid payload")
         if number == 0:
             if (row.get("type") != "session_meta" or payload.get("id") != session
-                    or payload.get("cli_version") != VERSION or payload.get("source") != binding.get("source", "cli")
+                    or payload.get("cli_version") != version or payload.get("source") != binding.get("source", "cli")
                     or payload.get("cwd") != binding["workspace"]):
                 raise ValueError("session identity mismatch")
             continue
