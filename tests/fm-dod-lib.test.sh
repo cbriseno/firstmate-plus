@@ -469,23 +469,19 @@ test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_promotion_keeps_the_recorded_base_branch
 
-# The launch role is the generated text a worker receives. It must keep the
-# skill name, so a session that registers the skill loads it by name, and must
-# name the skill file as the fallback for a session where the name does not
-# resolve.
-test_worker_role_names_skill_and_fallback_file() {
-  local role_file path
+# The generated role names the skill without priming other skill loads to use
+# the operator's home. The native catalog owns resolution of skill paths.
+test_worker_role_names_skill_without_home_path() {
+  local role_file
   role_file="$TMP_ROOT/worker-role.txt"
-  path="$ROOT/.agents/skills/firstmate-coding-guidelines/SKILL.md"
-  [ -f "$path" ] || fail "Firstmate skill file is missing at $path"
-  fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 "$ROOT" >"$role_file"
+  fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 >"$role_file"
   assert_grep "\`CONTRIBUTING.md\` and \`firstmate-coding-guidelines\` for Firstmate changes" "$role_file" \
     "worker role did not name the skill"
-  assert_grep "If the \`firstmate-coding-guidelines\` skill name does not resolve in this session, read \`$path\` instead." "$role_file" \
-    "worker role did not name the skill file as the fallback"
+  assert_no_grep '/.agents/skills/' "$role_file" \
+    "worker role primes skill loading with an absolute home path"
   assert_no_grep "Skill tool cannot resolve" "$role_file" \
     "worker role claims the Skill tool never resolves the skill"
-  pass "worker role names the skill and its fallback skill file"
+  pass "worker role names the skill without a home-path fallback"
 }
 
 # forge=external: a review tool uploads its own snapshot, so nothing is pushed.
@@ -597,7 +593,7 @@ test_external_dod_renders_the_adapter
 test_external_review_done_without_backup_is_accepted_on_the_url
 test_external_review_done_with_backup_needs_the_copy
 
-test_worker_role_names_skill_and_fallback_file
+test_worker_role_names_skill_without_home_path
 
 # A captain rule that forbids the selected path (no-mistakes or GitHub Actions
 # only on explicit request) is answered by firstmate, never by the captain: every

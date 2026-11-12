@@ -594,7 +594,7 @@ Optional helper: \`bin/fm-secondmate-report.sh <verb> <corr_id> <note>\` appends
 A plain \`echo\` that includes the same \`corr=<id>\` on this parent channel is equally valid; do not depend on the helper being present.
 For a terse result, a status line is the whole answer.
 For a detailed answer (an investigation, a plan, an audit), write it to a doc under your home's \`data/\` and append a status line that points to that doc - the scout-report pattern - so the main firstmate is woken and can read it.
-Before treating an investigation or visual review as complete, load \`captain-hold-lifecycle\` from this home's \`.agents/skills/\` and pass its shared completion gate.
+Before treating an investigation or visual review as complete, load \`captain-hold-lifecycle\` and pass its shared completion gate.
 A message with NO marker is the captain typing directly into your pane: treat it as authoritative captain intervention and stay conversational exactly as you would for any captain message; do not force it onto the status path.
 A request arriving through the instruction inbox below follows the same marker and reply rules.
 
@@ -842,7 +842,7 @@ The report must stand alone: what you did, what you found, the evidence (command
 For a diagnosis, read the always-on diagnostic logs in the directory above \`$FM_ROOT/bin/fm-diag.sh path\` first and cite their numbers, as \`diagnostic-reasoning\` describes.
 For a diagnosis with local changes, include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
-Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+Before reporting done, load \`captain-hold-lifecycle\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF

@@ -1096,8 +1096,9 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$ROOT/bin/fm-brief.sh" sample-investigation sample --scout >/dev/null 2>&1
   scout="$home/data/sample-investigation/brief.md"
-  assert_grep "$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md" "$scout" \
-    "scout brief did not load the captain-call policy before done"
+  assert_grep "load \`captain-hold-lifecycle\`" "$scout" \
+    "scout brief did not name the captain-call skill before done"
+  assert_no_grep '/.agents/skills/' "$scout" "scout brief primed home-based skill paths"
   assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
     "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
