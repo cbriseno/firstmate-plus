@@ -31,7 +31,7 @@ Readers must ignore members and events they do not recognize, so later versions 
 | Event              | Extra members                                  | Written when |
 | ------------------ | ---------------------------------------------- | ------------ |
 | `task.dispatched`  | `kind`, `project`, `harness`, `model`          | A new worker or second mate is launched. A relaunch of an existing task is not recorded. |
-| `task.status`      | `state`, `key`, `text`                         | A complete, nonblank line in the task's status log is captured. |
+| `task.status`      | `state`, `key`, `text`, `declared_at`          | A complete, nonblank line in the task's status log is captured. |
 | `task.pr_ready`    | `pr`                                           | Firstmate records the task's PR as ready for review. |
 | `task.merged`      | `via` (`"pr"` or `"local"`), plus `pr` when `via` is `"pr"` | The task's PR merge is recorded, or its local-only branch landed. |
 | `task.cleaned_up`  | none                                           | The task's worker and local copy were removed. |
@@ -54,6 +54,8 @@ Readers must ignore members and events they do not recognize, so later versions 
 
 For entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
 `call.opened` and `call.resolved` values carry the canonical task row and `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
+Direct status appends, task dispatches, and task-change and presentation events carry an optional `observation` containing local `main_inventory` and task `wait_until` and `run_step` facts from the canonical fleet snapshot.
+Validation samples expire according to their own timestamp and TTL.
 Presentation values carry the presentation owner's read result: declaration, outcome occurrence, checkpoint, lifecycle and evidence.
 Replays replace the value for that identity; they do not increment counters.
 Entity commands return failure if publication fails, preserving the already saved canonical change for explicit replay through its owner.
@@ -72,6 +74,7 @@ It is written each time firstmate records a PR for the task, so registering a re
 
 `task.status` members: `state` is the status line's leading word, such as `working`, `needs-decision`, `blocked`, `paused`, `done`, `failed`, or `resolved`, or `null` when the line has none.
 `key` is the line's `[key=...]` decision key, or `null`.
+`declared_at` is the valid `[at=...]` epoch declared on the line, or `null`; `ts` remains capture time.
 `text` is the status line after its first colon, verbatim, capped at 2000 characters; if the line has no colon, it is the whole line.
 
 Example:

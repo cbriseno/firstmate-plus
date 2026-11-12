@@ -23,7 +23,46 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     gen = run(*writer, 'arm', str(home / 'state'), 'activity', '--source', 'claude-hook', '--event', 'UserPromptSubmit').strip()
     base = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
     assert base['activity']['activity']['state'] == 'busy', base['activity']
+    # Real snapshot reports the orphan instead of inventing a worker.
+    assert base['snapshot']['main_inventory']['valid'] is False
+    assert 'activity' in base['snapshot']['main_inventory']['orphan_in_flight']
     model = Projection(base)
+    observed = dict(main_inventory=dict(valid=True, reason=None), tasks=[dict(
+        id='activity', wait_until='2026-11-20T15:00:00Z', run_step=dict(
+            phase='validation', state='running', source='no-mistakes.attributed-run',
+            observed_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), ttl_seconds=60))])
+    observation_event = dict(event='task.presentation', task='activity', ts=int(time.time()),
+                             value=copy.deepcopy(base['empty_presentation']), observation=observed)
+    assert model.apply(observation_event)
+    task = model.value['tasks'][0]
+    assert model.value['main_inventory']['valid'] is True
+    assert task['wait_until'] == '2026-11-20T15:00:00Z'
+    assert task['run_step']['state'] == 'running' and task['run_step']['freshness'] == 'fresh'
+    short_lived = copy.deepcopy(observation_event)
+    short_lived['observation']['tasks'][0]['run_step']['ttl_seconds'] = 1
+    assert model.apply(short_lived)
+    time.sleep(1.1)
+    assert model.value['tasks'][0]['run_step']['freshness'] == 'stale'
+    assert model.apply(observation_event)
+    assert model.apply(dict(event='agent.activity', task='activity', ts=int(time.time()),
+                            value=dict(gen='probe', seq=1, state='busy')))
+    assert model.value['tasks'][0]['wait_until'] is None
+    assert model.apply(observation_event)
+    observed['tasks'][0]['run_step']['observed_at'] = '2000-01-01T00:00:00Z'
+    assert model.apply(dict(observation_event, observation=observed))
+    assert model.value['tasks'][0]['run_step']['state'] == 'unknown'
+    assert model.value['tasks'][0]['run_step']['freshness'] == 'stale'
+    (home / 'state/activity.status').write_text('paused [at=1792921938]: waiting\n')
+    run('fm-fleet-ledger.sh', 'appended', str(home / 'config'), str(home / 'state/activity.status'))
+    status_event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert status_event['declared_at'] == 1792921938
+    assert status_event['observation']['main_inventory']['valid'] is False
+    assert model.apply(status_event)
+    assert model.value['tasks'][0]['wait_until'] is None
+    assert '[at=1792921938]' in model.status['activity']
+    assert model.apply(dict(event='task.status', task='activity', ts=1234567890,
+                            state='working', text='legacy', declared_at='invalid'))
+    assert '[at=' not in model.status['activity'].splitlines()[-1]
     assert model.capacity()['agents_running'] is None
     run('fm-fleet-ledger.sh', 'dispatched', 'activity', 'ship', 'firstmate', 'codex', '')
     event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])

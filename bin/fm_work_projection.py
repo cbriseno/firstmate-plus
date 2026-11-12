@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from fm_work import Owner, digest, time_value, read_text
+from fm_work import Owner, digest, time_value, read_text, work_observation, fresh_run_step
 import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
 from fm_task_usage import read_usage
@@ -54,6 +54,7 @@ def bootstrap(owner):
     owner._workers.update(workers)
     crew = lifecycle_capacity(crew, launches, enabled)
     owner.capacity = lambda: crew
+    owner.observation = work_observation(owner.home, owner.env)
     snapshot = owner.snapshot()
     selector = subprocess.run(['bash', '-c', '. "$1/fm-landed-lib.sh"; printf "%s" "$FM_LANDED_JQ_DEFS"', 'projection', str(BIN)], capture_output=True, text=True, check=True).stdout
     facts = dict(calls={t['key'][5:]: t['question']['call'] for t in snapshot['tasks']},
@@ -78,7 +79,7 @@ def bootstrap(owner):
         registry_text=owner.registry_text, structure=owner.structure, status=owner.status,
         captain_answers=owner.captain_answers, requests=owner.request_records(),
         aliases=owner.aliases.value, facts=facts, snapshot=snapshot, selector=selector,
-        launches=launches, activity=activity, empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
+        launches=launches, activity=activity, observation=owner.observation, empty_presentation=read_presentation(owner.home, 'deck-projection-new', verify=False))
 
 
 def lifecycle_capacity(crew, launches, enabled):
@@ -102,6 +103,7 @@ class Projection(Owner):
         self.crew = base['snapshot']['crew']
         self.launches = copy.deepcopy(base.get('launches', {}))
         self.ledger_enabled = base['enabled']
+        self.observation = copy.deepcopy(base.get('observation', dict(main_inventory=base['snapshot'].get('main_inventory'), tasks=[])))
         self.include_runtime = False
         self.request_sort = 'manual'
         self.value = base['snapshot']
@@ -115,6 +117,16 @@ class Projection(Owner):
             for t in base['snapshot']['tasks'] if t['question']['open'] and t['question']['call']}
         self.rev = base['snapshot']['rev']
         self.facts['changed'] = {}
+
+    @property
+    def value(self):
+        for task in self._value['tasks']:
+            task['run_step'] = fresh_run_step(task.get('run_step'))
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value
 
     def select_history(self, rows):
         selected = subprocess.run(['jq', self.selector + '\nmap(select(landed_record))'],
@@ -133,6 +145,12 @@ class Projection(Owner):
     def apply(self, event):
         name, task, value = event.get('event'), event.get('task'), event.get('value') or {}
         affected = {task}
+        observation = event.get('observation')
+        if isinstance(observation, dict):
+            self.observation = copy.deepcopy(observation)
+            affected = set(self.rows)
+        elif name in ('task.changed', 'task.dispatched', 'task.cleaned_up'):
+            self.observation['main_inventory'] = None
         scopes = {'task:' + str(task)} | (set(self.ancestors(task)) if task in self.rows else set())
         if name == 'task.changed' or name in ('call.opened', 'call.resolved'):
             row = value.get('task')
@@ -166,6 +184,11 @@ class Projection(Owner):
             receipt = value.get('receipt')
             self.facts['receipts'][task] = receipt if receipt and receipt.get('valid', True) else None
         elif name == 'task.status':
+            if not observation:
+                for observed in self.observation.get('tasks', []):
+                    if observed.get('id') == task:
+                        observed['wait_until'] = None
+                        observed['run_step'] = None
             if task in self.presentations:
                 self.presentations[task] = copy.deepcopy(self.presentations[task])
                 evidence = self.presentations[task]['lifecycle']['evidence']
@@ -181,6 +204,10 @@ class Projection(Owner):
                 if prior.get('gen') == value.get('gen') and prior.get('seq', 0) > value.get('seq', 0):
                     return False
                 self.activity[task] = value
+                if value.get('state') != 'idle':
+                    for observed in self.observation.get('tasks', []):
+                        if observed.get('id') == task:
+                            observed['wait_until'] = None
             elif name == 'agent.retired':
                 if self.activity.get(task, {}).get('gen') == value.get('gen'):
                     self.activity.pop(task, None)
@@ -216,7 +243,7 @@ class Projection(Owner):
             if value.get('answer'):
                 self.captain_answers[task] = value['answer']
                 affected.add(value['answer']['origin'])
-        if task in self.rows:
+        if task in self.rows and name != 'task.status':
             self.facts['changed'][task] = time_value(dt.datetime.fromtimestamp(event['ts'], dt.timezone.utc).isoformat(), 'fleet.entity')
         self.answers_by_origin = {}
         for answer in self.captain_answers.values():

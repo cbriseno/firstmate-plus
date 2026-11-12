@@ -260,10 +260,13 @@ usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
        fm-fleet-snapshot.sh --secondmate-home-summary
+       fm-fleet-snapshot.sh --work-observation
 
 Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
 refreshes only its parent-side remote-summary cache as an observational side effect.
+
+--work-observation emits local inventory and task pause/validation observations without remote collection.
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
@@ -317,6 +320,7 @@ case "${1:---json}" in
   --json) ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
+  --work-observation) OUTPUT_MODE=work-observation ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -2090,6 +2094,12 @@ printf '%s\n' "$BACKLOG_JSON" > "$BACKLOG_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary backlog file write failed" >&2; exit 1; }
 printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary task file write failed" >&2; exit 1; }
+if [ "$OUTPUT_MODE" = work-observation ]; then
+  main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" || exit 1
+  jq -n --slurpfile inventory "$MAIN_INVENTORY_JSON_FILE" --slurpfile tasks "$TASKS_JSON_FILE" \
+    '{main_inventory:$inventory[0], tasks:[$tasks[0][] | {id,wait_until,run_step}]}'
+  exit $?
+fi
 # Link registration independently of backlog ownership/phase. Queued or held
 # records without metadata retain null execution, never a coordinator fallback.
 if jq --slurpfile tasks "$TASKS_JSON_FILE" '

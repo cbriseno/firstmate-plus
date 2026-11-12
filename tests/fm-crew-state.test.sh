@@ -850,6 +850,11 @@ test_active_run_is_authoritative() {
     and .run_step.source == "no-mistakes.attributed-run"
     and (.run_step.observed_at | fromdateiso8601) > 0' >/dev/null \
     || fail "JSON validation observation did not retain its source and time: $out"
+  mkdir -p "$d/data" "$d/config"
+  printf '## In flight\n- [ ] feat-a - Validation (repo: sample)\n\n## Queued\n\n## Done\n' > "$d/data/backlog.md"
+  out=$(PATH="$d/fakebin:$PATH" FM_HOME="$d" bash "$ROOT/bin/fm-tasks-axi.sh" work bootstrap)
+  printf '%s' "$out" | jq -e '.snapshot.tasks[] | select(.key == "task:feat-a") | .run_step.phase == "validation" and .run_step.state == "running" and .run_step.freshness == "fresh"' >/dev/null \
+    || fail "bootstrap lost the real attributed run observation: $out"
   pass "active run-step is authoritative"
 }
 
@@ -2989,6 +2994,12 @@ test_no_run_idle_pane_paused() {
   out=$(run_crew_state "$d" feat-pause)
   assert_contains "$out" "state: paused" "continuation prose and trailing blanks preserve the pause"
   assert_contains "$out" "holding for the upstream tool release" "multiline pause preserves its declared reason"
+  printf 'paused: holding until 2026-11-20T15:00Z\n' > "$d/state/feat-pause.status"
+  mkdir -p "$d/data" "$d/config"
+  printf '## In flight\n- [ ] feat-pause - Pause (repo: sample)\n\n## Queued\n\n## Done\n' > "$d/data/backlog.md"
+  out=$(PATH="$d/fakebin:$PATH" FM_HOME="$d" bash "$ROOT/bin/fm-tasks-axi.sh" work bootstrap)
+  printf '%s' "$out" | jq -e '.snapshot.tasks[] | select(.key == "task:feat-pause") | .wait_until == "2026-11-20T15:00:00Z"' >/dev/null \
+    || fail "bootstrap lost the current pause end: $out"
   pass "no run + idle pane on a paused: status reports state: paused with its reason"
 }
 

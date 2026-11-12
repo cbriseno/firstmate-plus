@@ -162,8 +162,8 @@ load_libs() {
 append() {
   local event=$1 task=$2 extra=$3 line
   shift 3
-  line=$(jq -cn --arg home "$FM_HOME" --arg event "$event" --arg task "$task" "$@" \
-    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task, home: \$home} + ($extra)") \
+  line=$(jq -cn --arg home "$FM_HOME" --arg event "$event" --arg task "$task" --argjson observation "$observation" "$@" \
+    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task, home: \$home} + ($extra) + (if \$observation == null then {} else {observation: \$observation} end)") \
     || return 1
   printf '%s\n' "$line" >> "$LEDGER"
 }
@@ -210,6 +210,15 @@ if [ "$cmd" = capture ]; then
   grown=$(grown_logs) || exit 1
   [ -n "$grown" ] || exit 0
 fi
+
+# Sample before the ledger lock, using the same local facts as Bearings.
+# A failed observation never prevents the underlying event from being recorded.
+observation=null
+case "$cmd:${2:-}" in
+  appended:*|dispatched:*|entity:task.changed|entity:task.presentation)
+    observation=$(FM_HOME="$FM_HOME" bash "$SCRIPT_DIR/fm-fleet-snapshot.sh" --work-observation </dev/null 2>/dev/null | jq -ce 'select(type == "object")') || observation=null
+    ;;
+esac
 
 load_libs || exit 1
 fm_lock_acquire_wait "$LOCK" || exit 1

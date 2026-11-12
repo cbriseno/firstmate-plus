@@ -35,6 +35,34 @@ def now():
     return dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+def work_observation(home, env):
+    try:
+        result = subprocess.run(['bash', str(BIN / 'fm-fleet-snapshot.sh'), '--work-observation'],
+                                env=env, capture_output=True, text=True, timeout=30, check=True)
+        return json.loads(result.stdout)
+    except (subprocess.SubprocessError, ValueError):
+        return dict(main_inventory=None, tasks=[])
+
+
+def fresh_run_step(step):
+    if not isinstance(step, dict):
+        return None
+    step = dict(step)
+    try:
+        observed = dt.datetime.fromisoformat(step['observed_at'].replace('Z', '+00:00'))
+        age = (dt.datetime.now(dt.timezone.utc) - observed).total_seconds()
+        ttl = step['ttl_seconds']
+        fresh = (isinstance(ttl, (int, float)) and not isinstance(ttl, bool) and ttl > 0
+                 and -ttl < age < ttl and step.get('source') == 'no-mistakes.attributed-run'
+                 and step.get('phase') in ('validation', 'ci'))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        fresh = False
+    step['declared_state'] = step.get('declared_state', step.get('state'))
+    step['state'] = step['declared_state'] if fresh else 'unknown'
+    step['freshness'] = 'fresh' if fresh else 'stale'
+    return step
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -87,6 +115,7 @@ class Owner:
         self.data = self.home / 'data'
         self._runtime = {}
         self._workers = {}
+        self.observation = dict(main_inventory=None, tasks=[])
         self.include_runtime = False
         self.control_request = False
         self.structure_path = 'data/work-structure.json'
@@ -582,6 +611,7 @@ class Owner:
 
     def snapshot(self, facts=None, previous=None, affected=None, controls_only=False):
         tasks = []
+        observations = {t['id']: t for t in self.observation.get('tasks', [])}
         edges = self.edges()
         reasons = dict(records=[dict(id=i, hold_reason=(r.get('hold') or {}).get('reason')) for i,r in self.rows.items()
                                 if (previous is None or affected is None or i in affected) and (r.get('hold') or {}).get('reason') is not None])
@@ -659,7 +689,8 @@ class Owner:
             origin = re.search(r'^Captain hold origin:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
             receipt = facts['receipts'].get(task_id) if facts is not None else completion_receipt(self.home, row)
             project, subproject = self.display_membership(task_id)
-            tasks.append(dict(runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
+            observed = observations.get(task_id, {})
+            tasks.append(dict(wait_until=observed.get('wait_until'), run_step=fresh_run_step(observed.get('run_step')), runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
                 alias=self.aliases.alias('task:' + task_id), kind='task', parent=subproject or project,
                 project=project, subproject=subproject, repository_project='project:' + row['repo'] if row.get('repo') else None,
                 title=p.get('card_title') or row['title'], reason=(task_pause or hold or inherited or {}).get('reason'), state=state,
@@ -856,7 +887,7 @@ class Owner:
         return dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
                     subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, requests=request_groups, sigue=sigue, rev=self.rev, history_sources=self.history_sources,
                     pause_controls=pauses, events=[e for r in sorted(controls, key=lambda r: r.get('at_ns', 0)) for e in r.get('events', [])],
-                    crew=crew, yields=yields,
+                    crew=crew, yields=yields, main_inventory=self.observation.get('main_inventory'),
                     aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized'))
 
     def scope_position(self, scope):
@@ -1890,6 +1921,7 @@ def main():
                     if (authored.get('evidence') or {}).get('available') is not False:
                         authored['lifecycle'], _ = reconcile_progress(owner.home, task_id,
                             authored['presentation'], authored['progress_record'], read_text)
+                owner.observation = work_observation(owner.home, owner.env)
                 result = owner.snapshot()
                 DIAG['tasks'] = len(result.get('tasks', []))
             elif args.verb == 'reconcile':

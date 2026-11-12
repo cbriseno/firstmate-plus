@@ -111,7 +111,7 @@ test_flag_on_records_the_task_lifecycle() {
   jq -e -s 'all(.[]; .v == 1 and (.ts | type) == "number" and (.task | type) == "string")' \
     "$HOME_DIR/state/fleet-ledger.jsonl" >/dev/null \
     || fail "every record must carry v, ts, event, and task: $(cat "$HOME_DIR/state/fleet-ledger.jsonl")"
-  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home, .declared_at) | to_entries | map(.value))')
+  rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home, .declared_at, .observation) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
 ["task.dispatched","$TASK","ship","sample","claude",null]
 ["task.status","$TASK","working",null," setup done"]
