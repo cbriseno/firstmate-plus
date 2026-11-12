@@ -1164,7 +1164,8 @@ idle_wakes() { # <home> <key prefix>
 }
 
 idle_scan() { # <home> [bound-seconds]
-  FM_PAUSE_RESURFACE_SECS=${2:-60} FM_FAKE_CREW_LINE=${IDLE_LINE:-$IDLE_GONE_LINE} \
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 FM_PAUSE_RESURFACE_SECS=${2:-60} \
+    FM_FAKE_CREW_LINE=${IDLE_LINE:-$IDLE_GONE_LINE} \
     run_reconcile "$1" --startup >/dev/null
 }
 
