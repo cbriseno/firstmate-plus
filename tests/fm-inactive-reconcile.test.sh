@@ -177,6 +177,24 @@ test_main_direct_terminal_presentation_receipt() {
   pass "main direct terminal presentation has a durable receipt"
 }
 
+test_historical_receipt_without_worker_stays_quiet() {
+  local historical
+  make_world historical-receipt
+  mkdir -p "$MAIN/state/terminal-outcomes"
+  historical="$MAIN/state/terminal-outcomes/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.presented"
+  cat > "$historical" <<'EOF'
+schema=fm-terminal-outcome.v1
+fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+task_id=closed-history
+state=done
+phase=presentation
+EOF
+  run_reconcile "$MAIN" --startup >/dev/null
+  run_reconcile "$MAIN" --startup >/dev/null
+  ! grep -q 'cleanup-disposition:' "$MAIN/state/.wake-queue" 2>/dev/null || fail "historical receipt without worker woke the supervisor"
+  pass "historical receipt without worker stays quiet across scans"
+}
+
 test_cleanup_disposition_requires_close_or_reason() {
   local record fingerprint err out historical
   make_world cleanup-disposition
@@ -1221,6 +1239,7 @@ test_idle_in_flight_call_that_cannot_open_is_reported_once() {
   pass "an idle captain call that cannot be opened is reported once with its reason"
 }
 
+test_historical_receipt_without_worker_stays_quiet
 test_main_direct_terminal_presentation_receipt
 test_cleanup_disposition_requires_close_or_reason
 test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes
