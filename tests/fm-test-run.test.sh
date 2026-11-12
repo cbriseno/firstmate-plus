@@ -1899,6 +1899,20 @@ with tempfile.TemporaryDirectory() as tmp:
                 proc.wait()
             for fd in fds:
                 os.close(fd)
+    with open(fixture, "w") as out:
+        out.write('sleep 60 </dev/null >/dev/null 2>&1 &\necho $! > "$PIDFILE"\n')
+    env["PIDFILE"] = os.path.join(tmp, "pid")
+    subprocess.run(["bash", sys.argv[1], fixture], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, env=env, check=True, timeout=20)
+    pid = int(open(env["PIDFILE"]).read())
+    try:
+        fd = os.open(os.path.join(lock_dir.name, f"firstmate-test-{os.getuid()}-1.lock"), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+    finally:
+        os.kill(pid, 15)
 PYTEST
   pass "host slots wait and resume after release"
 }

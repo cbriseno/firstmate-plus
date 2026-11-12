@@ -2355,6 +2355,7 @@ while True:
         os.write(fd, str(os.getpid()).encode())
         os.set_inheritable(fd, True)
         os.environ["FM_TEST_HOST_LOCKED"] = "1"
+        os.environ["FM_TEST_HOST_LOCK_FD"] = str(fd)
         os.execvp(sys.argv[1], sys.argv[1:])
     if not reported:
         holders = []
@@ -2570,7 +2571,12 @@ record_script_result() {
 # positive, a script that outruns it is terminated and reported as exit 124: a
 # hung script must become a bounded failure rather than an unbounded suite,
 # because an unbounded suite is what silently outruns its caller's budget.
-run_script_bounded() {  # <script> <out> <stream> <id>
+run_script_bounded() (  # <script> <out> <stream> <id>
+  # The runner owns the slot; tests and their background children must not.
+  case ${FM_TEST_HOST_LOCK_FD:-} in
+    ''|*[!0-9]*) ;;
+    *) eval "exec ${FM_TEST_HOST_LOCK_FD}>&-"; unset FM_TEST_HOST_LOCK_FD ;;
+  esac
   local script=$1 out=$2 stream=$3 id=$4
   # Declaring the variables local first keeps the helper's export scoped to this
   # call and its child script, so the runner's own environment is left as the
@@ -2605,7 +2611,7 @@ run_script_bounded() {  # <script> <out> <stream> <id>
     [ "$stream" -eq 1 ] && tail -1 "$out"
   fi
   return "$rc"
-}
+)
 
 run_one_serial() {
   local script=$1

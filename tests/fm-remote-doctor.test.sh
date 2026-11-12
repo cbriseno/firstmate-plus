@@ -25,7 +25,18 @@ JOB_LABEL=dev.firstmate.remote-job
 CASE_N=0
 DOCTOR_WORKER_PID=
 HOLDER_PIDS=()
-trap 'if [ -n "$DOCTOR_WORKER_PID" ]; then kill "$DOCTOR_WORKER_PID" 2>/dev/null || true; fi; if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi; fm_test_cleanup || true' EXIT
+# shellcheck source=bin/fm-remote-job-lib.sh
+. "$ROOT/bin/fm-remote-job-lib.sh"
+cleanup_doctor_worker() {
+  if [ -n "$DOCTOR_WORKER_PID" ]; then
+    kill "$DOCTOR_WORKER_PID" 2>/dev/null || true
+    wait "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  fi
+  if [ -n "${CASE_HOME:-}" ] && fm_remote_job_lock_owner_matches_process "$CASE_HOME"; then
+    fm_remote_job_stop_worker_tree "$FM_REMOTE_JOB_OWNER_PID" || true
+  fi
+}
+trap 'cleanup_doctor_worker; if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi; fm_test_cleanup || true' EXIT
 GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
 
 # A fixture must be able to present a host with NO herdr, so the doctor never
@@ -830,6 +841,7 @@ mkdir -p "$CASE_HOME/.local/bin"
 for tool in herdr tasks-axi treehouse claude; do
   ln -s "$CASE_BIN/$tool" "$CASE_HOME/.local/bin/$tool"
 done
+ln -s "$TOOLS/jq" "$CASE_HOME/.local/bin/jq"
 HOME="$CASE_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
   "$ROOT/bin/fm-remote-job-worker.sh" > "$CASE_STATE/worker.out" 2> "$CASE_STATE/worker.err" &
 DOCTOR_WORKER_PID=$!
@@ -846,21 +858,17 @@ assert_contains "$DOCTOR_OUT" 'check remote-job-worker=fixable: the running remo
 assert_contains "$DOCTOR_OUT" 'check remote-job-probe=fixable: the remote job worker identity is stale' \
   "doctor probed through stale worker code"
 doctor --fix
+[ "$DOCTOR_RC" -eq 0 ] || printf '%s\n' "$DOCTOR_OUT" >&2
 expect_code 0 "$DOCTOR_RC" "--fix did not replace the stale worker identity"
 assert_contains "$DOCTOR_OUT" 'fix remote-job-worker=applied:' "--fix did not report refreshing the stale worker"
 assert_contains "$DOCTOR_OUT" 'check remote-job-worker=ok:' "the refreshed worker was not confirmed ready"
 assert_contains "$DOCTOR_OUT" 'check remote-job-probe=ok: the remote job worker completed the required-tool probe' \
   "doctor did not probe tools through the refreshed worker"
-DOCTOR_WORKER_PID=$(cat "$CASE_HOME/.firstmate/remote-job/worker.pid")
-kill -TERM "$DOCTOR_WORKER_PID"
-for _ in $(seq 1 100); do
-  kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null || break
-  sleep 0.05
-done
-if kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
-  kill -KILL "$DOCTOR_WORKER_PID" 2>/dev/null || true
-fi
+wait "$DOCTOR_WORKER_PID" 2>/dev/null || true
 DOCTOR_WORKER_PID=
+fm_remote_job_lock_owner_matches_process "$CASE_HOME" || fail "replacement worker was not running"
+fm_remote_job_stop_worker_tree "$FM_REMOTE_JOB_OWNER_PID" || fail "replacement worker tree did not stop"
+[ ! -f "$CASE_HOME/.firstmate/remote-job/worker.pid" ] || fail "replacement worker left its pid file"
 pass "doctor refreshes stale worker identity before probing tools"
 
 # --- the entrypoint symlink is recreated when it is missing ------------------
