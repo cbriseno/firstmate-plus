@@ -132,6 +132,12 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   exit 1
 fi
 
+wip=$(git -C "$PROJ" log --format='%h %s' "$DEFAULT..$BRANCH" | awk 'index(substr($0, index($0, " ") + 1), "WIP") && !found { print $1; found=1 }')
+if [ -n "$wip" ]; then
+  echo "REFUSED: commit $wip has WIP in its subject; rewrite the unpublished branch and retry." >&2
+  exit 1
+fi
+
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 hold_status=0
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \

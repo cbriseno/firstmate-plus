@@ -471,7 +471,7 @@ test_promotion_branch_command_is_shell_safe() {
 }
 
 test_local_merge_uses_the_recorded_ship_branch() {
-  local home proj id main fix out
+  local home proj id main fix out wip
   home="$TMP_ROOT/local-merge-branch/home"
   proj="$TMP_ROOT/local-merge-branch/proj"
   id=local-merge-branch-e2
@@ -487,12 +487,25 @@ test_local_merge_uses_the_recorded_ship_branch() {
   printf 'change\n' > "$proj/change"
   git -C "$proj" add change || fail "could not stage recorded branch fixture"
   git -C "$proj" commit -qm change || fail "could not commit recorded branch fixture"
+  git -C "$proj" commit --allow-empty -qm "WIP: intermediate" || fail "could not create WIP fixture"
+  wip=$(git -C "$proj" rev-parse --short HEAD)
+  git -C "$proj" commit --allow-empty -qm "finished" || fail "could not create finished fixture"
   fix=$(git -C "$proj" rev-parse HEAD)
   git -C "$proj" checkout -q "$main" || fail "could not restore fixture default branch"
   cat > "$home/data/projects.md" <<EOF
 - $(basename "$proj") [local-only branch=contrib/] - changed after task intake (added 2026-01-01)
 EOF
   printf 'project=%s\nmode=local-only\nbranch=fix/%s\n' "$proj" "$id" > "$home/state/$id.meta"
+  if out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id" 2>&1); then
+    fail "local merge accepted an intermediate WIP commit"
+  fi
+  assert_contains "$out" "$wip" "refusal did not identify the WIP commit"
+  assert_contains "$out" "rewrite" "refusal did not explain how to resolve it"
+  git -C "$proj" checkout -q "fix/$id"
+  git -C "$proj" reset -q --hard HEAD~2
+  git -C "$proj" commit --allow-empty -qm finished
+  fix=$(git -C "$proj" rev-parse HEAD)
+  git -C "$proj" checkout -q "$main"
   out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id") \
     || fail "local merge did not use the branch recorded at task intake: $out"
   [ "$(git -C "$proj" rev-parse HEAD)" = "$fix" ] \
