@@ -759,7 +759,9 @@ test_new_status_with_turnend_surfaces() {
       reap "$pid"
       continue
     fi
-    wait_for_exit "$pid" 100 || { reap "$pid"; fail "new $verb was swallowed"; }
+    # The real coalesced working event took 28s on the loaded host; this tests
+    # delivery, with headroom for startup and durable publication, not a deadline.
+    wait_for_exit "$pid" 600 || { reap "$pid"; fail "new $verb was swallowed"; }
     grep -F "$state/task.status" "$state/.wake-queue" >/dev/null || fail "new $verb not queued"
   done
   pass 'new results and undeclared stops surface with a coalesced turn-end; declared pauses stay quiet'
@@ -861,7 +863,7 @@ churn_config() {  # <dir> [off]
 # unchanging fixture pane could reach the stale backbone.
 wait_for_absorbed() {  # <state> <pid> <needle>
   local state=$1 pid=$2 needle=$3 i=0
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 600 ]; do
     grep -Fq "$needle" "$state/.watch-triage.log" 2>/dev/null && return 0
     kill -0 "$pid" 2>/dev/null || return 1
     sleep 0.1
@@ -940,7 +942,7 @@ test_turn_ended_churn_resets_prior_stale_classification() {
   # This is a new quiet interval, so it must surface through ordinary staleness
   # instead of inheriting the earlier interval's wedge timer.
   printf 'idle prompt from an earlier turn' > "$capture_file"
-  wait_for_exit "$pid" 100 \
+  wait_for_exit "$pid" 600 \
     || { reap "$pid"; fail "a stopped pane matching an earlier stale render waited for the wedge timeout"; }
   grep -Fx "stale: $window" "$out" >/dev/null \
     || fail "the returned stale render did not surface through ordinary staleness"

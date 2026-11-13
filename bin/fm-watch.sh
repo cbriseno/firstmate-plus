@@ -4117,7 +4117,11 @@ EOF
             ;;
           *)
             [ "$agent_state" != alive ] || rm -f "$STATE/.dead-reported-$key"
-            if [ "$agent_state" != alive ] || stale_is_terminal "$w" "$STATE" || status_is_paused_or_captain_held "$last"; then
+            # An opted-in churn deferral needs its quiet-pane fallback even
+            # when this harness cannot provide recovery-grade liveness.
+            if { [ "$agent_state" != alive ] \
+              && { [ ! -e "$CONFIG/turnend-churn-absorb" ] || [ ! -e "$STATE/.churn-since-$key" ]; }; } \
+              || stale_is_terminal "$w" "$STATE" || status_is_paused_or_captain_held "$last"; then
               printf '%s' "$h" > "$sf"
               wedge_episode_end "$key"
               clear_write_tracking "$key"
