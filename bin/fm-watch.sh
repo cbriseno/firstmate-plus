@@ -4121,6 +4121,13 @@ EOF
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
+        if [ "$kind" = secondmate ]; then
+          case "$(pause_state_class "$w" "$task")" in
+            paused) handle_paused_stale "$w" "$task" "$h" ;;
+            *)      clear_pause_tracking "$key" ;;
+          esac
+          continue
+        fi
         # Recheck endpoint liveness even when this pane hash was previously
         # observed alive or unknown; the endpoint can die without pane output changing.
         agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
@@ -4149,12 +4156,7 @@ EOF
             fi
             ;;
         esac
-        if [ "$kind" = secondmate ]; then
-          case "$(pause_state_class "$w" "$task")" in
-            paused) handle_paused_stale "$w" "$task" "$h" ;;
-            *)      clear_pause_tracking "$key" ;;
-          esac
-        elif afk_present; then
+        if afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before,
           # except that a captain-held pane is never handed over while the
           # away-posture record exists (captain_held_silenced).
