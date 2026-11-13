@@ -1942,6 +1942,26 @@ test_actionable_signal_surfaced() {
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
+# Workers report questions through status instead of opening a native selector.
+test_codex_question_reported_as_blocked() {
+  local dir state fakebin out question
+  dir=$(make_case codex-question); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  # Exact selector text extracted from installed codex-cli 0.166.0.
+  question='Submit with unanswered questions? Proceed / Return to the first unanswered question / Go back'
+  printf 'blocked: %s\n' "$question" > "$state/task.status"
+  watch_bg "$state" "$fakebin" "$out"
+  wait_for_exit "$!" 100 || fail "watcher did not surface the reported Codex question"
+  grep -F "signal: $state/task.status" "$out" >/dev/null \
+    || fail "reported Codex question did not wake firstmate"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after the reported Codex question failed"
+  assert_grep "$state/task.status" "$dir/drain.out" "reported question status was not queued"
+  [ "$(status_span_first_actionable "$state/task.status" 0)" = "blocked: $question" ] \
+    || fail "reported question or options were lost"
+  pass "reported Codex selector question wakes firstmate with its question and options intact"
+}
+
 # A needs-decision status append surfaced through this actionable signal path
 # must skip the Pi supervision branch and reach main directly
 # (docs/supervision-branch.md "Autonomy"). The row still
@@ -5650,6 +5670,7 @@ test_needs_decision_reconciliation_required_still_marked
 test_captain_held_signal_payload_marked_for_branch_exclusion
 test_pending_reply_escalation_signal_payload_marked_for_branch_exclusion
 test_ordinary_blocked_signal_payload_remains_branch_eligible
+test_codex_question_reported_as_blocked
 test_routine_signal_payload_not_marked_needs_decision
 test_actionable_signal_survives_a_later_routine_append
 test_keyed_decision_signal_reads_only_the_new_span

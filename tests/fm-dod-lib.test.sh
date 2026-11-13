@@ -475,6 +475,12 @@ test_worker_role_names_skill_without_home_path() {
   local role_file
   role_file="$TMP_ROOT/worker-role.txt"
   fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 >"$role_file"
+  assert_grep "Do not use \`request_user_input\`, \`request_user_input_async\`, or native question selectors" "$role_file" \
+    "worker launch contract allows a question selector invisible to firstmate"
+  assert_grep "write \`blocked\` using the task status command with the full question and all options" "$role_file" \
+    "worker launch contract does not route questions through status"
+  assert_grep 'wait for the reply in your steering inbox' "$role_file" \
+    "worker launch contract does not name the reply channel"
   assert_grep "\`CONTRIBUTING.md\` and \`firstmate-coding-guidelines\` for Firstmate changes" "$role_file" \
     "worker role did not name the skill"
   assert_no_grep '/.agents/skills/' "$role_file" \
