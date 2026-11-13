@@ -1038,10 +1038,6 @@ Cursor typed-submit confirmation is verified on tmux and Herdr only.
 
 
 
-Polytoken is verified for crewmate and scout launches only; [its adapter reference](../.agents/skills/harness-adapters/references/harness/polytoken.md) owns the operating contract and [verification record](verification/polytoken.md) owns the live evidence.
-It has no primary or secondmate supervision protocol.
-The launch generates a private per-task config directory that mirrors the operator's provider/model configuration and enforces unattended permissions without modifying global configuration.
-The first-start license dialog requires an operator decision and is never accepted automatically.
 
 ### Verification and primary supervision
 
@@ -1517,7 +1513,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
 | `claude`, `codex`, `grok`, `kimi`, `cursor` | The resolver has an authoritative single-provider mapping. |
-| Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, `omp`, and `opencode`, plus unmapped `polytoken`; omission is an actionable configuration error before any request. |
+| Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, `omp`, and `opencode`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.
 

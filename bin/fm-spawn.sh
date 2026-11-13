@@ -185,11 +185,7 @@
 #   could later be released out from under its successor. A spawn that aborts
 #   while it still holds the allocation lock drops its own claim; an abort after
 #   metadata publication has released that lock leaves the claim in place, and
-#   the next spawn's claim replaces it. A fresh polytoken spawn that fails and
-#   leaves no task record restores the pool as it found it: it retakes that lock
-#   once to drop its claim after metadata publication too, and before its launch
-#   is delivered it closes the endpoint whose `treehouse get` shell leases the
-#   slot and removes the wiring, task temp root, and staged launch file it wrote.
+#   the next spawn's claim replaces it.
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
@@ -454,13 +450,6 @@
 #                  the same binary the version-gate probe reads, so the recorded
 #                  major can never describe a different executable than the pane
 #                  runs (empty resolution falls back to a bare `opencode`)
-#     __POLYTOKENBIN__ resolved, polytoken-verified executable for a polytoken launch
-#     __POLYTOKENCONFIG__ firstmate-owned per-task polytoken config dir (mirrored
-#                  operator config with the unattended permission posture enforced)
-#     __POLYTOKENSESSIONS__ firstmate-owned per-task sessions root (the daemon
-#                  writes the versioned `<root>-v1` sibling beside it)
-#     __POLYTOKENFACETS__ the worktree's `.polytoken/facets` dir carrying the
-#                  generated firstmate-worker facet (the project facet layer)
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # A --secondmate launch arms the same semantic busy contract (bin/fm-busy-lib.sh) in THIS
 # parent home for claude, opencode, pi, pi-signed, and omp, so the parent's active-turn
@@ -504,24 +493,6 @@
 # seen and firstmate cannot answer it. That helper's header owns the structural
 # scope test for both shapes and every refusal; a failed registration stops this
 # spawn rather than launching a worker that would wedge on the dialog.
-# polytoken (the captain-approved TUI-pane-plus-REST hybrid) is the one harness
-# whose worker's unattended permission posture cannot ride a launch flag: a
-# per-task config dir is generated under state/ mirroring the operator's global
-# config with `default_permission_matcher` enforced to `bypass` (a project
-# config.yaml fully replaces the global config and no `new` flag reaches the
-# permission matcher, verified live). Its brief rides `--prompt` (auto-submitted
-# after the TUI attaches), its busy wiring is the worktree `.polytoken/hooks.json`
-# binding the verified pre_user_prompt / pre_model_turn (open) and stop (close)
-# events to a generated no-argv writer (handlers receive no argv, verified live),
-# and its control verbs ride the daemon REST API with the session id, port, and
-# credential recorded into task metadata after launch through
-# `polytoken sessions --format json`. The license dialog is a BLOCKER by captain
-# decision (2026-10-07): `--accept-license-terms` is never passed, and the
-# readiness gate fails loudly on any first-start dialog the launch cannot get
-# past. bin/fm-polytoken-lib.sh owns every generated artifact and the verified
-# facts; .agents/skills/harness-adapters/references/harness/polytoken.md owns the
-# knowledge record. polytoken is crewmate/scout only and is refused for
-# --secondmate.
 # Unless config/keep-ai-trailers is present, every claude launch carries the
 # attribution-off policy in its per-launch --settings JSON, so a spawned worker
 # never writes a Co-Authored-By trailer, Claude-Session link, or generated-with
@@ -777,8 +748,6 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
-# shellcheck source=bin/fm-polytoken-lib.sh
-. "$SCRIPT_DIR/fm-polytoken-lib.sh"
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -1141,9 +1110,6 @@ SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_SLOT_CLAIMED=0
-SPAWN_FRESH_ENDPOINT_OPENED=0
-SPAWN_FRESH_WIRING_PENDING=0
-SPAWN_TASK_TMP_CREATED=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1154,7 +1120,6 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
-SPAWN_STAGED_LAUNCH_FILE=
 
 # shellcheck source=bin/fm-spawn-cleanup-lib.sh
 . "$SCRIPT_DIR/fm-spawn-cleanup-lib.sh"
@@ -1218,11 +1183,6 @@ clear_relaunch_harness_wiring() {
   fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    if [ "$harness" = polytoken ]; then
-      case "$path" in
-        "$wt"/*) git -C "$wt" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 && continue ;;
-      esac
-    fi
     rm -f -- "$path" || return 1
   done <<EOF
 $(fm_control_harness_wiring_paths "$harness" "$wt" "$state" "$id" "$kind")
@@ -1649,7 +1609,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor |  omp | polytoken)
+  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor |  omp)
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1788,14 +1748,6 @@ case "$ARG3" in
   ;;
 esac
 
-# Polytoken has no primary supervision protocol.
-# polytoken has none either: only the crewmate/scout lifecycle is verified;
-# docs/supervision-protocols/ carries no polytoken primary wake protocol.
-if [ "$KIND" = secondmate ] && { [ "$HARNESS" = polytoken ]; }; then
-  echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-fi
-
 # config/crew-exclude-tools (header above): refuse before worker provisioning
 # if this launch cannot honor the list. Secondmate agents are not covered.
 EXCLUDE_TOOLS=
@@ -1855,12 +1807,6 @@ omp)
     exit 1
   }
   ;;
-polytoken)
-  POLYTOKEN_BIN=$(fm_polytoken_binary) || {
-    echo "error: polytoken executable not found; install Polytoken CLI or select a different verified harness" >&2
-    exit 1
-  }
-  ;;
 esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
@@ -1900,17 +1846,6 @@ if [ "$EFFORT" = ultra ]; then
 fi
 if [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
-fi
-# polytoken's model validation composes firstmate's model and effort axes into
-# the launch model reference (bin/fm-polytoken-lib.sh owns the reasoning): the
-# base model must be concrete and listed, and effort maps to the nearest
-# compatible selectable `<model>(<effort>)` reference. Resolved
-# before the busy wiring arms, so the generated launch command carries the
-# composed reference and task metadata keeps the separate axes.
-if [ "$HARNESS" = polytoken ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  POLYTOKEN_MODEL_REF=$(fm_polytoken_launch_ref "$POLYTOKEN_BIN" "$MODEL" "$EFFORT") || exit 1
-elif [ "$HARNESS" = polytoken ]; then
-  POLYTOKEN_MODEL_REF=$(fm_polytoken_model_ref "$POLYTOKEN_BIN" "$MODEL" "$EFFORT") || exit 1
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch
@@ -2021,13 +1956,6 @@ model_flag_for_harness() {
     ;;
   claude | codex | pi | pi-signed | grok | kimi | cursor |  omp)
     printf -- '--model %s ' "$(shell_quote "$model")"
-    ;;
-  # polytoken encodes reasoning effort inside the model reference, so the
-  # flag carries the composed reference fm_polytoken_model_ref validated
-  # above, including the model-scoped reasoning level, never an unpinned
-  # fallback to the bare model axis.
-  polytoken)
-    printf -- '--model %s ' "$(shell_quote "${POLYTOKEN_MODEL_REF:-$model}")"
     ;;
   esac
 }
@@ -2816,20 +2744,8 @@ spawn_worktree_isolated() { # <path>
   return 0
 }
 
-# spawn_endpoint_hint: the operator pointer for a pre-launch refusal. Only a
-# fresh polytoken spawn closes its endpoint on abort, so only it points away
-# from the window; every other harness keeps the plain inspect pointer.
-spawn_endpoint_closes_on_abort() {
-  [ "$SPAWN_FRESH_ENDPOINT_OPENED" = 1 ] && [ "$SPAWN_LAUNCH_SENT" = 0 ]
-}
-
-spawn_endpoint_hint() {
-  if spawn_endpoint_closes_on_abort; then
-    printf 'window %s is closed on exit, returning any pool slot it held' "$T"
-  else
-    printf 'inspect window %s' "$T"
-  fi
-}
+# Operator pointer for a pre-launch refusal.
+spawn_endpoint_hint() { printf 'inspect window %s' "$T"; }
 
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
@@ -3392,12 +3308,6 @@ EOF
     T="$HERDR_SES:$HERDR_PANE_ID"
     ;;
   esac
-  # The Herdr projection owns its own abort cleanup above; every other
-  # endpoint a fresh polytoken spawn opened is closed by spawn_abort_cleanup when
-  # the spawn ends with no record before its launch is delivered.
-  if [ "$HARNESS" = polytoken ] && [ "${HERDR_PROJECTED:-0}" -ne 1 ]; then
-    SPAWN_FRESH_ENDPOINT_OPENED=1
-  fi
 fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
@@ -3668,104 +3578,6 @@ opencode2_wait_for_delivery() {
   opencode2_turn_started
 }
 
-# polytoken's launch-then-confirm gate: the brief
-# rides the launch command (--prompt submits it after the TUI attaches), so
-# readiness is positive proof the brief is being processed rather than proof a
-# key was typed. The proof is semantic, not a screen scrape: the busy record
-# must advance past the fm-spawn seed to a polytoken-hook event (pre_user_prompt
-# fires the moment the brief turn is submitted, verified live), which is exactly
-# the verdict the supervisor reads. A pane parked on a first-start dialog the
-# launch cannot get past - the license dialog, which the captain's decision
-# (2026-10-07) makes a blocker that fleet spawns never auto-accept - never posts
-# the first hook event, so the gate fails loudly there. Session discovery is
-# folded into the same poll: `polytoken sessions --format json` scoped to this
-# task's config and sessions roots binds the pane's session id, port, and
-# credential file (a TUI-attached launch never prints them on the spawning
-# side, verified live).
-POLYTOKEN_SESSION_ID=
-POLYTOKEN_SESSION_PORT=
-POLYTOKEN_SESSION_CREDENTIAL=
-
-polytoken_wait_for_ready() {
-  local discovered record i=0 max=${FM_POLYTOKEN_READY_POLLS:-120} interval=${FM_POLYTOKEN_POLL_INTERVAL:-0.5}
-  while [ "$i" -lt "$max" ]; do
-    if [ -z "$POLYTOKEN_SESSION_ID" ]; then
-      discovered=$(fm_polytoken_session_for_project "$POLYTOKEN_BIN" \
-        "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")" \
-        "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")" \
-        "$WT") || discovered=
-      if [ -n "$discovered" ]; then
-        # The listing row carries a fourth field (the daemon pid); a trailing
-        # throwaway variable consumes it so it is never glued onto the
-        # credential path the control verbs address.
-        IFS=$'\t' read -r POLYTOKEN_SESSION_ID POLYTOKEN_SESSION_PORT POLYTOKEN_SESSION_CREDENTIAL _ <<EOF
-$discovered
-EOF
-      fi
-    fi
-    if [ -n "$POLYTOKEN_SESSION_ID" ]; then
-      record=$(fm_busy_record_read "$STATE_REAL" "$ID" 2>/dev/null) || record=
-      case "$record" in
-        *" polytoken-hook "*) return 0 ;;
-      esac
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-# Bind the discovered session into task metadata (the control verbs' durable
-# address), in the same locked-filter-and-publish shape spawn_record_traceparent
-# uses: an idempotent rewrite that drops any prior polytoken_* binding before
-# appending the fresh one.
-spawn_record_polytoken_session() {
-  local meta="$STATE/$ID.meta" status=0 acquired=0
-  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
-    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
-    fm_lock_acquire_wait "$SPAWN_META_LOCK"
-    SPAWN_META_LOCK_HELD=1
-    acquired=1
-  fi
-  SPAWN_META_TMP="$STATE/.$ID.meta.polytoken.${BASHPID:-$$}"
-  if [ ! -f "$meta" ] || [ ! -w "$meta" ] ||
-    ! awk -F= '$1 != "polytoken_session" && $1 != "polytoken_port" && $1 != "polytoken_credential"' "$meta" >"$SPAWN_META_TMP" ||
-    ! {
-      echo "polytoken_session=$POLYTOKEN_SESSION_ID"
-      echo "polytoken_port=$POLYTOKEN_SESSION_PORT"
-      echo "polytoken_credential=$POLYTOKEN_SESSION_CREDENTIAL"
-    } >>"$SPAWN_META_TMP" ||
-    ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$meta" "task record" "$STATE"; then
-    status=1
-    rm -f "$SPAWN_META_TMP" 2>/dev/null || true
-  fi
-  SPAWN_META_TMP=
-  if [ "$acquired" = 1 ]; then
-    fm_lock_release "$SPAWN_META_LOCK" || status=1
-    SPAWN_META_LOCK_HELD=0
-  fi
-  return "$status"
-}
-
-polytoken_spawn_fail() {  # <detail>
-  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
-  if [ -e "$CONFIG/fleet-ledger" ]; then
-    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
-  fi
-  echo "error: $1; inspect window $T" >&2
-  # A failed gate leaves nothing running or recorded: reap this launch's exact
-  # session daemon (scoped to this task's sessions root), retire the per-task
-  # wiring (the sessions roots, config dir, worktree hook layer, facet, and
-  # busy writer), then close the endpoint.
-  if [ -n "$POLYTOKEN_SESSION_ID" ]; then
-    "$POLYTOKEN_BIN" --config-dir "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")" \
-      reap "$POLYTOKEN_SESSION_ID" --force \
-      --sessions-dir "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")" >/dev/null 2>&1 || true
-  fi
-  clear_relaunch_harness_wiring polytoken "$WT" "$STATE_REAL" "$ID" || true
-  spawn_endpoint_cleanup
-}
-
 if [ "$RELAUNCH" -eq 1 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
@@ -3859,11 +3671,7 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
     exit 1
   fi
 
-  if spawn_endpoint_closes_on_abort; then
-    validate_spawn_worktree "treehouse get" "$WT ($(spawn_endpoint_hint))"
-  else
-    validate_spawn_worktree "treehouse get" "$T"
-  fi
+  validate_spawn_worktree "treehouse get" "$T"
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable
@@ -3957,9 +3765,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     TASK_TMP=$prior_task_tmp
   fi
 fi
-if (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
-  [ "$HARNESS" != polytoken ] || SPAWN_TASK_TMP_CREATED=1
-else
+if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   if [ -L "$TASK_TMP" ] || [ ! -d "$TASK_TMP" ] || [ ! -O "$TASK_TMP" ] ||
     [ -n "$(find "$TASK_TMP" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
     ! chmod 700 "$TASK_TMP"; then
@@ -4002,11 +3808,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   }
 fi
-if [ "$HARNESS" = polytoken ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  fm_polytoken_require_hooks_free "$WT" || exit 1
-  fm_polytoken_require_handler_path "$(fm_polytoken_busy_script "$STATE_REAL" "$ID")" || exit 1
-fi
-[ "$RELAUNCH" -eq 1 ] || [ "$HARNESS" != polytoken ] || SPAWN_FRESH_WIRING_PENDING=1
 if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_PENDING=1
   RELAUNCH_REPLACEMENT_HARNESS=$HARNESS
@@ -4121,15 +3922,6 @@ BUSY_GEN=
       exit 1
     }
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
-    ;;
-  polytoken)
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
-        echo "error: failed to arm the busy-state contract for $ID" >&2
-        exit 1
-      }
-      [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
-    fi
     ;;
   kimi*)
     # Standalone Kimi stays unknown until fm_busy_kimi_verified opens on a
@@ -4575,36 +4367,6 @@ EOF
     exclude_path '.fm-kimi-turnend'
     fi
     ;;
-  polytoken)
-    # Semantic busy-state wiring (bin/fm-busy-lib.sh; bin/fm-polytoken-lib.sh
-    # owns every generated artifact's content). Four pieces, all verified live:
-    # the per-task config dir (mirrored operator config with the unattended
-    # permission posture enforced - the one launch-time autonomy surface), the
-    # worker role-contract facet in the worktree's `.polytoken/facets/` (the
-    # project facet discovery layer), the generated no-argv busy writer in
-    # state/ (hook handlers receive no argv, verified live), and the worktree
-    # `.polytoken/hooks.json` binding the three busy events to that writer.
-    # post_model_turn is deliberately NOT wired as a close: it fires per model
-    # response - verified mid-turn, between tool phases - so closing on it
-    # would flap the record idle while a long tool call still runs. The
-    # worktree files stay out of git's view so they never block teardown's
-    # dirty check or leak into a commit; an existing `.polytoken/hooks.json`
-    # refused the spawn above, before any wiring or relaunch cleanup was armed,
-    # rather than clobbering a project's own hook layer.
-    # Gated on the canonical template because a raw
-    # launch command never carries this wiring's flags or cwd contract.
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      if ! fm_polytoken_write_config "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")" \
-        || ! fm_polytoken_write_facet "$WT" "$STATE_REAL/$ID.inbox" \
-        || ! fm_polytoken_write_busy_script "$FM_ROOT" "$STATE_REAL" "$ID" "$BUSY_GEN" "$TURNEND" \
-        || ! fm_polytoken_write_hooks "$WT" "$(fm_polytoken_busy_script "$STATE_REAL" "$ID")"; then
-        echo "error: could not arm the polytoken busy-state wiring for $ID" >&2
-        exit 1
-      fi
-      exclude_path '.polytoken/hooks.json'
-      exclude_path '.polytoken/facets/firstmate-worker.md'
-    fi
-    ;;
   esac
 
 # Per-task git hooksPath that strips AI commit trailers at the commit object.
@@ -4946,12 +4708,6 @@ opencode)
   [ "$OPENCODE_MAJOR" -lt 2 ] || oc_launch_bin="$oc_launch_bin --standalone"
   LAUNCH=${LAUNCH//__OPENCODEBIN__/"$oc_launch_bin"}
   ;;
-polytoken)
-  LAUNCH=${LAUNCH//__POLYTOKENBIN__/"$(shell_quote "$POLYTOKEN_BIN")"}
-  LAUNCH=${LAUNCH//__POLYTOKENCONFIG__/"$(shell_quote "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")")"}
-  LAUNCH=${LAUNCH//__POLYTOKENSESSIONS__/"$(shell_quote "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")")"}
-  LAUNCH=${LAUNCH//__POLYTOKENFACETS__/"$(shell_quote "$WT/.polytoken/facets")"}
-  ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 # A record-backed launch brief is published into the state dir of the pane
@@ -5264,7 +5020,6 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
   echo "error: could not stage the launch command at $LAUNCH_FILE" >&2
   exit 1
 fi
-SPAWN_STAGED_LAUNCH_FILE=$LAUNCH_FILE
 sleep 0.3
 SPAWN_LAUNCH_SENT=1
 LAUNCH_SOURCE_TEXT=". $(shell_quote "$LAUNCH_FILE")"
@@ -5314,22 +5069,6 @@ if [ "$HARNESS" = opencode ] && [ "$OPENCODE_MAJOR" -ge 2 ]; then
     exit 1
   fi
 fi
-# polytoken's gate is semantic and scoped to the canonical template: a raw
-# launch command never carries the generated wiring's flags, so it is gated
-# off exactly like the arm above. The failure detail names the one known
-# first-start blocker (the license dialog) so a supervisor can tell a
-# blocked launch from a wedged one.
-if [ "$HARNESS" = polytoken ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  if ! polytoken_wait_for_ready; then
-    polytoken_spawn_fail "polytoken did not start processing its brief in window $T (a first-start license dialog is the one known blocker; it is never auto-accepted)"
-    exit 1
-  fi
-  if ! spawn_record_polytoken_session; then
-    polytoken_spawn_fail "polytoken session binding could not be recorded for $ID"
-    exit 1
-  fi
-fi
-
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
     if fm_config_reread_quarantine_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then

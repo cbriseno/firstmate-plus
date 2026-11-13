@@ -96,8 +96,7 @@ fm_tmux_composer_caps() {
 #   - identity: the pane tty's FOREGROUND process group (pgid = tpgid, the
 #     same scoping as fm_backend_tmux_foreground_comms) contains a
 #     shape-owner process (pi, pi-signed, pi-launcher - docs/verification/
-#     runtime-backends.md "Agent liveness name sources"; polytoken, whose
-#     TUI pane foreground is comm `polytoken`, verified live on 0.8.19),
+#     runtime-backends.md "Agent liveness name sources"),
 #     falling back to tmux's own foreground-derived #{pane_current_command}.
 #     A pane whose agent died to a shell has no shape-owner foreground
 #     process and gets NO identity, which is exactly what keeps the strict
@@ -105,7 +104,7 @@ fm_tmux_composer_caps() {
 #     unknown.
 #   - status: the shape owner's verified busy footer via fm_pane_is_busy,
 #     mapped onto the idle/working vocabulary herdr's probe reports natively.
-# Prints "<owner><TAB>idle" or "<owner><TAB>working" for pi or polytoken.
+# Prints "<owner><TAB>idle" or "<owner><TAB>working" for pi.
 fm_tmux_composer_identity() {  # <target>
   local target=$1 tty pgid tpgid comm owner='' status
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || tty=
@@ -116,7 +115,6 @@ fm_tmux_composer_identity() {  # <target>
         [ "$pgid" = "$tpgid" ] || continue
         case "${comm##*/}" in
           pi|pi-signed|pi-launcher|Pi) owner=pi ;;
-          polytoken) owner=polytoken ;;
         esac
         [ -n "$owner" ] && break
       done <<EOF
@@ -128,13 +126,11 @@ EOF
     comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || comm=
     case "${comm##*/}" in
       pi|pi-signed|pi-launcher) owner=pi ;;
-      polytoken) owner=polytoken ;;
     esac
   fi
   [ -n "$owner" ] || return 1
   # The busy footer read is scoped to the matched owner's own harness
-  # signature (pi for the pi family, polytoken's `Running for` row) so one
-  # owner's ordinary output can never acknowledge
+  # signature (pi for the pi family) so one owner's ordinary output can never acknowledge
   # another's pane.
   status=$(fm_pane_busy_state "$target" "$owner")
   case "$status" in
@@ -253,8 +249,7 @@ fm_pane_is_busy() {  # <target> [harness]
 # `unknown` verdict is preserved untouched: busy conversion without the
 # transition evidence could mark an undelivered message delivered.
 # [busy-harness] scopes every busy read to one harness signature; the submit
-# core passes polytoken for a pane whose composer identity is polytoken (its
-# `Running for` row is outside the harness-less union) and nothing otherwise.
+# core uses the harness-less union.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [busy-harness]
   local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} busy_harness=${5:-} i=0 j state busy_state
   while :; do
@@ -299,21 +294,12 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
   fm_composer_queued_enter_verdict "$state" "$busy_state"
 }
 
-# fm_tmux_submit_busy_harness: the busy-footer harness for a submit on
-# <target> - polytoken when the pane's composer identity is polytoken, empty
-# (the harness-less union) for every other pane.
-fm_tmux_submit_busy_harness() {  # <target>
-  local identity
-  identity=$(fm_tmux_composer_identity "$1") || return 0
-  [ "${identity%%$'\t'*}" != polytoken ] || printf 'polytoken'
-}
-
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state err busy_harness
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
-  busy_harness=$(fm_tmux_submit_busy_harness "$target")
+  busy_harness=
   baseline_state=$(fm_pane_busy_state "$target" "$busy_harness")
   [ "$baseline_state" = idle ] && baseline_idle=1
   # A failed literal send replays tmux's stderr (for example "command too

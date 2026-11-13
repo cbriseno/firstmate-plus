@@ -426,8 +426,7 @@ test_backend_key_capability_matrix() {
 }
 
 # A verified adapter is not automatically verified for every task kind, and the
-# check has to sit on the pre-stop side of a relaunch: Polytoken has no primary
-# supervision protocol, so bin/fm-spawn.sh refuses it for a secondmate, and
+# check has to sit on the pre-stop side of a relaunch, because
 # discovering that only after the running agent was stopped would strand the
 # secondmate with no agent at all.
 test_harness_kind_capability() {

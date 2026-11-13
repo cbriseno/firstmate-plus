@@ -76,72 +76,19 @@ spawn_abort_cleanup() {
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
   fi
-  # A fresh polytoken spawn that fails and leaves no record must leave the pool
-  # as it found it. Before its launch is delivered, the endpoint it opened holds nothing but
-  # the shell whose `treehouse get` leases the slot, so closing it returns the
-  # slot to the pool and leaves no window or tab for a retry to trip over; the
-  # Firstmate wiring, task temp root, and staged launch file it wrote go with it.
-  # Once a launch was delivered into an endpoint still open, a worker may be
-  # running there, so those stay for the operator, as the refusal says.
-  if [ "$status" -ne 0 ] && [ "${HARNESS:-}" = polytoken ] &&
-    { [ "$SPAWN_FRESH_ENDPOINT_OPENED" = 1 ] || [ "$SPAWN_FRESH_WIRING_PENDING" = 1 ] ||
-      [ "$SPAWN_TASK_TMP_CREATED" = 1 ] || [ -n "$SPAWN_STAGED_LAUNCH_FILE" ]; } &&
-    [ "$RELAUNCH" -eq 0 ] &&
-    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
-    if [ "$SPAWN_FRESH_ENDPOINT_OPENED" = 1 ] && [ "$SPAWN_LAUNCH_SENT" = 0 ] && [ -n "${T:-}" ]; then
-      SPAWN_FRESH_ENDPOINT_OPENED=0
-      if fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null; then
-        SPAWN_ENDPOINT_CLOSED=1
-      else
-        echo "warning: could not close endpoint $T after the failed spawn of $ID; close it by hand so its slot returns to the pool" >&2
-      fi
-    fi
-    # These paths are per task id, so the per-id spawn lock is retaken for them
-    # exactly as for the strip dir below: a retry of the same id that took the
-    # lock meanwhile may already be reusing them.
-    if { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; } &&
-      { [ "$SPAWN_FRESH_WIRING_PENDING" = 1 ] || [ "$SPAWN_TASK_TMP_CREATED" = 1 ] ||
-        [ -n "$SPAWN_STAGED_LAUNCH_FILE" ]; }; then
-      if fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
-        if [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
-          if [ "$SPAWN_FRESH_WIRING_PENDING" = 1 ] && [ -n "${WT:-}" ] && [ -n "${STATE_REAL:-}" ]; then
-            SPAWN_FRESH_WIRING_PENDING=0
-            clear_relaunch_harness_wiring "$HARNESS" "$WT" "$STATE_REAL" "$ID" "$KIND" ||
-              echo "warning: could not remove $HARNESS wiring after the failed spawn of $ID" >&2
-          fi
-          if [ "$SPAWN_TASK_TMP_CREATED" = 1 ] && [ -n "${TASK_TMP:-}" ]; then
-            SPAWN_TASK_TMP_CREATED=0
-            rm -rf -- "$TASK_TMP" 2>/dev/null || true
-          fi
-          if [ -n "$SPAWN_STAGED_LAUNCH_FILE" ]; then
-            rm -f -- "$SPAWN_STAGED_LAUNCH_FILE" 2>/dev/null || true
-            rmdir -- "$(dirname "$SPAWN_STAGED_LAUNCH_FILE")" 2>/dev/null || true
-          fi
-        fi
-        fm_lock_release "$SPAWN_TASK_LOCK" || true
-      else
-        echo "warning: another spawn of $ID holds its spawn lock; leaving its $HARNESS wiring, temp root, and staged launch file in place" >&2
-      fi
-    fi
-  fi
   # A spawn that aborts after claiming its slot but before its record survives
   # must not leave a claim naming a task no record describes. The release is a
   # read-then-remove, so it runs only while the project lock that wrote the
   # claim is still held (aborts before metadata publication); a later abort has
   # already released that lock and leaves the claim for the next spawn's
-  # atomic replacement rather than racing it. A polytoken spawn instead retakes
-  # that lock once for a later failure whose record was rolled back. The
-  # release itself never removes another task's claim.
+  # atomic replacement rather than racing it. The release never removes
+  # another task's claim.
   if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ -n "${WT:-}" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
     fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
     SPAWN_SLOT_CLAIMED=0
     if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
       fm_treehouse_slot_owner_release "$WT" "$ID" || true
-    elif [ "${HARNESS:-}" = polytoken ] && [ -n "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] &&
-      fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
-      fm_treehouse_slot_owner_release "$WT" "$ID" || true
-      fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
     else
       echo "warning: leaving task $ID's slot claim on $WT in place; the Treehouse project lock is no longer held, so the next spawn's claim replaces it" >&2
     fi

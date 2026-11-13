@@ -3218,12 +3218,9 @@ test_teardown_preserves_opencode_busy_plugin_on_pool_return() {
 
 seed_polytoken_wiring() {
   local case_dir=$1
-  (
-    # shellcheck source=/dev/null
-    . "$ROOT/bin/fm-polytoken-lib.sh"
-    fm_polytoken_write_facet "$case_dir/wt" "$case_dir/state/task-x1.inbox"
-    fm_polytoken_write_hooks "$case_dir/wt" "$(fm_polytoken_busy_script "$case_dir/state" task-x1)"
-  ) || fail "seeding the generated polytoken wiring failed"
+  mkdir -p "$case_dir/wt/.polytoken/facets"
+  printf '%s\n' "$case_dir/state/task-x1.polytoken-busy.sh" > "$case_dir/wt/.polytoken/hooks.json"
+  printf '%s\n' "$case_dir/state/task-x1.inbox" > "$case_dir/wt/.polytoken/facets/firstmate-worker.md"
 }
 
 test_teardown_retires_polytoken_wiring_on_pool_return() {

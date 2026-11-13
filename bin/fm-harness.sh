@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp|polytoken|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -123,7 +123,7 @@ harness_marker() {
   # identified, and any rule that must be RELIABLE under grok has to test the hook
   # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
-  # codex, opencode, kimi, and polytoken publish no harness-identity marker at all, so
+  # codex, opencode, and kimi publish no harness-identity marker at all, so
   # they are never named here and are identified by ancestry alone. That is the
   # whole reason a foreign marker must not outrank ancestry: with markers winning
   # unconditionally, any retained CLAUDECODE would silently rename one of them.
@@ -180,19 +180,6 @@ harness_process_verdict() {  # <pid>
     # named `claude` with its own node child, and that fallback's *claude*
     # args glob would otherwise claim it if that subtree were ever walked.
     omp) echo "comm omp"; return ;;
-    # polytoken (Polytoken CLI) is a daemon-plus-TUI whose per-session daemon
-    # process name is exactly `polytoken` (verified live on 0.8.19: a TUI
-    # session's daemon runs as comm `polytoken` at ppid 1, and a shell tool
-    # subprocess's parent IS the daemon, so the walk from any real tool
-    # subprocess reaches it at hop one). Anchored, never *polytoken*, so
-    # unrelated commands containing that fragment cannot be misread as this
-    # harness. polytoken publishes no harness-identity marker of its own and
-    # does not clear inherited foreign markers (verified: AGENT=1,
-    # ORCA_AGENT_HOOK_ENV, and ORCA_OPENCODE_AGENT from the launching session
-    # reached a worker tool subprocess), so like kimi and it
-    # is detected by ancestry alone, and bin/fm-spawn.sh clears the foreign
-    # markers at its launch boundary as defense in depth.
-    polytoken) echo "comm polytoken"; return ;;
     node*|python*)
       # Bare interpreter: match the harness name in its script path.
       args=$(ps -o args= -p "$pid" 2>/dev/null)
@@ -350,7 +337,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp|polytoken)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp)
       printf '%s\n' "$pin"
       ;;
     *)

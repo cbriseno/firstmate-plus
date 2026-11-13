@@ -139,36 +139,6 @@ launch_template() {
   # only reads the environment. Cursor exposes no effort flag, so the shared
   # effort axis is deliberately omitted and stays in task metadata only.
   cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-  # polytoken (Polytoken CLI): a pane-attached TUI worker whose control verbs
-  # ride the daemon REST API (the captain-approved hybrid). The launch runs in
-  # the task worktree so the worktree's `.polytoken/` is the project hook and
-  # facet discovery layer (verified live: cwd-project hooks fire while hooks
-  # placed in the root --config-dir do not load). `--config-dir` names a
-  # firstmate-generated per-task config dir whose config.yaml mirrors the
-  # operator's global config with the unattended permission posture enforced,
-  # because a project config.yaml fully replaces the global config and the
-  # global layer never reaches the daemon (verified live) - no launch flag
-  # reaches the permission matcher at all. `--sessions-dir` isolates the
-  # per-task session tree so `polytoken sessions` can bind the pane's session
-  # id, port, and credential into task metadata after launch. `--facet` +
-  # `--facets-dir` carry the worker role contract (a facet IS the system
-  # prompt, and the generated one pins no model so `--model` stays
-  # authoritative); `--prompt` submits the brief after the TUI attaches, so no
-  # keyplane typing starts the work. `--accept-license-terms` is deliberately
-  # NEVER passed (captain decision 2026-10-07): the license dialog is a blocker
-  # that the readiness gate below fails loudly on, never something a fleet
-  # spawn answers. The leading shell loop clears every foreign ORCA_*/FM_*
-  # marker the pane actually carries at launch time (verified live: ORCA_*
-  # values from the launching session's environment reach worker tool
-  # subprocesses through the pane), keeping the three launch-owned names
-  # (FM_TASK_ID, FM_TASK_INBOX) so the doorbell and backend
-  # plumbing keep working; the fixed `env -u` set clears every harness-identity
-  # marker, because polytoken publishes none of its own and does not clear
-  # inherited ones. There is no `__EFFORTFLAG__`: polytoken encodes reasoning
-  # effort inside the model reference as `<model>(<effort>)`, so the effort
-  # axis rides `__MODELFLAG__` after mapping to the nearest compatible
-  # level in the installed model's selectable set.
-  polytoken) printf '%s' 'for _fmv in $(env | cut -d= -f1 | grep -E '\''^(ORCA_|FM_)'\''); do case $_fmv in FM_TASK_ID|FM_TASK_INBOX) ;; *) unset $_fmv ;; esac; done; env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u FM_OMP_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI -u AGENT __POLYTOKENBIN__ --config-dir __POLYTOKENCONFIG__ new --sessions-dir __POLYTOKENSESSIONS__ --facet firstmate-worker --facets-dir __POLYTOKENFACETS__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   # Kimi Code rejects a positional prompt, so it launches bare and receives
   # only an absolute brief pointer after the TUI readiness gate below.
   # Its turn-end signal is a globally configured Stop hook plus a guarded

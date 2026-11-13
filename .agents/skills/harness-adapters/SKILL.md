@@ -33,7 +33,6 @@ For recovery and control, use the exact `harness=` in `state/<id>.meta`; never i
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Polytoken is verified only for crewmate and scout work, never a secondmate or primary.
 
 ## Detection
 
@@ -89,8 +88,7 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "grok": "references/harness/grok.md",
     "kimi": "references/harness/kimi.md",
     "cursor": "references/harness/cursor.md",
-    "omp": "references/harness/omp.md",
-    "polytoken": "references/harness/polytoken.md"
+    "omp": "references/harness/omp.md"
   }
 }
 ```

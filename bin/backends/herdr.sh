@@ -3263,8 +3263,7 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unprove
 # read exists only so the submit core below can confirm a delivery for a
 # harness whose native state never transitions. Without a harness argument the
 # shared matcher uses its union of verified tokens; the submit core passes
-# polytoken only when the pane's native identity names polytoken, whose
-# `Running for` row is outside that union.
+# the verified adapter when one is available.
 fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unknown
   local target=$1 harness=${2:-} cap visible
   cap=$(fm_backend_herdr_capture "$target" 40) || { printf 'unknown'; return 0; }
@@ -3480,7 +3479,6 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   # that then starts a turn must not report empty. Codex uses its paste-aware
   # prompt API; remaining harnesses keep the unproven type-then-Enter path.
   identity=$(fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") || identity=
-  [ "${identity%%$'\t'*}" != polytoken ] || busy_harness=polytoken
   if [ "${identity%%$'\t'*}" = claude ]; then
     proof=1
     content=$(fm_backend_herdr_composer_content "$target") \

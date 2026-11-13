@@ -47,11 +47,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-## Polytoken worker lifecycle
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
 ## Harness detection precedence
 
 Historical machine-specific probe transcripts are not distributed.

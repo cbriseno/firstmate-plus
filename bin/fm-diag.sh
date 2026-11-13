@@ -133,7 +133,7 @@ fm_diag_emit() {  # <event> [key=value ...]
 _fm_diag_harness_word() {  # <word> -> FM_DIAG_HARNESS or return 1
   case "/$1/" in */claude/*) FM_DIAG_HARNESS=claude; return 0 ;; esac
   case "${1##*/}" in
-    claude|codex|opencode|grok|kimi|pi|pi-signed|omp|cursor-agent|polytoken)
+    claude|codex|opencode|grok|kimi|pi|pi-signed|omp|cursor-agent)
       FM_DIAG_HARNESS=${1##*/}; return 0 ;;
   esac
   return 1
@@ -169,7 +169,7 @@ fm_diag_harness() {
       for (i = 0; i < 8 && pid > 1; i++) {
         c = comm[pid]; n = c; sub(/.*\//, "", n)
         if (("/" c "/") ~ /\/claude\//) { print pid, "claude"; exit }
-        if (n ~ /^(claude|codex|opencode|grok|kimi|pi|pi-signed|omp|cursor-agent|polytoken)$/) { print pid, n; exit }
+        if (n ~ /^(claude|codex|opencode|grok|kimi|pi|pi-signed|omp|cursor-agent)$/) { print pid, n; exit }
         pid = parent[pid]
       }
       print "-", "unknown"

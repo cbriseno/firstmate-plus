@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor omp polytoken
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor omp
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -87,7 +87,6 @@ fm_control_harness_family() {  # <recorded-harness>
     pi) printf 'pi' ;;
     pi-signed) printf 'pi-signed' ;;
     omp) printf 'omp' ;;
-    polytoken) printf 'polytoken' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     opencode*) printf 'opencode' ;;
@@ -98,35 +97,9 @@ fm_control_harness_family() {  # <recorded-harness>
   esac
 }
 
-# Polytoken is a crewmate/scout adapter only: it has no primary
-# supervision protocol, and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control
-# plane asks this BEFORE it stops anything, so an incompatible relaunch target is
-# refused while the current agent is still running rather than after it has
-# been stopped.
+# All remaining verified adapters support both task kinds.
 fm_control_harness_supports_kind() {  # <harness> <kind>
-  local harness=${1-} kind=${2-}
-  fm_control_harness_supported "$harness" || return 1
-  case "$harness" in
-    polytoken) [ "$kind" != secondmate ] || return 1 ;;
-  esac
-  return 0
-}
-
-# Which transport a harness's interrupt verb rides: `rest` for a typed API
-# call, `key` for the keyplane sequence the tables below describe. polytoken
-# is the one rest adapter: its TUI has NO interrupt chord at all (verified
-# live on 0.8.19 through the full `print tui-command-actions` inventory:
-# `submit-prompt` is the only Enter action in Prompt scope, a single Escape
-# does nothing in Prompt scope, and Escape Escape opens the rewind picker),
-# so an interrupt MUST be POST /turn/cancel on the session daemon, and the
-# keyplane tables below deliberately refuse it so nothing can improvise a
-# key. Every other verified harness interrupts through the keyplane.
-fm_control_interrupt_transport() {  # <harness>
-  case "${1-}" in
-    polytoken) printf 'rest' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) printf 'key' ;;
-    *) return 1 ;;
-  esac
+  fm_control_harness_supported "${1-}"
 }
 
 # The key that cancels a running turn. Escape for every adapter except grok,
@@ -168,10 +141,6 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    # polytoken's interrupt rides the REST API, never keys, so no key can open
-    # a hazard surface on its path; the /quit exit opens only the slash palette,
-    # where Enter accepts the preselected /quit row (verified live).
-    polytoken) ;;
     claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) ;;
     *) return 1 ;;
   esac
@@ -201,7 +170,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
       esac
       ;;
     claude|grok|kimi|cursor) printf '/exit' ;;
-    codex|pi|pi-signed|omp|polytoken) printf '/quit' ;;
+    codex|pi|pi-signed|omp) printf '/quit' ;;
     *) return 1 ;;
   esac
 }

@@ -402,17 +402,6 @@ FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 # injection. Cursor's recorded worker state comes from its transcript fold in
 # bin/fm-busy-lib.sh, never from this row.
 FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
-# polytoken renders a live elapsed row above its composer separators while a
-# turn runs - ` Running for 11.12s`, with a leading space and an unanchored
-# tail of border furniture (verified live, 0.8.19; the turn-end rows are
-# `Completed in <t>`, `Errored after <t>`, and `Canceled after <t>`, all
-# deliberately distinct from the busy token). Delivery guard only; recorded
-# worker state comes from the polytoken-hook fold in bin/fm-busy-lib.sh, and
-# echoed worker output naming the token can fake only this acknowledgement,
-# never a busy-state verdict.
-# It is deliberately not part of the harness-less union above, so a pane with
-# no recorded harness never reads it as busy.
-FM_DELIVERY_POLYTOKEN_BUSY_REGEX_DEFAULT='^[[:space:]]*Running for [0-9]+([.][0-9]+)?s'
 FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
 
 fm_busy_lines_match() {  # [harness]
@@ -428,7 +417,6 @@ fm_busy_lines_match() {  # [harness]
       pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
       omp) regex=$FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT ;;
-      polytoken) regex=$FM_DELIVERY_POLYTOKEN_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT ;;
       cursor) regex=$FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_DELIVERY_BUSY_REGEX_DEFAULT ;;
@@ -2196,15 +2184,7 @@ _fm_composer_pi_verdict() {  # <screen> <styled> <has_identity> <identity>
   fi
   agent=${identity%%$'\t'*}
   agent_status=${identity#*$'\t'}
-  # polytoken is the second verified owner of the separated shape (verified
-  # live, 0.8.19: a full-width separator pair over one blank or pending
-  # content row with a footer below), so its identity passes the same
-  # conjunction: an idle polytoken proves an empty composer, and a working
-  # polytoken keeps the strict unknown - its composer really is empty
-  # mid-turn (Enter queues, verified live), but the unknown keeps the
-  # busy-queue conversion honest through the submit cores.
-  if { [ "$agent" != pi ] && [ "$agent" != polytoken ]; } \
-    || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ]; then
+  if [ "$agent" != pi ] || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ]; then
     printf 'unknown'
     return 0
   fi
