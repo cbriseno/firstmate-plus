@@ -3479,8 +3479,8 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   # Claude on Herdr is the live-verified truncation shape: Enter is withheld
   # unless the composer, empty before the send, shows this payload. A suffix
-  # that then starts a turn must not report empty. Other harnesses keep the
-  # unproven type-then-Enter path.
+  # that then starts a turn must not report empty. Codex uses its paste-aware
+  # prompt API; remaining harnesses keep the unproven type-then-Enter path.
   identity=$(fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") || identity=
   [ "${identity%%$'\t'*}" != polytoken ] || busy_harness=polytoken
   if [ "${identity%%$'\t'*}" = claude ]; then
@@ -3489,7 +3489,14 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       || { printf 'send-failed'; return 0; }
     [ -z "${content//[$' \t\r\n\v\f']/}" ] || { printf 'send-failed'; return 0; }
   fi
-  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  if [ "${identity%%$'\t'*}" = codex ]; then
+    # Preserve the paste boundary when Codex consumes buffered input at once.
+    fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" agent prompt "$FM_BACKEND_HERDR_PANE" "$text" >/dev/null \
+      || { printf 'send-failed'; return 0; }
+    enter_sent=1
+  else
+    fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  fi
   sleep "$settle"
   if [ "$proof" = 1 ]; then
     if ! content=$(fm_backend_herdr_composer_content "$target") \
@@ -3505,15 +3512,17 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   raw_status=$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")
   baseline=$(fm_backend_herdr_classify_submit_agent_status "$raw_status")
   confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")
-  # Typing never starts a turn, so a footer read taken after the literal send
-  # and before the first Enter is still a pre-submission baseline.
+  # Raw typing leaves this read before the first Enter. Codex has already
+  # submitted through agent prompt; its normal read-back below still applies.
   if [ "$baseline" = idle ]; then
     allow_rendered=1
   else
     footer_baseline=$(fm_backend_herdr_rendered_busy_state "$target" "$busy_harness")
   fi
   while :; do
-    if fm_backend_herdr_send_key "$target" Enter; then
+    if [ "$enter_sent" -eq 1 ] && [ "$i" -eq 0 ]; then
+      : # agent prompt already wrote the first Enter.
+    elif fm_backend_herdr_send_key "$target" Enter; then
       enter_sent=1
     elif [ "$enter_sent" -eq 0 ]; then
       i=$((i + 1))

@@ -282,8 +282,9 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ### Submit confirmation
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
+On 2026-11-13, Linux with Codex CLI 0.166.0 and Herdr 0.9.5 submitted a buffered `/quit` and exited after delayed input consumption.
+`FM_HERDR_CODEX_DELAYED_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-herdr-codex-delayed-live-e2e.test.sh` refreshes that proof in an isolated Herdr session.
+The original raw transport failed the same guard with `buffered /quit remained unsubmitted`.
 
 ### Claude exit behind the slash-command popup
 
