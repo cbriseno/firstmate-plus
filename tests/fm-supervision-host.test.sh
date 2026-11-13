@@ -257,7 +257,7 @@ test_attended_close_that_turns_main_only_before_its_turn_passes_to_main() {
   pi_offer=$(node --input-type=module -e '
     const dispatch = await import(process.argv[1]);
     console.log(dispatch.branchOfferForWake(process.argv[2], process.argv[3], false).eligible);
-  ' "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$home/pi-offer-state" "signal: $home/state/demo.status")
+  ' "$ROOT/bin/lib/fm-branch-dispatch.ts" "$home/pi-offer-state" "signal: $home/state/demo.status")
   [ "$pi_offer" = true ] || fail "the host-only transition veto changed Pi's existing offer rule"
   assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "the ledger must record why the close went to main"
   watcher_live "$home" || fail "the pass-through left no successor watcher"
@@ -394,7 +394,8 @@ SH
 # still runs on the engine.
 test_primary_without_a_verified_mirror_runs_away_only() {
   local home harness
-  for harness in grok codex; do
+  harness=codex
+  {
     home=$(make_home "attended-$harness" attended claude)
     FM_SUPERVISION_HOST_PRIMARY=$harness start_host "$home"
     wait_until 150 watcher_live "$home" || fail "$harness: the host never started a watcher cycle"
@@ -405,18 +406,18 @@ test_primary_without_a_verified_mirror_runs_away_only() {
     [ "$(engine_calls "$home")" -eq 0 ] || fail "$harness: the engine ran an attended wake without a verified dialog mirror"
     assert_re "	pass-through	attended	no verified dialog mirror for $harness	" "$home/state/.supervision-host.log" \
       "the ledger must record that no verified mirror kept the close on main"
-  done
-  home=$(make_home away-grok away claude)
-  FM_SUPERVISION_HOST_PRIMARY=grok start_host "$home"
-  wait_until 150 watcher_live "$home" || fail "away grok: the host never started a watcher cycle"
+  }
+  home=$(make_home away-codex away claude)
+  FM_SUPERVISION_HOST_PRIMARY=codex start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "away codex: the host never started a watcher cycle"
   append_status "$home" 'step one'
   wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 \
-    || fail "away grok: the wake was not handled on the engine: $(cat "$home/host.out"; cat "$home/state/.supervision-host.log")"
-  assert_re '^primary=grok$' "$home/engine-call.1" "the away engine must carry the grok primary pin"
+    || fail "away codex: the wake was not handled on the engine: $(cat "$home/host.out"; cat "$home/state/.supervision-host.log")"
+  assert_re '^primary=codex$' "$home/engine-call.1" "the away engine must carry the grok primary pin"
   assert_re '^POSTURE: AWAY\.' "$home/engine-call.1" "the away wake must carry the away tail"
-  [ ! -s "$home/host.rc" ] || fail "a handled away wake on grok reached main: $(cat "$home/host.out")"
+  [ ! -s "$home/host.rc" ] || fail "a handled away wake on codex reached main: $(cat "$home/host.out")"
   kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
-  wait_until 200 host_exited "$home" || fail "away grok: the host did not stop on TERM"
+  wait_until 200 host_exited "$home" || fail "away codex: the host did not stop on TERM"
   pass "host: a primary with no verified dialog mirror keeps every attended close on main, and its away posture still runs"
 }
 

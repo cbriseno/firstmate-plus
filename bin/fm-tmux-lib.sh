@@ -84,7 +84,7 @@ fm_tmux_composer_cursor_row() {  # <target>
 # fm_tmux_composer_caps: the tmux capability descriptor - static data, not
 # logic (see the capability model in bin/fm-composer-lib.sh).
 fm_tmux_composer_caps() {
-  printf 'styled=1\ncursor=1\nidentity=1\nrows=0\n'
+  printf 'styled=1\ncursor=1\nidentity=0\nrows=0\n'
 }
 
 # fm_tmux_composer_identity: the tmux agent-identity probe backing the
@@ -103,41 +103,6 @@ fm_tmux_composer_caps() {
 #   - status: the shape owner's verified busy footer via fm_pane_is_busy,
 #     mapped onto the idle/working vocabulary herdr's probe reports natively.
 # Prints "<owner><TAB>idle" or "<owner><TAB>working" for pi.
-fm_tmux_composer_identity() {  # <target>
-  local target=$1 tty pgid tpgid comm owner='' status
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || tty=
-  case "$tty" in
-    /dev/*)
-      while read -r _ pgid tpgid comm; do
-        [ -n "$comm" ] || continue
-        [ "$pgid" = "$tpgid" ] || continue
-        case "${comm##*/}" in
-          pi|pi-launcher|Pi) owner=pi ;;
-        esac
-        [ -n "$owner" ] && break
-      done <<EOF
-$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
-EOF
-      ;;
-  esac
-  if [ -z "$owner" ]; then
-    comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || comm=
-    case "${comm##*/}" in
-      pi|pi-launcher) owner=pi ;;
-    esac
-  fi
-  [ -n "$owner" ] || return 1
-  # The busy footer read is scoped to the matched owner's own harness
-  # signature (pi for the pi family) so one owner's ordinary output can never acknowledge
-  # another's pane.
-  status=$(fm_pane_busy_state "$target" "$owner")
-  case "$status" in
-    busy) printf '%s\tworking' "$owner" ;;
-    idle) printf '%s\tidle' "$owner" ;;
-    *) return 1 ;;
-  esac
-}
-
 # fm_tmux_composer_state: the tmux composer verdict - a thin adapter over the
 # shared screen classifier. The verdict contract (empty | pending |
 # pending-unproven | unknown, positive proof required for empty, unrecognized
@@ -151,7 +116,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   pane=$(fm_tmux_composer_capture "$target") || { printf 'unknown'; return 0; }
   verdict=$(fm_composer_classify_screen "$(fm_tmux_composer_caps)" "$pane" "$cy")
   if [ "$verdict" = need-identity ]; then
-    if ! identity=$(fm_tmux_composer_identity "$target") || [ -z "$identity" ]; then
+    if [ -z "$identity" ]; then
       identity='probe-absent'
     fi
     verdict=$(fm_composer_classify_screen "$(fm_tmux_composer_caps)" "$pane" "$cy" "$identity")

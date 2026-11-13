@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# fm-live-lab.sh - stand up, check, drive, and tear down one disposable live
-# supervision lab: a real lab main session on Claude or Pi, with the
-# supervision host (Claude) or branch (Pi) wired as a real home runs it,
-# optionally a real seeded local second mate and a real gated worker.
+# fm-live-lab.sh - disposable Claude supervision lab with a private tmux server,
+# optional seeded secondmate, and optional gated worker.
 #
 # Usage:
-#   fm-live-lab.sh up --harness claude|pi [--mate] [--worker]
+#   fm-live-lab.sh up --harness claude [--mate] [--worker]
 #                     [--model <m>] [--effort <e>]
 #                     [--supervision-host <line>|none|off] [--expect-host yes|no]
 #                     [--source <repo>] [--ref <rev>] [--timeout <seconds>]
@@ -15,97 +13,33 @@
 #   fm-live-lab.sh pane <lab-root> [--window <name>] [--lines <n>]
 #   fm-live-lab.sh down <lab-root>
 #
-# up builds everything under <lab-root> (a fresh path; default a new
-# /tmp/fmlab.XXXXXX), verifies readiness itself, and prints one line per check.
-# It exits 0 only when every check passed; otherwise it exits 1 and leaves the
-# lab up for inspection, so run down either way. check re-runs the same checks
-# once. say types text into a lab window and presses Enter (window main, the
-# lab primary, by default; mate and worker name the lab's own tasks). pane
-# prints a window's recent scrollback. down stops every lab process, removes the
-# lab's Claude trust entries by one atomic replace, removes <lab-root>, and exits
-# non-zero if the recorded Pi trust store or ~/.treehouse gained changes.
+# up requires a fresh path (default /tmp/fmlab.XXXXXX) and checks out the
+# committed source/ref into a marked primary lab home. It uses fm-lab-home.sh
+# for the short private tmux socket directory, no tmux user config, and a clean
+# launch environment. TREEHOUSE_ROOT keeps worker pools within the lab;
+# DISABLE_AUTOUPDATER=1 prevents replacement of the shared Claude binary.
+# Claude defaults to sonnet/medium with auto permissions. The primary starts
+# after the optional secondmate and worker, then receives a harmless probe.
+# Lab task ids include a nonce so their temp directories cannot collide.
 #
-# What up builds:
-#   home/            the lab main home: bin/fm-lab-home.sh create, then the
-#                    committed tree <ref> of <source> (default: HEAD of the
-#                    checkout this script runs from) checked out as a genuine
-#                    primary checkout, with FM_HOME at its root.
-#   config/          backend tmux, Claude crews and second mates, and
-#                    supervision-host <line> (default claude on Claude, absent
-#                    on Pi; none leaves the file absent; off writes the
-#                    inherited supervision-host-off opt-out instead, so the
-#                    mate spawn inherits it).
-#   tmux server      private, through the lab home's bin/fm-lab-home.sh
-#                    tmux-dir, with no user tmux config (its plugins never run
-#                    in a lab), started from an empty environment so no inherited
-#                    TMUX, Herdr, or Pi marker reaches a lab process.
-#                    TREEHOUSE_ROOT points into <lab-root>, so a worker's pool
-#                    never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
-#                    keeps Claude Code from replacing the shared binary under
-#                    a running lab, as every live run does (tests/lib.sh).
-#                    A set CLAUDE_CONFIG_DIR (absolute) is passed to every lab
-#                    process. up records the Claude store, Pi trust store, and
-#                    ~/.treehouse it selected, so check and down use those same
-#                    paths even from a later shell with another HOME.
-#   trust            Claude: bin/fm-claude-trust.sh --lab-home for the primary
-#                    and the spawn's own registration for the mate and worker. Pi:
-#                    --approve, which trusts project-local files for this run
-#                    only, so the Pi trust store is never written and all of
-#                    .pi/extensions loads; sessions stay under
-#                    <lab-root>/pi-sessions.
-#   task ids         lab<nonce>-mate and lab<nonce>-worker, unique per lab,
-#                    because a spawn keeps a task temp dir at /tmp/fm-<id>
-#                    that a fixed id would share with other labs and tasks.
-#   mate/            --mate: bin/fm-home-seed.sh <mate-id> <lab-root>/mate
-#                    --no-projects (an explicit path cloned from the git lab
-#                    home), launched by bin/fm-spawn.sh --secondmate.
-#   worker           --worker: a lab project notes with a lab-private origin
-#                    (local-only +yolo), a scaffolded brief, a backlog item, and
-#                    a real bin/fm-spawn.sh worker that parks on
-#                    <lab-home>/data/<worker-id>/gate until that file
-#                    exists; touch the gate and message the worker to resume.
-#   primary          window main: claude --setting-sources project,local
-#                    (default sonnet, medium, permission mode auto) or pi
-#                    (default openai-codex/gpt-6-luna, medium), launched
-#                    after the mate and worker so its first turn end arms
-#                    supervision. up then sends one harmless probe prompt.
+# A set absolute CLAUDE_CONFIG_DIR reaches all lab processes. The lab records
+# the chosen Claude store and treehouse path, so later check/down calls use the
+# original paths even with another HOME. Trust is registered through
+# fm-claude-trust.sh --lab-home for the primary and normal spawn for workers.
 #
-# Readiness checks (check prints "ok <name>: ..." or "fail <name>: ..."):
-#   primary       window main is alive, in the lab home, which is a primary
-#                 checkout, and the lab session lock names a live process.
-#   probe         the primary answered the probe with its nonce (the model is
-#                 accepted and a whole turn ran).
-#   trust         Claude: the lab home carries registered trust.
-#                 Pi: the Pi trust store is byte-identical to before up.
-#   mirror        Claude with --expect-host yes: the tree's
-#                 fm-host-mirror.sh verified claude and fm-host-mirror.sh check
-#                 pass, and the mirror holds a captain and a main entry.
-#   extensions    Pi: the watcher, turn-end guard, and branch extensions are
-#                 loaded by the process holding the lab session lock, at the
-#                 current on-disk builds.
-#   host          Claude: with --expect-host yes (the default on Claude unless
-#                 --supervision-host off) the supervision host runs; with no,
-#                 none runs. Skipped when the lab has no mate or worker, since
-#                 an empty fleet arms nothing.
-#   watcher       a live watcher with a fresh beacon holds this home's lock
-#                 (skipped on an empty fleet).
-#   mate          --mate: its window is alive and its own session lock names a
-#                 live process, so it got past trust into its charter. With
-#                 --supervision-host off, its inherited flag and disabled host
-#                 gate are also required.
-#   worker        --worker: its current crew state is paused on the gate.
-#   treehouse     ~/.treehouse gained no entry since up began.
+# check prints ok/fail lines for the primary checkout and lock, probe answer,
+# trust, configured dialog mirror and host, watcher beacon, optional secondmate
+# and parked worker, and confinement of treehouse pools. Host expectations obey
+# --supervision-host off and --expect-host; an empty fleet arms no watcher.
+# up exits 0 only when all required readiness checks pass. On failure it leaves
+# the lab available for inspection: run down either way. say sends text to main
+# unless --window names another lab window; pane captures its scrollback.
 #
-# down refuses any path without the lab record up writes. It kills only the
-# lab's recorded private tmux server and launch pane PIDs, and their descendants;
-# runs bin/fm-lab-home.sh teardown; removes the task temp and launch dirs the
-# lab's spawns kept under /tmp, including a failed spawn's; removes every
-# project entry at or under <lab-root> from the recorded Claude store, following
-# a symlinked store to its target (compare-and-swap atomic replace, unrelated
-# entries kept); reports a changed Pi trust store or a new
-# ~/.treehouse entry without touching either; and removes <lab-root>.
-# Transcripts under ~/.claude/projects are left as history. The lab never uses
-# Herdr.
+# down requires the lab record. It stops only recorded lab processes and their
+# descendants, rechecks process identities, waits through TERM cleanup and
+# escalates before removing the lab. It atomically removes only Claude trust
+# entries under the lab root, preserving a symlinked store. New pools outside
+# the lab are reported as a failure. History in Claude's own store remains.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -114,7 +48,6 @@ LAB_HOME_HELPER="$SCRIPT_DIR/fm-lab-home.sh"
 CLAUDE_TRUST="$SCRIPT_DIR/fm-claude-trust.sh"
 RECORD_NAME=.fm-live-lab
 RECORD_TOKEN='fm-live-lab v1'
-PI_TRUST_STORE="$HOME/.pi/agent/trust.json"
 TREEHOUSE_DIR="$HOME/.treehouse"
 
 die() { echo "fm-live-lab: $*" >&2; exit 1; }
@@ -152,10 +85,8 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   MATE_ID=$(rec_get "$ROOT" mate_id)
   WORKER_ID=$(rec_get "$ROOT" worker_id)
   GATE=$(rec_get "$ROOT" gate)
-  PI_TRUST_BEFORE=$(rec_get "$ROOT" pi_trust)
   CLAUDE_DIR=$(rec_get "$ROOT" claude_config_dir)
   CLAUDE_STORE=$(rec_get "$ROOT" claude_store)
-  PI_TRUST_STORE=$(rec_get "$ROOT" pi_trust_store)
   TREEHOUSE_DIR=$(rec_get "$ROOT" treehouse_dir)
   LAB_TMPDIR=$(rec_get "$ROOT" tmpdir)
   LAB_TMPDIR=${LAB_TMPDIR:-/tmp}
@@ -245,12 +176,6 @@ lab_trust_present() {
 }
 
 check_trust() {
-  if [ "$HARNESS" = pi ]; then
-    [ "$(digest "$PI_TRUST_STORE")" = "$PI_TRUST_BEFORE" ] \
-      || { echo "fail trust: the Pi trust store changed since up began"; return 1; }
-    echo "ok trust: Pi trust store unchanged (session-only --approve)"
-    return 0
-  fi
   if lab_trust_present; then
     echo "ok trust: $LAB is trusted in the Claude store"
   else
@@ -273,24 +198,6 @@ check_mirror() {
     captain=0*|*main=0|'') echo "fail mirror: the dialog mirror has no captain and main entry yet (${entries:-no mirror file})"; return 1 ;;
   esac
   echo "ok mirror: verified writer, check passed, $entries"
-}
-
-check_extensions() {
-  local pair source marker phase version out=""
-  for pair in fm-primary-pi-watch.ts:.pi-watch-extension-loaded:active fm-primary-turnend-guard.ts:.pi-turnend-extension-loaded; do
-    source=${pair%%:*}; marker=${pair#*:}; phase=${marker#*:}; marker=${marker%%:*}
-    [ "$phase" != "$marker" ] || phase=
-    # shellcheck disable=SC2016 # Expanded by the inner shell.
-    version=$(FM_HOME="$LAB" bash -c '. "$1/bin/fm-wake-lib.sh" && fm_pi_extension_version "$1/.pi/extensions/$2"' _ "$LAB" "$source" 2>/dev/null)
-    # shellcheck disable=SC2016 # Expanded by the inner shell.
-    FM_HOME="$LAB" bash -c '. "$1/bin/fm-wake-lib.sh" && fm_pi_extension_loaded "$1/state/$2" "$3" "$1/state/.lock" "$4"' \
-      _ "$LAB" "$marker" "$version" "$phase" 2>/dev/null \
-      || { echo "fail extensions: $source is not loaded at its current build by the lock holder"; return 1; }
-    out="$out ${source%.ts}"
-  done
-  [ "$(sed -n 1p "$LAB/state/.pi-branch-extension-loaded" 2>/dev/null)" = "$(sed -n 1p "$LAB/state/.lock" 2>/dev/null)" ] \
-    || { echo "fail extensions: fm-branch-supervision.ts is not loaded by the lock holder"; return 1; }
-  echo "ok extensions:$out fm-branch-supervision"
 }
 
 check_host() {
@@ -358,8 +265,6 @@ run_checks() {
   if [ "$HARNESS" = claude ]; then
     if [ "$EXPECT_HOST" = yes ]; then check_mirror || rc=1; fi
     check_host || rc=1
-  else
-    check_extensions || rc=1
   fi
   check_watcher || rc=1
   if [ "$WANT_MATE" = yes ]; then check_mate || rc=1; fi
@@ -475,7 +380,7 @@ cmd_up() {
       *) [ -z "$root" ] || usage; root=$1; shift ;;
     esac
   done
-  case "$harness" in claude|pi) ;; *) die "--harness must be claude or pi" ;; esac
+  case "$harness" in claude) ;; *) die "--harness must be claude" ;; esac
   case "$timeout" in ''|*[!0-9]*) die "--timeout takes seconds" ;; esac
   [ -n "$expect_host" ] || { [ "$harness" = claude ] && [ "$host_line" != off ] && expect_host=yes || expect_host=no; }
   case "$expect_host" in yes|no) ;; *) die "--expect-host takes yes or no" ;; esac
@@ -503,7 +408,6 @@ cmd_up() {
   NONCE=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
   MATE_ID="lab${NONCE:0:12}-mate" WORKER_ID="lab${NONCE:0:12}-worker"
   GATE="$LAB/data/$WORKER_ID/gate"
-  PI_TRUST_BEFORE=$(digest "$PI_TRUST_STORE")
   treehouse_listing | sort > "$ROOT/.treehouse-before"
   {
     echo "$RECORD_TOKEN"
@@ -517,10 +421,8 @@ cmd_up() {
     echo "mate_id=$MATE_ID"
     echo "worker_id=$WORKER_ID"
     echo "gate=$GATE"
-    echo "pi_trust=$PI_TRUST_BEFORE"
     echo "claude_config_dir=$CLAUDE_DIR"
     echo "claude_store=$CLAUDE_STORE"
-    echo "pi_trust_store=$PI_TRUST_STORE"
     echo "treehouse_dir=$TREEHOUSE_DIR"
     echo "tmpdir=$LAB_TMPDIR"
   } > "$ROOT/$RECORD_NAME"
@@ -572,8 +474,6 @@ cmd_up() {
     done
     lab_trust_present || die "the lab home's Claude trust keeps disappearing from $CLAUDE_STORE"
     primary=(claude --setting-sources "project,local" --model "$model" --effort "$effort" --permission-mode auto)
-  else
-    primary=(pi --approve --session-dir "$ROOT/pi-sessions" --model "$model" --thinking "$effort")
   fi
   lab_tmux new-window -d -t firstmate: -n main -c "$LAB" \
     env FM_HOME="$LAB" CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "${primary[@]}" \
@@ -815,10 +715,6 @@ cmd_down() {
   fi
   removed=$(forget_claude_entries) || die "cannot remove the lab's Claude trust entries"
   echo "removed: $removed Claude project entries under $ROOT"
-  if [ "$(digest "$PI_TRUST_STORE")" != "$PI_TRUST_BEFORE" ]; then
-    echo "warning: the Pi trust store changed since up began; left as is" >&2
-    rc=1
-  fi
   added=$(comm -13 "$ROOT/.treehouse-before" <(treehouse_listing | sort) 2>/dev/null)
   if [ -n "$added" ]; then
     echo "warning: ~/.treehouse gained entries during the lab; left as is: $(printf '%s' "$added" | tr '\n' ' ')" >&2

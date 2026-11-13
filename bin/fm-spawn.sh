@@ -103,14 +103,8 @@
 #   --model <name> and --effort <default|low|medium|high|xhigh|max|ultra> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
-#   from that harness's launch rather than guessed. Ultra is the explicit
-#   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
-#   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
-#   OpenCode 2 has no interactive model or effort flag, so its selected model
-#   and effort are written as the build agent's model and variant inside the
-#   OPENCODE_CONFIG_CONTENT JSON its launch already carries (config schema
-#   re-verified on opencode 2.0.21); without a model the effort axis is recorded
-#   but omitted.
+#   from that harness's launch rather than guessed. Explicit ultra refuses through
+#   bin/fm-harness.sh validate-native-effort on the verified adapters.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -221,21 +215,10 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|pi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
-#   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
-#   name from PATH once, probes that concrete path with --help, and launches the
-#   same path. It adds --tui-mode regular only when that help advertises the flag;
-#   a failed or inconclusive probe omits it so older Pi versions remain launchable.
-#   A --secondmate launch of a Firstmate-seeded home (the existing
-#   .fm-secondmate-home marker validate_firstmate_home_for_spawn already requires)
-#   also adds --approve when that help advertises it, so the first unattended
-#   launch does not stall on Pi's "Trust project folder?" dialog for that home
-#   path; --approve is session-scoped to the launch cwd and does not rewrite the
-#   operator's trust.json. Ordinary Pi worker launches never receive --approve.
-#   A missing selected executable refuses before endpoint creation, and pi-signed
-#   never falls back to pi.
+#   new adapters.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -367,24 +350,12 @@
 # Worker tool exclusions:
 #   docs/configuration.md "Worker tool exclusions" owns config/crew-exclude-tools
 #   and its operator contract. Resolve it with bin/fm-exclude-tools-lib.sh
-#   before provisioning; __PIEXCLUDE__ below owns the Pi launch substitution.
-# Worker account pin (config/claude-account, config/pi-account):
-#   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
-#   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
-#   destination pane's ambient account. A present file pins every launch of
-#   that runner from this home - ship, scout, local secondmate, raw Claude
-#   command, and relaunch - to the declared account root, and the spawn
-#   refuses before any endpoint, worktree, or record exists when the file is
-#   malformed, the root is unusable, or the runner's own check says it is not
-#   signed in. A pinned Claude launch sheds the environment credentials Claude
-#   ranks above the root's login; a pinned Pi launch needs --model
-#   <provider>/<id> for a declared provider and also carries --provider, and a
-#   raw Pi command refuses. The pin is recorded as account= (and Pi's
-#   account_provider=) in the task record and on the spawned line. A local
-#   secondmate first checks config/secondmate-accounts/<id>/<runner>-account
-#   in this launching home, then falls back to its home-wide pin when absent.
-#   Pins are never inherited; remote per-mate overrides refuse locally.
-#   bin/fm-worker-account-lib.sh owns parsing, the check, and the shed list.
+#   before provisioning.
+# Worker account pin (config/claude-account):
+#   bin/fm-worker-account-lib.sh owns parsing, sign-in checks, and the credential
+#   variables a pinned Claude launch sheds. The pin is recorded as account=.
+#   Per-secondmate pins live under config/secondmate-accounts/<id>/claude-account;
+#   pins are never inherited and remote per-mate overrides refuse locally.
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
@@ -393,45 +364,17 @@
 #                  supplies its own trailing space, empty never used)
 #     __CLAUDESETTINGS__ the quoted path to the firstmate-owned
 #                  state/<task-id>.claude-settings.json passed to Claude
-#     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
-#     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
-#     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
-#                  that executable advertises the flag (empty otherwise; session
-#                  trust for the launch cwd only, never a trust.json rewrite)
-#     __PIEXCLUDE__ optional ` --exclude-tools '<comma-joined names>'` from
-#                  config/crew-exclude-tools on Pi/pi-signed ship and scout
-#                  launches (supplies its own leading space, empty otherwise)
-#     __PIRESUME__ optional relaunch-only `--session <reference>` that keeps a
-#                  Pi replacement on the session the endpoint's runtime already
-#                  reports (relaunch_resume_args below owns it; it supplies its
-#                  own leading space, and is empty on every fresh spawn and for
-#                  every other harness)
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
-#     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi busy-state extension,
-#                  written by this script; outside the worktree to avoid pi's trust gate;
-#                  a secondmate loads it beside its two primary extensions)
-#     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
-#     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 #     __BRIEFDOORBELL__ quoted printable doorbell naming the launch-brief record this
 #                  script published into the receiving home's operational inbox
 #     __WORKTREE__  absolute path to the task worktree
-#     __OPENCODEBIN__ quoted concrete opencode executable path resolved from PATH -
-#                  the same binary the version-gate probe reads, so the recorded
-#                  major can never describe a different executable than the pane
-#                  runs (empty resolution falls back to a bare `opencode`)
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # A --secondmate launch arms the same semantic busy contract (bin/fm-busy-lib.sh) in THIS
-# parent home for claude, opencode, pi, pi-signed, so the parent's active-turn
-# gate can read a busy verdict. Those hooks do not touch the parent's turn-ended marker:
-# a mate's completed turns stay in its own home. Codex stays unknown until a semantic
-# source exists. Grok keeps its rendered-tail fallback and is not given a parent
-# turn-end hook. Cursor's transcript binding is written for a secondmate the same way
-# as for a crewmate.
-# A raw launch command for a claude, pi, pi-signed, secondmate is not armed
-# and retires any arm an earlier launch of that mate left, so its verdict is unknown:
-# the raw command carries no --settings or -e flag to load the wiring.
+# parent home for Claude so the parent's active-turn gate can read its busy
+# verdict. Its completed turns stay in its own home. Raw Claude launches carry
+# no --settings flag, so they retire an earlier arm and classify unknown.
 # A claude secondmate gets no Stop busy hook; its home's tracked Stop guard is its
 # only Stop writer, through the .fm-busy-stop pointer in that home. A home whose
 # guard predates that pointer keeps the ordinary Stop idle hook instead.
@@ -1549,7 +1492,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | pi )
+  '' | claude | codex  )
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1575,39 +1518,6 @@ shell_quote() {
   printf "'"
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
   printf "'"
-}
-
-resolve_pi_executable() {
-  local candidate dir
-  candidate=$(type -P -- "$1" 2>/dev/null) || return 1
-  [ -x "$candidate" ] || return 1
-  case "$candidate" in
-  /*) printf '%s\n' "$candidate" ;;
-  *)
-    dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || return 1
-    printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-    ;;
-  esac
-}
-
-# Pi's CLI surface is version-dependent, so probe the resolved executable's help
-# before composing the optional regular-TUI flag. An absent or inconclusive probe
-# omits the flag so older Pi versions can still spawn.
-pi_supports_tui_mode() {
-  local executable=$1 help
-  help=$("$executable" --help 2>&1) || return 1
-  printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
-}
-
-# Same help-probe shape as pi_supports_tui_mode for the session-scoped project
-# trust flag. A seeded secondmate home carries tracked .pi/extensions that gate
-# Pi behind "Trust project folder?" on first launch; --approve trusts that
-# launch cwd for the run without rewriting ~/.pi/agent/trust.json.
-pi_supports_approve() {
-  local executable=$1 help
-  help=$("$executable" --help 2>&1) || return 1
-  # Pi prints "--approve, -a"; allow comma (and any non-token char) after the name.
-  printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--approve([^[:alnum:]_-]|$)'
 }
 
 # shellcheck source=bin/fm-spawn-template-lib.sh
@@ -1662,37 +1572,10 @@ esac
 
 # config/crew-exclude-tools (header above): refuse before worker provisioning
 # if this launch cannot honor the list. Secondmate agents are not covered.
-EXCLUDE_TOOLS=
 if [ "$KIND" != secondmate ]; then
-  EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
+  fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG" >/dev/null || exit 1
 fi
 
-case "$HARNESS" in
-pi)
-  PI_BIN=$(resolve_pi_executable "$HARNESS") || {
-    echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
-    exit 1
-  }
-  PI_TUI_MODE=
-  if pi_supports_tui_mode "$PI_BIN"; then
-    PI_TUI_MODE=' --tui-mode regular'
-  fi
-  LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
-  # Seeded-home signal is .fm-secondmate-home (required by
-  # validate_firstmate_home_for_spawn before any secondmate launch reaches
-  # the pane). Session-only --approve; never expand to a parent path or
-  # rewrite the operator trust store.
-  PI_APPROVE=
-  if [ "$KIND" = secondmate ] && pi_supports_approve "$PI_BIN"; then
-    PI_APPROVE=' --approve'
-  fi
-  LAUNCH=${LAUNCH//__PIAPPROVE__/$PI_APPROVE}
-  PI_EXCLUDE=
-  [ -z "$EXCLUDE_TOOLS" ] || PI_EXCLUDE=" --exclude-tools $(shell_quote "$EXCLUDE_TOOLS")"
-  LAUNCH=${LAUNCH//__PIEXCLUDE__/$PI_EXCLUDE}
-  LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH"
-  ;;
-esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
@@ -1720,14 +1603,11 @@ if [ "$RELAUNCH" -eq 1 ] && [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ]; then
   [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
   [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
 fi
-# Ultra is an explicit native capability, never a Pi thinking-level alias.
+# No verified adapter supports ultra.
 # Validate the fully resolved profile before worktree or endpoint provisioning.
 if [ "$EFFORT" = ultra ]; then
   "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" || exit 1
-  [ "$RAW_LAUNCH" = 0 ] || {
-    echo "error: --effort ultra requires the canonical --harness pi or launch so its native flag cannot be omitted" >&2
-    exit 1
-  }
+
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch
@@ -1737,7 +1617,7 @@ RAW_COMMAND=
 [ "$RAW_LAUNCH" = 0 ] || RAW_COMMAND=$ARG3
 WORKER_ACCOUNT_MATE=
 [ "$KIND" != secondmate ] || WORKER_ACCOUNT_MATE=$ID
-WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND" "$WORKER_ACCOUNT_MATE") || exit 1
+WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "$HARNESS" "$RAW_COMMAND" "$WORKER_ACCOUNT_MATE") || exit 1
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
@@ -1754,61 +1634,18 @@ secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
 }
 
-# relaunch_resume_args: the launch arguments that keep a RELAUNCH bound to the
-# agent session this endpoint's runtime already reports, so the runtime's own
-# status authority survives the replacement.
-#
-# Why this exists, and why it is relaunch-only: some runtimes bind a pane's
-# agent status to one session identity and ignore reports carrying another (the
-# defect fixed 2026-09-21 for Herdr-backed Pi workers - docs/herdr-backend.md
-# "Agent status authority and relaunch"). A fresh replacement session is
-# exactly such a report, so the pane freezes at the previous agent's last
-# reported state. Passing the SAME session back to the replacement keeps that
-# identity, and the authority with it; no fresh spawn needs this because nothing
-# is bound yet.
-#
-# The reference is read from the endpoint's own runtime record, never guessed
-# from what looks recent, and only for an adapter with a verified resume form
-# whose own agent label reported it
-# (bin/fm-control-lib.sh's fm_control_relaunch_resume_flag owns both rules, and
-# bin/backends/herdr.sh's fm_backend_herdr_pane_agent_session_ref owns the
-# read). Every other combination prints nothing, so the launch stays exactly
-# what it was before this existed: a fresh session.
-#
-# Prints the arguments with the single leading space that appends them to the
-# launch line, so an empty result leaves every other launch byte-identical.
-#
-# Only the Herdr backend is asked: it is the one adapter whose runtime records a
-# per-pane agent session, and on every other backend the pane carries no such
-# identity for a replacement to preserve. An unreadable registration - no
-# agent, a stale one, a malformed reference - degrades to that same
-# fresh-session launch rather than refusing, because nothing here is a safety
-# property; it preserves a display and supervision signal.
-relaunch_resume_args() {  # <harness> <backend> <target>
-  local harness=${1-} backend=${2-} target=${3-} identity agent ref flag
-  [ "$backend" = herdr ] || return 0
-  [ -n "$target" ] || return 0
-  fm_backend_herdr_parse_target "$target" || return 0
-  identity=$(fm_backend_herdr_pane_agent_session_ref "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") || return 0
-  agent=${identity%%$'\t'*}
-  ref=${identity#*$'\t'}
-  flag=$(fm_control_relaunch_resume_flag "$harness" "$agent") || return 0
-  [ -n "$flag" ] && [ -n "$ref" ] || return 0
-  printf -- ' %s %s' "$flag" "$(shell_quote "$ref")"
-}
-
 model_flag_for_harness() {
-  local harness=$1 model=$2 oc_major=${3:-}
+  local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-  claude | codex | pi )
+  claude | codex  )
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   esac
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2 model=${3:-} oc_major=${4:-}
+  local harness=$1 effort=$2 model=${3:-}
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
   claude)
@@ -1826,17 +1663,6 @@ effort_flag_for_harness() {
       [ "$model" = gpt-5.6-luna ] || return 0
       printf -- '-c %s ' "$(shell_quote 'model_reasoning_effort="max"')"
       ;;
-    esac
-    ;;
-  pi)
-    # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
-    # its --thinking flag.
-    case "$effort" in
-    ultra)
-      "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$harness" "$model" "$effort" || return 1
-      printf -- '--codex-effort %s ' "$(shell_quote ultra)"
-      ;;
-    low | medium | high | xhigh | max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
     esac
     ;;
   esac
@@ -2410,8 +2236,6 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
-BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
-BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
@@ -3393,21 +3217,16 @@ fi
 # tmux-backed mate's active-turn gate unable to return busy. The launch
 # brief sent below IS a submitted turn, so the seed record is busy/fm-spawn.
 # The minted gen is embedded into each adapter's wiring so an event from a
-# superseded incarnation is rejected as stale. Grok stays on their
-# isolated rendered-tail fallback and is not armed here. A secondmate's
-# hooks update this record and do not touch
-# the parent's turn-ended marker; parent turn-end wiring for grok
-# stays on the ordinary-task path below. A raw launch command for a claude,
-# pi, pi-signed, secondmate is not armed: those four reach their
-# wiring only through a launch-template flag (--settings, -e) that a raw
-# command does not carry, so the record would never be updated.
+# superseded incarnation is rejected as stale. A secondmate's hooks update this
+# record without touching the parent's turn-ended marker. Raw Claude launches
+# carry no --settings flag and leave their busy verdict unarmed.
 busy_notify_turnend=true
 WIRING_HARNESS=$HARNESS
 if [ "$KIND" = secondmate ]; then
   busy_notify_turnend=false
   if [ "$RAW_LAUNCH" -ne 0 ]; then
     case "$HARNESS" in
-    claude* | pi )
+    claude*  )
       WIRING_HARNESS=
       if [ -e "$STATE_REAL/$ID.busy-gen" ]; then
         "$FM_ROOT/bin/fm-busy-event.sh" retire "$STATE_REAL" "$ID" --current-gen || {
@@ -3444,7 +3263,7 @@ BUSY_GEN=
       "$FM_ROOT/bin/fm-busy-event.sh" retire "$STATE_REAL" "$ID" --current-gen || exit 1
     fi
     ;;
-  claude** | pi )
+  claude*  )
     # opencode arms on every detected major: OpenCode 2 and the OpenCode 1 /
     # undetected->1.x path both provision a busy-state plugin below that needs
     # this gen, so gating the arm on major >= 2 would leave OpenCode 1 without
@@ -3522,70 +3341,6 @@ BUSY_GEN=
       session_keys="$session_keys\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},"
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
-    ;;
-  pi)
-    # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
-    # loaded from inside the project (verified live), but an explicit -e path
-    # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
-    cat >"$STATE/$ID.pi-ext.ts" <<EOF
-// Firstmate semantic busy-state events + turn-end notification; written by
-// fm-spawn under the contract owned by bin/fm-busy-lib.sh.
-// Semantic state: "agent_start" -> busy when a low-level agent run begins;
-// "agent_settled" -> idle only when ctx.isIdle() confirms Pi will not
-// continue automatically - auto-retries, auto-compaction retries, tool
-// loops, and queued continuations all keep the run un-settled, and a settle
-// that raced another extension's fresh run keeps state busy via isIdle().
-// "turn_end" fires at every inner turn boundary (one LLM response plus its
-// tool calls) and stays a wake NOTIFICATION touch for the watcher, never
-// current-state truth.
-import { execFile } from "node:child_process";
-import { appendFileSync } from "node:fs";
-const notifyTurnEnd = $busy_notify_turnend;
-const excludeTools = "$EXCLUDE_TOOLS".split(",").filter(Boolean);
-const excludeFile = $(perl -MJSON::PP -MEncode=decode_utf8 -e 'print encode_json(decode_utf8($ARGV[0]))' -- "$CONFIG/crew-exclude-tools");
-const statusFile = $(perl -MJSON::PP -MEncode=decode_utf8 -e 'print encode_json(decode_utf8($ARGV[0]))' -- "$STATE/$ID.status");
-const busyEvent = (state: string, event: string) =>
-  new Promise<void>((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "apply", "$STATE_REAL", "$ID", state,
-      "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
-    ], () => resolve());
-  });
-export default function (pi: any) {
-  let checkedExclusions = false;
-  pi.on("agent_start", async () => {
-    await busyEvent("busy", "agent-start");
-    // Verify only this worker's registry, never connect servers from Firstmate.
-    // Check before actions so the warning cannot supersede this turn's terminal status.
-    if (!checkedExclusions && excludeTools.length) {
-      const loaded = new Set(pi.getAllTools().map((tool: any) => tool.name));
-      const unmatched = excludeTools.filter((name) => !loaded.has(name));
-      if (unmatched.length) {
-        appendFileSync(statusFile, "note [at=" + Math.floor(Date.now() / 1000) + "]: warning: " + excludeFile
-          + " unmatched exclusion entries (unverified: absent from the worker's loaded-tool registry; excluded tools or unavailable servers cannot be verified): "
-          + unmatched.join(", ") + "\n");
-      }
-      checkedExclusions = true;
-    }
-  });
-  pi.on("agent_settled", (_event: any, ctx: any) => {
-    if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-    return busyEvent("idle", "agent-settled");
-  });
-  pi.on("turn_end", () => { if (notifyTurnEnd) execFile("touch", ["$TURNEND"]); });
-  // A native harness can make progress inside one Pi turn. This separate
-  // marker prevents false wedge alarms without fabricating a completed turn.
-  let lastProgress = 0;
-  pi.events?.on?.("codex-native:progress", () => {
-    const now = Date.now();
-    if (now - lastProgress < 1000) return;
-    lastProgress = now;
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "progress", "$STATE_REAL", "$ID", "--gen", "$BUSY_GEN",
-    ]);
-  });
-}
-EOF
     ;;
   codex*)
     # Hookless pull source; the launch helper owns the verified native Linux
@@ -3858,14 +3613,9 @@ python3 "$SCRIPT_DIR/fm_task_sessions.py" start "$STATE" "$ID" || echo "warning:
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
-sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
-sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
-sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-# A pinned Pi launch confines Pi's model lookup to the declared provider.
-[ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
@@ -3874,14 +3624,6 @@ if [ "$HARNESS" = codex ] && [ -n "$BUSY_GEN" ]; then
   CODEX_ACTIVITY="python3 $(shell_quote "$FM_ROOT/bin/fm-codex-activity.py") launch $(shell_quote "$STATE_REAL") $(shell_quote "$ID") $(shell_quote "$BUSY_GEN") $(shell_quote "$WT") "
 fi
 LAUNCH=${LAUNCH//__CODEXACTIVITY__/$CODEX_ACTIVITY}
-# Relaunch session continuity. Computed here, where the adopted endpoint (T) is
-# known, and substituted only into the Pi-family template's `__PIRESUME__`
-# placeholder; an empty value leaves every other launch byte-identical.
-RESUME_ARGS=
-if [ "$RELAUNCH" -eq 1 ]; then
-  RESUME_ARGS=$(relaunch_resume_args "$HARNESS" "$BACKEND" "$T") || RESUME_ARGS=
-fi
-LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
@@ -3904,12 +3646,8 @@ if [ "$HARNESS" = codex ] && [ -n "$BUSY_GEN" ]; then
 fi
 LAUNCH=${LAUNCH//__CODEXLEDGER__/$codex_ledger}
 
-LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
-LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
-LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
-pi) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 # A record-backed launch brief is published into the state dir of the pane
@@ -3954,7 +3692,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | pi)
+claude | codex)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
@@ -3977,9 +3715,6 @@ if [ -n "$WORKER_ACCOUNT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
     fi
     ;;
-  pi)
-    LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
-    ;;
   esac
 elif [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
@@ -3987,15 +3722,10 @@ fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   sq_primary_home=$(shell_quote "$FM_HOME")
-  # Keep this in step with fm_supervision_model (bin/fm-wake-lib.sh): Claude's
-  # Stop auto-arm and Cursor's stop-hook park both run the watcher only BETWEEN
-  # turns, so a fresh beacon with no live watcher is their healthy mid-turn state.
-  # Pi and secondmates previously received persistent here and now
-  # receive extension to match fm_supervision_model's own table, so their pull
-  # guard tolerates the extension hand-off exactly as a Pi primary does.
+  # Match fm_supervision_model: Claude's Stop hook owns between-turn auto-arm;
+  # Codex keeps the persistent watcher.
   case "$HARNESS" in
   claude) supervision_model=autoarm ;;
-  pi ) supervision_model=extension ;;
   *) supervision_model=persistent ;;
   esac
   # Deliver the primary's EFFECTIVE trace-context decision as a normalized on/off

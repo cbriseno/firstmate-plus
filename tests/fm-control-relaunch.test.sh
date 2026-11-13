@@ -787,30 +787,6 @@ test_same_harness_relaunch_keeps_the_profile_axes() {
   pass "fm-control relaunch: a same-harness relaunch keeps the profile axes it was running with"
 }
 
-test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
-  local dir out rc id=rl-ultra
-  dir=$(new_case native-ultra "$id")
-  add_ship_task "$dir" "$id" pi
-  printf pi > "$dir/fake/command"
-  printf pi > "$dir/fake/becomes"
-  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
-  chmod +x "$dir/fakebin/pi"
-  sed 's|^model=default$|model=codex-native/gpt-6-astra|; s/^effort=default$/effort=ultra/' \
-    "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
-  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
-  out=$(run_control "$dir" "$id" relaunch --model openai-codex/gpt-6-astra --note "invalid native effort transfer"); rc=$?
-  expect_code 1 "$rc" "Ultra transferred to ordinary Pi"
-  assert_contains "$out" "ultra effort requires pi or pi-signed" "model-aware relaunch refusal missing"
-  [ "$(cat "$dir/fake/command")" = pi ] || fail "invalid Ultra relaunch stopped the running agent"
-  [ ! -s "$dir/fake/literal" ] || fail "invalid Ultra relaunch sent lifecycle input"
-  out=$(run_control "$dir" "$id" relaunch --note "preserve explicit native effort"); rc=$?
-  expect_code 0 "$rc" "native Ultra relaunch failed: $out"
-  [ "$(meta_field "$dir" "$id" effort)" = ultra ] || fail "relaunch lost Ultra metadata"
-  [ "$(meta_field "$dir" "$id" model)" = codex-native/gpt-6-astra ] || fail "relaunch lost native model"
-  assert_contains "$(recorded_launch "$dir")" "--codex-effort 'ultra'" "relaunch lost native flag"
-  assert_not_contains "$(recorded_launch "$dir")" "--thinking 'ultra'" "relaunch used an invalid Pi level"
-  pass "native Ultra relaunch preserves its profile and rejects an unsupported model before stopping"
-}
 
 # A fake claude that answers `claude auth status` the way the real runner
 # does: signed in only when the selected config root holds a stored login.
@@ -866,26 +842,12 @@ test_worker_account_pin_follows_the_relaunch() {
 
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop() {
   local dir out rc id=rl-sm-acct harness file variable pin
-  for harness in claude pi; do
+  harness=claude
+  {
     dir=$(new_case "sm-account-$harness" "$id")
     add_ship_task "$dir" "$id" "$harness"
     make_claude_auth_stub "$dir"
-    cat > "$dir/fakebin/pi" <<'SH'
-#!/usr/bin/env bash
-case "${1:-}" in
-  --help) printf 'Options: --tui-mode\n' ;;
-  auth)
-    if grep -qx "$4" "$PI_CODING_AGENT_DIR/signed-in" 2>/dev/null; then
-      printf '{"status":"ready"}\n'
-    else
-      printf '{"status":"not_ready","reason":"credentials_not_configured"}\n'
-      exit 1
-    fi ;;
-esac
-SH
-    chmod +x "$dir/fakebin/pi"
     file=claude-account; variable=CLAUDE_CONFIG_DIR
-    if [ "$harness" = pi ]; then file=pi-account; variable=PI_CODING_AGENT_DIR; fi
     printf '%s' "$harness" > "$dir/fake/command"
     printf '%s' "$harness" > "$dir/fake/becomes"
     mkdir -p "$dir/wt/state" "$dir/wt/data" "$dir/wt/bin" \
@@ -906,16 +868,13 @@ SH
     printf 'openai-codex\n' > "$dir/mate/signed-in"
     printf 'openai-codex\n' > "$dir/new-mate/signed-in"
     printf '%s\n' "$dir/primary" > "$dir/home/config/$file"
-    [ "$harness" = claude ] || printf 'openai-codex\n' >> "$dir/home/config/$file"
     pin="$dir/home/config/secondmate-accounts/$id/$file"
     printf '%s\n' "$dir/mate" > "$pin"
-    [ "$harness" = claude ] || printf 'openai-codex\n' >> "$pin"
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "the secondmate should relaunch on its $harness pin: $out"
     assert_contains "$(recorded_launch "$dir")" "$variable='$dir/mate'" "the replacement must use the mate's pin"
     [ "$(meta_field "$dir" "$id" account)" = "$dir/mate" ] || fail "the record must name the mate's account"
     printf '%s\n' "$dir/new-mate" > "$pin"
-    [ "$harness" = claude ] || printf 'openai-codex\n' >> "$pin"
     : > "$dir/fake/literal"
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "a changed durable pin should govern relaunch: $out"
@@ -934,54 +893,28 @@ SH
     out=$(run_control "$dir" "$id" relaunch); rc=$?
     expect_code 0 "$rc" "removing the mate pin should restore the primary's pin: $out"
     assert_contains "$(recorded_launch "$dir")" "$variable='$dir/primary'" "an absent mate setting must restore the primary's pin"
-  done
-  pass "fm-control relaunch: mate pins are re-read for Claude and Pi, and unusable pins refuse before stopping the agent"
-}
-
-test_pi_exclude_tools_follow_the_relaunch() {
-  local dir out rc id=rl-pi-excl
-  dir=$(new_case pi-exclude "$id")
-  add_ship_task "$dir" "$id" pi
-  printf pi > "$dir/fake/command"
-  printf pi > "$dir/fake/becomes"
-  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
-  chmod +x "$dir/fakebin/pi"
-  mkdir -p "$dir/home/config"
-  printf '%s\n' '# hide writes' 'mcp__srv__writeTool' 'mcp__srv__adminTool' > "$dir/home/config/crew-exclude-tools"
-  out=$(run_control "$dir" "$id" relaunch --note "keep exclusions"); rc=$?
-  expect_code 0 "$rc" "a Pi relaunch with exclusions should succeed"$'\n'"$out"
-  assert_contains "$(recorded_launch "$dir")" "--exclude-tools 'mcp__srv__writeTool,mcp__srv__adminTool'" \
-    "the relaunched Pi worker must keep the home's tool exclusions"
-  rm "$dir/home/config/crew-exclude-tools"
-  : > "$dir/fake/literal"
-  printf pi > "$dir/fake/command"
-  out=$(run_control "$dir" "$id" relaunch --note "exclusions removed"); rc=$?
-  expect_code 0 "$rc" "a Pi relaunch after the file is removed should succeed"$'\n'"$out"
-  assert_not_contains "$(recorded_launch "$dir")" "--exclude-tools" \
-    "a relaunch without the file must launch with no exclusions"
-  pass "fm-control relaunch: a Pi replacement keeps the home's tool exclusions"
+  }
+  pass "fm-control relaunch: mate pins are re-read for Claude, and unusable pins refuse before stopping the agent"
 }
 
 test_exclude_tools_refusals_happen_before_the_agent_stops() {
   local dir out rc id=rl-excl-refuse
   dir=$(new_case excl-refuse "$id")
-  add_ship_task "$dir" "$id" pi
-  printf pi > "$dir/fake/command"
-  printf pi > "$dir/fake/becomes"
-  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
-  chmod +x "$dir/fakebin/pi"
+  add_ship_task "$dir" "$id" claude
+  printf claude > "$dir/fake/command"
+  printf claude > "$dir/fake/becomes"
   mkdir -p "$dir/home/config"
   printf '%s\n' 'two words' > "$dir/home/config/crew-exclude-tools"
   out=$(run_control "$dir" "$id" relaunch --note "bad list"); rc=$?
   expect_code 1 "$rc" "a malformed exclusion list must refuse the relaunch"
   assert_contains "$out" "config/crew-exclude-tools has a malformed entry" "refusal must name the entry"
-  [ "$(cat "$dir/fake/command")" = pi ] || fail "a malformed exclusion list stopped the running agent"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a malformed exclusion list stopped the running agent"
   [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch sent lifecycle input"
   printf '%s\n' 'mcp__srv__writeTool' > "$dir/home/config/crew-exclude-tools"
   out=$(run_control "$dir" "$id" relaunch --harness codex --note "switch runtime"); rc=$?
   expect_code 1 "$rc" "relaunching onto a runtime that cannot hide tools must refuse"
   assert_contains "$out" "config/crew-exclude-tools" "refusal must name the config file"
-  [ "$(cat "$dir/fake/command")" = pi ] || fail "an unhonorable exclusion list stopped the running agent"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "an unhonorable exclusion list stopped the running agent"
   [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch sent lifecycle input"
   pass "fm-control relaunch: exclusion-list refusals happen before the running agent stops"
 }
@@ -2526,38 +2459,6 @@ herdr_case_or_skip() {  # <name> <id> [session] [surviving-pane]
   return 0
 }
 
-test_herdr_relaunch_resumes_only_the_registered_pi_session() {
-  local dir out rc=0 command registered
-  for registered in pi claude; do
-    herdr_case_or_skip "resume-$registered" "resume-$registered" || {
-      echo "skip - herdr relaunch needs jq (the herdr adapter parses JSON with it)"
-      return 0
-    }
-    dir=$HERDR_CASE_DIR
-    printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
-    chmod +x "$dir/fakebin/pi"
-    rm -f "$dir/fake/herdr-stopped"
-    sed -i.bak 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
-    rm -f "$dir/home/state/resume-$registered.meta.bak"
-    # Keep the pane's status authority registered to an existing Pi session,
-    # while process-info proves that its previous agent has exited.
-    printf '{"result":{"agent":{"agent":"%s","agent_status":"idle","agent_session":{"kind":"path","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
-      "$registered" > "$dir/fake/herdr-agent-registration"
-    out=$(run_spawn "$dir" "resume-$registered" --relaunch --harness pi) || rc=$?
-    expect_code 0 "$rc" "Herdr Pi relaunch should complete ($registered registration)"$'\n'"$out"
-    command=$(fm_test_launch_payload "$(cat "$dir/fake/launched-command")")
-    if [ "$registered" = pi ]; then
-      assert_contains "$command" "--session '/tmp/pi-bound-session.jsonl'" \
-        "the replacement Pi must resume the session that owns Herdr status authority"
-    else
-      assert_not_contains "$command" "--session" \
-        "a Pi replacement must not resume a foreign adapter's conversation"
-    fi
-    rc=0
-  done
-  pass "fm-spawn --relaunch: resumes the bound Pi session only for a Pi registration"
-}
-
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server() {
   local dir out rc=0 log stray
   herdr_case_or_skip gone-herdr rl68 || {
@@ -2896,11 +2797,9 @@ test_harness_switch_moves_the_record_and_clears_prior_wiring
 test_harness_switch_does_not_carry_the_old_profile_axes
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
-test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
-test_pi_exclude_tools_follow_the_relaunch
 test_exclude_tools_refusals_happen_before_the_agent_stops
 test_explicit_model_wins_over_the_recorded_one
 test_control_relaunch_explicitly_resets_profile
@@ -2950,7 +2849,6 @@ test_tmux_refuses_a_window_missing_from_its_session
 test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
-test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session

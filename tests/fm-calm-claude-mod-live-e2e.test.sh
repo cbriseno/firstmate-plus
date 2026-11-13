@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Opt-in credentialed live regression for the Claude Code Calm mod
-# (.claude/mods/firstmate-calm) in a real Claude Code TUI under tmux, mirroring the
-# Pi interactive case in tests/fm-calm-pi-extension.test.sh. It proves, against the
+# (.claude/mods/firstmate-calm) in a real Claude Code TUI under tmux. It proves, against the
 # installed Claude Code and the shipped project auto-load path (.claude/skills):
 #   1. With CLAUDE_CODE_ENABLE_FUNCTION_HOOKS unset, the mod is a complete no-op even
 #      with the per-home preference already on: no hooks module loads, /calm is not a

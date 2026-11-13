@@ -770,7 +770,7 @@ test_teardown_conformance_old_vs_new() {
     printf 'scout findings\n' > "$data/$id/report.md"
     fm_write_meta "$state/$id.meta" \
       "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=scout" \
-      "decisions_reviewed=1" "decision_keys="
+      "decisions_reviewed=1" "decision_keys=" "spawn_gen=g1790000000.1.1"
     touch "$state/.last-watcher-beat"
     log="$TMP_ROOT/teardown-$version.log"
     script="$ROOT/bin/fm-teardown.sh"

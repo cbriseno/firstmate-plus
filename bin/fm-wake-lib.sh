@@ -255,102 +255,13 @@ fm_watcher_healthy() {
 fm_supervision_model() {
   local harness
   case "${FM_SUPERVISION_MODEL:-}" in
-    autoarm|extension|persistent) printf '%s\n' "$FM_SUPERVISION_MODEL"; return 0 ;;
+    autoarm|persistent) printf '%s\n' "$FM_SUPERVISION_MODEL"; return 0 ;;
   esac
   harness=$("$FM_WAKE_LIB_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
   case "$harness" in
     claude) printf 'autoarm\n' ;;
     *) printf 'persistent\n' ;;
   esac
-}
-
-# Pi primary supervision evidence. The Pi extensions record, in their state
-# markers, the exact build they loaded and the session process that loaded it, so
-# "a live Pi session owns supervision" is provable from durable state without a
-# watcher process and without reading any vendor-rendered surface.
-#
-# fm_pi_extension_version <file>
-# Print the marker version string the Pi extensions record for <file>. Must stay
-# byte-identical to the "sha256:<hex>" digest .pi/extensions/fm-primary-pi-watch.ts
-# and .pi/extensions/fm-primary-turnend-guard.ts compute for themselves; a host
-# with no SHA-256 tool falls back to a form no marker can match, which keeps every
-# consumer loud rather than silently satisfied.
-fm_pi_extension_version() {
-  local file=$1
-  [ -f "$file" ] || return 1
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print "sha256:" $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print "sha256:" $1}'
-  else
-    cksum "$file" | awk '{print "cksum:" $1 ":" $2}'
-  fi
-}
-
-# fm_pi_extension_loaded <marker> <expected-version> <session-lock> [active]
-# True when <marker> records <expected-version> and names the session process in
-# <session-lock>, i.e. the session holding this home loaded exactly this build.
-# The Pi watcher marker additionally carries its generation phase. Requiring
-# `active` rejects the handoff marker a retiring generation leaves behind, so a
-# running Pi process whose replacement did not load the watcher extension can
-# never vouch for an unheld watcher lock with stale load evidence.
-fm_pi_extension_loaded() {
-  local marker=$1 expected_version=$2 lock=$3 required_phase=${4:-} marker_version marker_pid lock_pid owner
-  [ -f "$marker" ] && [ -f "$lock" ] && [ -n "$expected_version" ] || return 1
-  marker_version=$(sed -n '1p' "$marker")
-  marker_pid=$(sed -n '2p' "$marker")
-  lock_pid=$(sed -n '1p' "$lock")
-  [ -n "$marker_pid" ] || return 1
-  [ "$marker_version" = "$expected_version" ] && [ "$marker_pid" = "$lock_pid" ] || return 1
-  [ -z "$required_phase" ] && return 0
-  owner=$(sed -n '3p' "$marker")
-  case "$owner" in
-    generation=*\ phase="$required_phase")
-      owner=${owner#generation=}
-      owner=${owner%% *}
-      case "$owner" in ''|0|*[!0-9]*) return 1 ;; esac
-      return 0
-      ;;
-    *) return 1 ;;
-  esac
-}
-
-# fm_pi_extension_owns_supervision <state> <root>
-# True when a LIVE Pi session owns supervision continuity for this home: both
-# primary extensions are loaded at their current on-disk builds by the process
-# recorded in this home's session lock, and that process is still alive.
-# Requiring the turn-end guard extension too is deliberate - it is the structural
-# backstop that catches a cycle the watch extension failed to restore, so a home
-# missing it has no benign hand-off to tolerate.
-fm_pi_extension_owns_supervision() {
-  fm_extension_pair_owns_supervision "$1" "$2/.pi/extensions" \
-    "fm-primary-pi-watch.ts:.pi-watch-extension-loaded:active" \
-    "fm-primary-turnend-guard.ts:.pi-turnend-extension-loaded"
-}
-
-# fm_extension_owns_supervision <state> <root>
-# The extension-model proof the verdict below consults: whichever extension
-# family's markers the lock-owning session recorded. Exactly one family can
-# match because both bind to the same lock pid.
-fm_extension_owns_supervision() {
-  fm_pi_extension_owns_supervision "$1" "$2"
-}
-
-fm_extension_pair_owns_supervision() {  # <state> <extension-dir> <source:marker[:phase]>...
-  local state=$1 dir=$2 lock session_pid pair source rest marker phase version
-  shift 2
-  lock="$state/.lock"
-  for pair in "$@"; do
-    source=${pair%%:*}
-    rest=${pair#*:}
-    marker=${rest%%:*}
-    phase=
-    [ "$marker" = "$rest" ] || phase=${rest#*:}
-    version=$(fm_pi_extension_version "$dir/$source") || return 1
-    fm_pi_extension_loaded "$state/$marker" "$version" "$lock" "$phase" || return 1
-  done
-  session_pid=$(sed -n '1p' "$lock" 2>/dev/null)
-  fm_pid_alive "$session_pid"
 }
 
 # Away-mode supervision evidence. While state/.afk exists the away-mode daemon
@@ -464,14 +375,7 @@ fm_watcher_supervision_verdict() {
     # No receipt ever acknowledges the durable events on the model's behalf.
     FM_WATCHER_VERDICT_OK=true
   elif [ "$fresh" = true ]; then
-    if [ "$model" = extension ] && fm_watcher_lock_unheld "$state" \
-      && fm_extension_owns_supervision "$state" "$root"; then
-      # shellcheck disable=SC2034 # Read by callers after the function returns.
-      FM_WATCHER_VERDICT_OK=true
-    else
-      # shellcheck disable=SC2034 # Read by callers after the function returns.
-      FM_WATCHER_VERDICT_REASON=no-watcher
-    fi
+    FM_WATCHER_VERDICT_REASON=no-watcher
   fi
   return 0
 }

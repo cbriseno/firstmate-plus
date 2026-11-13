@@ -39,24 +39,6 @@ fm_busy_claude_launch_prompt_tail() {
     && printf '%s' "$buf" | grep -qiE 'No, disable external imports|Yes, allow external imports'
 }
 
-# fm_busy_pi_launch_prompt_tail: Pi's project-trust dialog. Live-verified on
-# pi 0.86.1 (2026-09-22) in a fresh untrusted worktree carrying a project-local
-# .pi/extensions/ file (the shape a real ship/scout spawn always launches
-# into): the rendered heading is "Trust project folder?" and its declining
-# option is literally "Do not trust". An initial guess sourced only from the
-# installed binary's UI strings ("Project trust", the internal panel-title
-# component name, not this dialog's own rendered heading) was proven wrong by
-# that live run and never matched the real screen - which is exactly why this
-# class of check must be proven end to end rather than read off strings or a
-# name. Matching BOTH the heading and "Do not trust" keeps this from firing on
-# a worker's own prose that happens to use the common word "trust" alone.
-fm_busy_pi_launch_prompt_tail() {
-  local buf
-  buf=$(cat)
-  printf '%s' "$buf" | grep -qiE "${FM_BUSY_PI_LAUNCH_PROMPT_REGEX:-Trust project folder\\?}" \
-    && printf '%s' "$buf" | grep -qiE 'Do not trust'
-}
-
 # fm_busy_launch_prompt_parked: dispatch to the signature above for <harness>,
 # or fail when this harness has none. Consumes the tail on stdin. Scoped to
 # exactly the harnesses fm-spawn.sh arms with the fm-spawn busy source
@@ -67,7 +49,6 @@ fm_busy_pi_launch_prompt_tail() {
 fm_busy_launch_prompt_parked() {  # <harness>
   case "${1:-}" in
     claude*) fm_busy_claude_launch_prompt_tail ;;
-    pi ) fm_busy_pi_launch_prompt_tail ;;
     *) return 1 ;;
   esac
 }

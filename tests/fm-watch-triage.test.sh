@@ -1194,7 +1194,7 @@ test_secondmate_turn_ended_churning_pane_surfaced() {
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-mate-churning"
   : > "$state/mate.turn-ended"
-  printf 'window=%s\nkind=secondmate\nharness=pi\n' "$window" > "$state/mate.meta"
+  printf 'window=%s\nkind=secondmate\nharness=claude\n' "$window" > "$state/mate.meta"
   printf 'working on the next routed item' > "$capture_file"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   printf '%s' "$(hash_text 'waiting for work')" > "$state/.hash-$key"
@@ -1284,7 +1284,7 @@ test_turn_ended_mixed_positive_evidence_batch_absorbed() {
   first_window="test:fm-first"; second_window="test:fm-second"
   : > "$state/first.turn-ended"
   : > "$state/second.turn-ended"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$first_window" > "$state/first.meta"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$first_window" > "$state/first.meta"
   printf 'window=%s\nkind=ship\nharness=codex\n' "$second_window" > "$state/second.meta"
   printf 'second task rendered after the prior poll' > "$capture_file"
   first_key=$(printf '%s' "$first_window" | tr ':/.' '___')
@@ -1321,7 +1321,7 @@ test_turn_ended_mixed_positive_evidence_batch_default_off() {
   first_window="test:fm-firstoff"; second_window="test:fm-secondoff"
   : > "$state/firstoff.turn-ended"
   : > "$state/secondoff.turn-ended"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$first_window" > "$state/firstoff.meta"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$first_window" > "$state/firstoff.meta"
   printf 'window=%s\nkind=ship\nharness=codex\n' "$second_window" > "$state/secondoff.meta"
   printf 'second task rendered after the prior poll' > "$capture_file"
   first_key=$(printf '%s' "$first_window" | tr ':/.' '___')
@@ -1361,7 +1361,7 @@ test_status_and_turn_end_batch_never_uses_churn_evidence() {
   first_window="test:fm-firststatus"; second_window="test:fm-secondturn"
   printf 'working: authoritative task still running\n' > "$state/firststatus.status"
   : > "$state/secondturn.turn-ended"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$first_window" > "$state/firststatus.meta"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$first_window" > "$state/firststatus.meta"
   printf 'window=%s\nkind=ship\nharness=codex\n' "$second_window" > "$state/secondturn.meta"
   printf 'second task rendered after the prior poll' > "$capture_file"
   second_key=$(printf '%s' "$second_window" | tr ':/.' '___')
@@ -1944,7 +1944,7 @@ test_actionable_signal_surfaced() {
 
 # A needs-decision status append surfaced through this actionable signal path
 # must skip the Pi supervision branch and reach main directly
-# (docs/pi-supervision-branch.md "Autonomy"). The row still
+# (docs/supervision-branch.md "Autonomy"). The row still
 # queues as an ordinary signal-kind wake - fm-branch-dispatch.ts's
 # scopeForUnreadWake tells it apart from a routine signal by this payload
 # marker, not by kind.
@@ -3613,8 +3613,8 @@ test_busy_pane_below_turn_age_bound_is_absorbed() {
   dir=$(make_case busy-below-turn-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-fresh"
   printf 'Working... (12.3s)' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-fresh.meta"
-  record_pi_busy "$state" busy-fresh
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-fresh.meta"
+  record_claude_busy "$state" busy-fresh
   printf 'working: setup complete\n' > "$state/busy-fresh.status"
   sig=$(seen_sig "$state/busy-fresh.status"); printf '%s' "$sig" > "$state/.seen-busy-fresh_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3639,8 +3639,8 @@ test_busy_pane_stable_hash_escalates_past_turn_age_bound() {
   dir=$(make_case busy-stable-hash-turn-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-stable"
   printf 'Working...' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-stable.meta"
-  record_pi_busy "$state" busy-stable
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-stable.meta"
+  record_claude_busy "$state" busy-stable
   printf 'working: setup complete\n' > "$state/busy-stable.status"
   sig=$(seen_sig "$state/busy-stable.status"); printf '%s' "$sig" > "$state/.seen-busy-stable_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3684,8 +3684,8 @@ test_busy_pane_changing_hash_escalates_past_turn_age_bound() {
   dir=$(make_case busy-changing-hash-turn-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-ticking"
   printf 'Working... (3600.1s)' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-ticking.meta"
-  record_pi_busy "$state" busy-ticking
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-ticking.meta"
+  record_claude_busy "$state" busy-ticking
   printf 'working: setup complete\n' > "$state/busy-ticking.status"
   sig=$(seen_sig "$state/busy-ticking.status"); printf '%s' "$sig" > "$state/.seen-busy-ticking_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3726,8 +3726,8 @@ test_busy_pane_turn_end_touch_resets_age() {
   dir=$(make_case busy-turn-end-resets-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-reset"
   printf 'Working...' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-reset.meta"
-  record_pi_busy "$state" busy-reset
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-reset.meta"
+  record_claude_busy "$state" busy-reset
   printf 'working: setup complete\n' > "$state/busy-reset.status"
   sig=$(seen_sig "$state/busy-reset.status"); printf '%s' "$sig" > "$state/.seen-busy-reset_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3760,8 +3760,8 @@ test_busy_pane_native_progress_resets_age() {
   dir=$(make_case busy-native-progress-resets-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-reset"
   printf 'Working...' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-reset.meta"
-  record_pi_busy "$state" busy-reset
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-reset.meta"
+  record_claude_busy "$state" busy-reset
   printf 'working: setup complete\n' > "$state/busy-reset.status"
   sig=$(seen_sig "$state/busy-reset.status"); printf '%s' "$sig" > "$state/.seen-busy-reset_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3796,8 +3796,8 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection() {
   dir=$(make_case busy-turn-age-demand-inspect); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-demand-inspect"
   printf 'Working...' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-demand.meta"
-  record_pi_busy "$state" busy-demand
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-demand.meta"
+  record_claude_busy "$state" busy-demand
   printf 'working: setup complete\n' > "$state/busy-demand.status"
   sig=$(seen_sig "$state/busy-demand.status"); printf '%s' "$sig" > "$state/.seen-busy-demand_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3856,8 +3856,8 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-review-scout"
   statusf="$state/review-scout.status"
   printf 'Working... (7200.4s) lavish-axi poll' > "$capture_file"
-  printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/review-scout.meta"
-  record_pi_busy "$state" review-scout
+  printf 'window=%s\nkind=scout\nharness=claude\n' "$window" > "$state/review-scout.meta"
+  record_claude_busy "$state" review-scout
   printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-review-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3871,7 +3871,7 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   # declared pause is absorbed on the long cadence and never starts a wedge.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -3897,7 +3897,7 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=240 \
     FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -3917,7 +3917,7 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -3932,7 +3932,7 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -3963,8 +3963,8 @@ test_afk_busy_declared_pause_hands_off_plain_stale() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-afk-review-scout"
   statusf="$state/afk-review-scout.status"
   printf 'Working... (7200.4s) lavish-axi poll' > "$capture_file"
-  printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/afk-review-scout.meta"
-  record_pi_busy "$state" afk-review-scout
+  printf 'window=%s\nkind=scout\nharness=claude\n' "$window" > "$state/afk-review-scout.meta"
+  record_claude_busy "$state" afk-review-scout
   printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-review-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -3975,7 +3975,7 @@ test_afk_busy_declared_pause_hands_off_plain_stale() {
   # declaration is handed to the daemon undecorated instead of being wedge-timed.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -3999,7 +3999,7 @@ test_afk_busy_declared_pause_hands_off_plain_stale() {
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -4019,7 +4019,7 @@ test_afk_busy_declared_pause_hands_off_plain_stale() {
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -4068,8 +4068,8 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
-  printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/afk-ticking-scout.meta"
-  record_pi_busy "$state" afk-ticking-scout
+  printf 'window=%s\nkind=scout\nharness=claude\n' "$window" > "$state/afk-ticking-scout.meta"
+  record_claude_busy "$state" afk-ticking-scout
   printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-ticking-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -4085,7 +4085,7 @@ SH
   # phase's wedge bookkeeping is cleared with it.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_TICKS="$ticks" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
     FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
     FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -4116,7 +4116,7 @@ SH
     : > "$out"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_TICKS="$ticks" \
       FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-      FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+      FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (claude-hook)' \
       FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
       FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
@@ -4153,8 +4153,8 @@ test_busy_pane_default_turn_age_bound_is_3600s() {
   dir=$(make_case busy-default-turn-age); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-default"
   printf 'Working...' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-default.meta"
-  record_pi_busy "$state" busy-default
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-default.meta"
+  record_claude_busy "$state" busy-default
   printf 'working: setup complete\n' > "$state/busy-default.status"
   sig=$(seen_sig "$state/busy-default.status"); printf '%s' "$sig" > "$state/.seen-busy-default_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -4366,8 +4366,8 @@ test_secondmate_home_supervision_churn_is_not_write_evidence() {
   mkdir -p "$home/state"
   printf 'sm-mate\n' > "$home/.fm-secondmate-home"
   printf 'Working... (12.3s)' > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=pi\nworktree=%s\n' "$window" "$home" > "$state/mate.meta"
-  record_pi_busy "$state" mate
+  printf 'window=%s\nkind=ship\nharness=claude\nworktree=%s\n' "$window" "$home" > "$state/mate.meta"
+  record_claude_busy "$state" mate
   # An ordinary crew recording a provisioned mate home is the route that actually
   # reaches the probe: a kind=secondmate window of its own is triaged only under a
   # declared pause, and a declared pause takes the bounded recheck cadence instead of
@@ -5509,7 +5509,7 @@ test_idle_pause_without_deadline_is_rechecked() {
       secondmate) kind=secondmate ;;
       fresh) age=0 ;;
     esac
-    printf 'window=test:fm-paused\nkind=%s\nharness=pi\nbackend=tmux\n' "$kind" > "$state/paused.meta"
+    printf 'window=test:fm-paused\nkind=%s\nharness=claude\nbackend=tmux\n' "$kind" > "$state/paused.meta"
     printf '%s\n' "$note" > "$state/paused.status"
     set_mtime "$(( $(date +%s) - age ))" "$state/paused.status"
     printf '%s' "$(seen_sig "$state/paused.status")" > "$state/.seen-paused_status"
@@ -5522,7 +5522,7 @@ test_idle_pause_without_deadline_is_rechecked() {
     chmod +x "$dir/fakebin/fm-crew-state.sh"
     gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" paused)
     "$ROOT/bin/fm-busy-event.sh" apply "$state" paused "$activity" --gen "$gen" \
-      --source pi-ext --event agent-settled || fail "could not set $variant activity"
+      --source claude-hook --event agent-settled || fail "could not set $variant activity"
     FM_FAKE_TMUX_WINDOW=test:fm-paused FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
       FM_FAKE_TMUX_CURRENT_COMMAND=pi watch_bg "$state" "$dir/fakebin" "$dir/watch.out" env \
       FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999
@@ -5534,7 +5534,7 @@ test_idle_pause_without_deadline_is_rechecked() {
       sleep 0.1 & job=$!
       wait "$job"
       "$ROOT/bin/fm-busy-event.sh" apply "$state" paused idle --gen "$gen" \
-        --source pi-ext --event agent-settled || fail "could not settle after background completion"
+        --source claude-hook --event agent-settled || fail "could not settle after background completion"
       wait_for_exit "$pid" 100 || { reap "$pid"; fail "idle pause without a deadline was never rechecked"; }
       grep -F 'paused worker idle without a deadline' "$dir/watch.out" >/dev/null \
         || fail "idle-pause wake did not name the condition to inspect"

@@ -461,34 +461,6 @@ test_actionable_close_rewakes_with_reason() {
 # Pi's own session file under .pi/, which a Claude transcript path never
 # contains, so the stand-down must not overmatch a genuine Claude payload or a
 # payload with no transcript_path at all.
-test_stands_down_only_on_pi_code_transcript_path() {
-  local dir out status
-
-  dir=$(make_primary_dir "$TMP_ROOT/picode-pi")
-  : > "$dir/state/task.meta"
-  write_arm_fixture "$dir" actionable
-  out=$(run_autoarm "$dir" '{"session_id":"sess-pi","stop_hook_active":false,"transcript_path":"/srv/u/.pi/agent/sessions/s.jsonl"}' 2>/dev/null); status=$?
-  expect_code 0 "$status" "hook must stand down silently on a pi-code-delivered transcript_path"
-  [ -z "$out" ] || fail "pi-code stand-down printed output: $out"
-  [ ! -e "$dir/state/arm-ran" ] || fail "hook armed on a pi-code-delivered payload"
-
-  dir=$(make_primary_dir "$TMP_ROOT/picode-claude")
-  : > "$dir/state/task.meta"
-  write_arm_fixture "$dir" actionable
-  out=$(run_autoarm "$dir" '{"session_id":"sess-claude","stop_hook_active":false,"transcript_path":"/srv/u/.claude/projects/-home-u--pi-proj/s.jsonl"}' 2>/dev/null); status=$?
-  expect_code 2 "$status" "a Claude-shaped transcript_path must still arm and rewake"
-  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm with a Claude-shaped transcript_path present"
-
-  dir=$(make_primary_dir "$TMP_ROOT/picode-none")
-  : > "$dir/state/task.meta"
-  write_arm_fixture "$dir" actionable
-  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  expect_code 2 "$status" "a payload without transcript_path must still arm"
-  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm without a transcript_path"
-
-  pass "auto-arm: stands down only on a pi-code-delivered transcript_path (/.pi/)"
-}
-
 test_actionable_close_with_live_successor_rewakes_once() {
   local dir out out2 status status2 pid identity
   dir=$(make_primary_dir "$TMP_ROOT/actionable-live-successor")
@@ -2153,4 +2125,3 @@ test_host_lost_announced_handback_notifies_once_per_episode
 test_host_crash_is_retried_then_reported
 test_arguments_never_arm
 test_fm_lock_status_still_works_with_shared_lib
-test_stands_down_only_on_pi_code_transcript_path

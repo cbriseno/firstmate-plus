@@ -129,17 +129,6 @@ SH
         "runner did not execute the Git fixture"
     done
   done
-  rc=0
-  FM_SESSIONSTART_INSTRUCTION_REFRESH_LIVE_E2E=1 FM_SESSIONSTART_INSTRUCTION_REFRESH_REF=HEAD \
-    FM_SESSIONSTART_INSTRUCTION_REFRESH_EXPECT=updated \
-    FM_TEST_STANDALONE_COMMIT="$dir/global-standalone-commit" PATH="$fakebin:$PATH" \
-    bash "$ROOT/tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh" \
-    > "$dir/standalone.log" 2>&1 || rc=$?
-  [ "$rc" = 1 ] || fail "standalone fixture did not stop at the tmux launch"
-  assert_grep 'could not start isolated Pi session' "$dir/standalone.log" \
-    "standalone fixture failed before the tmux launch: $(cat "$dir/standalone.log")"
-  [ "$(cat "$dir/global-standalone-commit")" = 'test: initial instruction contract' ] \
-    || fail "standalone fixture did not create its initial commit"
   bash "$ROOT/tests/fm-gitignore-config.test.sh" > "$dir/gitignore.log" 2>&1 \
     || fail "standalone gitignore fixture inherited global config: $(cat "$dir/gitignore.log")"
   assert_host_config_still_governs global

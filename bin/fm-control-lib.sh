@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex pi
+  printf '%s\n' claude codex
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -83,7 +83,6 @@ fm_control_harness_supported() {  # <harness>
 # `pi-signed` are exact because a `pi*` prefix would swallow the signed adapter,
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
-    pi) printf 'pi' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     *) return 1 ;;
@@ -99,7 +98,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) printf 'Escape' ;;
+    claude|codex) printf 'Escape' ;;
     *) return 1 ;;
   esac
 }
@@ -108,7 +107,7 @@ fm_control_interrupt_key() {  # <harness>
 # Escape; every other verified adapter interrupts on a single press.
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) printf '1' ;;
+    claude|codex) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -116,7 +115,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) ;;
+    claude|codex) ;;
     *) return 1 ;;
   esac
 }
@@ -124,7 +123,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) printf '0.2' ;;
+    claude|codex) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -132,7 +131,7 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) ;;
+    claude|codex) ;;
     *) return 1 ;;
   esac
 }
@@ -140,7 +139,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # The key that must follow an interrupt to clear its composer, when needed.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
-    claude|codex|pi) ;;
+    claude|codex) ;;
     *) return 1 ;;
   esac
 }
@@ -155,47 +154,13 @@ fm_control_interrupt_clear_key() {  # <harness>
 fm_control_exit_command() {  # <harness> [opencode-major]
   case "${1-}" in
     claude) printf '/exit' ;;
-    codex|pi) printf '/quit' ;;
+    codex) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
 
-# The launch argument that makes a RELAUNCH of <harness> RESUME an exact agent
-# session instead of starting a fresh one, printed only when <registered-agent>
-# is the label that session reference belongs to; nothing otherwise.
-#
-# This exists for one runtime failure, not as a general resume feature. Herdr
-# gives a pane one status authority, and for Pi with its installed integration
-# that authority is the lifecycle hooks, which also suppress Herdr's screen
-# detection for the pane. That registration outlives its agent process in the
-# crew shape - a nested worktree shell under the pane's top shell - and Herdr
-# then applies only reports carrying the session identity it bound. A
-# replacement agent started fresh in that same pane reports a NEW session, so
-# its state reports are ignored and the pane stays frozen at whatever the
-# previous agent last reported: a working crewmate reads idle until its task
-# ends (reproduced and fixed live 2026-09-21, herdr 0.9.1; the read that
-# supplies the reference is
-# bin/backends/herdr.sh's fm_backend_herdr_pane_agent_session_ref).
-#
-# So the reference is not chosen from what looks recent - it is the exact
-# identity the endpoint's own runtime recorded, which is why a matched
-# registered-agent label is required: resuming a reference reported by a
-# DIFFERENT agent would inject another agent's conversation into this launch.
-# `pi` is the label Pi and both report, so one entry covers both.
-# Every other harness returns nothing and keeps today's fresh-session
-# relaunch, which is what the adapter tables above (and the absence of a
-# verified resume form for those harnesses) require.
-#
-# Prints the flag name only; the caller quotes and appends the reference, since
-# shell quoting belongs to the owner of the launch line (bin/fm-spawn.sh).
-fm_control_relaunch_resume_flag() {  # <harness> <registered-agent>
-  case "${1-}" in
-    pi)
-      [ "${2-}" = pi ] && printf -- '--session'
-      ;;
-  esac
-  return 0
-}
+# Retained harnesses have no verified session-resume flag.
+fm_control_relaunch_resume_flag() { return 0; }
 
 # Which named keys a backend adapter can deliver. Every session provider
 # normalizes Enter, Ctrl+C, and the Ctrl+U composer clear.
@@ -317,7 +282,6 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
         printf '%s\n' "$wt/.fm-busy-stop"
       fi
       ;;
-    pi) printf '%s\n' "$state/$id.pi-ext.ts" ;;
     grok)
       printf '%s\n' "$wt/.fm-grok-turnend"
       printf '%s\n' "$state/$id.grok-turnend-token"

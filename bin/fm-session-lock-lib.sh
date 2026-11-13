@@ -13,13 +13,13 @@
 # recorded id leaves the ancestry verdict exactly as it was.
 # This file is sourced by scripts and has no side effects on source.
 
-FM_HARNESS_RE='claude|codex|^pi$'
+FM_HARNESS_RE='claude|codex'
 
 # The same harnesses as exact executable names. Keep in sync with
 # FM_HARNESS_RE. Used only for the stricter path evidence below, where the
 # loose regex would also match ordinary firstmate paths such as
 # bin/fm-claude-stop-autoarm.sh.
-FM_HARNESS_NAMES=(claude codex pi)
+FM_HARNESS_NAMES=(claude codex)
 
 # Print the exact harness name carried by executable path $1 - its own basename
 # or any directory component - or return 1.

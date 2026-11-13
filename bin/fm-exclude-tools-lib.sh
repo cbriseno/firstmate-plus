@@ -49,13 +49,12 @@ fm_exclude_tools_check() {
   names=$(fm_exclude_tools_names "$config") || return 1
   if [ -n "$names" ]; then
     if [ "$raw" = 1 ]; then
-      echo "error: config/crew-exclude-tools lists tools to hide, but a raw launch command cannot hide tools; remove the entries or launch a runtime that supports them (pi,)" >&2
+      echo "error: config/crew-exclude-tools lists tools to hide, but a raw launch command cannot hide tools; remove the entries or empty the file" >&2
       return 1
     fi
     case "$harness" in
-    pi) ;;
     *)
-      echo "error: config/crew-exclude-tools lists tools to hide, but the $harness runtime cannot hide tools, so this launch is refused rather than running with them available; empty the file or launch a runtime that supports exclusion (pi,)" >&2
+      echo "error: config/crew-exclude-tools lists tools to hide, but the $harness runtime cannot hide tools, so this launch is refused rather than running with them available; empty the file " >&2
       return 1
       ;;
     esac

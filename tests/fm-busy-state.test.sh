@@ -62,11 +62,11 @@ test_apply_current_gen_reset() {
   "$EV" arm "$state" t1 >/dev/null
   "$EV" apply "$state" t1 idle --current-gen --source fm-interrupt --event interrupt \
     || fail "apply --current-gen failed"
-  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  out=$(fm_busy_classify tmux w1 claude t1 "$state")
   [ "$out" = "idle fm-interrupt" ] || fail "expected 'idle fm-interrupt', got '$out'"
   "$EV" apply "$state" t1 unknown --current-gen --source fm-recovery --event relaunch \
     || fail "apply unknown failed"
-  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  out=$(fm_busy_classify tmux w1 claude t1 "$state")
   [ "$out" = "unknown fm-recovery" ] || fail "expected 'unknown fm-recovery', got '$out'"
   pass "firstmate-owned interrupt and recovery events bind to the current gen"
 }
@@ -218,10 +218,9 @@ test_stale_gen_record_unknown() {
 test_missing_record_unknown_not_idle() {
   local state out h
   state=$(new_state_dir missing)
-  for h in claude pi; do
-    out=$(fm_busy_classify tmux w1 "$h" t1 "$state")
-    [ "$out" = "unknown missing" ] || fail "$h with no record must be 'unknown missing', got '$out'"
-  done
+  h=claude
+  out=$(fm_busy_classify tmux w1 "$h" t1 "$state")
+  [ "$out" = "unknown missing" ] || fail "$h with no record must be 'unknown missing', got '$out'"
   out=$(fm_busy_classify tmux w1 codex t1 "$state")
   [ "$out" = "unknown codex-unverified" ] || fail "codex with no verified source must be 'unknown codex-unverified', got '$out'"
   pass "a converted adapter with no record classifies unknown, never idle"
@@ -266,10 +265,6 @@ test_source_mismatch_cross_adapter() {
   "$EV" apply "$state" t1 busy --gen "$gen" --source pi-ext --event agent-start
   out=$(fm_busy_classify tmux w1 claude t1 "$state")
   [ "$out" = "unknown source-mismatch" ] || fail "pi-ext record on a claude task must be untrusted, got '$out'"
-  out=$(fm_busy_classify tmux w1 pi t1 "$state")
-  [ "$out" = "busy pi-ext" ] || fail "pi-ext record on a pi task must classify, got '$out'"
-  out=$(fm_busy_classify tmux w1 grok t1 "$state")
-  [ "$out" = "unknown source-mismatch" ] || fail "grok trusts no semantic source, got '$out'"
   pass "a record is trusted only by the adapter whose source wrote it"
 }
 
@@ -280,10 +275,9 @@ test_converted_adapters_ignore_footer_text() {
    ■■■■⬝⬝⬝⬝  esc interrupt
 Working...
 Ctrl+c:cancel'
-  for h in claude pi; do
-    out=$(fm_busy_classify tmux w1 "$h" t1 "$state" "$tail")
-    [ "$out" = "unknown missing" ] || fail "$h must never classify from footer text, got '$out'"
-  done
+  h=claude
+  out=$(fm_busy_classify tmux w1 "$h" t1 "$state" "$tail")
+  [ "$out" = "unknown missing" ] || fail "$h must never classify from footer text, got '$out'"
   out=$(fm_busy_classify tmux w1 codex t1 "$state" "$tail")
   [ "$out" = "unknown codex-unverified" ] || fail "codex must never classify from footer text, got '$out'"
   pass "converted adapters never classify busy from rendered footer text"
@@ -311,42 +305,6 @@ This project'"'"'s CLAUDE.md imports files outside the current working directory
   [ "$out" = "unknown launch-prompt" ] \
     || fail "a launch pinned at fm-spawn parked on Claude's external-imports dialog must classify unknown launch-prompt, got '$out'"
   pass "a Claude launch parked on its trust or external-imports dialog classifies unknown launch-prompt"
-}
-
-test_launch_prompt_pi_trust_dialog() {
-  local state out h
-  for h in pi; do
-    state=$(new_state_dir "launch-prompt-$h")
-    "$EV" arm "$state" t1 >/dev/null
-    out=$(fm_busy_classify tmux w1 "$h" t1 "$state" ' Trust project folder?
- /tmp/fm-pi-trust-check/wt
-
- This allows pi to load .pi settings and resources, install missing project packages, and execute project extensions.
-
- > Trust
-   Trust parent folder (/tmp/fm-pi-trust-check)
-   Trust (this session only)
-   Do not trust
-   Do not trust (this session only)
-
- up/down navigate  enter select  escape/ctrl+c cancel')
-    [ "$out" = "unknown launch-prompt" ] \
-      || fail "a $h launch pinned at fm-spawn parked on the project-trust dialog must classify unknown launch-prompt, got '$out'"
-  done
-  pass "a Pi-family launch (pi, pi-signed) parked on the project-trust dialog classifies unknown launch-prompt"
-}
-
-test_launch_prompt_pi_requires_both_markers() {
-  local state out
-  state=$(new_state_dir launch-prompt-pi-partial)
-  "$EV" arm "$state" t1 >/dev/null
-  # "trust" alone, with neither the dialog heading nor its decline option, must
-  # not be read as the dialog - it is an ordinary word a worker's own output
-  # could easily contain.
-  out=$(fm_busy_classify tmux w1 pi t1 "$state" 'I trust this approach and will proceed.')
-  [ "$out" = "busy fm-spawn" ] \
-    || fail "ordinary prose containing 'trust' must not classify as a parked launch, got '$out'"
-  pass "the Pi signature requires both the dialog heading and its decline option, not the bare word trust"
 }
 
 test_launch_prompt_never_shortens_a_working_launch() {
@@ -720,8 +678,6 @@ test_record_without_sidecar_unknown
 test_source_mismatch_cross_adapter
 test_converted_adapters_ignore_footer_text
 test_launch_prompt_claude_trust_dialog
-test_launch_prompt_pi_trust_dialog
-test_launch_prompt_pi_requires_both_markers
 test_launch_prompt_never_shortens_a_working_launch
 test_launch_prompt_never_reclassifies_an_advanced_record
 test_launch_prompt_requires_a_captured_tail

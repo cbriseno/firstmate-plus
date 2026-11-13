@@ -316,10 +316,8 @@ fm-harness-liveness-drift-live-e2e.test.sh FM_HARNESS_LIVENESS_DRIFT
 fm-secondmate-busy-contract-live-e2e.test.sh FM_SECONDMATE_BUSY_LIVE
 fm-composer-codex-idle-live-e2e.test.sh FM_COMPOSER_CODEX_IDLE_LIVE
 fm-codex-native-owner-live.test.sh FM_CODEX_NATIVE_OWNER_LIVE
-fm-herdr-pi-stale-registration-live-e2e.test.sh FM_HERDR_PI_STALE_REGISTRATION_LIVE_E2E
-fm-pi-branch-responsiveness-live-e2e.test.sh FM_PI_BRANCH_RESPONSIVENESS_E2E
 EOF
-  [ "$checked" -eq 6 ] || fail "expected six operator-service guards, checked $checked"
+  [ "$checked" -eq 4 ] || fail "expected four operator-service guards, checked $checked"
 }
 
 test_default_lavish_guard_never_addresses_the_operators_server() {

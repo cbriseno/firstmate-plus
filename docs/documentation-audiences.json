@@ -158,10 +158,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/pi.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -334,7 +330,7 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/pi-supervision-branch.md",
+      "path": "docs/supervision-branch.md",
       "audience": "maintainer-architecture"
     },
     {
@@ -371,10 +367,6 @@
     },
     {
       "path": "docs/supervision-protocols/codex-native.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": "docs/supervision-protocols/pi.md",
       "audience": "agent-runtime"
     },
     {

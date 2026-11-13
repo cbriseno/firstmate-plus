@@ -139,32 +139,6 @@ unit_retired_two_step_entry_is_refused() {
   rm -rf "$st"
 }
 
-unit_pi_never_launches_the_daemon() {
-  local st harness out rc
-  for harness in pi; do
-    st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-pi.XXXXXX")
-    mkdir -p "$st/state"
-    out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_TEST_HARNESS="$harness" \
-      FM_SUPERVISOR_TARGET=unused FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" \
-      bash -c '. "$1"; fm_afk_launch_primary_harness() { printf "%s" "$FM_TEST_HARNESS"; }; fm_afk_launch_main start' _ "$LAUNCH" 2>&1)
-    rc=$?
-    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -F "the away daemon is no longer launched on $harness" >/dev/null \
-      && [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ] && [ ! -e "$st/state/.afk-contract" ]; then
-      pass "$harness: start refuses to launch the daemon and writes no state"
-    else
-      fail "$harness: start did not refuse cleanly (rc=$rc): $out"
-    fi
-    out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_TEST_HARNESS="$harness" \
-      bash -c '. "$1"; fm_afk_launch_primary_harness() { printf "%s" "$FM_TEST_HARNESS"; }; fm_afk_launch_main start-native' _ "$LAUNCH" 2>&1)
-    rc=$?
-    if [ "$rc" -ne 0 ] && [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
-      pass "$harness: start-native refuses to prepare a daemon"
-    else
-      fail "$harness: start-native did not refuse (rc=$rc): $out"
-    fi
-    rm -rf "$st"
-  done
-}
 
 # A leaked FM_TEST_HARNESS in a real primary's environment must stay inert: the
 # seam fires only alongside the FM_TEST_SEAM marker that test suites set.
@@ -189,27 +163,6 @@ unit_test_harness_seam_requires_the_marker() {
   [ "$pinned" = codex ] \
     || fail "FM_TEST_SEAM-armed FM_TEST_HARNESS did not pin the harness ($pinned)"
   pass "FM_TEST_HARNESS seam is inert without the test marker"
-}
-
-unit_pi_enter_stop_does_not_claim_a_daemon_terminal() {
-  local st out rc
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-pi-stop.XXXXXX")
-  mkdir -p "$st/state"
-  enter_posture "$st" || fail "pi stop: could not enter fixture posture"
-  [ ! -e "$st/state/.afk" ] || fail "pi stop: fixture error: enter wrote the away flag"
-  [ ! -e "$st/state/.afk-daemon-terminal" ] || fail "pi stop: fixture error: enter recorded a daemon terminal"
-  [ ! -e "$st/state/.supervise-daemon.log" ] || fail "pi stop: fixture error: a daemon log already existed"
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop 2>&1)
-  rc=$?
-  if [ "$rc" -eq 0 ] \
-    && printf '%s' "$out" | grep -F 'no daemon terminal was running' >/dev/null \
-    && ! printf '%s' "$out" | grep -F 'daemon terminal torn down' >/dev/null \
-    && [ ! -e "$st/state/.afk-contract" ]; then
-    pass "pi enter stop: reports that no daemon terminal was running"
-  else
-    fail "pi enter stop: claimed a daemon teardown or failed (rc=$rc): $out"
-  fi
-  rm -rf "$st"
 }
 
 unit_daemon_entry_requires_the_record() {
@@ -1737,9 +1690,7 @@ e2e_tmux() {
 unit_clear_stale
 unit_enter_records_the_posture_in_one_step_without_a_daemon
 unit_retired_two_step_entry_is_refused
-unit_pi_never_launches_the_daemon
 unit_test_harness_seam_requires_the_marker
-unit_pi_enter_stop_does_not_claim_a_daemon_terminal
 unit_daemon_entry_requires_the_record
 unit_failed_daemon_launch_preserves_the_record
 unit_stop_archives_the_record_last

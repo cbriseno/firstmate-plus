@@ -18,7 +18,7 @@ import { runCommandAsync } from "./fm-async-exec.ts";
 // before the branch existed. Watcher-failure alarms are never offered - only
 // main can repair the watcher cycle (fm_watch_arm_pi lives on main).
 //
-// Postures (docs/pi-supervision-branch.md "Postures"). The away-posture record
+// Postures (docs/supervision-branch.md "Postures"). The away-posture record
 // state/.afk-contract (owner: bin/fm-afk-contract.sh) is the posture; it is
 // read as a file at every routing decision, never inferred from chat. While
 // it exists the branch takes EVERY actionable row - check rows, decision-owned
@@ -104,7 +104,7 @@ export interface UnreadWakeScope {
    * its status-log key, a stale row through the task metadata recording that
    * endpoint). The branch may report only these tasks while it handles the
    * wake; `fleet` or a task it merely remembers is refused (docs/
-   * pi-supervision-branch.md "Components and their owners"). Empty for a
+   * supervision-branch.md "Components and their owners"). Empty for a
    * heartbeat, which is not scoped by task.
    */
   eligibleTasks: string[];
@@ -172,7 +172,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 };
 
 // scopeForUnreadWake is the single owner of branch-eligibility classification
-// (docs/pi-supervision-branch.md "Autonomy"; docs/watcher-continuity.md
+// (docs/supervision-branch.md "Autonomy"; docs/watcher-continuity.md
 // "Per-actor acknowledgement"). bin/fm-wake-drain.sh never reclassifies a row
 // itself - it only consumes the exact sequence-number snapshot this function
 // (via writeEligibleRowsSnapshot) hands it.
@@ -320,7 +320,7 @@ function readPresentationCursor(state: string): Map<string, { ident: string; off
 
 // Walk the presented span in order: a resolution must close a decision that
 // was open immediately before that line, not one opened later in the span.
-// docs/pi-supervision-branch.md owns the routing contract.
+// docs/supervision-branch.md owns the routing contract.
 function spanIsDecisionOwned(
   open: ReadonlyMap<string, string>,
   presented: readonly string[],
@@ -438,7 +438,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         // Main-owned while attended: a
         // needs-decision status append surfaced through the actionable signal
         // path is excluded from what the branch may claim without vetoing the
-        // scan (docs/pi-supervision-branch.md "Autonomy"). Away, the branch
+        // scan (docs/supervision-branch.md "Autonomy"). Away, the branch
         // takes the decision row like any other task-local row; the guarded
         // scripts decide what it may do about it (bin/fm-lease-lib.sh).
         needsDecisionKeys.push(key);

@@ -19,11 +19,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-### Pi `/new` provider prerequisite
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
 ### Post-start instruction refresh
 
 Historical machine-specific probe transcripts are not distributed.

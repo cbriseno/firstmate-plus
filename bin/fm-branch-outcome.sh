@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-branch-outcome.sh - the durable outcome store for the Pi supervision
-# branch (docs/pi-supervision-branch.md).
+# branch (docs/supervision-branch.md).
 #
 # CONTRACT (this header is the one owner of the store's format).
 #   - Store: $STATE/branch-outcomes.jsonl, strictly APPEND-ONLY. One JSON

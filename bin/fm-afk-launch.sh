@@ -313,11 +313,6 @@ fm_afk_launch_quiet_check() {
 fm_afk_launch_daemon_allowed() {
   local harness mode
   harness=$(fm_afk_launch_primary_harness)
-  case "$harness" in
-    pi)
-      fm_afk_launch_log "the away daemon is no longer launched on $harness; the away-posture record is the posture there (run bin/fm-afk-launch.sh enter and stop)"
-      return 1 ;;
-  esac
   fm_afk_launch_host_primary "$harness" || return 0
   fm_supervision_host_enabled "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$harness" || return 0
   mode=$(fm_afk_launch_requested_mode)

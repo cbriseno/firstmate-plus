@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex pi"
+VERIFIED_HARNESSES="claude codex"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -45,7 +45,6 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
   case "$1" in
     claude) printf '/exit\tEscape\t1\t\n' ;;
     codex) printf '/quit\tEscape\t1\t\n' ;;
-    pi) printf '/quit\tEscape\t1\t\n' ;;
     *) return 1 ;;
   esac
 }
@@ -273,8 +272,7 @@ test_harness_family_resolution() {
   local pair recorded want got
   for pair in claude:claude claude-latest:claude codex:codex codex-cli:codex \
       \
-      pi:pi \
-      pi:pi; do
+      codex-cli:codex; do
     recorded=${pair%%:*}
     want=${pair#*:}
     got=$(fm_control_harness_family "$recorded") \
@@ -285,14 +283,6 @@ test_harness_family_resolution() {
     && fail "an unrecognized launch command must not be guessed into an adapter family"
   fm_control_harness_family '' \
     && fail "an empty harness must not resolve to an adapter family"
-  # The signed adapter is a distinct launch profile, not a pi variant.
-  [ "$(fm_control_harness_family pi-signed)" != "$(fm_control_harness_family pi)" ] \
-    || fail "pi-signed must not collapse into pi"
-  # omp is exact: an omp* prefix would claim unrelated commands such as ompd.
-  fm_control_harness_family ompd \
-    && fail "ompd must not be guessed into the omp adapter"
-  fm_control_harness_family comp \
-    && fail "comp must not be guessed into the omp adapter"
   pass "fm-control-lib: a recorded harness resolves to its verified adapter without guessing"
 }
 
@@ -357,7 +347,7 @@ test_harness_kind_capability() {
     fm_control_harness_supports_kind "$harness" scout \
       || fail "$harness should be able to run a scout task"
   done
-  for harness in claude codex pi; do
+  for harness in claude codex; do
     fm_control_harness_supports_kind "$harness" secondmate \
       || fail "$harness should be able to run a secondmate"
   done
@@ -948,33 +938,12 @@ test_fm_send_still_marks_the_same_secondmate_task() {
 # handed to it: resuming another adapter's reference would inject that agent's
 # conversation into this launch. Every other pair must print nothing so the
 # relaunch stays a fresh session exactly as it does today.
-test_relaunch_resume_flag_is_per_adapter_and_reference_owner() {
-  local got harness label want
-  # (harness | registered agent label | expected flag) lines, written out
-  # independently of the implementation.
-  local cases='pi|pi|--session
-pi||
-pi|codex|
-claude|claude|
-codex|codex|
-'
-  while IFS='|' read -r harness label want; do
-    [ -n "$harness" ] || continue
-    got=$(fm_control_relaunch_resume_flag "$harness" "$label") \
-      || fail "the resume-flag lookup must never fail; it did for '$harness'/'$label'"
-    [ "$got" = "$want" ] \
-      || fail "$harness with a '$label' registration should print '$want', got '$got'"
-  done <<EOF
-$cases
-EOF
-  pass "fm-control-lib: only a runtime's own recorded session has a relaunch resume form"
-}
+
 
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_unverified_harness_is_refused
 test_harness_family_resolution
-test_relaunch_resume_flag_is_per_adapter_and_reference_owner
 test_prefixed_recorded_harness_reaches_each_control_verb
 test_backend_key_capability_matrix
 test_harness_kind_capability

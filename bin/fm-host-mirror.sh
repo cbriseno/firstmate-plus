@@ -4,7 +4,7 @@
 # engine session at the head of each attended wake, while an away wake carries
 # none and never moves the cursor (docs/supervision-host.md "The dialog
 # mirror"). The Pi branch mirrors the same dialog in process
-# (docs/pi-supervision-branch.md "How the branch knows what the captain
+# (docs/supervision-branch.md "How the branch knows what the captain
 # said"); this is its twin for a host that is not Pi, and the one owner of the
 # mirror file, its cursor, its lock, the feed, and the verified-writer list.
 #

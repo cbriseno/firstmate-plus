@@ -3,7 +3,7 @@
 // dispatch, for a host that is not a Pi process (bin/fm-supervision-host.sh,
 // docs/supervision-host.md).
 //
-// It reimplements nothing: .pi/extensions/lib/fm-branch-dispatch.ts stays the
+// It reimplements nothing: bin/lib/fm-branch-dispatch.ts stays the
 // single owner of which queued rows the branch may claim and of the wake text,
 // and this file only prints that module's answers in a shape a shell can read.
 // The Pi branch extension and this entry therefore apply identical rules.
@@ -20,7 +20,7 @@
 //                       a claimed heartbeat or check row), so a report on any
 //                       task or on fleet is in scope
 //     --heartbeat marks a heartbeat wake; --afk applies the away-posture
-//     collapse (docs/pi-supervision-branch.md "Postures").
+//     collapse (docs/supervision-branch.md "Postures").
 //   fm-branch-dispatch.mjs offer [--afk]
 //     Read one actionable close's reason line from stdin and print
 //     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
@@ -46,7 +46,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions", "lib", "fm-branch-dispatch.ts")).href);
+const dispatch = await import(pathToFileURL(path.join(root, "bin", "lib", "fm-branch-dispatch.ts")).href);
 
 function usage() {
   process.stderr.write(

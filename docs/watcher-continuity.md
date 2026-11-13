@@ -24,48 +24,9 @@ Codex keep their own protocols; see [Manual recovery and other harnesses](#manua
 
 | Harness | Re-arm owner |
 | --- | --- |
-| Pi | `.pi/extensions/fm-primary-pi-watch.ts` |
 | Claude | `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) |
 
 On a non-Pi primary, a home that runs the supervision host also changes what the owner runs; see [Supervision host](#supervision-host).
-
-### Pi and OpenCode adapters
-
-Pi's `.pi/extensions/fm-primary-pi-watch.ts` and OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` own continuous re-arm after an actionable child close.
-Each adapter:
-
-- Starts the next arm before delivering the wake prompt.
-- Checks current session-lock ownership at launch.
-- Preserves one child or scheduled retry at a time.
-- Applies bounded exponential retry after an unexpected or failed close.
-
-Pi treats an arm child whose process is already gone as an empty slot even while its close event is still pending, so a repair call or a scheduled retry starts a fresh arm instead of answering unchanged.
-A failed follow-up never cancels continuity restoration.
-
-### Pi session replacement
-
-Pi same-process session replacement follows the generation-owner contract in `.pi/extensions/fm-primary-pi-watch.ts`:
-
-1. `session_shutdown` changes the current generation's durable extension marker from `active` to `handoff`, but keeps its established arm child alive.
-2. The owning `session_start` publishes a distinct active generation.
-3. That `session_start` commits its tracked replacement arm.
-4. Only after that commit does the replacement arm retire the predecessor.
-
-A state-scoped replacement handoff carries every actionable close whose delivery overlapped `session_shutdown`, including:
-
-- A main follow-up Pi accepted but had not yet consumed.
-- Branch handling.
-- A retiring child that reports after the successor claim.
-
-A handoff marker never satisfies the extension-ownership tolerance.
-So a running Pi process whose replacement did not load this extension is reported as missing, rather than borrowing stale load evidence from its predecessor.
-
-A main follow-up counts as delivered once Pi accepts it, never once the model reads it.
-The reason is that a follow-up queued while main is streaming joins the running run without a `before_agent_start`.
-The extension header owns how consumption is observed and why it only decides what a replacement replays.
-
-- It retires the predecessor arm at replacement shutdown instead of retaining it across the handoff.
-- It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
 
 ### Claude Stop hook
 
@@ -124,27 +85,6 @@ The host owns successive watcher cycles through the same arm.
 ## Actionable wake ordering
 
 This section covers what each re-arm owner does between an actionable close and the wake reaching the model.
-
-### Pi and OpenCode successor start
-
-After an actionable Pi, or OpenCode child close, the adapter:
-
-1. Waits for the predecessor process to close.
-2. Starts and verifies one singleton successor.
-3. Confirms the handling handoff before scheduling the follow-up: Pi confirms against the restoration's own recovery token, while OpenCode confirm against the current successor.
-4. Delivers the original wake.
-
-A complete Pi reason line can be observed while the predecessor is still finishing durable cleanup.
-That line is retained for replacement handoff, but the adapter never treats that already-ready predecessor as its own successor.
-
-If the handoff confirmation fails, the adapter retries it once: Pi against that same token, OpenCode against the current generation and successor.
-A failed confirmation is a restoration failure: the adapter classifies the error and surfaces exactly one typed message.
-Pi retires the current successor only when the failed token names its exact watcher pid and generation and that pid is no longer alive, while OpenCode retires the current successor whenever the restoration's watcher pid is no longer alive.
-On Pi a generation mismatch means a newer pipeline superseded this delivery mid-restore, so the wake routes like a confirmed delivery, with no failure appendix, and nothing is retired.
-An already-acknowledged episode confirms as a no-op when the confirmation names its generation, because the drain acknowledged it after the successor started but before the confirmation ran.
-The Pi extension diagnostic log is opt-in and off by default: only a positive FM_WATCH_EXTENSION_LOG_KEEP_LINES value appends restore attempts, readiness timeouts, and confirmation targets and results to state/.watch-extension.log, a bounded record that never changes supervision behavior.
-docs/configuration.md owns the knob's default and accepted values.
-A failed confirmation is never swallowed.
 
 ### Readiness timeout and retry
 
@@ -335,7 +275,7 @@ If a branch offer loses the claim race to main, it rejects its settlement so the
 
 ### Branch eligibility and check rows
 
-[`pi-supervision-branch.md`](pi-supervision-branch.md#components-and-their-owners) owns branch eligibility, mixed-queue dispatch, the pre-drain recheck, and heartbeat's all-or-nothing rule.
+[`supervision-branch.md`](supervision-branch.md#components-and-their-owners) owns branch eligibility, mixed-queue dispatch, the pre-drain recheck, and heartbeat's all-or-nothing rule.
 
 While attended, a check-kind row is main-owned, including a heartbeat review.
 So it is never part of a branch claim and never defers one.
@@ -366,7 +306,6 @@ The same suite pins the counted-equals-presentable invariant against `bin/fm-gua
 
 Branch acknowledgement retiring the check-row receipts of exactly its granted sequences is pinned by `tests/fm-wake-queue.test.sh` for the secondmate stall receipt and by `tests/fm-inactive-reconcile.test.sh` for the inactive-outcome receipt.
 
-`tests/fm-pi-branch-extension.test.sh` pins extension-side classification, claim publication and release, and the pre-drain recheck.
 
 ## Arm-layer cycle contract
 
@@ -420,34 +359,6 @@ Only positive decimal integers are accepted, including leading-zero forms such a
 A live foreign holder therefore cannot strand a TERM'd watcher in this marker-lock wait: on timeout the recovery transition fails without releasing the singleton, leaving dead-pid stale evidence for the next arm to republish and clear.
 
 ## Regression coverage
-
-### Pi and OpenCode watch extension
-
-`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops.
-It then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, and:
-
-- Blocks prompt delivery to prove the successor launches first.
-- Verifies single-flight behavior.
-- Changes the session lock before close to prove ownership is rechecked.
-- Hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
-
-The same suite covers ordinary same-process session replacement for `/new`, `/resume`, `/fork`, and reload, plus:
-
-- Same-instance shutdown-plus-start.
-- The predecessor remaining live under a handoff generation until its replacement commits.
-- Bounded retry after that replacement kills the predecessor but fails before readiness.
-- Automatic re-arm before any model turn.
-- A fresh extension-module rebind carrying all in-flight actionable closes exactly once.
-- Stale prior-generation callbacks.
-- Repeated transitions with exactly one live cycle.
-- Disappearance of the shutting-down refusal after a valid replacement activates.
-- Terminal quit still refusing late rearm.
-- A mid-restore marker advance that delivers the wake with no rejection appendix, offers it to an accepting supervision branch like a confirmed delivery, and records the attempt and the confirm result in the bounded extension log when opted in.
-- A failed confirmation for a stale successor that spares a newer arm started by a repair.
-- A repair, a scheduled retry, and a deferred close over a dead-but-unclosed arm child that each start a fresh arm instead of stalling.
-
-The guard and session-start suites prove that active generation evidence tolerates a fresh-beacon handoff.
-They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.
 
 ### Arm, recovery, triage, and lock suites
 

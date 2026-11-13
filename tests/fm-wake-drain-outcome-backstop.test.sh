@@ -363,31 +363,6 @@ test_uncovered_event_surfaces_on_first_drain_without_index() {
   pass "a fresh home with a status log and no index surfaces the backstop on its first drain"
 }
 
-test_malformed_outcome_store_fails_closed_without_pi_advice() {
-  local dir state out
-  dir=$(make_case index-selfheal-store-fault)
-  state="$dir/state"
-  out="$dir/drain.out"
-
-  printf 'done: must not surface over a corrupt outcome store\n' > "$state/unsafe.status"
-  printf 'not-json\n' > "$state/branch-outcomes.jsonl"
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" \
-    || fail "drain failed closed incorrectly on a malformed outcome store"
-  grep -F 'STATUS OUTCOME BACKSTOP SKIPPED:' "$out" >/dev/null \
-    || fail "malformed store did not fail closed: $(cat "$out")"
-  grep -F 'outcome store is unsafe' "$out" >/dev/null \
-    || fail "store-fault skip lost its repair wording: $(cat "$out")"
-  if grep -F 'Pi supervision' "$out" >/dev/null; then
-    fail "store-fault skip still advised restarting Pi supervision: $(cat "$out")"
-  fi
-  grep -F 'unsafe done:' "$out" >/dev/null \
-    && fail "malformed store still presented a backstop event: $(cat "$out")"
-  [ ! -f "$state/.branch-outcome-index-ready" ] \
-    || fail "a store fault published a ready marker"
-  pass "a genuine outcome-store fault fails closed without Pi-specific restart advice"
-}
-
 test_held_lock_mode_rejects_an_unlocked_caller() {
   local dir state out
   dir=$(make_case index-selfheal-held-lock-guard)
@@ -525,7 +500,6 @@ test_receipt_commit_failure_repeats_the_already_presented_backstop
 test_rejected_decision_line_surfaces_once_through_backstop
 test_missing_index_self_heals_on_first_drain
 test_uncovered_event_surfaces_on_first_drain_without_index
-test_malformed_outcome_store_fails_closed_without_pi_advice
 test_held_lock_mode_rejects_an_unlocked_caller
 test_held_lock_mode_accepts_a_lock_owner_descendant
 test_index_self_heal_runs_under_the_outcome_lock

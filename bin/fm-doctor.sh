@@ -61,7 +61,6 @@ if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   inventory actionlint development 1.7.12 no 'workflow lint'
   inventory codex agent unknown no 'Codex agent'
   inventory claude agent unknown no 'Claude agent'
-  inventory pi agent unknown no 'Pi agent'
   printf '%s\n' 'Extensions and agent-specific helpers are conditional; see docs/configuration.md. Versions marked unknown are not established minimums.'
   exit 0
 fi

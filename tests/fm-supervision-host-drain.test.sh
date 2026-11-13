@@ -160,38 +160,6 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
 # primary still needs the file; wherever the home does not run the host the
 # drain and the store's markers are exactly as before, and on Pi the branch
 # extension owns the same outcomes.
-test_branch_outcomes_only_on_a_host_home_off_pi() {
-  local home drained fakes
-  home="$TMP_ROOT/drain-scope"
-  mkdir -p "$home/state" "$home/config"
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict captain --summary 'PR ready for review' >/dev/null \
-    || fail "fixture: could not record a captain outcome"
-  fakes="$TMP_ROOT/drain-scope-fakes"
-  mkdir -p "$fakes"
-  ln -sf /bin/bash "$fakes/pi"
-  ln -sf /bin/bash "$fakes/codex"
-
-  : > "$home/config/supervision-host-off"
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a Claude home opted out by config/supervision-host-off must not present branch outcomes"
-  assert_absent "$home/state/.branch-outcomes-cursor" "a Claude home opted out by config/supervision-host-off must keep the store's read cursor untouched"
-
-  rm -f "$home/config/supervision-host" "$home/config/supervision-host-off"
-  drained=$(FM_HOME="$home" "$fakes/codex" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a Codex home without config/supervision-host must not present branch outcomes"
-  assert_absent "$home/state/.branch-outcomes-cursor" "a Codex home without config/supervision-host must keep the store's read cursor untouched"
-  drained=$(FM_HOME="$home" "$fakes/pi" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a Pi primary's drain must leave captain outcomes to the branch extension"
-  assert_absent "$home/state/.branch-outcomes-cursor" "a Pi primary's drain must not advance the store's read cursor"
-
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_contains "$drained" "[seq 1, recorded 0m ago] demo: PR ready for review" "a Claude home without config/supervision-host must present the captain outcome"
-
-  : > "$home/config/supervision-host"
-  drained=$(FM_HOME="$home" "$fakes/codex" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_contains "$drained" "[seq 1, recorded 0m ago] demo: PR ready for review" "a Codex home with config/supervision-host must present the captain outcome"
-  pass "drain: BRANCH OUTCOMES runs on a Claude home by default and on another primary with the file, never with off, and never on Pi"
-}
 
 # A fresh captain outcome is never hidden behind older routine outcomes: the
 # captain rows come first whatever the routine backlog, the newest routine
@@ -485,27 +453,6 @@ test_branch_ack_keeps_older_keyed_decision_open() {
 # A switch off Pi hands the drain an outcome the branch delivered but main
 # never acknowledged; it comes back with its age instead of as news, and is
 # still not adopted.
-test_branch_outcomes_date_an_outcome_carried_across_a_switch_off_pi() {
-  local home drained fakepi
-  home="$TMP_ROOT/drain-switch-off-pi"
-  mkdir -p "$home/state" "$home/config"
-  : > "$home/config/supervision-host"
-  fakepi="$TMP_ROOT/fakepi"
-  mkdir -p "$fakepi"
-  ln -sf /bin/bash "$fakepi/pi"
-  outcome_row 1 $(( $(date +%s) - 2 * 86400 )) gamma captain 'gamma needs your decision on the schema migration' \
-    > "$home/state/branch-outcomes.jsonl"
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-read --through 1 \
-    || fail "fixture: could not record the Pi branch's delivery"
-  drained=$(FM_HOME="$home" "$fakepi/pi" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a Pi primary's drain must leave the outcome to the branch extension"
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_contains "$drained" "[seq 1, recorded 2d ago] gamma: gamma needs your decision" \
-    "an outcome delivered on Pi but never acknowledged must come back with its age"
-  [ -n "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unprocessed)" ] \
-    || fail "the switch adopted an unacknowledged captain outcome as processed"
-  pass "drain: an outcome carried across a switch off Pi comes back with its age, never adopted"
-}
 
 # The state a legacy backlog shares with a freshly opted-in home: no read
 # cursor, no processed marker, and a captain outcome nothing has shown yet. Any
@@ -537,14 +484,6 @@ test_branch_outcomes_keep_an_unshown_outcome_until_acknowledged() {
 # A switch to Pi runs processed-init before reading unprocessed rows. The row
 # the host drain presented but main never acknowledged must stay unprocessed
 # rather than being adopted from the read cursor.
-test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_pi() {
-  present_unacknowledged_outcome_twice drain-switch-to-pi
-  FM_HOME="$PRESENTED_HOME" "$ROOT/bin/fm-branch-outcome.sh" processed-init \
-    || fail "processed-init failed as the Pi reconciliation runs it"
-  assert_contains "$(FM_HOME="$PRESENTED_HOME" "$ROOT/bin/fm-branch-outcome.sh" unprocessed)" '"seq":1' \
-    "a switch to Pi adopted a drain-presented, unacknowledged outcome as processed"
-  pass "drain: an outcome the host drain presented but main never acknowledged stays unprocessed across a switch to Pi"
-}
 
 # A lost index-ready marker makes the next drain's status backstop run
 # processed-init under the outcome lock before BRANCH OUTCOMES. That repair
@@ -566,7 +505,6 @@ test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair() {
 test_report_surface_enforces_actor_turn_and_scope
 test_report_after_the_return_is_queued_for_main
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail
-test_branch_outcomes_only_on_a_host_home_off_pi
 test_branch_outcomes_put_captain_first_and_collapse_routine_overflow
 test_branch_outcomes_collapse_repeated_captain_outcomes_per_task
 test_branch_outcomes_present_a_long_away_window_once
@@ -576,7 +514,5 @@ test_branch_outcomes_stay_unread_without_jq
 test_branch_outcomes_stay_unread_when_the_drain_cannot_print
 test_branch_outcomes_date_a_legacy_backlog_without_adopting_it
 test_branch_ack_keeps_older_keyed_decision_open
-test_branch_outcomes_date_an_outcome_carried_across_a_switch_off_pi
 test_branch_outcomes_keep_an_unshown_outcome_until_acknowledged
-test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_pi
 test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair

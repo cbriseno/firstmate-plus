@@ -67,8 +67,10 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ### Agent liveness name sources
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
+Verified 2026-11-13 on Linux with Claude Code 2.1.323 and codex-cli 0.166.0.
+Run `FM_HARNESS_LIVENESS_DRIFT=1 FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh` to refresh this token-free guard in disposable tmux resources.
+Both installed binaries classified alive and were identified at `comm` ancestry strength.
+The guard reported `checked 2 installed harness(es)` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
 
 ### 2026-09-06 default-on drift refresh, and the Cursor editor CLI collision
 
@@ -114,11 +116,6 @@ The guard uses a private config copy, a private tmux server, and an external-imp
 The portable registration regression is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-claude-trust.test.sh`; macOS interactive execution remains unverified.
 
 ### Secondmate homes
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-## Pi seeded-secondmate project trust
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
@@ -305,51 +302,6 @@ Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
 ## Codex App host tools
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-## Pi supervision branch
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-08-28 Pi 0.84.4 SDK compatibility refresh
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-08-29 deterministic captain-outcome delivery
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-01 sequence-keyed captain-outcome processing
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-02 historical post-construction provider-error fallback
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-02 streaming-time watcher delivery
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-04 off-thread supervision outcome delivery
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-18 away posture parks main
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-### 2026-09-20 the away words execute
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.

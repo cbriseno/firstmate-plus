@@ -903,23 +903,6 @@ test_branch_actor_is_not_told_to_drain_queued_wakes() {
   pass "fm-guard: the branch actor is never told to drain queued wakes while main still is"
 }
 
-test_persistent_model_ignores_pi_extension_evidence() {
-  local dir home out pid
-  dir=$(make_guard_case persistent-ignores-pi-evidence)
-  home=$(case_home "$dir")
-  sleep 60 &
-  pid=$!
-  record_pi_extension_session "$dir" "$pid" || fail "could not record the Pi extension session"
-  touch "$home/state/.last-watcher-beat"
-  out=$(run_guard_case "$dir")
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
-    || fail "a persistent-watcher primary must still alarm with Pi markers present: $out"
-  assert_contains "$out" "no live watcher process holds this home lock" \
-    "the persistent-model banner must still name the missing watcher process"
-  pass "fm-guard stale banner: persistent primaries ignore Pi extension evidence"
-}
 
 # An extension-owned home with a genuinely live watcher is the ordinary steady
 # state and must stay silent through the strict path, not through the tolerance.
@@ -946,40 +929,10 @@ test_extension_live_watcher_is_healthy_without_ownership_evidence() {
 # are cleared because the host running this suite may carry one, and the ancestry
 # walk is blinded because a structural ancestor of a different harness outranks the
 # Pi marker, so the harness this suite was launched from would otherwise answer.
-test_pi_harness_routes_itself_to_the_extension_model() {
-  local dir home out pid harness blind
-  local -a pi_env
-  blind=$(fm_fakebin "$TMP_ROOT/pi-routing-blind")
-  fm_fake_blind_ancestry "$blind"
-  for harness in pi; do
-    pi_env=(PI_CODING_AGENT=true)
-    [ "$harness" = pi ] || pi_env+=(FM_PI_HARNESS=pi-signed)
-    dir=$(make_guard_case "harness-routing-$harness")
-    home=$(case_home "$dir")
-    sleep 60 &
-    pid=$!
-    record_pi_extension_session "$dir" "$pid" || fail "could not record the Pi extension session"
-    touch "$home/state/.last-watcher-beat"
-    out=$(env -u CLAUDECODE -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GROK_AGENT -u FM_SUPERVISION_MODEL \
-      "${pi_env[@]}" \
-      PATH="$blind:$PATH" \
-      FM_ROOT_OVERRIDE="$(case_root "$dir")" \
-      FM_HOME="$home" \
-      FM_GUARD_GRACE=999 \
-      "$ROOT/bin/fm-guard.sh" 2>&1)
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    [ -z "$out" ] \
-      || fail "a $harness primary must route itself to the extension model, got: $out"
-  done
-  pass "fm-guard stale banner: Pi and pi-signed primaries route themselves to the extension model"
-}
-
 test_presented_wake_is_a_bounded_handling_phase
 test_first_stale_call_prints_full_banner
 test_full_banner_names_quiet_mode_when_active
 test_repeated_same_episode_prints_reminder_only
-test_pi_harness_routes_itself_to_the_extension_model
 test_extension_handoff_with_live_session_is_healthy
 test_extension_handoff_with_empty_lock_is_healthy
 test_extension_held_unhealthy_locks_stay_alarm
@@ -989,7 +942,6 @@ test_extension_stale_beacon_alarms_despite_live_session
 test_extension_handoff_keeps_queued_wake_warning
 test_branch_actor_is_not_told_to_drain_queued_wakes
 test_branch_actor_is_never_told_to_repair_the_watcher
-test_persistent_model_ignores_pi_extension_evidence
 test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_alarms_with_correct_reason

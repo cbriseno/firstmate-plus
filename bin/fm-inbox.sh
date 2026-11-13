@@ -929,7 +929,6 @@ cmd_ready() {
     harness=${anc#* }
     case "$harness" in
       claude) resolved_model=autoarm ;;
-      pi) resolved_model=extension ;;
       '') ;;
       unknown) ;;
       *) resolved_model=persistent ;;

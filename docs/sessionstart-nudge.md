@@ -26,8 +26,8 @@ The tier is a property of the harness surface, not of the home.
 
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
-| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi |
-| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, and run-tier sources routed to the nudge |
+| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0 |
+| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Run-tier sources routed to the nudge |
 
 Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has no tracked compaction or re-emit channel.
 
@@ -38,7 +38,6 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | Claude | Run | [Claude](#claude) |
 | Codex exec | Run | [Codex exec](#codex-exec) |
 | Codex interactive TUI | Run from codex-cli 0.164.0; compaction and re-emit uncovered | [Codex interactive TUI](#codex-interactive-tui) |
-| Pi | Run | [Pi](#pi) |
 
 ### Why the run tier exists
 
@@ -62,7 +61,7 @@ A re-emit (`--reemit`) reprints the digest for a process that already has the he
 
 | Source | Action | Why |
 | --- | --- | --- |
-| `startup`, `new` | Full digest | This is a true session start that has not taken the helm; Pi CLI continuations are refined to `resume` by the adapter before reaching this boundary. |
+| `startup`, `new` | Full digest | This is a true session start that has not taken the helm. |
 | `clear`, `compact` | `--reemit` after a proven complete startup, otherwise full digest | This process normally has the helm and lost only its context, but an earlier hook may have been truncated after acquiring the lock. |
 | `resume`, `reload`, `fork` | Delegate to the nudge wrapper | Prior context is restored, so re-running is redundant when the lock is still ours and an instruction is enough when a new process resumed an old session. |
 | unreadable or unrecognized | Full digest | Taking the helm redundantly is cheap and idempotent; not taking it is the bug this tier exists to fix. |
@@ -120,7 +119,6 @@ The `bin/fm-session-start.sh` header is the single owner of those mechanics.
 While the digest runs, the run tier blocks one of two things:
 
 - Hook-driven session initialization.
-- Pi's first provider preflight.
 
 So `bin/fm-session-start.sh` bounds itself rather than betting on an unbounded prerequisite.
 
@@ -213,7 +211,6 @@ Before printing, the nudge wrapper reads `state/.lock` and walks at most eight p
 It does this in its own separate, hard-coded loop, independent of two other ownership checks:
 
 - The shared sixteen-hop ancestry walk in `bin/fm-session-lock-lib.sh` that `bin/fm-lock.sh` uses for anchor selection and ownership.
-- Pi's `lockOwnership()`.
 
 If the lock names a live pid in that ancestry, session start already ran in this harness session and the wrapper stays silent.
 On Windows/Git Bash, a lock holding a tagged `win:<pid>` identity is outside this process table, so the wrapper instead asks the library's `fm_session_lock_owned_by_self`, whose Windows process-boundary bridge owns that identity.
@@ -223,9 +220,6 @@ On Windows/Git Bash, a lock holding a tagged `win:<pid>` identity is outside thi
 Every ordinary transport path in both wrappers exits 0, including malformed state and adapter errors.
 The reason is that a Claude SessionStart exit 2 blocks session initialization.
 
-The run wrapper's internal `--pi-prerequisite` mode uses silent exit 3 only for an intentional gate or scope stand-down.
-That exit lets Pi distinguish ineligibility from an eligible empty native result.
-It does not change any harness hook's exit contract.
 
 These conditions therefore surface as follows:
 
@@ -267,56 +261,9 @@ Codex 0.146.0 did not fire it in the interactive TUI.
 The TUI runs project hooks only after the operator trusts them in its hook review, once per clone.
 Firstmate ships no global hook and has no tracked compaction or re-emit channel for it, and does not claim instruction-refresh delivery for those.
 
-### Pi
-
-Pi are run-tier harnesses.
-The tracked transport is `.pi/extensions/fm-primary-turnend-guard.ts`.
-The extension maps Pi events onto wrapper sources:
-
-- It maps `session_start` reasons `startup`, `new`, `resume`, and `fork` onto wrapper sources.
-- It refines a Pi-reported `startup` to `resume` only when a continuation, resume-selection, or explicit-session flag accompanies a session header older than the current process.
-- It maps a fork flag to `fork`.
-- It handles `session_compact` as the compaction equivalent.
-- Pi's `reload` reason is deliberately unmapped, as it always was.
-
-Setup-created entries such as `--name` are not restoration evidence.
-
-Each mapped session generation starts one native prerequisite.
-`before_agent_start` awaits its matching result and returns one persistent context message before the first provider call.
-
-#### Pi message delivery
-
-Pi is the only adapter that injects a message rather than hook stdout.
-So whatever it injects must carry operational provenance, or the Ahoy skill would have to guess whether it was captain-authored.
-
-For `session_start`, the extension does the following:
-
-1. It activates a session-id and monotonic-generation owner synchronously.
-2. It starts the wrapper once.
-3. It makes `before_agent_start` await that same promise before returning Pi's persistent `message` result.
-
-Replacement or shutdown stops the matching process group.
-Stale generations cannot deliver into the active session.
-
-An eligible native failure or empty result settles before the extension returns the existing exact manual instruction.
-So native and manual startup never run concurrently.
-
-An intentional gate or non-primary stand-down returns no message.
-Context-preserving sources retain their existing silent result when the current process already holds the lock.
-
-Manual and automatic compaction retain the existing persistent delivery path, because an automatic retry may have no new `before_agent_start`.
-That path still shares the same generation cancellation and exactly-once claim.
-
-The extension encodes an unencoded digest or fallback as `session-start` operational input and leaves an already-encoded nudge alone.
-
-#### Pi delivery size limit
-
-The extension streams the hook to completion and retains at most 512 KiB for message delivery.
-Whenever the digest is incomplete, this approved containment keeps the prefix and appends a loud `PI SESSION-START DELIVERY TRUNCATED` marker with direct-inspection guidance.
-
 ## Regression coverage
 
-### Wrapper and Pi extension suite
+### Wrapper suite
 
 `tests/fm-sessionstart-nudge.test.sh` is a portable suite.
 It proves the nudge wrapper's silence for these cases:
@@ -328,7 +275,7 @@ It proves the nudge wrapper's silence for these cases:
 
 It also proves the nudge wrapper's exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output.
 
-It separately proves the run wrapper's silence for the gate environment and an unmarked linked worktree, including the internal Pi prerequisite's explicit silent stand-down.
+It separately proves the run wrapper's silence for the gate environment and an unmarked linked worktree.
 It proves the run wrapper creates a missing state directory on a fresh primary and delivers the full digest, while an unmarked linked worktree gets none.
 It proves a fresh primary whose state directory cannot be created reports that on one stderr line and stands down without a digest.
 
@@ -336,55 +283,16 @@ It proves the run wrapper's source routing end to end against a real `fm-session
 
 - Completion-gated `--reemit` selection.
 - Resume delegation.
-- Pi CLI continuation classification.
 - An unrecognized source falling through to the full digest.
-- Bounded loud delivery of an oversized Pi digest.
-
-Through the extension's public event surface, the same portable suite proves:
-
-- Provider exclusion until settlement.
-- Exactly-one execution and context delivery.
-- Interruption.
-- Process-tree retirement.
-- Two rapid replacements.
-- Stale completion.
-- Eligible empty output.
-- Spawn error.
-- Wrapper timeout output.
-- Truncation.
-- Ineligible stand-down.
-- Compaction cancellation.
-
-### Runtime bound test
-
-`tests/fm-session-start.test.sh` proves the runtime bound through the forced pure-Bash fallback.
-It uses a TERM-resistant digest that exceeds its budget and proves that the digest:
-
-- Is force-killed with its grandchild.
-- Still emits its completed stages.
-- Names the incomplete stage and every stage it never reached.
-- Leaves no completion proof.
-- Exits 0.
-
-### Native startup and Ahoy tests
-
-`tests/fm-pi-primary-live-e2e.test.sh` and `tests/fm-opencode-primary-live-e2e.test.sh` exercise native startup paths with first-message and later-message Ahoy regressions.
 
 ### Live run-tier guards
 
-`tests/fm-sessionstart-hook-live-e2e.test.sh` is the opt-in live guard for the Claude, Codex exec, and Pi run-tier adapters.
+`tests/fm-sessionstart-hook-live-e2e.test.sh` is the opt-in live guard for the Claude and Codex exec run-tier adapters.
 It confirms each installed adapter in that suite invokes the run wrapper and delivers its output into context.
 It verifies context-preserving reopen sources for those adapters, and context-reset delivery wherever their tracked TUI surface is reachable.
 
-Its separate `FM_PI_SESSIONSTART_RACE_LIVE_E2E=1` mode uses real Pi with an offline deterministic provider and a barrier-controlled `/new` digest.
-That mode proves both an immediate prompt and a completed-before-prompt control make their first provider call with exactly one native startup context and no manual execution.
-
-
-`tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh` is the separate opt-in real-Pi guard for a post-start AGENTS.md update followed by compaction.
-
 ### Guard, monitoring, and away-mode tests
 
-`tests/fm-turnend-guard.test.sh`, `tests/fm-pi-watch-extension.test.sh`, and `tests/fm-daemon.test.sh` cover marked guard, monitoring, and away-mode delivery.
 
 ### Transport evidence
 

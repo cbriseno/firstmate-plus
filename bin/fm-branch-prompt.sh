@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-branch-prompt.sh - emit the supervision branch's system prompt
-# (docs/pi-supervision-branch.md; the same bytes run off Pi under the
+# (docs/supervision-branch.md; the same bytes run off Pi under the
 # supervision host, docs/supervision-host.md) to stdout.
 #
 # PREFIX-STABILITY CONTRACT (this header is the one owner). The branch's
@@ -15,7 +15,7 @@
 # so one prompt serves the Pi branch and the supervision host; each wake names
 # its host's report surface. Any later
 # "helpful" dynamic content added here silently removes most of the cache
-# benefit - see the measured evidence cited in docs/pi-supervision-branch.md.
+# benefit - see the measured evidence cited in docs/supervision-branch.md.
 #
 # The prompt therefore changes only when the firstmate version changes
 # (tracked file edits), which is exactly "generated once per firstmate

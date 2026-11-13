@@ -136,7 +136,7 @@ test_markerless_ancestry_outranks_foreign_marker() {
   local dir fakebin bin got name
   dir="$TMP_ROOT/markerless"
   fakebin=$(blind_ancestry_bin "$dir/blind")
-  for name in codex; do
+  name=codex
     bin=$(named_bin "$dir/$name-tree" "$name")
     local expect=$name
 
@@ -155,7 +155,6 @@ test_markerless_ancestry_outranks_foreign_marker() {
     got=$(under_process "$bin" CURSOR_AGENT=1)
     [ "$got" = "$expect" ] \
       || fail "$name ancestry with an inherited CURSOR_AGENT resolved '$got', expected $expect"
-  done
   pass "a markerless harness keeps its identity under an inherited foreign marker"
 }
 
@@ -711,44 +710,44 @@ test_supervision_branch_resolves_the_primary_pin() {
   dir="$TMP_ROOT/primary-pin"
   home="$dir/home"
   mkdir -p "$home/config"
-  bin=$(named_bin "$dir/pi-tree" pi)
+  bin=$(named_bin "$dir/codex-tree" codex)
 
   # Without the pin the branch reads as its own engine, which is the hazard.
   for verb in '' crew secondmate; do
-    got=$(pin_probe "$bin" "$home" "$verb" PI_CODING_AGENT=true FM_SUPERVISION_ACTOR=branch)
-    [ "$got" = 'pi|0' ] \
-      || fail "an unpinned branch under a Pi engine resolved '${verb:-own}' as '$got', expected pi (the hazard is not live)"
+    got=$(pin_probe "$bin" "$home" "$verb" FM_SUPERVISION_ACTOR=branch)
+    [ "$got" = 'codex|0' ] \
+      || fail "an unpinned branch under a Codex engine resolved '${verb:-own}' as '$got', expected codex (the hazard is not live)"
   done
 
   for verb in '' crew secondmate; do
-    got=$(pin_probe "$bin" "$home" "$verb" PI_CODING_AGENT=true \
+    got=$(pin_probe "$bin" "$home" "$verb" \
       FM_SUPERVISION_ACTOR=branch FM_SUPERVISION_PRIMARY_HARNESS=claude)
     [ "$got" = 'claude|0' ] \
       || fail "a pinned branch resolved '${verb:-own}' as '$got', expected the primary's claude"
   done
   printf 'default\n' > "$home/config/crew-harness"
-  got=$(pin_probe "$bin" "$home" crew PI_CODING_AGENT=true \
+  got=$(pin_probe "$bin" "$home" crew \
     FM_SUPERVISION_ACTOR=branch FM_SUPERVISION_PRIMARY_HARNESS=claude)
   [ "$got" = 'claude|0' ] || fail "a pinned branch resolved a default crew config as '$got', expected claude"
 
   # An explicit crew config is still the captain's choice, pin or no pin.
   printf 'codex\n' > "$home/config/crew-harness"
-  got=$(pin_probe "$bin" "$home" crew PI_CODING_AGENT=true \
+  got=$(pin_probe "$bin" "$home" crew \
     FM_SUPERVISION_ACTOR=branch FM_SUPERVISION_PRIMARY_HARNESS=claude)
   [ "$got" = 'codex|0' ] || fail "the pin overrode an explicit crew config: '$got'"
   rm -f "$home/config/crew-harness"
 
   # Main, or no actor at all, ignores the pin.
-  got=$(pin_probe "$bin" "$home" '' PI_CODING_AGENT=true FM_SUPERVISION_PRIMARY_HARNESS=claude)
-  [ "$got" = 'pi|0' ] || fail "an unmarked process honored the branch-only pin: '$got'"
-  got=$(pin_probe "$bin" "$home" '' PI_CODING_AGENT=true \
+  got=$(pin_probe "$bin" "$home" '' FM_SUPERVISION_PRIMARY_HARNESS=claude)
+  [ "$got" = 'codex|0' ] || fail "an unmarked process honored the branch-only pin: '$got'"
+  got=$(pin_probe "$bin" "$home" '' \
     FM_SUPERVISION_ACTOR=main FM_SUPERVISION_PRIMARY_HARNESS=claude)
-  [ "$got" = 'pi|0' ] || fail "the main actor honored the branch-only pin: '$got'"
+  [ "$got" = 'codex|0' ] || fail "the main actor honored the branch-only pin: '$got'"
 
   # The ancestry evidence verb reports evidence only and never consults it.
-  got=$(pin_probe "$bin" "$home" ancestry PI_CODING_AGENT=true \
+  got=$(pin_probe "$bin" "$home" ancestry \
     FM_SUPERVISION_ACTOR=branch FM_SUPERVISION_PRIMARY_HARNESS=claude)
-  [ "$got" = 'comm pi|0' ] || fail "the ancestry verb consulted the pin: '$got'"
+  [ "$got" = 'comm codex|0' ] || fail "the ancestry verb consulted the pin: '$got'"
   pass "a supervision branch resolves own, crew, and secondmate to the primary's pinned harness"
 }
 
@@ -757,9 +756,9 @@ test_supervision_branch_refuses_an_unknown_primary_pin() {
   dir="$TMP_ROOT/primary-pin-bad"
   home="$dir/home"
   mkdir -p "$home/config"
-  bin=$(named_bin "$dir/pi-tree" pi)
+  bin=$(named_bin "$dir/codex-tree" codex)
   for verb in '' crew secondmate; do
-    got=$(pin_probe "$bin" "$home" "$verb" PI_CODING_AGENT=true \
+    got=$(pin_probe "$bin" "$home" "$verb" \
       FM_SUPERVISION_ACTOR=branch FM_SUPERVISION_PRIMARY_HARNESS=unknown)
     [ "$got" = '|2' ] \
       || fail "an unknown pin resolved '${verb:-own}' as '$got', expected a refusal with nothing on stdout"

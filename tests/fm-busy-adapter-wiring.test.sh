@@ -82,81 +82,6 @@ if (["turn-end", "progress"].includes(process.env.MODE)) {
 EOF
 }
 
-test_pi_extension_semantic_lifecycle() {
-  local rec id=busy-pi-1 out state ext
-  rec=$(make_spawn_case pi-lifecycle pi "$id")
-  read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
-  expect_code 0 $? "pi spawn should succeed: $out"
-  state="$HOME_DIR/state"
-  ext="$state/$id.pi-ext.ts"
-  assert_present "$ext" "pi spawn did not write the per-task extension"
-
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "seed after spawn must be 'busy fm-spawn', got '$out'"
-
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_pi_ext "$ext" progress) || fail "native progress drive failed: $out"
-  [ -f "$state/$id.progress" ] || fail "native progress did not write its separate marker"
-  [ ! -e "$state/$id.turn-ended" ] || fail "native progress fabricated a completed turn"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "native progress changed semantic state: $out"
-  out=$(drive_pi_ext "$ext" turn-end) || fail "turn_end drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "turn_end no longer touches the notification marker"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "turn_end must stay a notification, not a state edge, got '$out'"
-
-  out=$(drive_pi_ext "$ext" settle-idle) || fail "agent_settled drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "idle pi-ext" ] || fail "agent_settled with isIdle must classify 'idle pi-ext', got '$out'"
-
-  out=$(drive_pi_ext "$ext" agent-start) || fail "agent_start drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy pi-ext" ] || fail "agent_start must classify 'busy pi-ext', got '$out'"
-
-  out=$(drive_pi_ext "$ext" settle-continuing) || fail "continuing settle drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy pi-ext" ] || fail "a settle while another run continues must stay busy, got '$out'"
-
-  out=$(drive_pi_ext "$ext" settle-idle) || fail "final settle drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "idle pi-ext" ] || fail "the final settle must classify idle, got '$out'"
-  pass "pi extension reports agent_start busy, settles idle only via ctx.isIdle(), and keeps turn_end a notification"
-}
-
-test_pi_extension_serializes_settle_before_next_start() {
-  local rec id=busy-pi-order out state ext
-  rec=$(make_spawn_case pi-order pi "$id")
-  read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
-  expect_code 0 $? "pi spawn should succeed: $out"
-  state="$HOME_DIR/state"
-  ext="$state/$id.pi-ext.ts"
-
-  out=$(drive_pi_ext "$ext" settle-then-start) || fail "settle/start drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy pi-ext" ] || fail "a fresh agent_start after agent_settled must win, got '$out'"
-  pass "pi extension awaits agent_settled before the next agent_start without a test delay"
-}
-
-test_pi_extension_stale_incarnation_rejected() {
-  local rec id=busy-pi-2 out state ext
-  rec=$(make_spawn_case pi-stale pi "$id")
-  read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
-  expect_code 0 $? "pi spawn should succeed: $out"
-  state="$HOME_DIR/state"
-  ext="$state/$id.pi-ext.ts"
-  # A re-arm (a rewired incarnation) supersedes the gen embedded in the old
-  # extension file: its late events must be rejected and never change state.
-  "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
-  out=$(drive_pi_ext "$ext" settle-idle) || fail "stale settle drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "a stale extension event must not change state, got '$out'"
-  out=$(drive_pi_ext "$ext" progress) || fail "stale progress drive failed: $out"
-  [ ! -e "$state/$id.progress" ] || fail "stale native progress refreshed the new incarnation"
-  pass "pi extension events from a superseded incarnation are rejected as stale"
-}
 
 # drive_oc_plugin <plugin-path> <events-json-lines...>: load the generated
 # OpenCode plugin in a plain Node host and feed it one event per argument, in
@@ -594,31 +519,6 @@ test_secondmate_claude_spawn_leaves_local_settings_untouched() {
   pass "a claude secondmate spawn leaves an existing settings.local.json untouched"
 }
 
-test_secondmate_pi_extension_reports_busy_without_a_parent_turnend() {
-  local case_dir id=sm-pi primary state ext launch out
-  case_dir="$TMP_ROOT/sm-pi"
-  primary="$case_dir/primary"
-  out=$(spawn_secondmate_harness "$case_dir" "$id" pi) \
-    || fail "pi secondmate spawn failed: $out"
-  state="$primary/state"
-  ext="$state/$id.pi-ext.ts"
-  launch=$(cat "$case_dir/launch.log")
-  assert_present "$ext" "pi secondmate spawn did not write the busy extension"
-  assert_contains "$launch" "$ext" "pi secondmate launch did not load the busy extension"
-  assert_contains "$launch" "fm-primary-turnend-guard.ts" "pi secondmate launch dropped its turn-end extension"
-  assert_contains "$launch" "fm-primary-pi-watch.ts" "pi secondmate launch dropped its watch extension"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "pi secondmate seed must be busy fm-spawn, got '$out'"
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_pi_ext "$ext" turn-end) || fail "pi secondmate turn_end drive failed: $out"
-  [ ! -e "$state/$id.turn-ended" ] || fail "pi secondmate turn_end touched the parent's turn-ended marker"
-  out=$(drive_pi_ext "$ext" settle-idle) || fail "pi secondmate settle drive failed: $out"
-  out=$(classify pi "$id" "$state")
-  [ "$out" = "idle pi-ext" ] || fail "pi secondmate settle must classify idle pi-ext, got '$out'"
-  pass "a pi secondmate loads the busy extension beside its primary extensions and does not emit a parent turn-end"
-}
-
-
 
 # A raw launch command carries none of the launch-template flags (--settings,
 # -e) that load the secondmate wiring, so a record armed for it would never be
@@ -681,10 +581,6 @@ test_raw_secondmate_launch_writes_no_busy_wiring
 test_secondmate_claude_stop_guard_owns_the_stop_verdict
 test_secondmate_claude_older_home_guard_keeps_the_stop_idle_hook
 test_secondmate_claude_spawn_leaves_local_settings_untouched
-test_secondmate_pi_extension_reports_busy_without_a_parent_turnend
-test_pi_extension_semantic_lifecycle
-test_pi_extension_serializes_settle_before_next_start
-test_pi_extension_stale_incarnation_rejected
 test_claude_hooks_semantic_lifecycle
 test_claude_permission_dialog_writes_status_blocker
 test_claude_hooks_stale_incarnation_harmless

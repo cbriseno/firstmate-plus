@@ -4,9 +4,7 @@
 #   - the plugin's declared shape: one hooks module and nothing else, reached from the
 #     project's .claude/skills auto-load path through the tracked symlink, so nothing
 #     of it can load while CLAUDE_CODE_ENABLE_FUNCTION_HOOKS is off;
-#   - the harness-neutral sprite core both harnesses share: the Pi widget's rendering
-#     is byte-for-byte the shared frame painted with standard ANSI codes, so extracting
-#     the core changed nothing Pi draws;
+#   - the shared sprite frame used by the Claude mod;
 #   - the Raster packing of that frame and its base64 encoder;
 #   - the pure presentation policy: home resolution, preference values, working notes;
 #   - the pure supervision-note lines over a tail copy bin/fm-branch-outcome.sh writes;
@@ -22,8 +20,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 MOD="$ROOT/.claude/mods/firstmate-calm"
-PI_SHIP="$ROOT/.pi/extensions/lib/fm-calm-working-ship.ts"
-PI_SPRITE="$ROOT/.pi/extensions/lib/fm-calm-working-ship-sprite.ts"
 OPERATIONAL_INPUT="$ROOT/bin/fm-operational-input.sh"
 TMP_ROOT=$(fm_test_tmproot fm-calm-claude-mod)
 
@@ -49,10 +45,6 @@ test_plugin_shape() {
   autoload="$ROOT/.claude/skills/firstmate-calm"
   [ -f "$autoload/.claude-plugin/plugin.json" ] || fail "the project's .claude/skills path does not reach the mod's manifest"
   [ -f "$autoload/hooks/hooks.json" ] || fail "the project's .claude/skills path does not reach the mod's hooks module declaration"
-  [ -L "$PI_SPRITE" ] || fail "the Pi sprite path is not a symlink to the shared core"
-  [ "$(node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$PI_SPRITE")" = \
-    "$(node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$MOD/lib/fm-calm-working-ship-sprite.ts")" ] \
-    || fail "the Pi sprite path does not resolve to the mod's shared core"
   [ ! -e "$MOD/SKILL.md" ] || fail "the mod carries a SKILL.md and would load as a skill on every harness"
   cat >"$TMP_ROOT/shape.mjs" <<JS
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -78,80 +70,6 @@ JS
   out=$(run_node "$TMP_ROOT/shape.mjs" 2>&1) || fail "plugin shape: $out"
   assert_contains "$out" "shape-ok" "plugin shape check did not complete"
   pass "the Calm mod is one hooks module, linked into the project's auto-load path, with no command, skill, agent, or classic hook path that bypasses its exact opt-in"
-}
-
-test_shared_sprite_and_pi_rendering() {
-  local out
-  cat >"$TMP_ROOT/sprite.mjs" <<JS
-import { pathToFileURL } from "node:url";
-const pi = await import(pathToFileURL($(js_string "$PI_SHIP")).href);
-const core = await import(pathToFileURL($(js_string "$MOD") + "/lib/fm-calm-working-ship-sprite.ts").href);
-const ESC = "\\u001b";
-const ANSI = { water: ESC + "[34m", boat: ESC + "[33m" };
-const RESET = ESC + "[39m";
-const paint = (row) => row.map((run) => (run.color === "plain" ? run.text : ANSI[run.color] + run.text + RESET)).join("");
-const cells = (row) => row.map((run) => run.text).join("");
-const check = (condition, message) => { if (!condition) throw new Error(message); };
-check(pi.CALM_WORKING_SHIP_TICK_MS === core.CALM_WORKING_SHIP_TICK_MS, "Pi re-exports a different tick");
-check(pi.CALM_WORKING_SHIP_TICKS_PER_MOVE === core.CALM_WORKING_SHIP_TICKS_PER_MOVE, "Pi re-exports a different move cadence");
-let frames = 0;
-for (const width of [0, 1, 2, 3, 4, 5, 6, 9, 12, 24, 40, 80, 121]) {
-  const animation = pi.createCalmWorkingShipAnimation();
-  const sprite = core.createCalmWorkingShipSprite();
-  for (let step = 0; step < 41; step += 1) {
-    const rendered = animation.render(width);
-    const frame = sprite.frame(width);
-    const expected = frame.map(paint);
-    check(JSON.stringify(rendered) === JSON.stringify(expected), \`Pi rendering diverged from the shared frame at width \${width} step \${step}: \${JSON.stringify(rendered)} vs \${JSON.stringify(expected)}\`);
-    check(animation.position() === sprite.position() && animation.direction() === sprite.direction() && animation.waterPhase() === sprite.waterPhase(), \`Pi animation state diverged at width \${width} step \${step}\`);
-    if (width === 0) check(frame.length === 0, "zero width painted a row");
-    if (width > 0) {
-      const water = frame[frame.length - 1];
-      check(cells(water).length === width, \`water row is \${cells(water).length} cells at width \${width}\`);
-      for (const row of frame) {
-        check(cells(row).length <= width, \`a row overflowed width \${width}\`);
-        for (const run of row) check(["plain", "water", "boat"].includes(run.color), \`unknown color \${run.color}\`);
-      }
-      if (width >= 5) {
-        check(frame.length === 2, \`width \${width} did not paint two rows\`);
-        check(JSON.stringify(frame[0].slice(1)) === JSON.stringify([{ text: "◿│◣", color: "boat" }]), "the sail is not one boat-colored run");
-        check(frame[0][0].color === "plain" && /^ +$/.test(frame[0][0].text), "sail padding is not plain spaces");
-        const hullAt = frame[1].findIndex((run) => run.text === "╲▁▁▁╱");
-        check(hullAt >= 0, "the hull is not one run");
-        check(frame[1][hullAt].color === "boat", "the hull is not boat-colored");
-        check(frame[1].filter((_run, index) => index !== hullAt).every((run) => run.text.length === 1 && run.color === "water"), "water outside the hull is not one water-colored bar per cell");
-      } else if (width >= 3) {
-        check(frame.length === 1 && cells(frame[0]).includes("◿│◣"), \`width \${width} lost the sail-only fallback\`);
-      } else {
-        check(frame.length === 1 && /^[▁▂▃▄]+$/.test(cells(frame[0])), \`width \${width} lost the water-only fallback\`);
-      }
-    }
-    animation.tick();
-    sprite.tick();
-    frames += 1;
-  }
-}
-// Freeze and resume: restoring the last painted frame discards later ticks on both.
-{
-  const animation = pi.createCalmWorkingShipAnimation();
-  const sprite = core.createCalmWorkingShipSprite();
-  animation.render(30); sprite.frame(30);
-  for (let step = 0; step < 9; step += 1) { animation.tick(); sprite.tick(); }
-  animation.render(30); sprite.frame(30);
-  for (let step = 0; step < 6; step += 1) { animation.tick(); sprite.tick(); }
-  animation.restoreLastRendered(); sprite.restoreLastRendered();
-  check(animation.position() === sprite.position() && animation.waterPhase() === sprite.waterPhase(), "restore diverged");
-  check(sprite.waterPhase() === 1 && sprite.position() === 2, \`restore landed at phase \${sprite.waterPhase()} column \${sprite.position()}\`);
-  sprite.clampToWidth(6);
-  check(sprite.position() === 1 && sprite.direction() === -1, "a hidden clamp did not turn the boat at the new edge");
-  sprite.reset();
-  check(sprite.position() === 0 && sprite.direction() === 1 && sprite.waterPhase() === 0, "reset did not restore the initial state");
-}
-console.log("sprite-ok frames=" + frames);
-JS
-  out=$(run_node "$TMP_ROOT/sprite.mjs" 2>&1) || fail "shared sprite: $out"
-  assert_contains "$out" "sprite-ok frames=533" "the sprite parity sweep did not cover every width and step"
-  pass "the Pi working ship renders byte-for-byte the shared sprite core's frame painted in standard ANSI, at every width, cadence step, freeze, clamp, and reset"
 }
 
 test_raster_packing() {
@@ -243,7 +161,6 @@ test_presentation_policy() {
   cat >"$TMP_ROOT/policy.mjs" <<JS
 import { pathToFileURL } from "node:url";
 const policy = await import(pathToFileURL($(js_string "$MOD") + "/lib/fm-calm-presentation.ts").href);
-const piPreservation = await import(pathToFileURL($(js_string "$ROOT") + "/.pi/extensions/lib/fm-calm-preservation.ts").href);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const plugin = "/repo/.claude/mods/firstmate-calm";
 check(policy.calmPreferencePath({}, plugin) === "/repo/config/calm", "plugin-root fallback");
@@ -263,16 +180,13 @@ const multiLineReply = "The result is substantive.\\nHere is the context needed 
 const atThresholdReply = "x".repeat(240);
 const belowThresholdNote = "x".repeat(239);
 check(policy.CALM_PRESERVE_MIN_CHARS === 240, "Claude preservation threshold");
-check(piPreservation.CALM_PRESERVE_MIN_CHARS === policy.CALM_PRESERVE_MIN_CHARS, "Pi and Claude preservation thresholds");
 for (const [text, expectedPreserved, label] of [
   [belowThresholdNote, false, "239-character single line"],
   [atThresholdReply, true, "240-character single line"],
   [multiLineReply, true, "multi-line text"],
 ]) {
   const claudePreserved = !policy.stepTextIsWorkingNote({ stopReason: "tool_use", toolUses: [] }, text);
-  const piPreserved = piPreservation.calmTextIsSubstantive(text);
   check(claudePreserved === expectedPreserved, "Claude did not classify " + label + " as expected");
-  check(piPreserved === expectedPreserved, "Pi did not classify " + label + " as expected");
 }
 check(policy.stepTextIsWorkingNote({ stopReason: "tool_use", toolUses: [] }, shortNote) === true, "short single-line tool_use note");
 check(policy.stepTextIsWorkingNote({ stopReason: "tool_use", toolUses: [] }, multiLineReply) === false, "multi-line tool_use reply");
@@ -317,7 +231,7 @@ console.log("policy-ok");
 JS
   out=$(run_node "$TMP_ROOT/policy.mjs" 2>&1) || fail "presentation policy: $out"
   assert_contains "$out" "policy-ok" "the policy check did not complete"
-  pass "the Calm policy resolves the shared preference exactly as Pi does, reads on, max, and off as Pi does, and shares Pi's 240-character-or-newline preservation behavior while classifying working notes by stop reason, tool use, and restored transcript shape"
+  pass "the Calm policy resolves the shared preference for the active home, reads on, max, and off with the stored values, and preserves the 240-character-or-newline boundary while classifying working notes by stop reason, tool use, and restored transcript shape"
 }
 
 test_branch_notes_over_the_store_owner() {
@@ -411,7 +325,7 @@ console.log("notes-ok");
 JS
   out=$(NOTES_MOD=$MOD NOTES_STATE=$state NOTES_START_CURSOR=$TMP_ROOT/notes-start-cursor run_node "$TMP_ROOT/notes.mjs" 2>&1) || fail "supervision notes: $out"
   assert_contains "$out" "notes-ok" "the supervision notes check did not complete"
-  pass "the supervision notes read the store owner's tail copy and markers as Pi does: sailboat and anchor lines, silent rows skipped, bounded replay of unread and unprocessed rows not already shown in the session, and latch notes"
+  pass "the supervision notes read the store owner's tail copy and markers with the stored values: sailboat and anchor lines, silent rows skipped, bounded replay of unread and unprocessed rows not already shown in the session, and latch notes"
 }
 
 # The classifier parity corpus: envelopes the shell owner encodes itself, its legacy
@@ -598,7 +512,6 @@ JS
 }
 
 test_plugin_shape
-test_shared_sprite_and_pi_rendering
 test_raster_packing
 test_presentation_policy
 test_branch_notes_over_the_store_owner

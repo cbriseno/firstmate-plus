@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for the Pi supervision branch's fleet-record layer
-# (docs/pi-supervision-branch.md): the byte-stable branch prompt generator
+# (docs/supervision-branch.md): the byte-stable branch prompt generator
 # (bin/fm-branch-prompt.sh), the append-only outcome store
 # (bin/fm-branch-outcome.sh), the per-task lease contract (bin/fm-lease.sh,
 # bin/fm-lease-lib.sh), the lease and role-partition guards wired into the
@@ -1347,7 +1347,7 @@ test_away_record_relocates_main_owned_actions_to_the_branch() {
   git init -q -b main "$root"
   git -C "$root" commit -q --allow-empty -m init
   ln -s "$ROOT/bin" "$root/bin"
-  refusal="error: PR merge (fm-pr-merge) refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/pi-supervision-branch.md)"
+  refusal="error: PR merge (fm-pr-merge) refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/supervision-branch.md)"
 
   # Attended: the refusal wording every caller already pins.
   out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch "$ROOT/bin/fm-pr-merge.sh" task-x https://github.com/o/r/pull/1 2>&1)

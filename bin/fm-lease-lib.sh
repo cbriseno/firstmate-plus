@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fm-lease-lib.sh - the per-task supervision lease contract (one owner).
 #
-# WHY. A supervision branch (docs/pi-supervision-branch.md) is a second LLM
+# WHY. A supervision branch (docs/supervision-branch.md) is a second LLM
 # actor beside MAIN (the captain's chat) in one firstmate home - on Pi, a
 # persistent conversation inside the same pi process; beside another primary,
 # a headless engine session run by the supervision host
@@ -325,9 +325,9 @@ fm_lease_forbid_branch() {
   actor=$(fm_lease_actor) || exit "$FM_LEASE_REFUSE_EXIT"
   [ "$actor" = branch ] || return 0
   if [ "$relocatable" = --away-relocated ] && fm_lease_away_relocated; then
-    echo "note: $action proceeds for the supervision branch under the away-posture record: main is parked and its standing authority is relocated; this script's own gate still applies (docs/pi-supervision-branch.md \"Postures\")" >&2
+    echo "note: $action proceeds for the supervision branch under the away-posture record: main is parked and its standing authority is relocated; this script's own gate still applies (docs/supervision-branch.md \"Postures\")" >&2
     return 0
   fi
-  echo "error: $action refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/pi-supervision-branch.md)" >&2
+  echo "error: $action refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/supervision-branch.md)" >&2
   exit "$FM_LEASE_REFUSE_EXIT"
 }

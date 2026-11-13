@@ -108,13 +108,13 @@ init_changed_fixture_repo() {
     fm-backend-herdr-smoke.test.sh \
     fm-secondmate-safety.test.sh \
     fm-session-start.test.sh \
-    fm-afk-pi-herdr-return-e2e.test.sh \
     fm-backend.test.sh \
     fm-pr-merge.test.sh \
     fm-procevent-quota.test.sh \
     fm-quota-choose.test.sh \
-    fm-pi-watch-extension.test.sh \
-    fm-pi-windows-shell-invocation.test.sh \
+    fm-watch-recovery-loop.test.sh \
+    fm-supervision-host-drain.test.sh \
+    fm-supervision-host.test.sh \
     fm-afk-return.test.sh \
     fm-bearings-snapshot.test.sh \
     fm-control-herdr-smoke.test.sh \
@@ -151,21 +151,21 @@ init_changed_fixture_repo() {
   # shellcheck disable=SC2016  # literal fixture text: the reference must reach
   # the file verbatim so the changed-file scan can find it, not expand here.
   printf '. "$ROOT/bin/shared-probe-lib.sh"\n' >"$repo/bin/fm-watch-probe.sh"
-  printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
+  printf '# .claude/settings.json\n# bin/lib/fm-branch-dispatch.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
-  printf '# .pi/extensions/fm-primary-pi-watch.ts\n' >>"$repo/tests/fm-pi-watch-extension.test.sh"
+  printf '# bin/lib/fm-branch-dispatch.ts\n' >>"$repo/tests/fm-watch-recovery-loop.test.sh"
   mkdir -p \
     "$repo/.agents/skills/example" \
     "$repo/.agents/skills/harness-adapters/references/common" \
-    "$repo/.claude" "$repo/.pi/extensions" "$repo/docs" "$repo/src"
+    "$repo/.claude" "$repo/bin/lib" "$repo/docs" "$repo/src"
   : >"$repo/.agents/skills/example/SKILL.md"
   : >"$repo/.agents/skills/harness-adapters/SKILL.md"
   : >"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
   : >"$repo/.claude/settings.json"
-  : >"$repo/.pi/extensions/fm-primary-pi-watch.ts"
-  : >"$repo/.pi/extensions/fm-primary-turnend-guard.ts"
-  mkdir -p "$repo/.pi/extensions/lib"
-  : >"$repo/.pi/extensions/lib/fm-operational-input.ts"
+  : >"$repo/bin/lib/fm-branch-dispatch.ts"
+  : >"$repo/bin/lib/fm-branch-dispatch.ts"
+  mkdir -p "$repo/bin/lib"
+  : >"$repo/bin/lib/fm-async-exec.ts"
   : >"$repo/docs/fm-test-isolation-proof.md"
   : >"$repo/CONTRIBUTING.md"
   : >"$repo/src/unmapped.ts"
@@ -341,22 +341,22 @@ test_changed_dependency_selection_and_unmapped_failure() {
 
   printf '\n' >>"$repo/.agents/skills/example/SKILL.md"
   printf '\n' >>"$repo/.claude/settings.json"
-  printf '\n' >>"$repo/.pi/extensions/fm-primary-pi-watch.ts"
-  printf '\n' >>"$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  printf '\n' >>"$repo/bin/lib/fm-branch-dispatch.ts"
+  printf '\n' >>"$repo/bin/lib/fm-branch-dispatch.ts"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-ask-user-authority.test.sh" "skill source selects pure contract coverage"
-  assert_contains "$listed" "tests/fm-cd-pretool-check.test.sh" "Claude and Pi source selects hook coverage"
-  assert_contains "$listed" "tests/fm-pi-watch-extension.test.sh" "Pi source selects watcher coverage"
-  assert_contains "$listed" "tests/fm-pi-windows-shell-invocation.test.sh" \
+  assert_contains "$listed" "tests/fm-cd-pretool-check.test.sh" "Claude source selects hook coverage"
+  assert_contains "$listed" "tests/fm-supervision-host.test.sh" "shared branch module selects host coverage"
+  assert_contains "$listed" "tests/fm-supervision-host-drain.test.sh" \
     "turn-end extension selects native-Windows shell coverage"
-  git -C "$repo" add .agents .claude .pi
+  git -C "$repo" add .agents .claude bin/lib
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm non-bin-source-change
 
-  printf '\n' >>"$repo/.pi/extensions/lib/fm-operational-input.ts"
+  printf '\n' >>"$repo/bin/lib/fm-async-exec.ts"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
-  assert_contains "$listed" "tests/fm-pi-windows-shell-invocation.test.sh" \
+  assert_contains "$listed" "tests/fm-supervision-host-drain.test.sh" \
     "operational-input extension selects native-Windows shell coverage"
-  git -C "$repo" add .pi/extensions/lib/fm-operational-input.ts
+  git -C "$repo" add bin/lib/fm-async-exec.ts
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm operational-input-source-change
 
   printf '\n' >>"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
@@ -450,7 +450,7 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
   # The curated consumer keeps its family-level coupling.
   assert_contains "$listed" "tests/fm-daemon.test.sh" \
     "a curated consumer of the helper must still select its whole family"
-  assert_contains "$listed" "tests/fm-pi-watch-extension.test.sh" \
+  assert_contains "$listed" "tests/fm-watch-recovery-loop.test.sh" \
     "a curated consumer of the helper must still select its whole family"
 
   rm -rf "$tmp"
@@ -489,7 +489,7 @@ test_changed_uses_bounded_automatic_concurrency() {
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
-  for script in fm-backend-herdr-smoke.test.sh fm-daemon.test.sh fm-pi-watch-extension.test.sh; do
+  for script in fm-backend-herdr-smoke.test.sh fm-daemon.test.sh fm-watch-recovery-loop.test.sh; do
     cat >"$repo/tests/$script" <<'SH'
 #!/usr/bin/env bash
 sleep 1
@@ -531,7 +531,7 @@ assert serial["selection"].split(";")[-1] == "jobs=1"
 PY
 
   timeout_repo="$tmp/timeout-repo"
-  timeout_script=tests/fm-calm-pi-extension.test.sh
+  timeout_script=tests/fm-calm-claude-mod.test.sh
   mkdir -p "$timeout_repo/bin" "$timeout_repo/tests"
   cp "$RUNNER" "$timeout_repo/bin/fm-test-run.sh"
   cp "$ROOT/tests/git-config-helpers.sh" "$timeout_repo/tests/"
@@ -557,7 +557,7 @@ SH
   rc=$?
   set -e
   [ "$rc" -eq 1 ] || fail "single-script automatic timeout must fail the run, got $rc"
-  grep -Eq '^FM_TEST_END .+ tests/fm-calm-pi-extension\.test\.sh exit=124 ' "$tmp/timeout.out" \
+  grep -Eq '^FM_TEST_END .+ tests/fm-calm-claude-mod\.test\.sh exit=124 ' "$tmp/timeout.out" \
     || fail "single unproven changed script did not receive the automatic timeout: $(cat "$tmp/timeout.out")"
   [ ! -e "$timeout_repo/should-not-run" ] || fail "automatic timeout helper did not own the single changed script"
 
@@ -690,7 +690,7 @@ test_family_proofs_run_in_separate_concurrent_phases() {
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
-    fm-calm-pi-extension.test.sh fm-harness-precedence.test.sh \
+    fm-calm-claude-mod.test.sh fm-harness-precedence.test.sh \
     fm-pr-check-security.test.sh fm-teardown.test.sh; do
     cat >"$repo/tests/$script" <<'SH'
 #!/usr/bin/env bash
@@ -701,7 +701,7 @@ SH
   done
 
   (cd "$repo" && bin/fm-test-run.sh \
-      tests/fm-pr-check-security.test.sh tests/fm-calm-pi-extension.test.sh \
+      tests/fm-pr-check-security.test.sh tests/fm-calm-claude-mod.test.sh \
       tests/fm-teardown.test.sh tests/fm-harness-precedence.test.sh --jobs 4) \
     >"$tmp/out" 2>"$tmp/err" \
     || fail "cross-family phase fixture failed: $(cat "$tmp/err")"

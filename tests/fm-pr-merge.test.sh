@@ -3622,7 +3622,7 @@ test_away_record_permits_any_green_merge_under_away_authority() {
 # would: any task merges green at its live head under away authority, a red
 # one is refused whatever the words say, and without the record the branch is
 # refused at the role partition before any forge call
-# (docs/pi-supervision-branch.md "Postures").
+# (docs/supervision-branch.md "Postures").
 test_away_branch_actor_merges_green_under_the_record() {
   local case_dir rc url head
   head=dadadadadadadadadadadadadadadadadadadada

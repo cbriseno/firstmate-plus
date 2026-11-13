@@ -155,37 +155,6 @@ else
   note "claude not installed - launch-prompt signature not checked"
 fi
 
-PI_BIN=$(command -v pi 2>/dev/null || true)
-if [ -x "${PI_BIN:-}" ]; then
-  VERSION_OUT=$("$PI_BIN" --version 2>&1) || fail "pi --version failed: $VERSION_OUT"
-  note "live pi version: $VERSION_OUT"
-  # A fresh, isolated HOME is required so pi's own trust store has no prior
-  # decision for this scratch worktree; a project-local .pi/extensions/ file
-  # is what actually gates a fresh worktree behind the dialog (pi only asks
-  # when the directory holds a trust-requiring resource), exactly the shape
-  # fm-spawn.sh's own pi launch always carries.
-  PI_HOME_LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-launch-prompt-pi-home.XXXXXX") || fail "pi: could not create the isolated HOME"
-  LABS+=("$PI_HOME_LAB")
-  PI_TAIL_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-launch-prompt-pi-tail.XXXXXX") || fail "pi: could not create the tail capture file"
-  LABS+=("$PI_TAIL_FILE")
-  check_harness pi fm-lp-pi-$$ '.pi/extensions/dummy.ts' 'export default {};' \
-    'Trust project folder' "$PI_TAIL_FILE" \
-    env HOME="$PI_HOME_LAB" "$PI_BIN" hello
-  # pi-signed share Pi's engine and the same project-trust gate
-  # (fm_busy_launch_prompt_parked), so the one real capture also proves them,
-  # each against its own freshly armed fm-spawn seed record.
-  h=pi-signed
-    hstate=$(mktemp -d "${TMPDIR:-/tmp}/fm-launch-prompt-$h.XXXXXX") || fail "$h: could not create the isolated state dir"
-    LABS+=("$hstate")
-    "$EV" arm "$hstate" t1 >/dev/null || fail "$h: could not arm the scratch busy-state record"
-    out=$(fm_busy_classify tmux w1 "$h" t1 "$hstate" "$(cat "$PI_TAIL_FILE")")
-    [ "$out" = "unknown launch-prompt" ] \
-      || fail "$h: the same real Pi trust-dialog capture classified '$out', expected 'unknown launch-prompt'"
-  pass "pi, pi-signed: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate"
-else
-  note "pi not installed - launch-prompt signature not checked"
-fi
-
 [ "$CHECKED" -gt 0 ] || fail "no installed harness could be checked; this run verified nothing"
 note "checked $CHECKED launch-prompt signature(s) against real installed binaries"
 cleanup_all

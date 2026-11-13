@@ -33,7 +33,6 @@ This record owns concurrent isolation evidence for the portable parallel candida
 - `tests/fm-ensure-agents-md.test.sh`
 - `tests/fm-herdr-lab.test.sh`
 - `tests/fm-lint.test.sh`
-- `tests/fm-pi-primary-types.test.sh`
 - `tests/fm-pr-merge.test.sh`
 - `tests/fm-review-diff.test.sh`
 - `tests/fm-send-popup-settle.test.sh`
@@ -69,7 +68,6 @@ This record owns concurrent isolation evidence for the portable parallel candida
 | 2166 | 0 | 15 | `tests/fm-review-diff.test.sh` |
 | 1315 | 0 | 3 | `tests/fm-brief.test.sh` |
 | 975 | 0 | 19 | `tests/fm-spawn-batch.test.sh` |
-| 598 | 0 | 13 | `tests/fm-pi-primary-types.test.sh` |
 | 513 | 0 | 9 | `tests/fm-ensure-agents-md.test.sh` |
 | 331 | 0 | 20 | `tests/fm-supervision-instructions.test.sh` |
 | 99 | 0 | 23 | `tests/fm-transition-lib.test.sh` |
@@ -227,7 +225,6 @@ Its current live-backend result is recorded under [workspace-removal focus safet
 `tests/fm-claude-stop-autoarm-live-e2e.test.sh` gate-skips on its opt-in variable and is now `live-harness-optin`, since a candidate that gate-skips cannot prove concurrency.
 
 One member needs a current Pi to pass at all.
-`tests/fm-pi-branch-extension.test.sh` compares firstmate's supervision-branch extension against the stock renderers of the installed `@earendil-works/pi-coding-agent`, and the proof host's global install was stale at 0.81.1 while the published release was 0.84.4.
 On the stale package the case fails serially as well as concurrently, so it is a prerequisite rather than a concurrency result; both runs above pinned the current package with `FM_PI_PACKAGE_DIR`, and on a host whose global install is current the plain command reproduces them.
 
 ## Production runner effect of the 2026-09-03 admissions

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 // starts no worker for them. A spawnSync call from an extension therefore
 // stops repaint and key echo for the child's whole lifetime, which a
 // supervision outcome made visible as a subsecond freeze every time one
-// arrived (docs/pi-supervision-branch.md "Off-thread delivery").
+// arrived (docs/supervision-branch.md "Off-thread delivery").
 //
 // This is the one owner of that replacement: the status, UTF-8 stdout, and
 // UTF-8 stderr fields these callers consumed from spawnSync, produced by an

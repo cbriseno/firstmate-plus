@@ -38,8 +38,7 @@ Trust handling is complete only when inspection proves the target started proces
 
 `../../../bin/fm-harness.sh` prints firstmate's own harness from verified environment markers and process ancestry, and owns how they combine.
 A marker names its harness, but a structural ancestor of a different harness outranks it, because a marker is ordinary environment state a child or a multiplexer can retain while ancestry is what proves who owns the process tree.
-Only `FM_PI_HARNESS=pi-signed` at the launch boundary together with `PI_CODING_AGENT=true` selects Pi-signed; shared unmarked launcher ancestry remains Pi.
-`../../../bin/fm-spawn.sh` owns worker marker establishment, while the README launch command owns the signed-primary boundary.
+`../../../bin/fm-spawn.sh` owns worker marker establishment, the README owns the primary launch command.
 `../../../bin/fm-harness.sh crew` resolves `config/crew-harness`, where absent or `default` means firstmate's own harness.
 [`docs/configuration.md`](../../../docs/configuration.md#choose-the-secondmate-harness) owns secondmate pin resolution, including per-mate overrides; [`bin/fm-harness.sh`](../../../bin/fm-harness.sh) owns the resolver commands.
 `../../../bin/fm-spawn.sh` re-resolves on every spawn, and an explicit per-spawn argument wins for that spawn.
@@ -79,8 +78,7 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
   },
   "harnesses": {
     "claude": "references/harness/claude.md",
-    "codex": "references/harness/codex.md",
-    "pi": "references/harness/pi.md"
+    "codex": "references/harness/codex.md"
   }
 }
 ```

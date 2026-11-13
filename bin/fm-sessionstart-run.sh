@@ -11,17 +11,12 @@
 # discretion - the helm is taken before the model's first turn, whatever the
 # first turn is.
 #
-# Usage: fm-sessionstart-run.sh [--source <source>] [--pi-prerequisite]
+# Usage: fm-sessionstart-run.sh [--source <source>]
 #   --source  The harness's own session-open source. When omitted, the source is
 #             read from a Claude/Codex-shaped JSON hook payload on stdin
 #             (the `source` field). An unreadable or unrecognized source is
 #             treated as `startup`, because taking the helm redundantly is
 #             cheap and idempotent while not taking it is the whole bug.
-#   --pi-prerequisite
-#             Internal Pi extension mode. An intentional gate/scope stand-down
-#             exits 3 so provider preflight can distinguish it from an eligible
-#             native attempt that settled without output. Every ordinary hook
-#             invocation retains the always-zero compatibility contract below.
 #
 # Source routing (see docs/sessionstart-nudge.md for the per-harness names):
 #   startup, new            full digest - this process has not taken the helm
@@ -134,7 +129,6 @@ COMPLETION_FILE="$STATE/.session-start-complete"
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
 
 SOURCE=
-PI_PREREQUISITE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --source)
@@ -144,22 +138,15 @@ while [ $# -gt 0 ]; do
       if [ $# -ge 2 ]; then shift 2; else shift; fi
       ;;
     --source=*) SOURCE=${1#--source=}; shift ;;
-    --pi-prerequisite) PI_PREREQUISITE=1; shift ;;
     *) shift ;;
   esac
 done
 
-stand_down() {
-  if [ "$PI_PREREQUISITE" = 1 ]; then
-    exit 3
-  fi
-  exit 0
-}
+stand_down() { exit 0; }
 
 # The same two eligibility owners the nudge wrapper uses, so a no-mistakes gate
 # agent and an unmarked task worktree can never run a session start for a home
-# they do not own. Pi's preflight-only status preserves that intentional silence
-# without mistaking it for a failed eligible attempt that needs the manual nudge.
+# they do not own.
 fm_is_gate_agent "$FM_ROOT" && stand_down
 if [ ! -d "$STATE" ] && fm_primary_root_matches "$FM_ROOT"; then
   if ! MKDIR_ERR=$(mkdir -p "$STATE" 2>&1); then
