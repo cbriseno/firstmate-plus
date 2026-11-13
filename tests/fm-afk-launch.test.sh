@@ -1021,7 +1021,7 @@ unit_supervision_host_other_harnesses_run_no_away_daemon() {
       || fail "$harness: the refusal must name the host: $out"
     daemon_allowed "$harness" quiet >/dev/null || fail "$harness: quiet mode must still launch the daemon on an opted-in home"
   done
-  daemon_allowed kimi >/dev/null || fail "kimi has no arm owner to run the host, so it must keep the away daemon"
+  daemon_allowed unknown >/dev/null || fail "unknown has no arm owner to run the host, so it must keep the away daemon"
   pass "supervision host: away mode on an opted-in cursor, opencode, codex, grok, or codex home launches no daemon"
 
   enter_with() {  # <harness> <config line, off for the opt-out, or ->

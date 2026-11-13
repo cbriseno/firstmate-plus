@@ -35,7 +35,6 @@ Today it runs beside a Claude, Cursor, OpenCode, Grok, or Codex primary: away on
 - `/quiet` enters nothing where the attended host runs, and elsewhere launches the daemon; see [Quiet mode](#quiet-mode).
   While the daemon's flag `state/.afk` exists, the host stands aside exactly as the plain arm does.
 - Pi keeps its in-process branch whatever the file says, and no Pi engine is built.
-- Kimi has no primary supervision protocol, so it has no arm owner to run the host.
 
 ### Not yet on the host
 

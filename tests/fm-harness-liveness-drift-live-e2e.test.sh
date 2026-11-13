@@ -95,10 +95,6 @@ resolve_harness_binary() {  # <harness>
     printf '%s\n' "$candidate"
     return 0
   fi
-  if [ "$harness" = kimi ] && [ -n "${HOME:-}" ] && [ -x "$HOME/.kimi-code/bin/kimi" ]; then
-    printf '%s\n' "$HOME/.kimi-code/bin/kimi"
-    return 0
-  fi
   return 1
 }
 
@@ -107,7 +103,7 @@ SKIPPED=
 
 # The verified adapters, in the order the harness-adapters skill router records
 # them. An adapter that gains a verified launch path belongs here too.
-for harness in claude codex opencode pi pi-signed grok kimi cursor; do
+for harness in claude codex opencode pi pi-signed grok cursor; do
   if ! bin_path=$(resolve_harness_binary "$harness"); then
     SKIPPED="$SKIPPED $harness"
     note "skip: $harness is not installed on this machine, so its classification is unverified here"

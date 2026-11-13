@@ -123,11 +123,6 @@ launch_template() {
   # only reads the environment. Cursor exposes no effort flag, so the shared
   # effort axis is deliberately omitted and stays in task metadata only.
   cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-  # Kimi Code rejects a positional prompt, so it launches bare and receives
-  # only an absolute brief pointer after the TUI readiness gate below.
-  # Its turn-end signal is a globally configured Stop hook plus a guarded
-  # per-task worktree token, so no launch placeholder belongs here.
-  kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
   *) return 1 ;;
   esac
 }

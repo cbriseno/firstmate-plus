@@ -2334,7 +2334,7 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' || true)
+  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok)-turnend$)' || true)
 
   if ! unpushed_raw=$(unlanded_commits --oneline 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then

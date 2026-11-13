@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor"
+VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok cursor"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -49,7 +49,6 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     pi) printf '/quit\tEscape\t1\t\n' ;;
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     grok) printf '/exit\tC-c\t1\t\n' ;;
-    kimi) printf '/exit\tEscape\t1\t\n' ;;
     cursor) printf '/exit\tEscape\t1\t\n' ;;
     *) return 1 ;;
   esac
@@ -332,7 +331,7 @@ test_interrupt_sends_each_harness_verified_key() {
 test_harness_family_resolution() {
   local pair recorded want got
   for pair in claude:claude claude-latest:claude codex:codex codex-cli:codex \
-      opencode:opencode grok:grok grok-2:grok kimi:kimi cursor:cursor \
+      opencode:opencode grok:grok grok-2:grok cursor:cursor \
       cursor-agent:cursor pi:pi \
       pi-signed:pi-signed; do
     recorded=${pair%%:*}
@@ -436,7 +435,7 @@ test_harness_kind_capability() {
     fm_control_harness_supports_kind "$harness" scout \
       || fail "$harness should be able to run a scout task"
   done
-  for harness in claude codex opencode pi pi-signed grok kimi; do
+  for harness in claude codex opencode pi pi-signed grok; do
     fm_control_harness_supports_kind "$harness" secondmate \
       || fail "$harness should be able to run a secondmate"
   done
@@ -1066,7 +1065,6 @@ claude|claude|
 codex|codex|
 opencode|opencode|
 grok|grok|
-kimi|kimi|
 cursor|cursor|
 '
   while IFS='|' read -r harness label want; do

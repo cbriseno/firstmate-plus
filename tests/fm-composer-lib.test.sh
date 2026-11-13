@@ -1164,18 +1164,6 @@ _grok_titled_bottom() {  # <width> <title>
   printf '  ╰%s%s─╯' "$(_grok_rule "$lead")" "$title"
 }
 
-test_matrix_kimi_bordered_shell_glyph_box() {
-  # Kimi's bordered `│ > │` composer - the shape fm-spawn.sh's retired
-  # spawn-local regex used to own. Now the shared owner proves it everywhere,
-  # which is what kimi launch-readiness and delivery route through.
-  local screen
-  screen=$'╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯'
-  assert_screen "kimi idle on tmux" empty "$CAPS_TMUX" "$screen" 1
-  assert_screen "kimi idle on plain capture" empty "$CAPS_PLAIN" "$screen"
-  assert_screen "kimi idle on herdr" empty "$CAPS_STYLED" "$screen"
-  assert_screen "kimi idle on cursorless" empty "$CAPS_STYLED_NOID" "$screen"
-  pass "matrix: kimi's bordered shell-glyph box reads empty through the shared owner (spawn's fourth copy retired)"
-}
 
 test_matrix_claude_inside_cursorless_ansi_dump() {
   # Styled Claude capture: `ESC[m` `❯` U+00A0.
@@ -1288,7 +1276,7 @@ test_cursorless_bare_wrap_region_classifies() {
 }
 
 test_cursorless_container_rejects_contiguous_lower_activity() {
-  local box leftbar grok kimi opencode
+  local box leftbar grok opencode
   box=$'╭────────────────────────╮\n│ ❯                      │\n╰────────────────────────╯\nWorking on request...'
   assert_screen "stale box above activity on herdr" unknown "$CAPS_STYLED" "$box"
   assert_screen "stale box above activity on cursorless" unknown "$CAPS_STYLED_NOID" "$box"
@@ -1419,7 +1407,6 @@ test_matrix_opencode_leftbar_abs_cwd_furniture
 test_matrix_grok_titled_bottom_border
 test_matrix_claude_titled_top_rule
 test_matrix_grok_144_approval_titled_bottom_border
-test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_cursorless_ansi_dump
 test_strict_blank_row_divergence
 test_bare_wrap_region_classifies

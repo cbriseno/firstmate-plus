@@ -232,7 +232,6 @@ Its supervisor injection path resolves `FM_SUPERVISOR_BACKEND` and `FM_SUPERVISO
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr, for a Claude pane, types only into an empty composer and withholds Enter until that composer shows the typed payload, and then uses native agent-state submit confirmation on idle baselines, a composer empty fallback when native stays idle, and a pre-Enter rendered-footer transition when that baseline is unavailable.
 The retries-exhausted queued-Enter decision is owned by `fm_composer_queued_enter_verdict` in `bin/fm-composer-lib.sh`; the adapters provide only their backend-specific busy signals.
 Composer classification has one shared owner, `bin/fm-composer-lib.sh`: tmux and herdr contribute only a screen capture plus declarative styled, cursor, identity, and row capabilities, while the shared classifier owns every shape and the `empty`/`pending`/`pending-unproven`/`unknown` verdict.
-`fm-spawn.sh` also routes Kimi launch readiness through that classifier instead of carrying another shape copy.
 The daemon injects only into an affirmatively `empty` composer, so every other or future verdict defers; positive container proof is required, and a blank unidentified row or bare dead-shell prompt cannot receive an escalation.
 The current operator boundary is in [Composer and injection safety](herdr-backend.md#composer-and-injection-safety).
 Unsupported supervisor backends refuse at daemon startup.
@@ -262,8 +261,7 @@ Ordinary child teardown uses its own home's configuration; retiring a whole home
 Every classification returns a verdict of busy, idle, unknown, or dead together with the source that produced it, so a consumer or a diagnostic can never confuse semantic state with a fallback.
 
 Each converted adapter reports its own turn lifecycle through a machine-readable contract the vendor already exposes, rather than through rendered footer text: Pi and pi-signed through the Firstmate-owned extension's `agent_start` and `agent_settled` confirmed by `ctx.isIdle()`, OpenCode through its plugin's semantic `session.execution.*`, Claude through owned `UserPromptSubmit`, `Stop`, `StopFailure`, and `SessionEnd` hooks, and Cursor through its conversation transcript.
-Kimi behind Pi inherits Pi's lifecycle.
-Verified native Linux Codex workers use their process-owned rollout through `bin/fm-codex-activity.py`; other Codex launches and standalone Kimi remain unknown until verified.
+Verified native Linux Codex workers use their process-owned rollout through `bin/fm-codex-activity.py`; other Codex launches remain unknown until verified.
 Grok keeps a rendered-tail busy fallback scoped to its own tasks.
 The one case where the contract reads rendered text for a converted adapter is the launch-prompt backstop (`fm_busy_launch_prompt_parked` in `bin/fm-busy-lib.sh`): when a record is still the untouched `fm-spawn` seed and the caller supplied a captured pane matching that harness's own recognized interactive launch prompt - a workspace-trust dialog, sign-in screen, or first-run menu - `fm_busy_classify` reports `unknown launch-prompt` instead of `busy fm-spawn`.
 That keeps a launch that never began its brief from holding the busy-age exemption for the whole `FM_BUSY_TURN_MAX_SECS` bound and surfaces it through the ordinary not-provably-working path instead.
@@ -338,7 +336,7 @@ The session-start bootstrap step keeps valid dispatch configuration silent unles
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
-That keeps spawn launch compatible across claude, codex, opencode, pi, pi-signed, grok, kimi, cursor while preserving the requested profile for later audit.
+That keeps spawn launch compatible across claude, codex, opencode, pi, pi-signed, grok, cursor while preserving the requested profile for later audit.
 
 ## Optional secondmates
 

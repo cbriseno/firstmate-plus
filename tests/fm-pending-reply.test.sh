@@ -1325,107 +1325,6 @@ test_unknown_backend_state_uses_capture_fallback() {
   pass "tmux and herdr unknown states use bounded capture fallback"
 }
 
-test_kimi_capture_fallback_uses_recorded_harness() (
-  local home state corr rec sm_home
-  home=$(setup_parent kimi-fallback)
-  state="$home/state"
-  sm_home="$home/sm"
-  mkdir -p "$sm_home/state"
-  # This fixture clock is intentionally scoped to the isolated subshell.
-  # shellcheck disable=SC2030,SC2031
-  export FM_PENDING_REPLY_NOW=10020
-  corr=$(fm_pending_reply_create "$home" "$state" hibit "kimi fallback")
-  fm_pending_reply_mark_delivered "$state" "$corr"
-  fm_write_secondmate_meta "$state/hibit.meta" "$sm_home" "session:fm-hibit" alpha kimi
-  fm_backend_busy_state() { printf 'unknown'; }
-  fm_backend_capture() { printf '%s' "$FM_PENDING_KIMI_CAPTURE"; }
-  export FM_PENDING_KIMI_CAPTURE=' 🌑 · Tip: ask Kimi to schedule tasks, e.g. "remind me at 5pm"'
-
-  [ "$(fm_pending_reply_backend_observation tmux session:fm-hibit fm-hibit codex)" = fallback-idle ] \
-    || fail "Kimi spinner leaked into another harness"
-  export FM_PENDING_KIMI_CAPTURE='Ctrl+c:cancel'
-  [ "$(fm_pending_reply_backend_observation tmux session:fm-hibit fm-hibit kimi)" = fallback-idle ] \
-    || fail "Grok's exact busy token leaked into Kimi pending-reply observation"
-  export FM_PENDING_KIMI_CAPTURE=' 🌑 · Tip: ask Kimi to schedule tasks, e.g. "remind me at 5pm"'
-  fm_pending_reply_tick "$state"
-  rec=$(fm_pending_reply_path "$state" "$corr")
-  [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
-    || fail "recorded Kimi spinner was not observed as busy"
-  [ "$(phase_of "$state" "$corr")" = awaiting_report ] \
-    || fail "working Kimi secondmate entered recovery"
-  pass "pending replies scope Kimi capture fallback by recorded harness"
-)
-
-test_tick_skips_terminal_and_reuses_target_observation() {
-  (
-    local home state open1 open2 resolved escalated rec probe_log probes scan_log scans snapshot
-    home=$(setup_parent observation-cache)
-    state="$home/state"
-    probe_log="$home/backend-probes.log"
-    scan_log="$home/status-scans.log"
-    : > "$probe_log"
-    : > "$scan_log"
-    # This fixture clock is intentionally scoped to the isolated subshell.
-    # shellcheck disable=SC2030,SC2031
-    export FM_PENDING_REPLY_NOW=10100
-    open1=$(fm_pending_reply_create "$home" "$state" hibit "first open request")
-    open2=$(fm_pending_reply_create "$home" "$state" hibit "second open request")
-    fm_pending_reply_mark_delivered "$state" "$open1"
-    fm_pending_reply_mark_delivered "$state" "$open2"
-    resolved=$(fm_pending_reply_create "$home" "$state" resolved "resolved request")
-    fm_pending_reply_mark_delivered "$state" "$resolved"
-    printf 'done [corr=%s]: complete\n' "$resolved" > "$state/resolved.status"
-    fm_pending_reply_try_resolve "$state" "$resolved" || fail "resolved fixture should resolve"
-    escalated=$(fm_pending_reply_create "$home" "$state" escalated "escalated request")
-    fm_pending_reply_mark_delivered "$state" "$escalated"
-    rec=$(fm_pending_reply_path "$state" "$escalated")
-    fm_pending_reply_set "$rec" phase escalated || fail "escalated fixture should transition"
-    mkdir -p "$home/escalated/state"
-    printf 'done [corr=%s]: wrong home\n' "$escalated" > "$home/escalated/state/child.status"
-    fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
-    fm_write_secondmate_meta "$state/resolved.meta" "$home/resolved" "sess:fm-resolved"
-    fm_write_secondmate_meta "$state/escalated.meta" "$home/escalated" "sess:fm-escalated"
-    # Runtime overrides called indirectly by the pending-reply tick.
-    # shellcheck disable=SC2329
-    fm_backend_busy_state() {
-      printf '%s\t%s\n' "$1" "$2" >> "$probe_log"
-      printf 'busy'
-    }
-    # shellcheck disable=SC2329
-    fm_backend_capture() { fail "native busy observations should not capture"; }
-    # shellcheck disable=SC2329
-    fm_pending_reply_find_resolve_line() {
-      local status_file=$1 corr=$2 line
-      printf '%s\t%s\n' "$status_file" "$corr" >> "$scan_log"
-      [ -f "$status_file" ] || return 0
-      while IFS= read -r line || [ -n "$line" ]; do
-        fm_pending_reply_line_resolves "$line" "$corr" || continue
-        printf '%s' "$line"
-        return 0
-      done < "$status_file"
-      return 0
-    }
-    fm_pending_reply_tick "$state"
-    probes=$(wc -l < "$probe_log" | tr -d ' ')
-    [ "$probes" = 1 ] || fail "two open records for one target should use one probe, got $probes"
-    rec=$(fm_pending_reply_path "$state" "$open1")
-    [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
-      || fail "cached observation should update the first open record"
-    rec=$(fm_pending_reply_path "$state" "$open2")
-    [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
-      || fail "cached observation should update the second open record"
-    rec=$(fm_pending_reply_path "$state" "$escalated")
-    snapshot=$(fm_pending_reply_get "$rec" wrong_home_scan_signature)
-    [ -n "$snapshot" ] || fail "wrong-home scan should persist its file-set signature"
-    fm_pending_reply_tick "$state"
-    scans=$(wc -l < "$scan_log" | tr -d ' ')
-    [ "$scans" = 3 ] \
-      || fail "unchanged records should scan two open and one escalated status only once, got $scans"
-    [ "$(fm_pending_reply_get "$rec" wrong_home_scan_signature)" = "$snapshot" ] \
-      || fail "unchanged wrong-home logs should retain their scan signature"
-  ) || fail "terminal-skip and observation-cache regression failed"
-  pass "tick skips terminal records and reuses target observations"
-}
 
 # Records are never pruned, so a home accumulates thousands of settled ones. The
 # tick selects the records it has work for in one pass and leaves every settled
@@ -2157,7 +2056,6 @@ test_document_pointer_resolves
 test_helper_report_resolves
 test_busy_idle_observation_via_backend_abstraction
 test_unknown_backend_state_uses_capture_fallback
-test_kimi_capture_fallback_uses_recorded_harness
 test_tick_skips_terminal_and_reuses_target_observation
 test_tick_leaves_settled_records_alone
 test_correlations_reuse_only_for_matching_open_task

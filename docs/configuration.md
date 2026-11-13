@@ -1025,7 +1025,7 @@ For a checkout with a private integration branch, run `bin/fm-local-sync.sh <rep
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, cursor are empirically verified for crewmate and secondmate launches.
+claude, codex, opencode, pi, pi-signed, grok, cursor are empirically verified for crewmate and secondmate launches.
 The verified primary harnesses are Claude Code, Grok, Pi, `pi-signed`, Codex, OpenCode, and Cursor Agent CLI.
 
 ### Harness restrictions and credentials
@@ -1052,7 +1052,6 @@ Other harnesses retain the typed operational-marker launch path.
 Pi-family launches adapt the regular-TUI safeguard to the installed CLI's capabilities; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the exact version-safe launch mechanics.
 Enabled primary-session turn-end guard integrations are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 
-Kimi remains outside the primary turn-end guard integrations; [`docs/turnend-guard.md`](turnend-guard.md#compatibility-limits) owns its separate captain-approved crew wake hook.
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 
 Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, and OpenCode uses its TUI plugin.
@@ -1113,12 +1112,6 @@ Those inherited values are defaults and rules only; `fm-spawn` still permits a c
 ### Installed hooks and launch details
 
 For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
-For Kimi crews, `fm-spawn.sh` runs `fm-kimi-turnend-hook.sh install`, drops a per-task `.fm-kimi-turnend` pointer in the worktree, and records the matching private registry token for teardown.
-
-Kimi continues to use the captain's normal Kimi home, including the existing config, skills, and memory; Firstmate does not create an isolated Kimi home.
-The Kimi installer requires an existing regular non-symlink `~/.kimi-code/config.toml`, `python3` with `tomllib`, and `jq`; it validates but never serializes the captain's TOML and refuses before writing when the config is missing, malformed, or surprising or when either tool requirement is unavailable.
-
-Its `remove` action excises only the marker-delimited Firstmate region and removes Firstmate's hook files.
 For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree, plus the parent home's `state/<id>.pi-ext.ts` busy extension.
 Pi-family secondmates can start unattended in Firstmate-seeded homes without accepting project trust manually; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the capability requirement, session-only approval scope, and older-version fallback, with [regression evidence](verification/runtime-backends.md#pi-seeded-secondmate-project-trust).
 
@@ -1510,7 +1503,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
-| `claude`, `codex`, `grok`, `kimi`, `cursor` | The resolver has an authoritative single-provider mapping. |
+| `claude`, `codex`, `grok`, `cursor` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, and `opencode`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.

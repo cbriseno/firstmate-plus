@@ -149,7 +149,6 @@ fm_quota_single_provider_table() {
     'claude claude' \
     'codex codex' \
     'grok grok' \
-    'kimi kimi' \
     'cursor cursor'
 }
 
@@ -172,7 +171,6 @@ fm_quota_provider_for_harness() {
     opencode)     printf 'codex\n' ;;
     pi|pi-signed) printf 'pi\n' ;;
     grok)         printf 'grok\n' ;;
-    kimi)         printf 'kimi\n' ;;
     cursor)       printf 'cursor\n' ;;
     *)            return 1 ;;
   esac

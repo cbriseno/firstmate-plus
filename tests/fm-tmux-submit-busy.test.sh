@@ -319,9 +319,9 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   # particularly important for Kimi: its idle key-tip rotation can include the
   # same cancel token Grok uses to mean busy.
   printf 'Working...\n' > "$composer"
-  pane_busy unknown kimi && fail "Kimi must ignore Pi's Working footer"
+  pane_busy unknown unknown && fail "An unknown adapter must ignore Pi's Working footer"
   printf 'Ctrl+c:cancel\n' > "$composer"
-  pane_busy unknown kimi && fail "idle Kimi must ignore Grok's cancel footer"
+  pane_busy unknown unknown && fail "idle An unknown adapter must ignore Grok's cancel footer"
 
   # Older Claude Code and the existing Pi and Grok signatures remain unchanged.
   printf 'esc to interrupt\n' > "$composer"
