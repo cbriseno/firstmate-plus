@@ -577,7 +577,7 @@ test_unverified_harness_is_refused() {
 
 test_backend_key_capability_matrix() {
   local backend key
-  for backend in tmux herdr zellij cmux; do
+  for backend in tmux herdr cmux; do
     # C-u is the composer clear muse's interrupt needs; every session provider
     # but Orca normalizes it (bin/backends/*.sh).
     for key in Escape Enter C-c C-u; do
@@ -638,33 +638,19 @@ test_orca_refuses_an_escape_harness_interrupt() {
 }
 
 test_unverified_state_backends_refuse_stop_verbs() {
-  local dir out rc backend
-  for backend in zellij cmux; do
-    dir=$(new_case "nostate-$backend")
-    if [ "$backend" = zellij ]; then
-      add_task "$dir" t1 claude ship zellij "sess:7"
-      {
-        echo "zellij_session=sess"
-        echo "zellij_tab_id=1"
-        echo "zellij_pane_id=7"
-      } >> "$dir/home/state/t1.meta"
-    else
-      add_task "$dir" t1 claude ship cmux "ws1:surface1"
-      {
-        echo "cmux_workspace_id=ws1"
-        echo "cmux_surface_id=surface1"
-      } >> "$dir/home/state/t1.meta"
-    fi
-    out=$(run_control "$dir" t1 exit); rc=$?
-    expect_code 1 "$rc" "exit on $backend should refuse"$'\n'"$out"
-    assert_contains "$out" "no recovery-grade agent-state classifier" \
-      "the $backend refusal should name the missing stop proof"
-    [ -z "$(literals "$dir")" ] || fail "$backend must receive no exit command"
-    out=$(run_control "$dir" t1 relaunch --note x); rc=$?
-    expect_code 1 "$rc" "relaunch on $backend should refuse"$'\n'"$out"
-    assert_contains "$out" "no recovery-grade agent-state classifier" \
-      "the $backend relaunch refusal should name the missing stop proof"
-  done
+  local dir out rc backend=cmux
+  dir=$(new_case "nostate-$backend")
+  add_task "$dir" t1 claude ship cmux "ws1:surface1"
+  printf 'cmux_workspace_id=ws1\ncmux_surface_id=surface1\n' >> "$dir/home/state/t1.meta"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "exit on $backend should refuse"$'\n'"$out"
+  assert_contains "$out" "no recovery-grade agent-state classifier" \
+    "the $backend refusal should name the missing stop proof"
+  [ -z "$(literals "$dir")" ] || fail "$backend must receive no exit command"
+  out=$(run_control "$dir" t1 relaunch --note x); rc=$?
+  expect_code 1 "$rc" "relaunch on $backend should refuse"$'\n'"$out"
+  assert_contains "$out" "no recovery-grade agent-state classifier" \
+    "the $backend relaunch refusal should name the missing stop proof"
   pass "fm-control: a backend that cannot prove an agent stopped refuses exit and relaunch"
 }
 
@@ -673,13 +659,9 @@ test_unverified_state_backends_refuse_stop_verbs() {
 # relaunch onto commandcode there while the running agent is untouched.
 test_commandcode_relaunch_off_tmux_and_herdr_refuses_before_stopping() {
   local dir out rc backend meta_before
-  for backend in zellij cmux orca; do
+  for backend in cmux orca; do
     dir=$(new_case "cc-relaunch-$backend")
     case "$backend" in
-      zellij)
-        add_task "$dir" t1 claude ship zellij "sess:7"
-        printf 'zellij_session=sess\nzellij_tab_id=1\nzellij_pane_id=7\n' >> "$dir/home/state/t1.meta"
-        ;;
       cmux)
         add_task "$dir" t1 claude ship cmux "ws1:surface1"
         printf 'cmux_workspace_id=ws1\ncmux_surface_id=surface1\n' >> "$dir/home/state/t1.meta"
@@ -707,11 +689,11 @@ test_commandcode_relaunch_off_tmux_and_herdr_refuses_before_stopping() {
   pass "fm-control relaunch: commandcode off tmux and herdr is refused before the running agent is stopped"
 }
 
-test_state_verified_backends_are_exactly_tmux_herdr_and_rex() {
+test_state_verified_backends_are_exactly_tmux_and_herdr() {
   fm_control_backend_state_verified tmux || fail "tmux has a recovery-grade classifier"
   fm_control_backend_state_verified herdr || fail "herdr has a recovery-grade classifier"
   local backend
-  for backend in zellij orca cmux; do
+  for backend in orca cmux; do
     fm_control_backend_state_verified "$backend" \
       && fail "$backend has no recovery-grade classifier and must not claim one"
   done
@@ -1410,7 +1392,7 @@ test_harness_kind_capability
 test_orca_refuses_an_escape_harness_interrupt
 test_unverified_state_backends_refuse_stop_verbs
 test_commandcode_relaunch_off_tmux_and_herdr_refuses_before_stopping
-test_state_verified_backends_are_exactly_tmux_herdr_and_rex
+test_state_verified_backends_are_exactly_tmux_and_herdr
 test_window_label_is_refused_with_the_exact_id
 test_explicit_endpoint_is_refused
 test_unknown_task_is_refused

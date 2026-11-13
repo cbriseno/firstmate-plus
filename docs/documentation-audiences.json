@@ -76,10 +76,6 @@
       "target": "docs/verification/runtime-backends.md"
     },
     {
-      "source": "docs/zellij-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
       "source": "docs/orca-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
@@ -571,10 +567,6 @@
     },
     {
       "path": "docs/wedge-alarm.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },
     {

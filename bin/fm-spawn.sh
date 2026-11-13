@@ -120,11 +120,11 @@
 #   fallback details in docs/cmux-backend.md),
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter, verified herdr
-#   adapter, and experimental zellij, orca and cmux adapters. Orca owns
+#   adapter, and experimental orca and cmux adapters. Orca owns
 #   both the task worktree and terminal, so ship/scout Orca spawns do not run
-#   treehouse get; cmux is a session provider only, exactly like
-#   herdr/zellij, so they do. Auto-detected herdr stays silent like tmux;
-#   auto-detected cmux prints a loud stderr notice; zellij and orca are
+#   treehouse get; cmux and herdr are session providers and use treehouse.
+#   Auto-detected herdr stays silent like tmux;
+#   auto-detected cmux prints a loud stderr notice; orca is
 #   never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
@@ -381,7 +381,7 @@
 #   LANG LC_ALL LC_CTYPE TMPDIR TMP TEMP GOTMPDIR, plus backend identity/routing:
 #   TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID
 #   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID CMUX_SOCKET_PATH
-#   ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION TERM_PROGRAM
+#   TERM_PROGRAM
 #   plus the task
 #   marker FM_TASK_ID that ship and scout panes receive above, plus the
 #   compact-adviser kill switch COMPACT_ADVISER_DISABLE, which the floor also
@@ -1969,7 +1969,7 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
 fi
 
 # Command Code's idle placeholder reads empty only with a Command Code pane
-# identity, which tmux and Herdr supply and zellij, cmux, and orca do not, so
+# identity, which tmux and Herdr supply and cmux and orca do not, so
 # there the composer would never read empty and steering would stall.
 if [ "$HARNESS" = commandcode ] && [ "$BACKEND" != tmux ] && [ "$BACKEND" != herdr ]; then
   echo "error: commandcode is verified on the tmux and herdr backends only; backend=$BACKEND cannot prove its composer empty. Select backend tmux or herdr." >&2
@@ -3107,7 +3107,7 @@ BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
 # Every backend's own current-path read (tmux's pane_current_path, herdr's
-# foreground_cwd, zellij/cmux's active pwd probe against the live shell) can
+# foreground_cwd, cmux's active pwd probe against the live shell) can
 # report the OS-level, physically-resolved cwd, so comparing it against a
 # still-symlinked PROJ_ABS can misfire both ways: false-negative (the poll
 # below never notices the pane left the project) or false-positive (the
@@ -3782,18 +3782,6 @@ EOF
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
     ;;
-  zellij)
-    ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
-    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS") || exit 1
-    read -r ZELLIJ_TAB_ID ZELLIJ_PANE_ID <<EOF
-$ZELLIJ_TASK_IDS
-EOF
-    if [ -z "$ZELLIJ_TAB_ID" ] || [ -z "$ZELLIJ_PANE_ID" ]; then
-      echo "error: zellij did not return a tab/pane id for $W" >&2
-      exit 1
-    fi
-    T="$ZELLIJ_SES:$ZELLIJ_PANE_ID"
-    ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
     CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
@@ -3854,7 +3842,6 @@ spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
   herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_text_line "$1" "$2" ;;
   cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   esac
@@ -3863,7 +3850,6 @@ spawn_current_path() { # <target>
   case "$BACKEND" in
   tmux) fm_backend_tmux_current_path "$1" ;;
   herdr) fm_backend_herdr_current_path "$1" ;;
-  zellij) fm_backend_zellij_current_path "$1" "$W" ;;
   cmux) fm_backend_cmux_current_path "$1" "$W" ;;
   esac
 }
@@ -3871,7 +3857,6 @@ spawn_send_literal() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
   herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_literal "$1" "$2" ;;
   cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
   esac
@@ -3880,7 +3865,6 @@ spawn_send_key() { # <target> <key>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_key "$1" "$2" ;;
   herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_key "$1" "$2" ;;
   cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
   esac
@@ -3900,7 +3884,7 @@ spawn_enter_recorded_worktree() {
 }
 
 # Verify the endpoint's cwd after the explicit handoff but before any harness
-# starts. Zellij and cmux implement this read with a shell probe, so keeping it
+# starts. cmux implements this read with a shell probe, so keeping it
 # before launch prevents the probe from becoming input to a live worker.
 spawn_assert_agent_worktree() {
   local expected seen i
@@ -4157,9 +4141,7 @@ rovo_endpoint_cleanup() {
     fm_backend_kill orca "$T" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
     return 0
   fi
-  local tab_id=
-  [ "$BACKEND" = zellij ] && tab_id=$ZELLIJ_TAB_ID
-  fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
+  fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
 # OpenCode 2 takes its brief on the launch command (--prompt), but some 2.x
@@ -5401,7 +5383,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen process_scope spawned_at sessions_file status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen process_scope spawned_at sessions_file status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5462,11 +5444,6 @@ preserve_relaunch_meta() {
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
     echo "herdr_tab_id=$HERDR_TAB_ID"
     echo "herdr_pane_id=$HERDR_PANE_ID"
-  fi
-  if [ "$BACKEND" = zellij ]; then
-    echo "zellij_session=$ZELLIJ_SES"
-    echo "zellij_tab_id=$ZELLIJ_TAB_ID"
-    echo "zellij_pane_id=$ZELLIJ_PANE_ID"
   fi
   if [ "$BACKEND" = orca ]; then
     echo "orca_worktree_id=$ORCA_WORKTREE_ID"
@@ -5939,7 +5916,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   for env_name in HOME PATH USER LOGNAME SHELL TERM COLORTERM LANG LC_ALL LC_CTYPE \
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
     HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
-    CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
+    CMUX_SOCKET_PATH \
     TERM_PROGRAM \
     FM_TASK_ID COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
     $LAUNCH_ENV_FORWARD_NAMES; do

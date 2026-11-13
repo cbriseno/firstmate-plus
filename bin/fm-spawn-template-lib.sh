@@ -224,14 +224,14 @@ launch_template() {
   # marker the pane actually carries at launch time (verified live: ORCA_*
   # values from the launching session's environment reach worker tool
   # subprocesses through the pane), keeping the three launch-owned names
-  # (FM_TASK_ID, FM_TASK_INBOX, FM_ZELLIJ_SESSION) so the doorbell and backend
+  # (FM_TASK_ID, FM_TASK_INBOX) so the doorbell and backend
   # plumbing keep working; the fixed `env -u` set clears every harness-identity
   # marker, because polytoken publishes none of its own and does not clear
   # inherited ones. There is no `__EFFORTFLAG__`: polytoken encodes reasoning
   # effort inside the model reference as `<model>(<effort>)`, so the effort
   # axis rides `__MODELFLAG__` after mapping to the nearest compatible
   # level in the installed model's selectable set.
-  polytoken) printf '%s' 'for _fmv in $(env | cut -d= -f1 | grep -E '\''^(ORCA_|FM_)'\''); do case $_fmv in FM_TASK_ID|FM_TASK_INBOX|FM_ZELLIJ_SESSION) ;; *) unset $_fmv ;; esac; done; env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u FM_OMP_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI -u AGENT __POLYTOKENBIN__ --config-dir __POLYTOKENCONFIG__ new --sessions-dir __POLYTOKENSESSIONS__ --facet firstmate-worker --facets-dir __POLYTOKENFACETS__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+  polytoken) printf '%s' 'for _fmv in $(env | cut -d= -f1 | grep -E '\''^(ORCA_|FM_)'\''); do case $_fmv in FM_TASK_ID|FM_TASK_INBOX) ;; *) unset $_fmv ;; esac; done; env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u FM_OMP_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI -u AGENT __POLYTOKENBIN__ --config-dir __POLYTOKENCONFIG__ new --sessions-dir __POLYTOKENSESSIONS__ --facet firstmate-worker --facets-dir __POLYTOKENFACETS__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   # Command Code receives the typed launch envelope after -- as its initial
   # message. --yolo bypasses permission prompts, --trust skips the folder-trust
   # prompt of a fresh worktree, and --skip-onboarding skips taste onboarding.

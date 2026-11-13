@@ -456,7 +456,7 @@ test_backend_validate_refuses_unknown() {
   fm_backend_validate tmux 2>/dev/null || fail "fm_backend_validate should accept tmux"
   fm_backend_validate orca 2>/dev/null || fail "fm_backend_validate should accept orca"
   local out
-  # bogus names a backend with no adapter at all; tmux, herdr, zellij, orca,
+  # bogus names a backend with no adapter at all; tmux, herdr, orca,
   # and cmux are all known adapters and spawn-supported.
   out=$(fm_backend_validate bogus 2>&1) && fail "fm_backend_validate should refuse bogus (no such adapter)"
   assert_contains "$out" "unknown backend 'bogus'" "fm_backend_validate did not name the rejected backend"
@@ -547,7 +547,6 @@ test_backend_validate_spawn_accepts_orca() {
   local out
   fm_backend_validate_spawn tmux 2>/dev/null || fail "fm_backend_validate_spawn should accept tmux"
   fm_backend_validate_spawn herdr 2>/dev/null || fail "fm_backend_validate_spawn should accept herdr"
-  fm_backend_validate_spawn zellij 2>/dev/null || fail "fm_backend_validate_spawn should accept zellij"
   fm_backend_validate_spawn orca 2>/dev/null || fail "fm_backend_validate_spawn should accept orca"
   fm_backend_validate_spawn cmux 2>/dev/null || fail "fm_backend_validate_spawn should accept cmux"
   out=$(fm_backend_validate_spawn bogus 2>&1) && fail "fm_backend_validate_spawn should still refuse unknown backends"
@@ -1055,7 +1054,7 @@ test_teardown_conformance_old_vs_new() {
 
 test_spawn_refuses_unknown_backend_flag() {
   local out status
-  # bogus names a backend with no adapter at all; zellij and orca both
+  # bogus names a backend with no adapter at all; orca and cmux both
   # graduated to real adapters and have their own spawn tests.
   out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 \
@@ -1192,6 +1191,10 @@ if fm_backend_validate_spawn rex >/dev/null 2>&1; then
   fail "removed rex backend must be rejected"
 fi
 pass "removed rex backend is rejected"
+if fm_backend_validate_spawn zellij >/dev/null 2>&1; then
+  fail "removed zellij backend must be rejected"
+fi
+pass "removed zellij backend is rejected"
 test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
 test_backend_validate_spawn_accepts_orca

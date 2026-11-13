@@ -3427,7 +3427,7 @@ fm_backend_herdr_composer_content() {  # <target>
 
 # fm_backend_herdr_composer_payload_shown: 0 when <after>, read from a
 # composer that was empty before the send, shows <text>.
-# Literal equality ignores whitespace, the same comparison zellij uses, so a
+# Literal equality ignores whitespace, so a
 # wrapped payload still matches. It also ignores U+2063, the invisible mark
 # that starts operational inputs and separates the from-firstmate label:
 # Claude's composer read-back on Herdr never shows it (verified live), and it

@@ -71,12 +71,11 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-git-strip-ai-trailers.sh` | Install per-launch publication checks and forge wrappers, chain project hooks, and optionally strip AI commit trailers |
 | `fm-git-push-guard.sh`  | Run the publication check, plus external-review shared-origin and branch restrictions, and write the external-review guard record ([design](external-review-forge.md)) |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
-| `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
+| `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer shapes, capability-aware screen classification, and verdicts |
 | `fm-agent-process-lib.sh` | Backend-neutral harness-process name classifier shared by recovery-grade adapters |
 | `backends/tmux.sh`       | Verified tmux session-provider adapter                                               |
 | `backends/herdr.sh`      | Herdr session-provider adapter with its own required CI lane                         |
-| `backends/zellij.sh`     | Experimental zellij session-provider adapter                                         |
 | `backends/orca.sh`       | Experimental Orca backend adapter owning both worktree and terminal                  |
 | `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push declared inherited local material to live local or remote secondmates and send the placement-specific config reread when changed |

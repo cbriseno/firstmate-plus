@@ -168,7 +168,7 @@ The worktree and the task's records are unaffected either way.
 - A backend that cannot deliver the harness's interrupt key, or the composer clear that key needs, is refused rather than sent a different key.
   Orca's terminal API exposes only an interrupt and an Enter, so it can deliver neither Escape nor Ctrl+U.
 - `exit` and `relaunch` require a backend with a recovery-grade agent-state classifier - tmux and herdr - because without one the "the agent stopped" postcondition cannot be proven.
-  zellij, orca, and cmux are refused rather than reported as successful blind.
+  orca and cmux are refused rather than reported as successful blind.
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
 - `exit`'s composer-empty check, above, is itself a fail-closed boundary that `relaunch` inherits by stopping the old agent through `exit`.
@@ -184,7 +184,6 @@ Backend capability comes from each adapter's real surface, not from a policy cho
 | --- | --- | --- | --- | --- | --- |
 | tmux | yes | yes | yes | yes | yes |
 | herdr | yes | yes | yes | yes | yes |
-| zellij | yes | yes | yes | yes | no |
 | cmux | yes | yes | yes | yes | no |
 | orca | no | yes | yes | no | no |
 

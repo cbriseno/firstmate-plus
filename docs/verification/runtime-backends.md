@@ -12,7 +12,7 @@ On 2026-11-09, Linux with Python 3.11.2, codex-cli 0.166.0 and Claude Code 2.1.3
 Replaying the first 60 lines of real historical Claude and Codex transcripts through the migration recovered both sessions; a second invocation left the files unchanged.
 Claude's historical brief can arrive in a tool result after an inbox doorbell, and its first transcript record can lack a timestamp.
 The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-busy-state.test.sh`.
-The common spawn path records launches before backend delivery for tmux, Herdr, Zellij, Orca, cmux, independent of the harness command; session capture currently uses only Claude's existing hook and Codex's existing pin.
+The common spawn path records launches before backend delivery for tmux, Herdr, Orca, and cmux, independent of the harness command; session capture currently uses only Claude's existing hook and Codex's existing pin.
 Remote secondmate launch transport is outside worker capture.
 macOS was inspected but not executed; the writer and migration use Python's standard library, while automatic Codex capture retains its existing native Linux capability limit.
 
@@ -21,12 +21,12 @@ macOS was inspected but not executed; the writer and migration use Python's stan
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.
 On 2026-11-10, Linux with Python 3.11.2 ran `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-work-activity.test.sh` with real disposable worker processes.
 It reported `ok - real worker kill and wrapper stop publish death; count, row, recovery, relaunch and incarnation isolation`.
-The common wrapper now publishes process liveness independently of harness output for ship, scout and host launches across tmux, Herdr, Zellij, Orca, cmux; secondmate launches remain outside this wrapper.
+The common wrapper now publishes process liveness independently of harness output for ship, scout and host launches across tmux, Herdr, Orca, and cmux; secondmate launches remain outside this wrapper.
 The regression exercises SIGKILL of the worker while its wrapper remains alive, wrapper TERM, recovery and relaunch through the canonical owner and projection.
 Its common publication path uses Python subprocess and the existing Bash ledger writer on Linux and macOS; macOS execution of this new regression remains unverified.
 On 2026-11-06, Linux with Python 3.11.2, chrome-devtools-axi 0.1.44 and Chrome 148.0.7778.178 ran a private worker that opened a Python HTTP server and headless browser.
 The wrapper captured 21 processes including the detached bridge, MCP, Chrome, telemetry and crashpad, then returned `exit 0 captured 21 survivors {}`.
-The common spawn path was inspected for tmux, Herdr, Zellij, Orca, cmux; it wraps ship, scout and host commands after environment filtering and leaves secondmate launches unchanged.
+The common spawn path was inspected for tmux, Herdr, Orca, and cmux; it wraps ship, scout and host commands after environment filtering and leaves secondmate launches unchanged.
 Harness command templates retain their existing bytes inside the wrapper; ownership uses kernel process relationships rather than vendor names or rendered output.
 The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-control-relaunch.test.sh tests/fm-spawn-compact-adviser-disable.test.sh tests/fm-teardown.test.sh`.
 It exercises automatic close, explicit exit, teardown, separate ownership scopes and both launch environment modes.
@@ -357,11 +357,6 @@ Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
 ### Away-mode transport
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-## Zellij
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.

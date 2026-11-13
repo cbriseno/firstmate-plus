@@ -740,7 +740,7 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
 # plus jq added, so a backend that must NOT require tmux can be proven silent
 # with tmux absent. Echoes the fakebin dir. The removed tmux is what makes these
 # cases catch the old "everything but orca demands tmux" bug: with the buggy
-# TOOLS list a herdr/zellij/cmux home would report MISSING: tmux here.
+# TOOLS list a herdr/cmux home would report MISSING: tmux here.
 make_fake_toolchain_no_tmux() {  # <case-dir> <extra-cli...>
   local dir=$1 fakebin
   shift
@@ -752,7 +752,7 @@ make_fake_toolchain_no_tmux() {  # <case-dir> <extra-cli...>
 
 test_session_provider_backends_do_not_require_tmux() {
   local backend cli case_dir fakebin out
-  # herdr/zellij/cmux are session providers only: they require their own CLI, jq,
+  # herdr/cmux are session providers only: they require their own CLI, jq,
   # and treehouse, never tmux. With all genuine deps present and tmux absent,
   # bootstrap must be silent.
   while IFS='^' read -r backend cli; do
@@ -767,7 +767,6 @@ test_session_provider_backends_do_not_require_tmux() {
     [ -z "$out" ] || fail "backend=$backend with tmux absent but its own deps present should be silent, got: $out"
   done <<'ROWS'
 herdr^herdr
-zellij^zellij
 cmux^cmux
 ROWS
   pass "bootstrap: session-provider backends require their own CLI + jq + treehouse, never tmux"
@@ -801,7 +800,6 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when its own CLI is missing"
   done <<'ROWS'
 herdr^herdr
-zellij^zellij
 cmux^cmux
 ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
@@ -841,7 +839,7 @@ test_unknown_backend_reports_invalid_configuration() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux)" \
+  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr orca cmux)" \
     "bootstrap should report an unknown resolved backend"
   assert_not_contains "$out" "MISSING: tmux" "an unknown backend should not silently fall back to tmux dependencies"
   pass "bootstrap: unknown resolved backends fail closed with an actionable diagnostic"
@@ -849,7 +847,7 @@ test_unknown_backend_reports_invalid_configuration() {
 
 test_json_backends_require_jq_not_tmux() {
   local backend case_dir fakebin bash_env out
-  # herdr/zellij/cmux parse their backend's JSON output, so jq is a genuine dep.
+  # herdr/cmux parse their backend's JSON output, so jq is a genuine dep.
   # jq lives in a system BASE_PATH dir on many hosts, so force it missing with a
   # command()/jq() override (the same technique the git-required case uses) to keep
   # the assertion host-independent.
@@ -881,7 +879,6 @@ SH
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when jq is missing"
   done <<'ROWS'
 herdr
-zellij
 cmux
 ROWS
   pass "bootstrap: JSON-emitting backends require jq (their genuine dep), never tmux"

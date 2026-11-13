@@ -271,12 +271,6 @@ test_supported_backend_endpoint_records_validate() {
     "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid Herdr endpoint refused"
 
-  id=zellij-task
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=lab:7" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" \
-    "backend=zellij" "zellij_session=lab" "zellij_tab_id=3" "zellij_pane_id=7"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid Zellij endpoint refused"
-
   id=orca-task
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "terminal=term-7" \
@@ -291,20 +285,22 @@ test_supported_backend_endpoint_records_validate() {
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
 
   id=retired-backend-task
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=old-session:old-block" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" "backend=rex"
-  if fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null; then
-    fail "retired backend metadata must refuse cleanup"
-  fi
+  for backend in rex zellij; do
+    fm_write_meta "$dir/home/state/$id.meta" \
+      "window=old-session:old-block" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" "backend=$backend"
+    if fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null; then
+      fail "retired $backend metadata must refuse cleanup"
+    fi
+  done
 
-  for backend in tmux herdr zellij orca cmux; do
+  for backend in tmux herdr orca cmux; do
     set +e
     fm_backend_kill "$backend" "" >/dev/null 2>&1
     target=$?
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate, and every empty backend target refuses"
+  pass "cleanup identity: valid tmux, Herdr, Orca, and cmux records validate, and every empty backend target refuses"
 }
 
 test_orca_composite_worktree_id_validates() {

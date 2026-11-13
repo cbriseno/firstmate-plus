@@ -118,7 +118,6 @@ init_changed_fixture_repo() {
     fm-afk-return.test.sh \
     fm-bearings-snapshot.test.sh \
     fm-backend-cmux.test.sh \
-    fm-backend-zellij.test.sh \
     fm-control-herdr-smoke.test.sh \
     fm-backend-orca.test.sh; do
     printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/$script"

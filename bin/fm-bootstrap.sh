@@ -870,7 +870,7 @@ secondmate_handoff_detect() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|git|gh|curl|jq|orca|zellij|cmux)
+    tmux|node|git|gh|curl|jq|orca|cmux)
       [ "$(fm_platform_name)" != macos ] || return 1
       if [ "$1" = cmux ]; then
         echo "brew install --cask cmux  # or see https://cmux.com"
@@ -900,7 +900,7 @@ upgrade_cmd() {
 
 manual_install_url() {
   case "$1" in
-    node|git|tmux|jq|gh|orca|zellij|cmux|curl)
+    node|git|tmux|jq|gh|orca|cmux|curl)
       [ "$(fm_platform_name)" = macos ] || return 1
       echo "docs/platforms.md (provide $1 on PATH manually)" ;;
     herdr) echo "https://herdr.dev" ;;

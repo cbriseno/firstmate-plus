@@ -160,9 +160,7 @@ spawn_abort_cleanup() {
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
     if [ "$SPAWN_FRESH_ENDPOINT_OPENED" = 1 ] && [ "$SPAWN_LAUNCH_SENT" = 0 ] && [ -n "${T:-}" ]; then
       SPAWN_FRESH_ENDPOINT_OPENED=0
-      local abort_tab_id=
-      [ "$BACKEND" != zellij ] || abort_tab_id=${ZELLIJ_TAB_ID:-}
-      if fm_backend_kill "$BACKEND" "$T" "$abort_tab_id" "fm-$ID" 2>/dev/null; then
+      if fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null; then
         SPAWN_ENDPOINT_CLOSED=1
       else
         echo "warning: could not close endpoint $T after the failed spawn of $ID; close it by hand so its slot returns to the pool" >&2
