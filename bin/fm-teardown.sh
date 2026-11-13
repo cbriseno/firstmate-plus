@@ -745,7 +745,7 @@ case "$TEARDOWN_WINDOW_COUNT:$(fm_meta_get "$META" window)" in
   0:|1:)
     case "$TEARDOWN_BACKEND_COUNT:$(fm_meta_get "$META" backend)" in
       0:|1:tmux)
-        TEARDOWN_FOREIGN_ENDPOINT_KEYS='^terminal=|^orca_'
+        TEARDOWN_FOREIGN_ENDPOINT_KEYS='^terminal=|^orca_|^cmux_'
         for TEARDOWN_FOREIGN_BACKEND in $FM_BACKEND_KNOWN; do
           [ "$TEARDOWN_FOREIGN_BACKEND" = tmux ] \
             || TEARDOWN_FOREIGN_ENDPOINT_KEYS="$TEARDOWN_FOREIGN_ENDPOINT_KEYS|^${TEARDOWN_FOREIGN_BACKEND}_"

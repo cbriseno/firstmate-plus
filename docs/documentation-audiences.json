@@ -76,10 +76,6 @@
       "target": "docs/verification/runtime-backends.md"
     },
     {
-      "source": "docs/cmux-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
       "source": "docs/codex-app-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
@@ -300,10 +296,6 @@
     {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
-    },
-    {
-      "path": "docs/cmux-backend.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/codex-app-backend.md",

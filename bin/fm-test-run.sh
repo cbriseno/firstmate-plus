@@ -354,7 +354,6 @@ family_for_basename() {
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|fm-claude-trust-live-e2e.test.sh|fm-claude-native-live-e2e.test.sh|\
-    fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-codex-hook-layer-live-e2e.test.sh|fm-codex-native-owner-live.test.sh|fm-lock-release-live.test.sh|\
@@ -414,9 +413,6 @@ family_for_basename() {
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
-    fm-backend-cmux.test.sh|fm-backend-cmux-smoke.test.sh)
-      printf '%s\n' cmux
-      ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
     fm-busy-state.test.sh|fm-capacity.test.sh|fm-classify-corr-token.test.sh|\
     fm-claude-stop-autoarm.test.sh|fm-cursor-harness.test.sh|\
@@ -444,7 +440,6 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    cmux) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -462,7 +457,6 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
-cmux
 standalone
 unclassified
 EOF
@@ -693,8 +687,6 @@ tests/fm-afk-return.test.sh 47380
 tests/fm-agy-harness.test.sh 50959
 tests/fm-agy-signals-live-e2e.test.sh 53
 tests/fm-ask-user-authority.test.sh 171
-tests/fm-backend-cmux-smoke.test.sh 34
-tests/fm-backend-cmux.test.sh 3754
 tests/fm-backend-tmux-smoke.test.sh 291
 tests/fm-backend.test.sh 23932
 tests/fm-backlog-atomicity.test.sh 219379
@@ -722,7 +714,6 @@ tests/fm-claude-stop-autoarm-live-e2e.test.sh 73
 tests/fm-claude-stop-autoarm.test.sh 61189
 tests/fm-claude-trust.test.sh 12010
 tests/fm-claude-trust-live-e2e.test.sh 16739
-tests/fm-cmux-claude-composer-live-e2e.test.sh 77
 tests/fm-codex-activity-live-e2e.test.sh 323
 tests/fm-codex-continuity-live-e2e.test.sh 108
 tests/fm-codex-hook-layer-live-e2e.test.sh 108
@@ -1461,14 +1452,10 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/cmux*|tests/cmux-test-safety.sh)
-      printf '%s\n' cmux
-      printf '%s\n' backend-dispatch
-      ;;
     bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       ;;
-    bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
+    bin/fm-backend.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;

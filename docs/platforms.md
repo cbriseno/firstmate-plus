@@ -18,7 +18,7 @@ The [toolchain configuration](configuration.md#toolchain) owns the additional ag
 Choose a supported primary harness and runtime; [tmux](tmux-backend.md) is the reference route.
 The [upstream tmux installation guide](https://github.com/tmux/tmux/wiki/Installing) covers Linux distributions and macOS package managers.
 On macOS, stock Bash 3.2 is supported by the existing compatibility lane; install Python and the selected backend separately.
-Use the backend's own guide for platform constraints, especially macOS-only cmux.
+Use the backend's own guide for platform constraints.
 
 On Windows, install WSL2 and a Linux distribution using [Microsoft's WSL installation instructions](https://learn.microsoft.com/en-us/windows/wsl/install).
 Confirm the distribution uses version 2 with `wsl --list --verbose` in PowerShell, then run setup, Git, the primary harness, tools and backend inside that distribution.

@@ -870,13 +870,9 @@ secondmate_handoff_detect() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|git|gh|curl|jq|cmux)
+    tmux|node|git|gh|curl|jq)
       [ "$(fm_platform_name)" != macos ] || return 1
-      if [ "$1" = cmux ]; then
-        echo "brew install --cask cmux  # or see https://cmux.com"
-      else
-        echo "brew install $1  # or the platform's package manager"
-      fi ;;
+      echo "brew install $1  # or the platform's package manager" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
@@ -900,7 +896,7 @@ upgrade_cmd() {
 
 manual_install_url() {
   case "$1" in
-    node|git|tmux|jq|gh|cmux|curl)
+    node|git|tmux|jq|gh|curl)
       [ "$(fm_platform_name)" = macos ] || return 1
       echo "docs/platforms.md (provide $1 on PATH manually)" ;;
     herdr) echo "https://herdr.dev" ;;

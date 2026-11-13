@@ -39,7 +39,6 @@ if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   inventory tmux backend unknown no 'tmux backend'
   inventory treehouse backend 'lease support' no 'isolated tmux worktrees'
   inventory herdr backend unknown no 'Herdr backend'
-  inventory cmux backend unknown no 'cmux backend'
   inventory gh forge unknown no 'GitHub operations'
   inventory gh-axi forge 0.1.29 no 'GitHub integration'
   inventory tasks-axi backlog 0.2.6 no 'tasks-axi backlog'
@@ -148,10 +147,7 @@ if ! ps -p "$$" -o pid= -o ppid= >/dev/null 2>&1; then
   printf 'missing: POSIX process inspection\n'
   result=1
 fi
-if [ "$backend" = cmux ] && [ "$(fm_platform_name)" != macos ]; then
-  printf 'unsupported: cmux requires macOS; select an available runtime explicitly\n'
-  result=1
-fi
+
 printf 'native-codex: optional Linux-only binding; no transport acceptance implied\n'
 printf 'scope: prerequisite check only; bootstrap owns versions/auth and backend guides own live acceptance\n'
 exit "$result"

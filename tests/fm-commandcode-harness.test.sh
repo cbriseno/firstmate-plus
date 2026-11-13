@@ -180,17 +180,3 @@ if out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" cc-sm "$proj" --secondmate -
 then fail 'Command Code secondmate launch accepted'; fi
 assert_contains "$out" 'crewmate/scout adapter only' 'wrong secondmate refusal'
 pass "scout launch carries model, verified effort only, autonomy, typed brief, and the per-process mod"
-
-# Only tmux and Herdr supply the Command Code identity that lets its idle
-# placeholder read empty, so every other spawn-capable backend is refused
-# before any endpoint, worktree, or busy record exists.
-backend=cmux
-fm_test_spawn_brief "$home" "cc-$backend"
-if out=$(FM_FAKE_LAUNCH_LOG="$case_dir/cc-$backend.launch" fm_test_run_spawn "$home" "$wt" "$fakebin" "cc-$backend" "$proj" \
-  --scout --harness commandcode --backend "$backend" 2>&1)
-then fail "Command Code launch accepted on backend=$backend"; fi
-assert_contains "$out" "commandcode is verified on the tmux and herdr backends only; backend=$backend" "wrong refusal on $backend: $out"
-assert_absent "$case_dir/cc-$backend.launch" "Command Code launched on $backend"
-assert_absent "$home/state/cc-$backend.meta" "refused $backend spawn left a task record"
-assert_absent "$home/state/cc-$backend.busy-gen" "refused $backend spawn armed busy state"
-pass "Command Code launches are refused on cmux"

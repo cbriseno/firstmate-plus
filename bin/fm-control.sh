@@ -118,8 +118,7 @@
 #     if the backend cannot send that key.
 #   - `exit` and `relaunch` require a backend with a recovery-grade agent-state
 #     classifier (tmux, herdr), because without one the "the agent stopped"
-#     postcondition cannot be proven. cmux is refused
-#     rather than reported as successful blind.
+#     postcondition cannot be proven.
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
 #     classified state acts.
 #   - A composer that visibly holds pending text refuses before an exit command

@@ -116,6 +116,12 @@ test_invalid_endpoint_records_refuse_before_mutation() {
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout" "backend=orca"
   assert_refused_without_mutation "$dir" "$id" "retired Orca endpoint"
 
+  dir=$(make_case retired-cmux)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=workspace:surface" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout" "backend=cmux"
+  assert_refused_without_mutation "$dir" "$id" "retired cmux endpoint"
+
   pass "fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call"
 }
 
@@ -277,14 +283,8 @@ test_supported_backend_endpoint_records_validate() {
     "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid Herdr endpoint refused"
 
-  id=cmux-task
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=workspace-1:surface-2" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" \
-    "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
-
   id=retired-backend-task
-  for backend in rex zellij orca; do
+  for backend in rex zellij orca cmux; do
     fm_write_meta "$dir/home/state/$id.meta" \
       "window=old-session:old-block" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" "backend=$backend"
     if fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null; then
@@ -292,14 +292,14 @@ test_supported_backend_endpoint_records_validate() {
     fi
   done
 
-  for backend in tmux herdr cmux; do
+  for backend in tmux herdr; do
     set +e
     fm_backend_kill "$backend" "" >/dev/null 2>&1
     target=$?
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: valid tmux, Herdr, and cmux records validate, and every empty backend target refuses"
+  pass "cleanup identity: valid tmux and Herdr records validate, and every empty backend target refuses"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {

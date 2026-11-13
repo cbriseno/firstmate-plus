@@ -71,12 +71,10 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-git-strip-ai-trailers.sh` | Install per-launch publication checks and forge wrappers, chain project hooks, and optionally strip AI commit trailers |
 | `fm-git-push-guard.sh`  | Run the publication check, plus external-review shared-origin and branch restrictions, and write the external-review guard record ([design](external-review-forge.md)) |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
-| `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer shapes, capability-aware screen classification, and verdicts |
 | `fm-agent-process-lib.sh` | Backend-neutral harness-process name classifier shared by recovery-grade adapters |
 | `backends/tmux.sh`       | Verified tmux session-provider adapter                                               |
 | `backends/herdr.sh`      | Herdr session-provider adapter with its own required CI lane                         |
-| `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push declared inherited local material to live local or remote secondmates and send the placement-specific config reread when changed |
 | `fm-project-mode.sh`     | Resolve a project's registered delivery posture, forge binding, ship-branch prefix, or linked local installation from `data/projects.md` for fleet sync, home seeding, the forge agreement a ship spawn or scout promotion applies, and the installation follow-up |
 | `fm-install-followup.sh` | Queue, announce, and pre-fill the follow-up that carries a linked project's landed work into its local installation (`install=<project>`) |

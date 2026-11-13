@@ -115,16 +115,11 @@
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
 #   config/backend, then runtime auto-detection from the runtime firstmate's
-#   environment: $TMUX, HERDR_ENV=1 or cmux
-#   runtime signals (via bin/fm-backend.sh's fm_backend_detect, with cmux
-#   fallback details in docs/cmux-backend.md),
-#   then tmux.
-#   Spawn-capable backends are tmux, herdr and cmux; all use treehouse.
-#   Auto-detected herdr stays silent; auto-detected cmux prints a notice.
+#   environment: $TMUX or HERDR_ENV=1, then tmux.
+#   Spawn-capable backends are tmux and Herdr; both use treehouse.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate
-#   spawns yet.
+#   absent backend= means tmux.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -375,7 +370,6 @@
 #   The fixed operational floor is HOME PATH USER LOGNAME SHELL TERM COLORTERM
 #   LANG LC_ALL LC_CTYPE TMPDIR TMP TEMP GOTMPDIR, plus backend identity/routing:
 #   TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID
-#   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID CMUX_SOCKET_PATH
 #   TERM_PROGRAM
 #   plus the task
 #   marker FM_TASK_ID that ship and scout panes receive above, plus the
@@ -1521,10 +1515,6 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
-  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
-    exit 1
-  fi
 
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
@@ -1901,7 +1891,7 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
 fi
 
 # Command Code's idle placeholder reads empty only with a Command Code pane
-# identity, which tmux and Herdr supply and cmux does not, so
+# identity, which tmux and Herdr supply, so
 # there the composer would never read empty and steering would stall.
 if [ "$HARNESS" = commandcode ] && [ "$BACKEND" != tmux ] && [ "$BACKEND" != herdr ]; then
   echo "error: commandcode is verified on the tmux and herdr backends only; backend=$BACKEND cannot prove its composer empty. Select backend tmux or herdr." >&2
@@ -3031,7 +3021,7 @@ BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
 # Every backend's own current-path read (tmux's pane_current_path, herdr's
-# foreground_cwd, cmux's active pwd probe against the live shell) can
+# foreground_cwd) can
 # report the OS-level, physically-resolved cwd, so comparing it against a
 # still-symlinked PROJ_ABS can misfire both ways: false-negative (the poll
 # below never notices the pane left the project) or false-positive (the
@@ -3706,18 +3696,6 @@ EOF
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
     ;;
-  cmux)
-    fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
-    read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
-$CMUX_TASK_IDS
-EOF
-    if [ -z "$CMUX_WORKSPACE_ID" ] || [ -z "$CMUX_SURFACE_ID" ]; then
-      echo "error: cmux did not return a workspace/surface id for $W" >&2
-      exit 1
-    fi
-    T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
-    ;;
   esac
   # The Herdr projection owns its own abort cleanup above; every other
   # endpoint a fresh polytoken spawn opened is closed by spawn_abort_cleanup when
@@ -3741,28 +3719,24 @@ spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
   herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   esac
 }
 spawn_current_path() { # <target>
   case "$BACKEND" in
   tmux) fm_backend_tmux_current_path "$1" ;;
   herdr) fm_backend_herdr_current_path "$1" ;;
-  cmux) fm_backend_cmux_current_path "$1" "$W" ;;
   esac
 }
 spawn_send_literal() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
   herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
   esac
 }
 spawn_send_key() { # <target> <key>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_key "$1" "$2" ;;
   herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
   esac
 }
 
@@ -3779,9 +3753,7 @@ spawn_enter_recorded_worktree() {
   }
 }
 
-# Verify the endpoint's cwd after the explicit handoff but before any harness
-# starts. cmux implements this read with a shell probe, so keeping it
-# before launch prevents the probe from becoming input to a live worker.
+# Verify the endpoint's cwd after the explicit handoff but before any harness starts.
 spawn_assert_agent_worktree() {
   local expected seen i
   [ "$KIND" = secondmate ] && return 0
@@ -5327,10 +5299,6 @@ preserve_relaunch_meta() {
     echo "herdr_tab_id=$HERDR_TAB_ID"
     echo "herdr_pane_id=$HERDR_PANE_ID"
   fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
-  fi
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
@@ -5789,8 +5757,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   # authoritative setter.
   for env_name in HOME PATH USER LOGNAME SHELL TERM COLORTERM LANG LC_ALL LC_CTYPE \
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
-    HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
-    CMUX_SOCKET_PATH \
+    HERDR_PANE_ID \
     TERM_PROGRAM \
     FM_TASK_ID COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
     $LAUNCH_ENV_FORWARD_NAMES; do

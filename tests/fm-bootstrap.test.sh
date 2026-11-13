@@ -29,7 +29,6 @@ set -u
 
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-bootstrap-tests)
-export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"
 
 # Hermetic runtime-backend detection. These cases pin the backend per-home via
 # config/backend; the dev shell's ambient runtime markers ($TMUX inside tmux,
@@ -745,7 +744,6 @@ test_session_provider_backends_do_not_require_tmux() {
     [ -z "$out" ] || fail "backend=$backend with tmux absent but its own deps present should be silent, got: $out"
   done <<'ROWS'
 herdr^herdr
-cmux^cmux
 ROWS
   pass "bootstrap: session-provider backends require their own CLI + jq + treehouse, never tmux"
 }
@@ -778,7 +776,6 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when its own CLI is missing"
   done <<'ROWS'
 herdr^herdr
-cmux^cmux
 ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
 }
@@ -793,20 +790,6 @@ test_herdr_install_requires_manual_action() {
   pass "bootstrap: Herdr manual-install guidance is never executed as a shell command"
 }
 
-test_cmux_bundled_cli_satisfies_dependency() {
-  local case_dir fakebin bundle out
-  case_dir="$TMP_ROOT/cmux-bundled-cli"
-  mkdir -p "$case_dir/home/config" "$case_dir/bundle"
-  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
-  printf '%s\n' cmux > "$case_dir/home/config/backend"
-  fakebin=$(make_fake_toolchain_no_tmux "$case_dir")
-  fm_fake_exit0 "$case_dir/bundle" cmux
-  bundle="$case_dir/bundle/cmux"
-  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-    FM_BACKEND_CMUX_BUNDLE_BIN="$bundle" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  [ -z "$out" ] || fail "a usable bundled cmux CLI should satisfy bootstrap without a PATH shim, got: $out"
-  pass "bootstrap: the bundled cmux CLI satisfies the active backend dependency"
-}
 
 test_unknown_backend_reports_invalid_configuration() {
   local case_dir fakebin out
@@ -817,7 +800,7 @@ test_unknown_backend_reports_invalid_configuration() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr cmux)" \
+  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr)" \
     "bootstrap should report an unknown resolved backend"
   assert_not_contains "$out" "MISSING: tmux" "an unknown backend should not silently fall back to tmux dependencies"
   pass "bootstrap: unknown resolved backends fail closed with an actionable diagnostic"
@@ -857,7 +840,6 @@ SH
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when jq is missing"
   done <<'ROWS'
 herdr
-cmux
 ROWS
   pass "bootstrap: JSON-emitting backends require jq (their genuine dep), never tmux"
 }
@@ -1504,7 +1486,6 @@ test_git_is_required_with_supported_install_instruction
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux
 test_herdr_install_requires_manual_action
-test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
 test_treehouse_lease_check_follows_resolved_backend
