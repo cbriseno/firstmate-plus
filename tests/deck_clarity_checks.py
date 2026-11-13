@@ -547,6 +547,37 @@ class Clarity(unittest.TestCase):
         self.assertFalse(json.loads(path.read_text())['valid'])
         self.assertEqual(self.history()['records'], [])
 
+    def test_close_records_request_to_verified_installation(self):
+        if not shutil.which('tasks-axi') or not shutil.which('node'):
+            self.skipTest('installed tasks-axi + Node required')
+        self.run_cli('fm-tasks-axi.sh', 'add', 'origin', 'Original request', '--repo', 'alpha')
+        self.run_cli('fm-tasks-axi.sh', 'add', 'install', 'Install follow-up', '--repo', 'alpha',
+                     '--request-from', 'origin')
+        created = json.loads((self.home / 'data/origin/creation.json').read_text())['created_at']
+        installed = dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')
+        payload = Path(self.tmp.name) / 'installed.json'
+        payload.write_text(json.dumps(dict(installed_at=installed)))
+        self.value('fm-tasks-axi.sh', 'presentation', 'install', '--presentation-file', str(payload))
+        snapshot = self.value('fm-bearings-snapshot.sh', '--json')
+        row = next(v for v in snapshot['gates'] if v['id'] == 'install')
+        self.assertEqual(row['flow']['presentation']['installed_at'], installed)
+        self.run_cli('fm-tasks-axi.sh', 'done', 'install', '--note', 'local main', '--json')
+        receipt = json.loads((self.home / 'data/install/completion.json').read_text())
+        metric = receipt['request_to_installed']
+        self.assertEqual((metric['request_id'], metric['requested_at'], metric['installed_at']),
+                         ('origin', created, installed))
+        self.assertEqual(metric['seconds'], (dt.datetime.fromisoformat(installed.replace('Z', '+00:00')) -
+                                             dt.datetime.fromisoformat(created.replace('Z', '+00:00'))).total_seconds())
+        self.run_cli('fm-tasks-axi.sh', 'add', 'host-install', 'Installed host operation')
+        host_time = dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')
+        payload.write_text(json.dumps(dict(installed_at=host_time)))
+        self.value('fm-tasks-axi.sh', 'presentation', 'host-install', '--presentation-file', str(payload))
+        self.run_cli('fm-tasks-axi.sh', 'done', 'host-install', '--note', 'installed and verified', '--json')
+        host_receipt = json.loads((self.home / 'data/host-install/completion.json').read_text())
+        self.assertEqual(host_receipt['request_to_installed']['installed_at'], host_time)
+        self.run_cli('fm-tasks-axi.sh', 'done', 'origin', '--note', 'local main', '--json')
+        self.assertNotIn('request_to_installed', json.loads((self.home / 'data/origin/completion.json').read_text()))
+
     def test_close_declares_missing_outcome_and_keeps_declared_one(self):
         if not shutil.which('tasks-axi') or not shutil.which('node'):
             self.skipTest('installed tasks-axi + Node required')

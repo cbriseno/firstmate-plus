@@ -299,6 +299,7 @@ Update and republish phase, card_status and steps together after each status rep
 Keep the initial plan small but concrete for this task; the example is a shape, not evidence of completed work.
 Use done for closed explicit steps and todo for remaining ones, never estimate a percentage or time.
 Keep implementation, affected checks, branch readiness, merge and installed activation distinct; never declare delivery or activation from code completion alone.
+When installed activation has been verified, add installed_at (UTC ISO 8601 instant) to the same JSON; close records request-to-installed time when the original request time exists.
 Confirm exit success AND ok=true, state=published, evidence.available=true and lifecycle.evidence.current=true; busy/rejected JSON is not publication, even with exit0.
 After a done status, publish the checkpoint before stopping; the owner verifies gate-bound readiness separately.
 When that done checkpoint delivers a scout report or another result for the captain to read, include "outcome":{"role":"final","review":"needed"} in it (role "partial" for an interim result, "step" for a finished step that is not itself a result); a close without one is declared final when data/<id>/report.md exists, otherwise step.

@@ -33,6 +33,7 @@ Recheck a residual item whenever its condition can have changed, close it with `
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 When a `cleanup-disposition:<fingerprint>` wake names that task, record `closed` after teardown succeeds, or record `retained` with its reason or `blocked` with the teardown refusal through `fm-inactive-reconcile.sh disposition`; the startup scan keeps an unresolved disposition visible after wake acknowledgement.
 When the applicable delivery procedure requires installed verification, complete it within the same task before treating the request as finished.
+After verification, publish its observed UTC instant as `installed_at` on that task before close, using `fm-tasks-axi.sh presentation` and its file-input contract.
 When teardown prints `Install follow-up:`, run its named `bin/fm-install-followup.sh brief` command and dispatch that follow-up when the selected delivery procedure uses this capability.
 Report a landed change as on its way until that verification is complete.
 

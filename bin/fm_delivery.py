@@ -341,12 +341,26 @@ def record_completion(home, task_id, data):
     report = next((r['url'] for r in links if r.get('kind') == 'report'), None)
     pr = next((r['url'] for r in links if r.get('kind') == 'pr'), None)
     local = local_artifact(task)
+    # An installation is an explicit observed event, not inferred from landing.
+    declaration = read_presentation(home, task_id, verify=False)['presentation']
+    installed = declaration.get('installed_at')
+    request = declaration.get('request') or {}
+    requested = task_creation(data, dict(id=request.get('id'))) if request.get('id') else None
+    metric = None
+    if installed and requested:
+        start = dt.datetime.fromisoformat(requested['value'].replace('Z', '+00:00'))
+        end = dt.datetime.fromisoformat(installed.replace('Z', '+00:00'))
+        if end >= start:
+            metric = dict(request_id=request['id'], requested_at=requested['value'],
+                          installed_at=installed, seconds=(end - start).total_seconds())
     if task.get('kind') == 'scout' and report:
         verb, artifact = 'reported', report
     elif pr:
         verb, artifact = 'merged', pr
     elif local:
         verb, artifact = 'done', 'local main'
+    elif metric:
+        verb, artifact = 'done', None
     else:
         return  # a closed question or unspecified row is not an observed delivery
     if task.get('kind') == 'captain' or (task.get('hold') or {}).get('kind') == 'captain':
@@ -362,6 +376,8 @@ def record_completion(home, task_id, data):
                    completion=dict(verb=verb, date=task['closed']), artifact=artifact, valid=True,
                    at=dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                    source='backlog.owner.done')
+    if metric:
+        receipt['request_to_installed'] = metric
     lock = os.open(folder / '.completion.lock', os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -642,7 +658,7 @@ PRESENTATION_BOUNDS = dict(summary=2000, waiting_for=2000, next_action=2000,
 REQUEST_BOUNDS = dict(id=80, label=80, project=80)
 OUTCOME_ROLES = ('step', 'partial', 'final')
 OUTCOME_REVIEWS = ('needed', 'done')
-PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase', 'request', 'outcome', 'closure')
+PRESENTATION_FIELDS = tuple(PRESENTATION_BOUNDS) + ('progress', 'phase', 'request', 'outcome', 'closure', 'installed_at')
 
 
 def plain_line(text, limit):
@@ -654,6 +670,13 @@ def presentation_fields(value):
     if not isinstance(value, dict) or set(value) - set(PRESENTATION_FIELDS):
         raise ValueError('presentation accepts only ' + ', '.join(PRESENTATION_FIELDS))
     for key, text in value.items():
+        if key == 'installed_at':
+            if text is not None:
+                if not isinstance(text, str) or not re.fullmatch(
+                        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z', text):
+                    raise ValueError('installed_at requires a UTC instant')
+                dt.datetime.fromisoformat(text.replace('Z', '+00:00'))
+            continue
         if key == 'closure':
             if text is not None:
                 if (not isinstance(text, dict) or set(text) != {'kind', 'reason', 'at'}
@@ -708,7 +731,7 @@ def presentation_path(home, task_id, data=None):
 
 
 def read_presentation(home, task_id, data=None, verify=True, reader=read_text):
-    empty = dict.fromkeys(PRESENTATION_FIELDS)
+    empty = dict.fromkeys(k for k in PRESENTATION_FIELDS if k != 'installed_at')
     try:
         path = presentation_path(home, task_id, data)
         value = json.loads(reader(home, path, 32768))
@@ -1115,6 +1138,8 @@ def presentation(home, args):
             record = dict(reported_at=None, status_token=None, context=context,
                           head=code_head(meta), gates=view['gates'])
         fields['progress'] = view['progress']
+        if fields.get('installed_at') is None:
+            fields.pop('installed_at', None)
         if fields.get('closure') is None:
             fields.pop('closure', None)
         value = dict(schema='fm-task-presentation.v1', home=str(home), id=args.task,
