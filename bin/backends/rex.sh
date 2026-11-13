@@ -4,7 +4,7 @@
 # Rex (https://www.superlogical.com/rex) is a terminal multiplexer whose
 # hierarchy is server > session > window (a tab) > block (a pane). Rex is a
 # session provider ONLY: the worktree provider stays treehouse. Modeled on
-# bin/backends/paseo.sh for CLI mechanics and home-scoped names, with the
+# home-scoped names, with the
 # Herdr adapter's recovery-grade control plane. Sourced only through
 # bin/fm-backend.sh's fm_backend_source in normal operation; the unit tests
 # source it directly. docs/rex-backend.md owns the user-facing contract and

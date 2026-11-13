@@ -904,7 +904,6 @@ manual_install_url() {
       [ "$(fm_platform_name)" = macos ] || return 1
       echo "docs/platforms.md (provide $1 on PATH manually)" ;;
     herdr) echo "https://herdr.dev" ;;
-    paseo) echo "https://paseo.sh" ;;
     rex) echo "https://www.superlogical.com/rex" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
     *) return 1 ;;
