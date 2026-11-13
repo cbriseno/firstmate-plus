@@ -354,6 +354,27 @@ test_lock_single_winner_under_concurrency() {
   pass "concurrent fm_lock_try_acquire yields exactly one winner"
 }
 
+# Release is a no-op after nested retirement removed its own state directory.
+# Keep the shell's production errexit posture: a missing-file builtin read can
+# otherwise exit before the release's ordinary empty-owner check runs.
+test_lock_release_after_parent_removal() {
+  local dir state
+  dir=$(make_case lock-release-parent-gone); state="$dir/state"
+  FM_STATE_OVERRIDE="$state" bash -eu -c '
+    . "$1"
+    fm_lock_release "$2/never-created.lock"
+    mkdir "$2/removed"
+    fm_lock_acquire_wait "$2/removed/lock"
+    rm -rf -- "$2/removed"
+    fm_lock_release "$2/removed/lock"
+    mkdir "$2/incomplete-owner"
+    ln -s "$2/incomplete-owner" "$2/incomplete.lock"
+    fm_lock_release "$2/incomplete.lock"
+    [ -L "$2/incomplete.lock" ]
+  ' _ "$LIB" "$state" || fail "lock release aborted on an absent pid under errexit"
+  pass "lock release survives a removed parent and preserves an incomplete foreign owner"
+}
+
 test_lock_steals_dead_pid_lock() {
   local dir state lockdir dead rc newpid
   dir=$(make_case lock-dead-steal)
@@ -1684,6 +1705,7 @@ test_live_stale_watch_lock_is_actionable
 test_live_stalled_watch_lock_is_replaced_past_hard_bound
 test_guard_warnings
 test_lock_single_winner_under_concurrency
+test_lock_release_after_parent_removal
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_reclaims_dead_steal_owner_without_nested_markers

@@ -1407,14 +1407,14 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    { pid=$(< "$ownerdir/pid"); } 2>/dev/null || pid=
+    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  { pid=$(< "$lockdir/pid"); } 2>/dev/null || pid=
+  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   [ "$pid" = "$current" ] || return 0
   fm_lock_clean_known_files "$lockdir"
   rmdir "$lockdir" 2>/dev/null || true
