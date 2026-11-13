@@ -57,6 +57,8 @@
 #   - `hold` with `--kind captain`, because a captain call opened here would
 #     carry no card for the captain to answer: bin/fm-captain-hold.sh hold is
 #     the one path that opens one, and it refuses a call without choices;
+#   - a future hold without --until or with an unresolved dependency: use
+#     `block <id> --by <task>` for dependency-only deferral;
 #   - a data directory that cannot be resolved, or whose backend configuration
 #     cannot be read (bin/fm-tasks-axi-lib.sh owns that diagnostic);
 #   - a markdown `<data>/backlog.md` that is itself a symlink, because the
@@ -509,6 +511,19 @@ FM_BACKLOG_TRANSITION_ERROR=
 if ! fm_backlog_tasks_axi_addressing "$DATA"; then
   fail "${FM_BACKLOG_TRANSITION_ERROR:-data directory cannot be resolved: $DATA}"
 fi
+if [ "${1:-}" = hold ]; then
+  hold_kind='' hold_until='' previous_arg=''
+  for arg in "${@:2}"; do
+    case "$previous_arg" in --kind) hold_kind=$arg ;; --until) hold_until=$arg ;; esac
+    case "$arg" in --kind=*) hold_kind=${arg#*=} ;; --until=*) hold_until=${arg#*=} ;; esac
+    previous_arg=$arg
+  done
+  if [ "$hold_kind" = future ]; then
+    fm_backlog_row_probe "$DATA" "${2:-}" || fail "cannot inspect task for future hold: $FM_BACKLOG_ROW_ERROR"
+    case "$FM_BACKLOG_ROW_STATE" in *' yes') fail 'a dependency is not a future hold; use block and clear the hold' ;; esac
+    [ -n "$hold_until" ] || fail 'a future hold requires --until; use block for a dependency or ask the captain now'
+  fi
+fi
 case "${1:-}" in
   add|create) CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data' ;;
   public-followup)
@@ -607,4 +622,8 @@ case "${1:-}" in
     ;;
 esac
 run_owner tasks-axi ${ARGS[@]+"${ARGS[@]}"}
-exit $?
+result=$?
+if [ "$result" -eq 0 ] && [ "${1:-}" = hold ] && [ "${hold_kind:-}" = future ]; then
+  rm -f -- "${FM_STATE_OVERRIDE:-$FM_HOME/state}/.future-hold-${2:-}"
+fi
+exit "$result"

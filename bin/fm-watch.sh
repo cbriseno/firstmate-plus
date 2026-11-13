@@ -3272,6 +3272,34 @@ spawn_deferred_tick() {
   return 0
 }
 
+# Surface a dated future hold once after its date, including across watcher restarts.
+future_hold_tick() {
+  local rows id until marker reason data=${FM_DATA_OVERRIDE:-$FM_HOME/data}
+  rows=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$data" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" list --state queued --fields hold_kind,hold_until,blocked_by 2>/dev/null) || return 1
+  while IFS=' ' read -r id until; do
+    [ -n "$id" ] || continue
+    marker="$STATE/.future-hold-$id"
+    [ "$(cat "$marker" 2>/dev/null || true)" != "$until" ] || continue
+    reason="check: future hold due: $id (until $until); review ready work"
+    fm_wake_append check "future-hold-$id" "$reason" || return 1
+    printf '%s' "$until" > "$marker" || return 1
+    wake "$reason"
+  done < <(printf '%s\n' "$rows" | python3 -c '
+import csv, datetime, re, sys
+lines = sys.stdin.read().splitlines()
+for line in lines:
+    if not line.startswith("  "): continue
+    row = next(csv.reader([line.strip()]))
+    if len(row) != 8: continue
+    task, _, _, _, _, kind, until, blocked = row
+    if (re.fullmatch(r"[A-Za-z0-9._-]+", task) and kind == "future"
+            and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", until)
+            and until <= datetime.date.today().isoformat() and blocked in ("none", "-")):
+        print(task, until)
+')
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -3733,6 +3761,7 @@ while :; do
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+    future_hold_tick || triage_log "future hold check unavailable"
     # Refresh live usage outside work snapshot; the reader skips unchanged sizes.
     for usage_meta in "$STATE"/*.meta; do
       [ -f "$usage_meta" ] || continue

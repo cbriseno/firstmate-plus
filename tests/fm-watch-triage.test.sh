@@ -5559,6 +5559,27 @@ test_idle_pause_without_deadline_is_rechecked() {
   pass "idle deadline-free pauses recheck once; busy, unknown, active runs, deadlines, secondmates and fresh waits stay quiet"
 }
 
+test_due_future_hold_wakes_once() {
+  local dir state pid out
+  command -v tasks-axi >/dev/null 2>&1 || { echo 'skip: tasks-axi unavailable'; return; }
+  dir=$(make_case future-hold-wake); state="$dir/state"; out="$dir/watch.out"
+  mkdir -p "$dir/data" "$dir/config"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  FM_HOME="$dir" bash "$ROOT/bin/fm-tasks-axi.sh" add future-1 'Dated work' >/dev/null || fail 'add failed'
+  FM_HOME="$dir" bash "$ROOT/bin/fm-tasks-axi.sh" hold future-1 --kind future --reason date --until 2020-01-01 >/dev/null || fail 'hold failed'
+  FM_HOME="$dir" watch_bg "$state" "$dir/fakebin" "$out" env FM_CHECK_INTERVAL=0
+  pid=$!
+  wait_for_exit "$pid" 200 || { reap "$pid"; fail 'due future hold did not wake'; }
+  assert_grep 'future hold due: future-1' "$state/.wake-queue" 'due hold missing from queue'
+  ack_stopped_cycle "$state" || fail 'wake acknowledgement failed'
+  FM_HOME="$dir" watch_bg "$state" "$dir/fakebin" "$out" env FM_CHECK_INTERVAL=0
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail 'hold woke twice'; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'hold queued twice'; }
+  reap "$pid"
+  pass 'a dated future hold wakes once when due'
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -5566,6 +5587,7 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
   exit $?
 fi
 
+test_due_future_hold_wakes_once
 test_status_span_actionable_classifier
 test_status_span_survives_a_later_routine_append
 test_status_span_respects_decision_closure

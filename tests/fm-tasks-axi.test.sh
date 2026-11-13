@@ -247,6 +247,25 @@ test_wrapper_refuses_captain_hold() {
   pass "fm-tasks-axi.sh refuses a captain hold while other hold kinds pass through"
 }
 
+test_future_hold_requires_date_and_no_blocker() {
+  local dir out
+  dir=$(make_split future-trigger)
+  wrapper_from_code "$dir" add future-1 "Future" >/dev/null || fail "add failed"
+  wrapper_from_code "$dir" add future-2 "Dependency" >/dev/null || fail "add failed"
+  if wrapper_from_code "$dir" hold future-1 --kind future --reason event >/dev/null 2>&1; then
+    fail "undated future hold was accepted"
+  fi
+  wrapper_from_code "$dir" block future-1 --by future-2 >/dev/null || fail "block failed"
+  if wrapper_from_code "$dir" hold future-1 --kind future --reason dependency --until 2099-01-01 >/dev/null 2>&1; then
+    fail "future hold on a dependency was accepted"
+  fi
+  wrapper_from_code "$dir" "done" future-2 >/dev/null || fail "close dependency failed"
+  out=$(wrapper_from_code "$dir" ready)
+  assert_contains "$out" future-1 "dependency closure did not release the task"
+  wrapper_from_code "$dir" hold future-1 --kind future --reason date --until 2099-01-01 >/dev/null || fail "dated hold refused"
+  pass "future holds require a date; dependency-only blocks release on close"
+}
+
 test_wrapper_single_home() {
   local dir
   dir="$TMP_ROOT/single-wrapper"
@@ -296,6 +315,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_overrides_ambient_file
   test_wrapper_refusals
   test_wrapper_refuses_add_start
+  test_future_hold_requires_date_and_no_blocker
 test_wrapper_refuses_captain_hold
   test_wrapper_single_home
   test_wrapper_cancel
