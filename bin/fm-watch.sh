@@ -4135,12 +4135,17 @@ EOF
           dead|missing)
             # Endpoint loss does not cancel a worker's declared wait.
             if status_is_paused_or_captain_held "$last"; then
-              handle_paused_stale "$w" "$task" "$h"
+              if ! afk_present; then
+                handle_paused_stale "$w" "$task" "$h"
+                printf '%s' "$h" > "$sf"
+                continue
+              fi
+              # The ordinary away-mode handoff below owns this declared wait.
             else
               wedge_dead_record "$w" "$ssf" stale 0 "$h" "$task" "$agent_state"
+              printf '%s' "$h" > "$sf"
+              continue
             fi
-            printf '%s' "$h" > "$sf"
-            continue
             ;;
           *)
             [ "$agent_state" != alive ] || rm -f "$STATE/.dead-reported-$key"
