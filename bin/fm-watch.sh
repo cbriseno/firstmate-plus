@@ -685,6 +685,8 @@ paused_idle_recheck() {  # <window> <task> <declared-wait-line> <activity-verdic
   declaration="idle:$(stale_wait_declaration "$task")"
   stale_wait_throttled "$key" "$declaration" && return 0
   [ "$(crew_absorb_class "$task")" != working ] || return 0
+  # Dead endpoints retain the declared-wait cadence below, with its own scope.
+  [ "$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null)" = alive ] || return 0
   resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" \
     "stale: $win (paused worker idle without a deadline or active validation run; check finished background work and resume if the wait cleared)" \
     "$declaration" "$STALE_ESCALATE_SECS"
@@ -1915,12 +1917,17 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
     triage_log "absorbed $label (agent $agent_state, already reported once, idle ${age}s): $win"
     return 0
   fi
+  if captain_call_stale_bound "$key" "$task"; then
+    printf '%s %s' "$agent_state" "$id" > "$marker"
+    return 0
+  fi
   reason="stale: $win (idle ${age}s, agent $agent_state - $detail, so this is not a wedge; reported once and not re-escalated while it stays that way - reconcile this record, and check for unlanded work before any cleanup)"
   # Append before the marker, for the reason stale_wait_record gives: a marker
   # written ahead of a failed append outlives it, and the next sighting would then
   # absorb the retry - the one way this bound could swallow the report outright
   # rather than deliver it once.
   fm_wake_append stale "$win" "$reason" || exit 1
+  stale_wait_record "$key"
   printf '%s %s' "$agent_state" "$id" > "$marker"
   clear_write_tracking "$key"
   wake "$reason"
@@ -4119,7 +4126,12 @@ EOF
         agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
         case "$agent_state" in
           dead|missing)
-            wedge_dead_record "$w" "$ssf" stale 0 "$h" "$task" "$agent_state"
+            # Endpoint loss does not cancel a worker's declared wait.
+            if status_is_paused_or_captain_held "$last"; then
+              handle_paused_stale "$w" "$task" "$h"
+            else
+              wedge_dead_record "$w" "$ssf" stale 0 "$h" "$task" "$agent_state"
+            fi
             printf '%s' "$h" > "$sf"
             continue
             ;;
