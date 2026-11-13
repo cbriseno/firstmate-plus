@@ -40,12 +40,26 @@ TMP_ROOT=$(fm_test_tmproot fm-wake-daemon-e2e)
 # always-on standalone triage is covered by fm-watch-triage.test.sh. fakebin
 # shadows tmux. Echoes nothing; the caller reads $out.
 run_watcher_once() {
-  local state=$1 fakebin=$2 out=$3
+  local state=$1 fakebin=$2 out=$3 seen=$4 prior_seen=$5 pid i=0 limit current
   mkdir -p "$state"
   date '+%s' > "$state/.afk"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 50
+  pid=$!
+  limit=$((FM_TEST_STUB_MAX_BLOCK_SECONDS * 20))
+  while [ "$i" -lt "$limit" ] && is_live_non_zombie "$pid"; do
+    current=$(cat "$seen" 2>/dev/null || true)
+    [ "$current" = "$prior_seen" ] || break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  current=$(cat "$seen" 2>/dev/null || true)
+  if [ "$current" = "$prior_seen" ]; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 1
+  fi
+  wait_for_exit "$pid" "$limit"
 }
 
 ack_handled_wakes() {  # <state> <drain-stderr>
@@ -59,7 +73,7 @@ ack_handled_wakes() {  # <state> <drain-stderr>
 
 # --- Phase 1: routine progress absorbed; terminal caught after restart ---
 test_routine_then_terminal_after_restart() {
-  local dir state fakebin out drain_out drain_err status_file seen routine_pid i
+  local dir state fakebin out drain_out drain_err status_file seen prior_seen routine_pid i
   dir=$(make_supercase wd-lifecycle)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -91,9 +105,11 @@ test_routine_then_terminal_after_restart() {
 
   # The watcher is now DOWN (one-shot exit). A terminal status lands while it is
   # down; the next watcher run must catch it up (losslessness across restart).
+  prior_seen=$(cat "$seen" 2>/dev/null || true)
   printf 'done: PR https://example.test/pr/900\n' >> "$status_file"
   : > "$out"
-  run_watcher_once "$state" "$fakebin" "$out" || fail "restarted watcher did not exit for the terminal signal"
+  run_watcher_once "$state" "$fakebin" "$out" "$seen" "$prior_seen" \
+    || fail "restarted watcher did not classify the terminal signal and exit"
   grep -F "signal: $status_file" "$out" >/dev/null || fail "terminal signal written while watcher down was not caught on restart"
 
   # Drain and route the terminal: exactly ONE digest is buffered.
