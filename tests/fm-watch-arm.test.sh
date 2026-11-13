@@ -1666,11 +1666,9 @@ test_handling_delivered_accepts_already_acked_generation() {
   pass "watch-arm: an already-acknowledged handling confirmation succeeds as a no-op"
 }
 
-# A non-successor arm start mints a fresh generation, and a confirmation for
-# the churned generation reports a mismatch (status 3). The closing arm check
-# without a reopen - the marker step a handling successor runs - keeps the
-# churned generation. This characterizes existing marker behavior that the Pi
-# superseded-delivery path relies on.
+# A durable append supersedes an announced downtime generation. Since
+# 956f945d, a manual restart keeps that already-announced generation quiet;
+# confirming the superseded delivery must still report a mismatch (status 3).
 test_handling_delivered_rejects_a_superseded_generation() {
   local dir home state pid identity first second status
   dir=$(make_case handling-delivered-superseded)
@@ -1692,26 +1690,24 @@ test_handling_delivered_rejects_a_superseded_generation() {
     announced:downtime:"$first") ;;
     *) fail "announced episode has the wrong shape: $(cat "$state/.watcher-down")" ;;
   esac
-  # Reopening mints a fresh generation only when unrecovered work is queued:
-  # an announced episode with an empty queue must survive untouched, so queue
-  # one wake and re-announce first. Without this the reopen below is a no-op
-  # by design (no idle churn) and the fresh-generation assertion below fails.
   append_wake "$state" check inbox:fixture 'check: manual-restart churn fixture' \
     || fail "could not queue the fixture wake for the manual restart"
   FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_recovery_marker_arm_check "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$state/.watcher-down" \
     || fail "could not re-announce the queued fixture episode"
-  first=$(recovery_marker_generation "$state/.watcher-down")
+  second=$(recovery_marker_generation "$state/.watcher-down")
+  [ -n "$second" ] && [ "$second" != "$first" ] \
+    || fail "a durable append did not mint a fresh generation: $(cat "$state/.watcher-down")"
   case "$(cat "$state/.watcher-down")" in
-    announced:downtime:"$first") ;;
+    announced:downtime:"$second") ;;
     *) fail "queued episode has the wrong shape: $(cat "$state/.watcher-down")" ;;
   esac
   FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_recovery_marker_reopen_announced "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$state/.watcher-down" \
-    || fail "a manual arm start could not reopen the announced episode"
-  second=$(recovery_marker_generation "$state/.watcher-down")
-  [ -n "$second" ] && [ "$second" != "$first" ] \
-    || fail "a non-successor arm start did not mint a fresh generation: $(cat "$state/.watcher-down")"
+    || fail "a manual arm start could not check the announced episode"
+  status=$(recovery_marker_generation "$state/.watcher-down")
+  [ "$status" = "$second" ] \
+    || fail "a manual restart churned the announced generation: $(cat "$state/.watcher-down")"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" --handling-delivered "$first" \
     --watcher-pid "$pid" 2>/dev/null
   expect_code 3 "$?" "a confirmation for the churned generation must report a mismatch"
