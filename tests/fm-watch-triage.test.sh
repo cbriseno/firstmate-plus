@@ -1198,10 +1198,10 @@ test_turn_ended_trailing_newline_prior_hash_surfaced() {
   pass "a bare turn-end backed by a newline-terminated prior hash surfaces"
 }
 
-test_secondmate_turn_ended_churning_pane_surfaced() {
-  local dir state fakebin out drain_out capture_file window key pid
+test_secondmate_turn_ended_churning_pane_absorbed() {
+  local dir state fakebin out capture_file window key pid
   dir=$(make_case secondmate-turn-ended-churning); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
   window="test:fm-mate-churning"
   : > "$state/mate.turn-ended"
   printf 'window=%s\nkind=secondmate\nharness=claude\n' "$window" > "$state/mate.meta"
@@ -1216,15 +1216,14 @@ test_secondmate_turn_ended_churning_pane_surfaced() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not surface a churning secondmate turn-end"
-  grep -F "signal: $state/mate.turn-ended" "$out" >/dev/null \
-    || fail "watcher did not print the surfaced churning secondmate turn-end"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
-    || fail "drain after the churning secondmate turn-end failed"
-  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$state/mate.turn-ended" >/dev/null \
-    || fail "churning secondmate turn-end was not queued"
+  wait_for_absorbed "$state" "$pid" 'absorbed benign signal:' \
+    || { reap "$pid"; fail 'routine secondmate turn-end did not stay quiet'; }
+  [ ! -s "$out" ] || { reap "$pid"; fail 'routine secondmate turn-end printed a wake'; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'routine secondmate turn-end queued a wake'; }
+  [ ! -e "$state/.churn-since-$key" ] || { reap "$pid"; fail 'secondmate opened a churn deferral'; }
+  reap "$pid"
   unset FM_FAKE_CREW_STATE
-  pass "a churning secondmate turn-end surfaces without a stale resurface path"
+  pass "a routine secondmate turn-end stays quiet without a churn deferral"
 }
 
 test_turn_ended_colliding_window_key_surfaced() {
@@ -1647,24 +1646,24 @@ test_turn_ended_surfaced_batch_opens_no_partial_deadline() {
   pass "a surfaced batch opens no partial pane-churn deadline"
 }
 
-test_working_note_not_working_surfaced() {
-  local dir state fakebin out drain_out status_file pid
+test_working_note_without_turnend_absorbed() {
+  local dir state fakebin out status_file pid
   dir=$(make_case working-note-stopped); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  out="$dir/watch.out"
   status_file="$state/task.status"
   printf 'working: compiling step 2\n' > "$status_file"
-  # A non-no-mistakes crew (no run) whose pane went idle: fm-crew-state falls back
-  # to the stale working: status-log line. That is NOT positive evidence, so the
-  # wake must surface - these users must never be left hanging.
+  # Routine progress alone stays quiet even without execution proof.
+  # An ordinary worker's turn-end, result or declared decision supplies the wake.
   export FM_FAKE_CREW_STATE='state: working · source: status-log · working: compiling step 2'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not surface a working: note whose crew has no running pipeline and an idle pane"
-  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not print the surfaced working: signal"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the surfaced working: note failed"
-  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "surfaced working: note was not queued"
-  [ -s "$state/.seen-task_status" ] || fail "surfaced working: note did not advance its .seen-* suppressor"
-  pass "a no-verb working: note whose crew is idle with no running pipeline is surfaced"
+  wait_for_absorbed "$state" "$pid" 'absorbed benign signal:' \
+    || { reap "$pid"; fail 'routine working note was not classified quietly'; }
+  [ ! -s "$out" ] || { reap "$pid"; fail 'routine working note printed a wake'; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'routine working note queued a wake'; }
+  reap "$pid"
+  [ -s "$state/.seen-task_status" ] || fail "absorbed working: note did not advance its .seen-* suppressor"
+  pass "a routine working note without a turn-end stays quiet even when activity is unproven"
 }
 
 test_secondmate_status_note_surfaced_despite_busy_agent() {
@@ -5651,7 +5650,7 @@ test_turn_ended_malformed_prior_hash_surfaced
 test_unknown_alive_stale_is_bounded_after_its_first_alarm
 test_unknown_alive_stale_without_progress_keeps_surfacing
 test_turn_ended_trailing_newline_prior_hash_surfaced
-test_secondmate_turn_ended_churning_pane_surfaced
+test_secondmate_turn_ended_churning_pane_absorbed
 test_turn_ended_colliding_window_key_surfaced
 test_turn_ended_duplicate_endpoint_records_surfaced
 test_turn_ended_mixed_positive_evidence_batch_absorbed
@@ -5664,7 +5663,7 @@ test_turn_ended_invalid_churn_bound_surfaced
 test_turn_ended_oversized_churn_bound_surfaced
 test_turn_ended_invalid_churn_deadline_surfaced
 test_turn_ended_surfaced_batch_opens_no_partial_deadline
-test_working_note_not_working_surfaced
+test_working_note_without_turnend_absorbed
 test_secondmate_status_note_surfaced_despite_busy_agent
 test_secondmate_routine_progress_absorbed_then_note_surfaced
 test_secondmate_buried_block_wakes_despite_busy_agent
