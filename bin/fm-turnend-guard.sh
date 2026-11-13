@@ -105,7 +105,6 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
-CURSOR_MODE=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-30000}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
@@ -116,8 +115,7 @@ case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
 for arg in "$@"; do
   case "$arg" in
     --claude) CLAUDE_MODE=1 ;;
-    --cursor) CURSOR_MODE=1 ;;
-    *) echo "usage: $(basename "$0") [--claude|--cursor]" >&2; exit 2 ;;
+    *) echo "usage: $(basename "$0") [--claude]" >&2; exit 2 ;;
   esac
 done
 
@@ -174,12 +172,12 @@ command -v jq >/dev/null 2>&1 || exit 0
 # which calls this guard back with --cursor. Without that flag a Cursor-delivered
 # payload is the Claude-compatibility duplicate and must not create a second
 # continuation path (docs/turnend-guard.md "Harness integrations").
-if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
+if fm_hook_payload_is_foreign_host "$PAYLOAD"; then
   exit 0
 fi
 
 # Capture before loop allowances or supervision handoff can end this Stop path.
-if [ -e "$CONFIG/fleet-ledger" ] && [ "$CURSOR_MODE" -eq 0 ]; then
+if [ -e "$CONFIG/fleet-ledger" ]; then
   final_harness=claude
   if [ "$CLAUDE_MODE" -eq 0 ]; then
     final_harness=$(bash "$SCRIPT_DIR/fm-harness.sh")
@@ -194,7 +192,7 @@ fi
 
 # The already-registered Stop entrypoint must enforce the same opt-in boundary
 # as the new shim. This does not establish that either definition was loaded.
-if [ "$CLAUDE_MODE" -eq 0 ] && [ "$CURSOR_MODE" -eq 0 ] \
+if [ "$CLAUDE_MODE" -eq 0 ] \
   && [ -f "$CONFIG/codex-native-supervision.json" ]; then
   # shellcheck source=bin/fm-codex-native-lib.sh
   . "$SCRIPT_DIR/fm-codex-native-lib.sh"

@@ -351,18 +351,18 @@ See the [current direct-input verification](verification/runtime-backends.md#cod
 Two optional local, gitignored files control the supervision host for this home: `config/supervision-host-off` opts the home out, and `config/supervision-host` opts a home in and selects its engine.
 The host runs the supervision branch's contract on a headless engine session beside a non-Pi primary.
 [docs/supervision-host.md](supervision-host.md) defines its design, current scope, and verified engines.
-A Claude, Cursor, OpenCode, or Codex primary can run the host.
+A Claude, OpenCode, or Codex primary can run the host.
 
 A present `config/supervision-host-off`, whatever it holds, opts the home out on every primary.
 Otherwise a Claude primary runs the host by default: with no `config/supervision-host` it runs exactly as with an empty one, at the Claude engine's default model.
-A Cursor, OpenCode, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
+An OpenCode, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
 A home that does not run the host behaves exactly as it does without it, and a Pi primary keeps its in-process supervision branch whatever either file says.
 `fm_supervision_host_enabled` in `bin/fm-supervision-engine-lib.sh` implements this gate for every reader.
 
 While the home runs the host, the primary's arm owner runs it in place of the watcher arm.
-The host handles wakes on the engine under the [posture rules](supervision-host.md#postures), including an away record and attended operation on a Claude or Cursor primary with a verified dialog mirror.
+The host handles wakes on the engine under the [posture rules](supervision-host.md#postures), including an away record and attended operation on a Claude primary with a verified dialog mirror.
 On that home, `/afk` launches no away daemon; see [Quiet mode](supervision-host.md#quiet-mode) for `/quiet`'s attended statement and fallback.
-The same gate governs the primary's dialog-mirror hooks (`bin/fm-host-mirror.sh`), which record on a Claude or Cursor primary ([supervision-host.md](supervision-host.md#the-dialog-mirror)).
+The same gate governs the primary's dialog-mirror hooks (`bin/fm-host-mirror.sh`), which record on a Claude primary ([supervision-host.md](supervision-host.md#the-dialog-mirror)).
 
 ### Engine selection
 
@@ -371,7 +371,7 @@ The same gate governs the primary's dialog-mirror hooks (`bin/fm-host-mirror.sh`
 - empty or `default` selects the primary harness's own engine at that engine's default model (`sonnet` for the Claude engine);
 - `<engine> [<model>]` names a verified engine, currently only `claude`, and optionally the engine's own model name or alias; `default <model>` selects the primary harness's engine with that model.
 
-Only Claude has a verified engine of its own, so a Cursor, OpenCode, or Codex home names `claude` in the file.
+Only Claude has a verified engine of its own, so an OpenCode, or Codex home names `claude` in the file.
 
 ### Failures, when changes apply, and inheritance
 
@@ -1024,14 +1024,12 @@ For a checkout with a private integration branch, run `bin/fm-local-sync.sh <rep
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, cursor are empirically verified for crewmate and secondmate launches.
-The verified primary harnesses are Claude Code, Pi, `pi-signed`, Codex, OpenCode, and Cursor Agent CLI.
+claude, codex, opencode, pi, pi-signed are empirically verified for crewmate and secondmate launches.
+The verified primary harnesses are Claude Code, Pi, `pi-signed`, Codex, OpenCode.
 
 ### Harness restrictions and credentials
 
-A cursor secondmate or primary runs the tracked project-scope `.cursor/hooks.json` in its own home and must be launched with `--trust`, or no project hook loads; [`docs/supervision-protocols/cursor.md`](supervision-protocols/cursor.md) owns its supervision protocol.
 
-Cursor typed-submit confirmation is verified on tmux and Herdr only.
 
 
 
@@ -1053,7 +1051,7 @@ Enabled primary-session turn-end guard integrations are tracked as repo-level ho
 
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 
-Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, and OpenCode uses its TUI plugin.
+Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, and OpenCode uses its TUI plugin.
 
 ### Choose the worker harness
 
@@ -1501,7 +1499,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
-| `claude`, `codex`, `cursor` | The resolver has an authoritative single-provider mapping. |
+| `claude`, `codex` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, and `opencode`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.

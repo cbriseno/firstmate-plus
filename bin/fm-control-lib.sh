@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed cursor
+  printf '%s\n' claude codex opencode pi pi-signed
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -88,7 +88,6 @@ fm_control_harness_family() {  # <recorded-harness>
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     opencode*) printf 'opencode' ;;
-    cursor*) printf 'cursor' ;;
     *) return 1 ;;
   esac
 }
@@ -102,7 +101,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|cursor) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed) printf 'Escape' ;;
     *) return 1 ;;
   esac
 }
@@ -112,7 +111,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|cursor) printf '1' ;;
+    claude|codex|pi|pi-signed) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -120,7 +119,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|cursor) ;;
+    claude|codex|opencode|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -128,7 +127,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|cursor) printf '0.2' ;;
+    claude|codex|opencode|pi|pi-signed) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -136,7 +135,7 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|cursor) ;;
+    claude|codex|opencode|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -144,7 +143,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # The key that must follow an interrupt to clear its composer, when needed.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|cursor) ;;
+    claude|codex|opencode|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -164,7 +163,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
         *) printf 'C-c' ;;
       esac
       ;;
-    claude|cursor) printf '/exit' ;;
+    claude) printf '/exit' ;;
     codex|pi|pi-signed) printf '/quit' ;;
     *) return 1 ;;
   esac
@@ -337,7 +336,6 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
       printf '%s\n' "$wt/.fm-kimi-turnend"
       printf '%s\n' "$state/$id.kimi-turnend-token"
       ;;
-    cursor) printf '%s\n' "$state/$id.cursor-session" ;;
     # polytoken's per-task wiring spans the worktree's project hook and facet
     # layers (the only hook and facet discovery a task controls, so a relaunch
     # must retire them rather than leave a stale hook pointing at a retired

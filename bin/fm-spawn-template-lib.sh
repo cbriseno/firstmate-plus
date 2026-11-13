@@ -102,19 +102,6 @@ launch_template() {
       printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
-  # Cursor Agent CLI. --trust suppresses the workspace-trust prompt, which
-  # --yolo does NOT cover and which would otherwise block every spawn, since
-  # each task gets a fresh worktree path cursor has never seen. --yolo is the
-  # --force alias whose TUI label is "Run Everything". --workspace pins the
-  # exact worktree. -w/--worktree is deliberately never passed: it allocates a
-  # SECOND worktree under ~/.cursor/worktrees and would break firstmate's
-  # isolation contract. The binary is resolved rather than named because
-  # `cursor` is not the CLI (the installed names are cursor-agent and the
-  # legacy alias agent), and the foreign primary markers are cleared so an
-  # inherited CLAUDECODE cannot outrank cursor's own marker in a process that
-  # only reads the environment. Cursor exposes no effort flag, so the shared
-  # effort axis is deliberately omitted and stays in task metadata only.
-  cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   *) return 1 ;;
   esac
 }

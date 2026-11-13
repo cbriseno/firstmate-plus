@@ -36,7 +36,7 @@ cat > "$EXPECTED_JSON" <<'JSON'
     {"id":"interrupt.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/pi.md"},
     {"id":"exit.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/grok.md"},
     {"id":"resume.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/codex.md"},
-    {"id":"recovery.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/cursor.md"},
+    {"id":"recovery.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/codex.md"},
     {"id":"recovery.replacement-profile","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md"],"harness":"references/harness/codex.md"},
     {"id":"recovery.secondmate","common":["references/common/control-and-recovery.md","references/common/primary-hooks.md"],"harness":"references/harness/claude.md"},
     {"id":"recovery.replacement-secondmate","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md","references/common/primary-hooks.md"],"harness":"references/harness/codex.md"},
@@ -96,13 +96,8 @@ pass "local model $MODEL selected every operation scenario and all nine harness 
 
 CHECKED=0
 MISSING=
-. "$ROOT/bin/fm-cursor-lib.sh"
 resolve_native_binary() {
   local harness=$1 candidate
-  if [ "$harness" = cursor ]; then
-    fm_cursor_resolve_binary 2>/dev/null
-    return
-  fi
   candidate=$(command -v "$harness" 2>/dev/null || true)
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     printf '%s\n' "$candidate"
@@ -111,7 +106,7 @@ resolve_native_binary() {
   return 1
 }
 
-for harness in claude codex opencode pi pi-signed cursor; do
+for harness in claude codex opencode pi pi-signed; do
   if binary=$(resolve_native_binary "$harness"); then
     version=$("$binary" --version 2>/dev/null | head -1 | tr -d '\r') || version=unknown
     printf '# native loader not claimed: %s %s is installed, but this harness-neutral evaluation does not exercise its provider transport\n' "$harness" "$version"

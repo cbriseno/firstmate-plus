@@ -35,18 +35,6 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     *)
       if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
         printf 'agent'
-      # cursor-agent runs as a bundled node script, so tmux reports the pane
-      # command as a bare `node` that no name pattern above can own, and its
-      # other installed name is the far-too-generic `agent` (verified live on
-      # cursor-agent 2026.08.11-e8db854: #{pane_current_command} is `node` while
-      # `ps -o comm=` carries the cursor-agent install path). Identity therefore
-      # comes from the narrowed structural rule in bin/fm-cursor-lib.sh, which
-      # demands Cursor's own name or install tree in the path or argv[0]. An
-      # unrelated `node` or `agent` matches nothing here and stays `other`,
-      # which the callers fold into `ambiguous` rather than `dead`, so a
-      # stranger's node pane is never reported as an agent-free pane.
-      elif fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
-        printf 'agent'
       else
         printf 'other'
       fi

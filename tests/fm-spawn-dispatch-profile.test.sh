@@ -268,21 +268,6 @@ test_claude_spawn_refuses_when_the_brief_record_cannot_publish() {
   pass "a claude spawn whose launch-brief record cannot publish stops with a clear error and sends no launch"
 }
 
-test_non_cursor_launch_clears_inherited_cursor_markers() {
-  local rec id out status launch
-  id=profile-claude-cursor-markers-z1b
-  rec=$(make_spawn_case profile-claude-cursor-markers claude "$id")
-  read_case_record "$rec"
-
-  out=$(CURSOR_AGENT=1 CURSOR_INVOKED_AS=cursor-agent \
-    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
-  status=$?
-  expect_code 0 "$status" "claude spawn under Cursor markers should succeed"
-  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI" \
-    "non-cursor launch must clear both inherited Cursor identity markers"
-  pass "non-cursor launches clear inherited Cursor identity markers"
-}
 
 test_relative_home_overrides_launch_with_absolute_cross_process_paths() {
   local rec id out status launch home_real
@@ -809,75 +794,8 @@ test_codex_approval_mode_contract() {
 
 
 
-test_cursor_threads_model_workspace_and_omits_effort_axis() {
-  local rec id out status launch
-  id=profile-cursor-z6c
-  rec=$(make_spawn_case profile-cursor cursor "$id")
-  read_case_record "$rec"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --model cursor-grok-4.5-high --effort high)
-  status=$?
-  expect_code 0 "$status" "cursor spawn with a model-qualified reasoning class should succeed"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-grok-4.5-high high
-  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "--trust --yolo --model 'cursor-grok-4.5-high' --workspace '$WT_DIR'" \
-    "cursor launch did not carry trust, autonomy, model, and exact workspace flags"
-  # The executable is RESOLVED, never named: `cursor` is not the CLI, so a
-  # literal `cursor agent` command cannot run on a machine that has only the
-  # real installed names.
-  assert_not_contains "$launch" "cursor agent --trust" \
-    "cursor launch must resolve its executable, not invoke a literal 'cursor agent'"
-  assert_contains "$launch" "cursor-agent" "cursor launch did not resolve a cursor executable"
-  # -w/--worktree would allocate a SECOND worktree under ~/.cursor/worktrees and
-  # break the isolation contract the spawn assertion depends on.
-  assert_not_contains "$launch" " --worktree" "cursor launch must never allocate a second worktree"
-  assert_not_contains "$launch" " -w " "cursor launch must never allocate a second worktree"
-  # An inherited CLAUDECODE would otherwise outrank cursor's own marker.
-  assert_contains "$launch" "env -u CLAUDECODE" "cursor launch must clear foreign primary markers"
-  assert_contains "$launch" "encode launch-brief" "cursor launch did not deliver the brief positionally"
-  assert_not_contains "$launch" "--effort" "cursor launch must not invent a separate effort flag"
-  assert_not_contains "$launch" "--reasoning-effort" "cursor launch must not invent a separate reasoning-effort flag"
-  assert_grep 'harness=cursor' "$HOME_DIR/state/$id.meta" "cursor harness was not recorded in meta"
-  assert_grep 'model=cursor-grok-4.5-high' "$HOME_DIR/state/$id.meta" "cursor model was recorded as default"
-  pass "cursor receives its model-qualified reasoning class and exact task workspace"
-}
 
-test_cursor_refuses_model_absent_from_live_catalog() {
-  local rec id out status
-  id=profile-cursor-unsupported-z6d
-  rec=$(make_spawn_case profile-cursor-unsupported cursor "$id")
-  read_case_record "$rec"
-
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --model cursor-grok-4.5)
-  status=$?
-  expect_code 1 "$status" "cursor spawn should refuse a model absent from a successful catalog"
-  assert_contains "$out" "Cursor model 'cursor-grok-4.5' is not available" \
-    "cursor model refusal did not identify the unavailable model"
-  assert_contains "$out" "--list-models" \
-    "cursor model refusal did not tell the caller how to find valid ids"
-  [ ! -s "$LAUNCH_LOG" ] || fail "cursor model refusal must happen before launch"
-  pass "cursor refuses model ids absent from its resolved binary's live catalog"
-}
-
-test_cursor_failed_catalog_probe_does_not_block_spawn() {
-  local rec id out status launch
-  id=profile-cursor-catalog-unreachable-z6e
-  rec=$(make_spawn_case profile-cursor-catalog-unreachable cursor "$id")
-  read_case_record "$rec"
-
-  FM_TEST_CURSOR_LIST_STATUS=124 \
-    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-      --model cursor-catalog-unreachable)
-  status=$?
-  expect_code 0 "$status" "cursor spawn should fail open when the bounded catalog query fails"
-  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "--model 'cursor-catalog-unreachable'" \
-    "failed catalog lookup incorrectly removed the requested model"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-catalog-unreachable default
-  pass "cursor preserves the requested model when its live catalog is unreachable"
-}
 
 test_opencode_threads_model_and_effort_variant() {
   local rec id out status launch
@@ -2649,7 +2567,6 @@ test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home
 test_claude_spawn_refuses_when_the_brief_record_cannot_publish
-test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
 test_home_defaults_preserve_absolute_or_resolve_relative_paths
 test_absolute_override_spelling_is_preserved_in_launch_paths
@@ -2667,9 +2584,6 @@ test_codex_omits_max_effort_for_unsupported_model
 test_codex_crewmate_launch_preserves_the_hook_layer
 test_codex_secondmate_launch_keeps_the_hook_layer
 test_codex_approval_mode_contract
-test_cursor_threads_model_workspace_and_omits_effort_axis
-test_cursor_refuses_model_absent_from_live_catalog
-test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_threads_model_and_effort_variant
 test_opencode_without_effort_keeps_launch_config_unchanged
 test_opencode_emits_variant_for_openai_family_effort

@@ -101,7 +101,7 @@ if [ -z "$HARNESS" ]; then
 fi
 
 case "$HARNESS" in
-  claude|codex|opencode|pi|cursor) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
+  claude|codex|opencode|pi) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   pi-signed) SNIPPET="$DOC_DIR/pi.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
@@ -113,7 +113,7 @@ if [ "$HARNESS" = codex ] && "$SCRIPT_DIR/fm-codex-stop-autoarm.sh" --capable >/
 fi
 HOST_SNIPPET=
 case "$HARNESS" in
-  claude|cursor|opencode|codex)
+  claude|opencode|codex)
     # shellcheck source=bin/fm-supervision-engine-lib.sh
     . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
     if fm_supervision_host_enabled "$CONFIG" "$HARNESS"; then
@@ -194,9 +194,6 @@ repair_line() {
     opencode)
       printf '%s%s\n' "$prefix" 'repair missing watcher supervision by letting the OpenCode TUI plugin arm after idle; use bin/fm-watch-arm.sh only as a manual recovery probe if the plugin reports failure.'
       ;;
-    cursor)
-      printf '%s%s\n' "$prefix" 'watcher supervision is owned by the stop-hook park; inspect the hook registration and watcher startup path before ending the turn.'
-      ;;
     *)
       printf '%s%s\n' "$prefix" 'repair missing watcher supervision according to the session-start block for this harness; do not use shell &.'
       ;;
@@ -220,9 +217,6 @@ ordinary_wake_line() {
       ;;
     opencode)
       printf '%s\n' '- Ordinary wake: the OpenCode TUI plugin already owns watcher continuity; do not arm manually.'
-      ;;
-    cursor)
-      printf '%s\n' '- Ordinary wake: the stop-hook park (bin/fm-turnend-guard-cursor.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'
       ;;
     *)
       printf '%s\n' '- Ordinary wake: follow the continuation in the harness protocol below; do not use shell &.'

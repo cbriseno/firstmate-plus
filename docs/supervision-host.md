@@ -22,7 +22,7 @@ An arm owner is the component in each primary harness that starts watcher cycles
 
 The host runs by default on a Claude primary and is opt-in per home on the other five primaries it supports; [configuration.md](configuration.md#supervision-host-configsupervision-host) owns the home gate and inherited opt-out.
 A home that does not run the host behaves exactly as it does without it.
-Today it runs beside a Claude, Cursor, OpenCode, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
+Today it runs beside a Claude, OpenCode, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
 
 ### Behavior by posture and harness
 
@@ -66,7 +66,6 @@ The host's header owns the output contract they read.
 | Primary | Arm owner | A handed-back wake reaches main as |
 |---|---|---|
 | Claude | the Stop auto-arm, `bin/fm-claude-stop-autoarm.sh`, inside its single-flight generation | the hook's exit-2 rewake (`Stop hook feedback`) |
-| Cursor | the `stop` hook park, `bin/fm-turnend-guard-cursor.sh` | the park's `watcher` follow-up |
 | OpenCode | the TUI plugin, `.opencode/plugins/fm-primary-watch-arm.js`, which restarts its own successor after each close | a `watcher` prompt through `ctx.session.prompt` |
 | Codex | the foreground checkpoint, `bin/fm-watch-checkpoint.sh`, in the watcher's place | the checkpoint's own output |
 
@@ -407,7 +406,7 @@ The default model is `sonnet`, which handled every measured wake correctly at a 
 `config/supervision-host` can name another.
 
 The Claude engine runs beside any of the six primaries, but only a Claude primary selects it by default when the host is enabled, even with no file.
-A Cursor, OpenCode, or Codex home names it (`claude`, optionally with a model) in `config/supervision-host`.
+An OpenCode, or Codex home names it (`claude`, optionally with a model) in `config/supervision-host`.
 `/afk` there says so when the file selects no engine.
 
 ## Verification
@@ -423,7 +422,6 @@ The four suites share their stub engine and fixtures through `tests/supervision-
 | `tests/fm-supervision-host-hook.test.sh` | The Claude Stop hook's hand-back and re-arm: main-only pass-throughs, successors closed before or during their turn, and a returned driver. |
 | `tests/fm-supervision-host-park.test.sh` | The park boundary, the engine-error latch, lock ownership, and held-outcome delivery. |
 | `tests/fm-claude-stop-autoarm.test.sh` | The Claude arm owner's host mode against a stub host. |
-| `tests/fm-cursor-primary.test.sh` | The Cursor arm owner's host mode against a stub host. |
 | `tests/fm-pi-watch-extension.test.sh` | The OpenCode plugin's host mode against a stub host. |
 | `tests/fm-watch-checkpoint.test.sh` | The Codex checkpoint's host mode against a stub host. |
 | `tests/fm-supervision-instructions.test.sh` | The rendered protocol, including Grok's arm command. |

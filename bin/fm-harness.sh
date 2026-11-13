@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|cursor|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -75,23 +75,11 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
-# shellcheck source=bin/fm-cursor-lib.sh
-. "$SCRIPT_DIR/fm-cursor-lib.sh"
 
 # Print the harness named by a verified environment marker, or nothing when no
 # marker is present. Markers only report what the environment CLAIMS; detect_own
 # decides whether that claim survives contradicting ancestry.
 harness_marker() {
-  # Cursor is tested BEFORE claude, deliberately. cursor-agent does NOT clear an
-  # inherited CLAUDECODE, so a cursor session started by hand from a claude
-  # primary carries BOTH markers and whichever is tested first wins. This
-  # ordering only settles the case where ancestry finds nothing to arbitrate
-  # with; a nearer claude ancestor still outranks both in detect_own.
-  # Verified live on cursor-agent 2026.08.11-e8db854: CURSOR_INVOKED_AS=cursor-agent
-  # is set on the agent process itself, and CURSOR_AGENT=1 is set for the
-  # child/tool processes this script runs as.
-  [ "${CURSOR_AGENT:-}" = "1" ] && { echo cursor; return; }
-  [ "${CURSOR_INVOKED_AS:-}" = "cursor-agent" ] && { echo cursor; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   if [ "${PI_CODING_AGENT:-}" = "true" ]; then
     if [ "${FM_PI_HARNESS:-}" = pi-signed ]; then echo pi-signed; else echo pi; fi
@@ -115,11 +103,6 @@ harness_marker() {
 harness_process_verdict() {  # <pid>
   local pid=$1 comm args argv0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
-  argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
-  if fm_cursor_process_matches "$comm" '' "$argv0"; then
-    echo "comm cursor"
-    return
-  fi
   case "$(basename -- "$comm")" in
     *claude*) echo "comm claude"; return ;;
     *codex*) echo "comm codex"; return ;;
@@ -285,7 +268,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|cursor)
+    claude|codex|opencode|pi|pi-signed)
       printf '%s\n' "$pin"
       ;;
     *)

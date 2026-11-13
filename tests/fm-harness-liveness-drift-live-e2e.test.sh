@@ -68,7 +68,6 @@ export PATH
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 # shellcheck source=/dev/null
-. "$ROOT/bin/fm-cursor-lib.sh"
 fm_backend_source tmux || fail "fm_backend_source tmux failed"
 
 "$REAL_TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -n control -c "$LAB/wt" \
@@ -86,10 +85,6 @@ resolve_harness_binary() {  # <harness>
   # pane that this guard then reports as liveness drift the classifier can do
   # nothing about. Asking the owner first also keeps an unrelated executable
   # named `agent` rejected here exactly as it would be at launch.
-  if [ "$harness" = cursor ]; then
-    fm_cursor_resolve_binary 2>/dev/null && return 0
-    return 1
-  fi
   candidate=$(command -v "$harness" 2>/dev/null || true)
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     printf '%s\n' "$candidate"
@@ -103,7 +98,7 @@ SKIPPED=
 
 # The verified adapters, in the order the harness-adapters skill router records
 # them. An adapter that gains a verified launch path belongs here too.
-for harness in claude codex opencode pi pi-signed cursor; do
+for harness in claude codex opencode pi pi-signed; do
   if ! bin_path=$(resolve_harness_binary "$harness"); then
     SKIPPED="$SKIPPED $harness"
     note "skip: $harness is not installed on this machine, so its classification is unverified here"

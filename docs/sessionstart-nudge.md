@@ -26,7 +26,7 @@ The tier is a property of the harness surface, not of the home.
 
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
-| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed, Cursor |
+| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed |
 | Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has no tracked compaction or re-emit channel.
@@ -40,8 +40,6 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | Codex interactive TUI | Run from codex-cli 0.164.0; compaction and re-emit uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
 | OpenCode | Nudge | [OpenCode](#opencode) |
-| Cursor | Run | [Cursor](#cursor) |
-| Cursor compaction | Uncovered | [Cursor compaction](#cursor-compaction) |
 
 ### Why the run tier exists
 
@@ -175,7 +173,7 @@ So a truncated digest does neither of these:
 
 ### Hook budget
 
-A hook harness discards everything a hook printed when it kills that hook at its registered timeout (180s for Claude, Codex, and Cursor).
+A hook harness discards everything a hook printed when it kills that hook at its registered timeout (180s for Claude and Codex).
 The digest bound alone does not keep a slow start under that timeout: a nested bounded call survives the digest's process-group kill while still holding the hook's output open, and a loaded host can spend the margin before the digest even starts.
 So `bin/fm-sessionstart-run.sh` gives preparation and execution together `FM_SESSION_START_HOOK_BUDGET` (default 150s, below every registered hook timeout), starting at wrapper entry.
 Eligibility checks, hook-payload reads and parsing, completion checks, and capture-file allocation all spend that same budget.
@@ -334,29 +332,6 @@ The OpenCode nudge runs only on `session.created`.
 The watcher-arm and turn-end plugins run later, on the terminal `session.execution.succeeded`, `session.execution.failed`, and `session.execution.interrupted` events in OpenCode 2, or `session.idle` in OpenCode 1.
 The guard lets the watcher coordinator act first, so the plugins do not race for one lifecycle event.
 
-### Cursor
-
-Cursor is a run-tier harness for session open.
-`.cursor/hooks.json` registers `sessionStart`, anchored through `$CURSOR_PROJECT_DIR` with a 180s timeout, invoking `bin/fm-sessionstart-cursor.sh`.
-Cursor's payload has no `source` field, so the registration supplies `--source` itself.
-The adapter returns the digest as `additional_context`.
-Project hooks load only when the workspace is launched with `--trust`.
-
-Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session.
-So a resume re-runs the full digest.
-That is redundant and idempotent rather than a lost helm.
-
-### Cursor compaction
-
-Cursor compaction is uncovered and has no tracked transport.
-Cursor's `preCompact` response can return only `user_message` and is absent from Cursor's `additional_context` step set.
-So it cannot inject a re-emit digest.
-Delivering one needs its own design and is deliberately deferred to a follow-up.
-A Cursor primary does not re-emit its digest after a compaction.
-
-Firstmate registers nothing for `preCompact`.
-So a compacted Cursor session keeps whatever context survived rather than receiving a fresh digest.
-
 ## Regression coverage
 
 ### Wrapper and Pi extension suite
@@ -413,17 +388,6 @@ It uses a TERM-resistant digest that exceeds its budget and proves that the dige
 
 `tests/fm-pi-primary-live-e2e.test.sh` and `tests/fm-opencode-primary-live-e2e.test.sh` exercise native startup paths with first-message and later-message Ahoy regressions.
 
-### Cursor tests
-
-`tests/fm-cursor-primary.test.sh` proves the Cursor adapter over real processes:
-
-- `sessionStart` emits the whole digest as `additional_context` with a caller-supplied `--source`.
-- It stays silent in a child worktree.
-- It lets the run wrapper stand down on the Cursor-delivered duplicate.
-- It keeps `preCompact` unregistered, so the deferred surface cannot be reintroduced unnoticed.
-
-`FM_CURSOR_PRIMARY_LIVE_E2E=1 tests/fm-cursor-primary-live-e2e.test.sh` proves the injected digest actually reaches model context in a real cursor-agent session.
-
 ### Live run-tier guards
 
 `tests/fm-sessionstart-hook-live-e2e.test.sh` is the opt-in live guard for the Claude, Codex exec, and Pi run-tier adapters.
@@ -433,7 +397,6 @@ It verifies context-preserving reopen sources for those adapters, and context-re
 Its separate `FM_PI_SESSIONSTART_RACE_LIVE_E2E=1` mode uses real Pi with an offline deterministic provider and a barrier-controlled `/new` digest.
 That mode proves both an immediate prompt and a completed-before-prompt control make their first provider call with exactly one native startup context and no manual execution.
 
-Cursor uses the separate primary live guard named in [Cursor tests](#cursor-tests) because its source-free `sessionStart` and stop-hook park are validated together.
 
 `tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh` is the separate opt-in real-Pi guard for a post-start AGENTS.md update followed by compaction.
 

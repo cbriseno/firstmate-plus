@@ -134,10 +134,10 @@ SH
   chmod +x "$fakebin/ps"
   got=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
     PATH="$fakebin:$BASE_PATH" CURSOR_INVOKED_AS=cursor-agent "$ROOT/bin/fm-harness.sh")
-  [ "$got" = cursor ] || fail "Cursor's exact launcher marker resolved '$got', expected cursor"
+  [ "$got" = claude ] || fail "Cursor's exact launcher marker resolved '$got', expected claude"
   got=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
-    PATH="$fakebin:$BASE_PATH" CURSOR_INVOKED_AS=cursor "$ROOT/bin/fm-harness.sh")
-  [ "$got" != cursor ] || fail "an inexact Cursor marker value was accepted as Cursor Agent CLI"
+    PATH="$fakebin:$BASE_PATH" CURSOR_INVOKED_AS=claude "$ROOT/bin/fm-harness.sh")
+  [ "$got" != claude ] || fail "an inexact Cursor marker value was accepted as Cursor Agent CLI"
   pass "fm-harness detects only Cursor Agent CLI's exact invocation marker"
 }
 
@@ -796,7 +796,7 @@ test_spawn_cursor_secondmate_launches_with_its_primary_contract() {
   sm="$w/sm"
   launchlog="$w/launch.log"
   mkdir -p "$w/home/config" "$w/home/state" "$w/home/data" "$w/home/projects"
-  printf 'cursor\n' > "$w/home/config/secondmate-harness"
+  printf 'claude\n' > "$w/home/config/secondmate-harness"
   make_seeded_home "$sm" sm
   fakebin=$(make_launch_capturing_tmux "$w/tmux")
   : > "$launchlog"
@@ -809,19 +809,19 @@ test_spawn_cursor_secondmate_launches_with_its_primary_contract() {
     "$ROOT/bin/fm-spawn.sh" sm "$sm" --secondmate >/dev/null 2>&1 || rc=$?
 
   [ "$rc" -eq 0 ] || {
-    echo "skip: cursor executable not resolvable in this environment, so the launch could not be built"
+    echo "skip: claude executable not resolvable in this environment, so the launch could not be built"
     return
   }
   meta="$w/home/state/sm.meta"
-  [ "$(meta_field "$meta" harness)" = cursor ] || fail "a cursor secondmate must record its own harness"
-  [ "$(meta_field "$meta" kind)" = secondmate ] || fail "a cursor secondmate must record kind=secondmate"
+  [ "$(meta_field "$meta" harness)" = claude ] || fail "a claude secondmate must record its own harness"
+  [ "$(meta_field "$meta" kind)" = secondmate ] || fail "a claude secondmate must record kind=secondmate"
   launch=$(cat "$launchlog")
   assert_contains "$launch" "--trust" \
-    "a cursor secondmate must launch with --trust, or none of its project hooks load and its home has no supervision at all"
+    "a claude secondmate must launch with --trust, or none of its project hooks load and its home has no supervision at all"
   assert_contains "$launch" "--workspace" \
-    "a cursor secondmate must be pinned to its own home as the workspace"
+    "a claude secondmate must be pinned to its own home as the workspace"
   assert_contains "$launch" "FM_SUPERVISION_MODEL=autoarm" \
-    "cursor's stop-hook park runs the watcher only between turns, so its home must inherit the autoarm model"
+    "claude's stop-hook park runs the watcher only between turns, so its home must inherit the autoarm model"
   pass "Cursor is accepted for secondmates and launches with the contract its park needs"
 }
 

@@ -58,14 +58,14 @@ cat > "$BASE_RULES" <<'JSON'
       "when": "A simple bug fix with a stated root cause.",
       "use": [
         { "harness": "claude", "model": "sonnet", "effort": "high" },
-        { "harness": "cursor", "model": "cursor-grok-4.6-medium" },
+        { "harness":"codex","provider":"cursor", "model": "cursor-grok-4.6-medium" },
         { "harness": "pi", "model": "kimi-code/k3", "provider": "kimi" }
       ]
     }
   ],
   "default": [
     { "harness": "claude", "model": "opus" },
-    { "harness": "cursor", "model": "cursor-grok-4.6-high" }
+    { "harness":"codex","provider":"cursor", "model": "cursor-grok-4.6-high" }
   ]
 }
 JSON
@@ -221,7 +221,7 @@ expect_code 0 "$code" "clear exits 0"
 assert_contains "$out" 'dispatch-resolve:' "TOON block header"
 assert_contains "$out" '  status: clear' "clear status"
 assert_contains "$out" '  rule: rule_4 (A simple bug fix with a stated root cause.)   confidence: 0.9' "rule and confidence line"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "argmax picks the highest spendPriority"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "argmax picks the highest spendPriority"
 assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=-0.4627  runway=projected_exhaustion  -> eligible' "every candidate is accounted for"
 assert_contains "$out" 'candidate: pi:kimi-code/k3  provider=kimi  -> eligible, unranked: provider kimi unmeasured (unknown): disclosed uncertainty' "unmeasured provider stays listed as eligible and unranked"
 assert_contains "$out" '  note: 1 eligible candidate(s) unranked (kimi)' "clear results flag eligible unranked candidates once"
@@ -267,7 +267,7 @@ FM_DISPATCH_PROVIDER=openrouter FM_DISPATCH_MODEL=typesafe/jev-1.13 \
 expect_code 0 "$code" "OpenRouter clear exits 0"
 assert_contains "$out" '  status: clear' "OpenRouter clear status"
 assert_contains "$out" '  probabilities: rule_1=0.01 rule_2=0.01 rule_3=0.01 rule_4=0.96 default=0.01' "OpenRouter preserves per-rule probabilities"
-assert_contains "$out" '  profile: --harness '\''cursor'\'' --model '\''cursor-grok-4.6-medium'\''' "OpenRouter uses the shared quota argmax"
+assert_contains "$out" '  profile: --harness '\''codex'\'' --model '\''cursor-grok-4.6-medium'\''' "OpenRouter uses the shared quota argmax"
 assert_contains "$(cat "$LOG/argv")" 'https://openrouter.ai/api/alpha/decisions' "OpenRouter endpoint"
 assert_contains "$(cat "$LOG/argv")" $'--max-time\n10' "OpenRouter timeout"
 assert_not_contains "$(cat "$LOG/argv")" "$OR_KEY" "OpenRouter key never appears in curl argv"
@@ -427,7 +427,7 @@ cp "$BASE_RULES" "$RULES"
 reset_log
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY FAKE_CURL_MUTATE_SOURCE="$MUTATED_RULES" FAKE_CURL_MUTATE_TARGET="$RULES" run code out err "$BRIEF"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "resolution uses the same rules snapshot Jev received"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "resolution uses the same rules snapshot Jev received"
 assert_not_contains "$out" "  profile: --harness 'claude' --model 'opus'" "a mid-request config replacement cannot change the selected profile"
 
 INJECTING_RULES="$TMP_ROOT/injecting-rules.json"
@@ -459,8 +459,8 @@ assert_absent "$LOG/quota-axi.calls" "absent rules file never reads quota"
 
 DEFAULT_ONLY="$TMP_ROOT/default-only.json"
 EMPTY_RULES="$TMP_ROOT/empty-rules.json"
-printf '%s\n' '{"default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$DEFAULT_ONLY"
-printf '%s\n' '{"rules":[],"default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$EMPTY_RULES"
+printf '%s\n' '{"default":[{"harness":"claude","model":"opus"},{"harness":"codex","provider":"cursor","model":"cursor-grok-4.6-high"}]}' > "$DEFAULT_ONLY"
+printf '%s\n' '{"rules":[],"default":[{"harness":"claude","model":"opus"},{"harness":"codex","provider":"cursor","model":"cursor-grok-4.6-high"}]}' > "$EMPTY_RULES"
 for direct_rules in "$DEFAULT_ONLY" "$EMPTY_RULES"; do
   cp "$direct_rules" "$RULES"
   reset_log
@@ -515,7 +515,7 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "a top rule below its own floor falls to a runner-up that clears its floor"
 assert_contains "$out" '  rule: rule_2 (The task generates images.)   confidence: 0.76' "the model's own pick stays visible"
 assert_contains "$out" '  fallback: rule_4 (A simple bug fix with a stated root cause.) probability 0.18 clears its floor 0.1; rule_2 probability 0.76 is below its floor 0.9' "the fallback names both floors"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the runner-up rule's profiles are resolved"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "the runner-up rule's profiles are resolved"
 assert_not_contains "$(cat "$LOG/body")" 'min_confidence' "the model never sees confidence floors"
 
 reset_log
@@ -537,7 +537,7 @@ cp "$FLOOR_RULES" "$RULES"
 reset_log
 write_floor_response "$RESPONSE" rule_4 0.45 0.01 0.01 0.01 0.45 0.52
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "a declared floor below the global floor lets the picked rule resolve"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "a declared floor below the global floor lets the picked rule resolve"
 
 # A declared floor needs the same support from a rule as the pick or as a runner-up
 jq '.rules[3].min_confidence = 0.3' "$FLOOR_RULES" > "$RULES"
@@ -546,7 +546,7 @@ write_floor_response "$RESPONSE" rule_4 0.25 0.25 0.05 0.05 0.35 0.30
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "a picked rule clears its declared floor on its own probability, not the answer confidence"
 assert_not_contains "$out" '  fallback:' "a picked rule that clears its own floor takes no fallback"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the picked rule resolves at probability 0.35 over floor 0.3"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "the picked rule resolves at probability 0.35 over floor 0.3"
 
 reset_log
 write_floor_response "$RESPONSE" rule_2 0.95 0.05 0.55 0.05 0.30 0.05
@@ -656,7 +656,7 @@ write_response "$RESPONSE" rule_1 0.97
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "rule floor fall-through still resolves"
 assert_contains "$out" '  note: rule rule_1 floor model:fable below 20%: fall through to default' "rule floor fall-through is explained"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "fall-through resolves among the default profiles"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-high'" "fall-through resolves among the default profiles"
 assert_not_contains "$out" 'candidate: claude:fable' "the floored rule's own profile is not a candidate"
 
 MISSING_RULE_FLOOR="$TMP_ROOT/missing-rule-floor.json"
@@ -705,7 +705,7 @@ NONNUMERIC="$TMP_ROOT/nonnumeric-spend-priority.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPriority) = "high"' "$QUOTA" > "$NONNUMERIC"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$NONNUMERIC" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=-  runway=through_reset  -> eligible, unranked: spendPriority missing or non-numeric at all_models: not rankable: disclosed uncertainty' "a nonnumeric spendPriority remains eligible but unranked"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=-  runway=through_reset  -> eligible, unranked: spendPriority missing or non-numeric at all_models: not rankable: disclosed uncertainty' "a nonnumeric spendPriority remains eligible but unranked"
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "numeric evidence wins without mixed-type ordering"
 pass "nonnumeric spendPriority evidence is never ranked"
 
@@ -715,15 +715,15 @@ PARTIAL="$TMP_ROOT/partial.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.status) = "partial"' "$QUOTA" > "$PARTIAL"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$PARTIAL" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.7597  runway=through_reset  -> eligible' "a known row from a partial provider remains rankable"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "partial provider evidence can win the argmax"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.7597  runway=through_reset  -> eligible' "a known row from a partial provider remains rankable"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "partial provider evidence can win the argmax"
 
 PARTIAL_UNKNOWN="$TMP_ROOT/partial-unknown.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics) |= (.status = "partial" | .effectiveAvailability += [
   {"scope":"model:cursor-grok-4.6-medium","status":"unknown","runway":{"status":"unknown"}}
 ])' "$QUOTA" > "$PARTIAL_UNKNOWN"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$PARTIAL_UNKNOWN" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=model:cursor-grok-4.6-medium  remaining=-%  spendPriority=-  runway=-  bounds=all_models:91%/through_reset,model:cursor-grok-4.6-medium:-%/unknown  -> eligible, unranked: quota row model:cursor-grok-4.6-medium unknown: not rankable: disclosed uncertainty' "an unknown exact-model row preserves partial known evidence without ranking"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  scope=model:cursor-grok-4.6-medium  remaining=-%  spendPriority=-  runway=-  bounds=all_models:91%/through_reset,model:cursor-grok-4.6-medium:-%/unknown  -> eligible, unranked: quota row model:cursor-grok-4.6-medium unknown: not rankable: disclosed uncertainty' "an unknown exact-model row preserves partial known evidence without ranking"
 assert_contains "$out" '  note: 2 eligible candidate(s) unranked (cursor, kimi)' "clear result lists every provider with unranked uncertainty"
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "another measured candidate can clear"
 
@@ -732,7 +732,7 @@ jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics) |= (.status
   {"scope":"model:cursor-grok-4.6-medium","status":"unknown","runway":{"status":"unknown"}}
 ] | .effectiveAvailability[] |= if .scope == "all_models" then .effectivePercentRemaining = 0 | .runway.status = "exhausted_now" else . end)' "$QUOTA" > "$PARTIAL_EXHAUSTED"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$PARTIAL_EXHAUSTED" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=0%  spendPriority=-  runway=exhausted_now  bounds=all_models:0%/exhausted_now,model:cursor-grok-4.6-medium:-%/unknown  -> not eligible: runway exhausted_now at all_models' "known exhaustion vetoes a candidate despite unknown exact-model evidence"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=0%  spendPriority=-  runway=exhausted_now  bounds=all_models:0%/exhausted_now,model:cursor-grok-4.6-medium:-%/unknown  -> not eligible: runway exhausted_now at all_models' "known exhaustion vetoes a candidate despite unknown exact-model evidence"
 assert_contains "$out" '  note: 1 eligible candidate(s) unranked (kimi)' "an exhausted candidate is excluded from the unranked uncertainty note"
 
 UNKNOWN_EXHAUSTED="$TMP_ROOT/unknown-exhausted.json"
@@ -742,14 +742,14 @@ jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics) = {
   ]
 }' "$QUOTA" > "$UNKNOWN_EXHAUSTED"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$UNKNOWN_EXHAUSTED" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=-%  spendPriority=-  runway=exhausted_now  -> not eligible: runway exhausted_now at all_models' "unknown provider semantics cannot mask concrete exhaustion"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=-%  spendPriority=-  runway=exhausted_now  -> not eligible: runway exhausted_now at all_models' "unknown provider semantics cannot mask concrete exhaustion"
 
 NO_APPLICABLE="$TMP_ROOT/no-applicable.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability) = [
   {"scope":"model:other","status":"known","effectivePercentRemaining":91,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.8}}
 ]' "$QUOTA" > "$NO_APPLICABLE"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$NO_APPLICABLE" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  -> eligible, unranked: no applicable quota row for provider cursor: disclosed uncertainty' "a candidate without an applicable row remains eligible but unranked"
+assert_contains "$out" 'candidate: codex:cursor-grok-4.6-medium  provider=cursor  -> eligible, unranked: no applicable quota row for provider cursor: disclosed uncertainty' "a candidate without an applicable row remains eligible but unranked"
 assert_contains "$out" '  note: 2 eligible candidate(s) unranked (cursor, kimi)' "no-applicable-row uncertainty appears in the clear-result note"
 pass "partial and missing quota evidence remain eligible but unranked"
 
@@ -777,7 +777,7 @@ write_response "$RESPONSE" default 0.88
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  rule: default (No listed rule applies to this task.)' "default names the fixed neutral none option"
 assert_contains "$out" '  note: no rule matched' "default is explained"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "default resolves by argmax"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-high'" "default resolves by argmax"
 pass "default: no rule matched resolves among the default profiles"
 
 # --- genuine tie escalates ---------------------------------------------------------
@@ -933,7 +933,7 @@ write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 expect_code 0 "$code" "quota-axi path exits 0"
 assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "quota-axi --json is called exactly once"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "quota-axi snapshot drives the argmax"
+assert_contains "$out" "  profile: --harness 'codex' --model 'cursor-grok-4.6-medium'" "quota-axi snapshot drives the argmax"
 reset_log
 TYPESAFE_API_KEY=$KEY FAKE_QUOTA_FAIL=1 run code out err "$BRIEF"
 expect_code 0 "$code" "quota-axi failure exits 0"

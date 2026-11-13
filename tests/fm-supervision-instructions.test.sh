@@ -61,7 +61,7 @@ test_supervision_host_protocol_on_every_arm_owner() {
   home="$TMP_ROOT/host-owners-home"
   config="$TMP_ROOT/host-owners-config"
   mkdir -p "$home/state" "$config"
-  for harness in claude cursor opencode codex; do
+  for harness in claude opencode codex; do
     : > "$config/supervision-host-off"
     plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness")
     assert_not_contains "$plain" "- Supervision host: on;" "$harness: a home opted out by config/supervision-host-off rendered the host protocol"

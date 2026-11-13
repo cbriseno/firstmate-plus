@@ -221,7 +221,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|cursor)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -417,7 +417,6 @@
 #     __BRIEFDOORBELL__ quoted printable doorbell naming the launch-brief record this
 #                  script published into the receiving home's operational inbox
 #     __WORKTREE__  absolute path to the task worktree
-#     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
 #     __OPENCODEBIN__ quoted concrete opencode executable path resolved from PATH -
 #                  the same binary the version-gate probe reads, so the recorded
 #                  major can never describe a different executable than the pane
@@ -436,22 +435,6 @@
 # A claude secondmate gets no Stop busy hook; its home's tracked Stop guard is its
 # only Stop writer, through the .fm-busy-stop pointer in that home. A home whose
 # guard predates that pointer keeps the ordinary Stop idle hook instead.
-# cursor installs no per-task hook either: it writes state/<id>.cursor-session to
-# bind the pane to cursor's own conversation transcript (projects root, the exact
-# workspace path cursor records in .workspace-trusted, and the conversations that
-# already existed for that workspace). It is launched through the verified binary
-# resolver because `cursor` is not the CLI name. A cursor SECONDMATE instead runs
-# the tracked project-scope .cursor/hooks.json in its own home, whose stop-hook
-# park owns that home's supervision (docs/supervision-protocols/cursor.md).
-# claude is the one harness whose pre-launch setup can REFUSE the spawn: before
-# any per-task state exists, and before its busy hooks are written, every
-# claude launch pre-registers the directory the pane
-# starts in - the task worktree, or the secondmate home for a --secondmate spawn -
-# in the launching user's own Claude trust store through bin/fm-claude-trust.sh,
-# because Claude's interactive workspace-trust dialog gates a folder it has never
-# seen and firstmate cannot answer it. That helper's header owns the structural
-# scope test for both shapes and every refusal; a failed registration stops this
-# spawn rather than launching a worker that would wedge on the dialog.
 # Unless config/keep-ai-trailers is present, every claude launch carries the
 # attribution-off policy in its per-launch --settings JSON, so a spawned worker
 # never writes a Co-Authored-By trailer, Claude-Session link, or generated-with
@@ -707,8 +690,6 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
-# shellcheck source=bin/fm-cursor-lib.sh
-. "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
@@ -1568,7 +1549,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed | cursor )
+  '' | claude | codex | opencode | pi | pi-signed )
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1711,22 +1692,6 @@ pi | pi-signed)
   LAUNCH=${LAUNCH//__PIEXCLUDE__/$PI_EXCLUDE}
   LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH"
   ;;
-cursor)
-  # `cursor` is not the CLI name, and the legacy alias `agent` is far too
-  # generic to launch on its name alone, so resolution runs through the
-  # verified owner rather than a bare command lookup. Refusing here keeps a
-  # missing install a loud spawn refusal instead of a pane that dies with a
-  # command-not-found the supervisor would read as a wedged worker.
-  CURSOR_BIN=$(fm_cursor_resolve_binary) || exit 1
-  if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
-    if CURSOR_MODELS=$(fm_cursor_list_models "$CURSOR_BIN"); then
-      if ! printf '%s\n' "$CURSOR_MODELS" | fm_cursor_catalog_has_model "$MODEL"; then
-        echo "error: Cursor model '$MODEL' is not available from '$CURSOR_BIN --list-models'; choose an id listed by that command or omit --model" >&2
-        exit 1
-      fi
-    fi
-  fi
-  ;;
 esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
@@ -1844,7 +1809,7 @@ model_flag_for_harness() {
     [ "$oc_major" = 1 ] || return 0
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
-  claude | codex | pi | pi-signed | cursor )
+  claude | codex | pi | pi-signed )
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   esac
@@ -3920,29 +3885,6 @@ EOF
     # capability and process/session binding. Secondmates and raw launches keep
     # their existing launch and unknown semantics. notify remains a notification.
     ;;
-  cursor*)
-    # Cursor's turn lifecycle is neither a hook nor a launch flag: it writes
-    # its own durable per-conversation transcript and brackets every turn
-    # there (bin/fm-busy-lib.sh owns the fold). This is a PULL
-    # source with no writer, so nothing is armed and no record is seeded.
-    # This sidecar is the whole binding. It pins the projects root and the
-    # exact workspace path cursor records in each project's
-    # .workspace-trusted, plus every conversation that already exists for
-    # that workspace, so a relaunch into a reused worktree folds its OWN
-    # conversation instead of its predecessor's. The classifier then accepts
-    # only one remaining conversation and never guesses between incarnations.
-    CURSOR_PROJECTS_ROOT="${CURSOR_PROJECTS_ROOT_OVERRIDE:-$HOME/.cursor/projects}"
-    {
-      printf 'projects_root=%s\n' "$CURSOR_PROJECTS_ROOT"
-      printf 'workspace_root=%s\n' "$WT"
-      if CURSOR_PRIOR_PROJECT=$(fm_busy_cursor_project_dir "$CURSOR_PROJECTS_ROOT" "$WT" 2>/dev/null); then
-        for CURSOR_PRIOR_DIR in "$CURSOR_PRIOR_PROJECT"/agent-transcripts/*/; do
-          [ -d "$CURSOR_PRIOR_DIR" ] || continue
-          printf 'prior_conversation=%s\n' "$(basename -- "${CURSOR_PRIOR_DIR%/}")"
-        done
-      fi
-    } >"$STATE/$ID.cursor-session"
-    ;;
   esac
 
 # Per-task git hooksPath that strips AI commit trailers at the commit object.
@@ -4262,7 +4204,6 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
 pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
-cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 opencode)
   # The resolved absolute path probed for the version gate above, so the pane
   # runs exactly the binary whose major was recorded. An unresolved executable
@@ -4363,7 +4304,7 @@ if [ "$KIND" = secondmate ]; then
   # receive extension to match fm_supervision_model's own table, so their pull
   # guard tolerates the extension hand-off exactly as a Pi primary does.
   case "$HARNESS" in
-  claude | cursor) supervision_model=autoarm ;;
+  claude) supervision_model=autoarm ;;
   pi | pi-signed ) supervision_model=extension ;;
   *) supervision_model=persistent ;;
   esac

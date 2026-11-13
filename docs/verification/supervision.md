@@ -49,11 +49,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-### Cursor primary park, 2026-08-13
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
 ### Claude drops the exit 2 of a hook it timed out, 2026-09-23
 
 Historical machine-specific probe transcripts are not distributed.

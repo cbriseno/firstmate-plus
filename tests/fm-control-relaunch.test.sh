@@ -1619,18 +1619,6 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
 # `codex-cli` would have its turn-end token and hook pointer armed and never
 # retired - leaving a registry entry that outlives the agent that owned it.
 
-test_cursor_session_binding_is_retired_on_a_harness_switch() {
-  local dir
-  dir=$(new_case cursorwiring rl35)
-  add_ship_task "$dir" rl35 cursor
-  printf 'workspace=%s\nprior_conversation=old-conversation\n' "$dir/wt" \
-    > "$dir/home/state/rl35.cursor-session"
-  printf 'zsh' > "$dir/fake/command"
-  run_spawn "$dir" rl35 --relaunch --harness claude >/dev/null
-  [ ! -e "$dir/home/state/rl35.cursor-session" ] \
-    || fail "the retired cursor incarnation's session binding must not outlive it"
-  pass "fm-spawn --relaunch: switching away from cursor retires its session binding"
-}
 
 # --- 3 and 4. refusals before the agent is touched ---------------------------
 
@@ -2950,7 +2938,6 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_spawn_relaunch_preserves_profile_axes
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
-test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical

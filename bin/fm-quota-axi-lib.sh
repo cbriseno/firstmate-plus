@@ -147,8 +147,7 @@ fm_quota_json_valid() {
 fm_quota_single_provider_table() {
   printf '%s\n' \
     'claude claude' \
-    'codex codex' \
-    'cursor cursor'
+    'codex codex'
 }
 
 # Reads the whole table before answering: leaving the loop early closes the
@@ -169,7 +168,6 @@ fm_quota_provider_for_harness() {
     codex)        printf 'codex\n' ;;
     opencode)     printf 'codex\n' ;;
     pi|pi-signed) printf 'pi\n' ;;
-    cursor)       printf 'cursor\n' ;;
     *)            return 1 ;;
   esac
 }

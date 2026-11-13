@@ -49,7 +49,6 @@ CMD=""
 CMD_SET=0
 BACKGROUND=""
 CLAUDE_MODE=0
-CURSOR_MODE=0
 
 usage() {
   cat <<'EOF'
@@ -92,10 +91,6 @@ while [ "$#" -gt 0 ]; do
       CLAUDE_MODE=1
       shift
       ;;
-    --cursor)
-      CURSOR_MODE=1
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -117,7 +112,7 @@ if [ "$CMD_SET" -eq 0 ]; then
   # Cursor's own registration passes --cursor. Without it a Cursor-delivered
   # payload is the Claude-settings duplicate Cursor also loads, already
   # evaluated by that registration, so this copy allows without re-classifying.
-  if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
+  if fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0
   fi
   CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
@@ -194,10 +189,6 @@ json_escape() {
 
 DETAIL="[$CODE] $REASON"
 ESCAPED=$(json_escape "$DETAIL")
-if [ "$CURSOR_MODE" -eq 1 ]; then
-  printf '{"permission":"deny","user_message":"%s"}\n' "$ESCAPED"
-  exit 0
-fi
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$ESCAPED" >&2
 [ "$CLAUDE_MODE" -eq 1 ] || printf '{"decision":"deny","reason":"%s"}\n' "$ESCAPED"
 exit 2

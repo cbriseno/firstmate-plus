@@ -169,46 +169,15 @@ test_genuine_marker_and_ancestry_agree() {
   got=$(under_process "$bin" CLAUDECODE=1)
   [ "$got" = claude ] || fail "a genuine claude session resolved '$got', expected claude"
 
-  bin=$(named_bin "$dir/cursor-tree" cursor-agent)
-  got=$(under_process "$bin" CURSOR_AGENT=1)
-  [ "$got" = cursor ] || fail "a genuine cursor session resolved '$got', expected cursor"
-  got=$(under_process "$bin" CURSOR_INVOKED_AS=cursor-agent)
-  [ "$got" = cursor ] || fail "a genuine cursor session (launcher marker) resolved '$got', expected cursor"
-
   pass "a harness that publishes a marker inside its own process tree is unchanged"
 }
 
 # Cursor is the case that motivated the pre-existing marker ordering: a cursor
 # session started by hand under a claude primary carries BOTH markers. Ancestry
 # is silent about which owns the tree there, so the ordering still decides.
-test_cursor_ordering_still_decides_when_ancestry_is_silent() {
-  local fakebin got
-  fakebin=$(blind_ancestry_bin "$TMP_ROOT/cursor-ordering")
-  got=$(with_blind_ancestry "$fakebin" CLAUDECODE=1 CURSOR_AGENT=1)
-  [ "$got" = cursor ] || fail "both markers with no ancestry resolved '$got', expected cursor"
-  got=$(with_blind_ancestry "$fakebin" CLAUDECODE=1 CURSOR_INVOKED_AS=cursor-agent)
-  [ "$got" = cursor ] || fail "both markers (launcher form) with no ancestry resolved '$got', expected cursor"
-  got=$(with_blind_ancestry "$fakebin" CLAUDECODE=1)
-  [ "$got" = claude ] || fail "CLAUDECODE with no ancestry resolved '$got', expected claude"
-  got=$(with_blind_ancestry "$fakebin")
-  [ "$got" = unknown ] \
-    || fail "no marker and no ancestry resolved '$got', expected unknown"
-  pass "with ancestry silent, the marker layer and its cursor-first ordering still decide"
-}
 
 # The symmetric half of the same bug: cursor-agent's marker reaches a nested
 # claude worker's environment, and the nearer claude ancestor must win.
-test_retained_cursor_marker_does_not_rename_a_nested_claude() {
-  local bin got
-  bin=$(named_bin "$TMP_ROOT/nested-claude" claude)
-  got=$(under_process "$bin" CURSOR_AGENT=1 CLAUDECODE=1)
-  [ "$got" = claude ] \
-    || fail "a claude tree carrying a retained CURSOR_AGENT resolved '$got', expected claude"
-  got=$(under_process "$bin" CURSOR_INVOKED_AS=cursor-agent CLAUDECODE=1)
-  [ "$got" = claude ] \
-    || fail "a claude tree carrying a retained cursor launcher marker resolved '$got', expected claude"
-  pass "a retained cursor marker does not rename a nested claude worker"
-}
 
 # --- 3. Pi keeps the marker's more specific identity ------------------------
 
@@ -852,8 +821,6 @@ test_supervision_protocol_follows_corrected_verdict() {
 
 test_markerless_ancestry_outranks_foreign_marker
 test_genuine_marker_and_ancestry_agree
-test_cursor_ordering_still_decides_when_ancestry_is_silent
-test_retained_cursor_marker_does_not_rename_a_nested_claude
 test_pi_signed_survives_agreeing_ancestry
 test_interpreter_args_match_does_not_outrank_a_marker
 test_native_child_of_an_interpreter_shim_decides_at_comm_strength

@@ -19,14 +19,13 @@ In this document, an arm is one run of `bin/fm-watch-arm.sh`, which starts a wat
 
 ## Ownership
 
-On Pi, OpenCode, Cursor, and Claude primaries, one component owns re-arming the watcher.
+On Pi, OpenCode, and Claude primaries, one component owns re-arming the watcher.
 Codex keep their own protocols; see [Manual recovery and other harnesses](#manual-recovery-and-other-harnesses).
 
 | Harness | Re-arm owner |
 | --- | --- |
 | Pi | `.pi/extensions/fm-primary-pi-watch.ts` |
 | OpenCode | `.opencode/plugins/fm-primary-watch-arm.js` |
-| Cursor | `.cursor/hooks.json` `stop` hook (`bin/fm-turnend-guard-cursor.sh`) |
 | Claude | `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) |
 
 On a non-Pi primary, a home that runs the supervision host also changes what the owner runs; see [Supervision host](#supervision-host).
@@ -68,12 +67,6 @@ The extension header owns how consumption is observed and why it only decides wh
 
 - It retires the predecessor arm at replacement shutdown instead of retaining it across the handoff.
 - It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
-
-### Cursor stop hook
-
-Cursor's `.cursor/hooks.json` `stop` hook (`bin/fm-turnend-guard-cursor.sh`) owns routine tokenless re-arm for a Cursor primary.
-It re-arms by parking that awaited hook on `bin/fm-watch-arm.sh` and returning an actionable close as one follow-up.
-[`turnend-guard.md`](turnend-guard.md#harness-integrations) owns its Pi-host stand-down, loop bounds, and supersession baton.
 
 ### Claude Stop hook
 
