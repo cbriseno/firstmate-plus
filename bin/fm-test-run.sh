@@ -292,7 +292,7 @@ family_for_basename() {
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
-    fm-kimi-harness.test.sh|fm-muse-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
+    fm-kimi-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-calm-claude-mod.test.sh|\
@@ -361,7 +361,7 @@ family_for_basename() {
     fm-cursor-primary-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-adapter-instructions-live-e2e.test.sh|\
     fm-harness-liveness-drift-live-e2e.test.sh|\
-    fm-muse-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
+    fm-polytoken-signals-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|\
     fm-pi-seeded-home-trust-live-e2e.test.sh|\
     fm-herdr-version-floor-live-e2e.test.sh|\
@@ -772,8 +772,6 @@ tests/fm-lock-release.test.sh 26380
 tests/fm-lock-release-live.test.sh 2395
 tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
-tests/fm-muse-harness.test.sh 46548
-tests/fm-muse-signals-live-e2e.test.sh 52
 tests/fm-nm-test-contract.test.sh 853
 tests/fm-no-mistakes-required.test.sh 270
 tests/fm-omp-harness.test.sh 63796

@@ -9,17 +9,7 @@ fm_send_id_from_meta() { # <meta-file>
   printf '%s' "${base%.meta}"
 }
 
-# fm_send_clear_after_interrupt: muse RESTORES the interrupted prompt back into
-# the composer when Escape cancels a turn, as real bright text (verified: fg
-# 38;2;204;211;219, luminance ~210, muse 0.1.0-R708.1), not de-emphasised ghost
-# text. Classifying that as pending input is correct - the text really is
-# unsubmitted - but leaving it there means the NEXT steer types onto the end of
-# it and submits both as one garbled message. Ctrl-U clears the composer
-# (verified), so the interrupt is not complete until it has been sent. A failed
-# clear is loud rather than silent, because the alternative is a corrupted steer.
-# WHICH adapters need that clear, and which key clears them, comes from the one
-# control-plane capability table (bin/fm-control-lib.sh) rather than a second
-# copy here - the same table bin/fm-control.sh's interrupt verb reads.
+# Clear any adapter-specific restored composer after an interrupt.
 fm_send_clear_after_interrupt() { # <key>
   local key=$1 family clear
   [ "$key" = Escape ] || return 0

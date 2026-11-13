@@ -174,33 +174,6 @@ launch_template() {
   # Its turn-end signal is a globally configured Stop hook plus a guarded
   # per-task worktree token, so no launch placeholder belongs here.
   kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
-  # muse (Muse Code): a positional prompt starts the supervised interactive
-  # session. --yolo is the single flag that makes a crewmate pane viable: muse
-  # ships approval prompts AND a filesystem/network sandbox ON by default
-  # (--sandbox-network defaults to proxy-only, which refuses outright without a
-  # managed proxy), and it gates a fresh workspace behind a trust dialog. One
-  # --yolo disables approval, disables the sandbox so git and network work, and
-  # trusts the workspace for the run, so no dialog appears on the fresh
-  # per-task worktree (verified, muse 0.1.0-R708.1).
-  # MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on is the privacy control:
-  # muse otherwise loads the OPERATOR's foreign personal rules from ~/.claude
-  # into every run and ships them to Meta-hosted inference, even under an
-  # isolated XDG_CONFIG_HOME. exec mode's --no-foreign-personal-context flag is
-  # NOT accepted by the interactive TUI (it exits with "unexpected argument"),
-  # so this env var is the only control that reaches a pane worker. Verified to
-  # drop the foreign rules_file context block while KEEPING the project's own
-  # AGENTS.md rules, which the crewmate contract depends on.
-  # muse's turn-end signal rides neither the launch command nor a hook: its
-  # plugin engine is off in the default build, so firstmate folds muse's own
-  # session event log instead (bin/fm-busy-lib.sh), bound by the sidecar
-  # written below. Nothing to place in the template for it.
-  # codex, opencode, and kimi are markerless too and inherit foreign markers the
-  # same way, but detection no longer depends on this launch-side clearing:
-  # bin/fm-harness.sh lets a markerless harness's structural ancestor outrank an
-  # inherited marker. The clearing stays on the cursor and muse templates as the
-  # verified launch behavior their evidence records, not as the only thing
-  # standing between a retained marker and a misidentified worker.
-  muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   *) return 1 ;;
   esac
 }

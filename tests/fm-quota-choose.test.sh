@@ -25,8 +25,6 @@ SEMANTICS_MISMATCH="$LAB/semantics-mismatch.json"
 PARTIAL="$LAB/partial.json"
 NO_APPLICABLE="$LAB/no-applicable.json"
 APPLICABLE_VETO="$LAB/applicable-veto.json"
-MUSE_EXHAUSTED="$LAB/muse-exhausted.json"
-MUSE_POSITIVE="$LAB/muse-positive.json"
 AGY_POSITIVE="$LAB/agy-positive.json"
 TOON="$LAB/quota.toon"
 RENDERER_TOON="$LAB/renderer-quota.toon"
@@ -543,20 +541,6 @@ fi
 [ "$out" = "none" ] || fail "provider-level unknown quota returned: $out"
 ok "provider-level unknown quota is not positive"
 
-jq '.providers += [{"provider":"meta","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
-  "$LAB/captured.json" > "$MUSE_POSITIVE"
-out=$(call_choose --snapshot "$MUSE_POSITIVE" --candidate muse:default)
-[ "$out" = "muse default" ] || fail "supported Muse candidate returned: $out"
-ok "Muse candidate is accepted"
-
-jq '.providers += [{"provider":"meta","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"}}]}}]' \
-  "$LAB/captured.json" > "$MUSE_EXHAUSTED"
-if out=$(call_choose --snapshot "$MUSE_EXHAUSTED" --candidate muse:default 2>/dev/null); then
-  fail "Muse candidate dispatched with exhausted Meta quota"
-fi
-[ "$out" = "none" ] || fail "exhausted Meta quota returned: $out"
-ok "Muse uses Meta quota"
-
 jq '.providers += [{"provider":"agy","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
   "$LAB/captured.json" > "$AGY_POSITIVE"
 if err=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default 2>&1); then
@@ -736,7 +720,7 @@ lookup_err=$(bash -c '
   trap "" PIPE
   . "$1/fm-quota-axi-lib.sh"
   for _ in $(seq 200); do
-    for harness in claude codex grok kimi cursor muse; do
+    for harness in claude codex grok kimi cursor; do
       fm_quota_single_provider_for_harness "$harness" >/dev/null
     done
   done

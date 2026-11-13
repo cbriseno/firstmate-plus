@@ -1034,8 +1034,6 @@ A cursor secondmate or primary runs the tracked project-scope `.cursor/hooks.jso
 
 Cursor typed-submit confirmation is verified on tmux and Herdr only.
 
-muse is verified for crewmate and scout launches ONLY, and `fm-spawn.sh` refuses it for a secondmate, because muse ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
-muse also needs a worker-reachable credential before spawning, and the portable fleet path is the `<config>/muse/auth.json` credential stored by `muse login`, because a caller-only `META_API_KEY` does not cross a long-lived backend daemon.
 
 
 
@@ -1385,8 +1383,7 @@ Choose the minimum additions for the authentication method actually in use:
 | --- | --- |
 | Provider login stored under the normal home directory | None for the environment contract; the same user still has access to that provider's stored login. |
 | Provider configured through environment variables | The exact credential and endpoint names required by that provider, for example `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; a multi-provider tool needs each provider it will actually use. |
-| Custom provider store | Its configured location variables, such as `CODEX_HOME`, `GROK_HOME`, or `XDG_CONFIG_HOME`; Firstmate's existing explicit Claude and Muse store assignments still apply. |
-| Muse environment authentication | `META_API_KEY`, already present in the target tmux session environment; Firstmate's preflight requires the stored-login path on other backends. |
+| Custom provider store | Its configured location variables, such as `CODEX_HOME`, `GROK_HOME`, or `XDG_CONFIG_HOME`; Firstmate's existing explicit Claude store assignments still apply. |
 | Git over SSH with an agent | `SSH_AUTH_SOCK`; add `GIT_SSH_COMMAND` only if the chosen transport requires that override. |
 | Git over SSH with a key file | No credential variable when normal SSH configuration selects the key; file permissions and any passphrase handling still apply. |
 | Git over HTTPS with a credential helper | Whatever the configured helper requires; a GitHub CLI helper using an environment token needs its selected `GH_TOKEN` or `GITHUB_TOKEN`. |
@@ -1519,7 +1516,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
-| `claude`, `codex`, `grok`, `kimi`, `cursor`, `muse` | The resolver has an authoritative single-provider mapping. |
+| `claude`, `codex`, `grok`, `kimi`, `cursor` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, `omp`, and `opencode`, plus unmapped `polytoken`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.

@@ -215,7 +215,7 @@ mate line wins for that exact id^pi def-m xhigh\nmate alpha: claude opus max^alp
 mate line leaves every other id on the default^pi def-m xhigh\nmate alpha: claude opus max^beta^pi^def-m^xhigh
 mate line is ignored when no id is passed^pi def-m xhigh\nmate alpha: claude opus max^^pi^def-m^xhigh
 harness-only mate line yields empty model and effort^pi def-m xhigh\nmate alpha: grok^alpha^grok^^
-mate line listed above the default line is honored^mate alpha: muse m1 low\npi def-m xhigh^alpha^muse^m1^low
+mate line listed above the default line is honored^mate alpha: polytoken m1 low\npi def-m xhigh^alpha^polytoken^m1^low
 mate line whose harness is default defers to the crew chain^claude opus high\nmate alpha: default^alpha^claude^^
 comments and blank lines stay legal between the lines^# pinned by the captain\n\n  \npi def-m xhigh\n\n# exception\nmate alpha: grok g1 max^alpha^grok^g1^max
 override with no default line governs its own id^mate alpha: grok g1 max^alpha^grok^g1^max
@@ -251,7 +251,7 @@ test_secondmate_malformed_pin_refuses_with_line_number() {
     done
     done
   done <<'ROWS'
-duplicate override for the same mate^pi def-m xhigh\nmate alpha: grok g1 max\nmate alpha: muse m2 low
+duplicate override for the same mate^pi def-m xhigh\nmate alpha: grok g1 max\nmate alpha: polytoken m2 low
 unknown line that is not the default and not an override^pi def-m xhigh\nmate alpha: grok\npi def-m low
 mate keyword with no id^pi def-m xhigh\nmate alpha: grok\nmate: grok g1 max
 mate id containing a space^pi def-m xhigh\nmate alpha: grok\nmate an alpha: grok

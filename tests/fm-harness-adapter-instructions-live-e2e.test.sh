@@ -37,7 +37,7 @@ cat > "$EXPECTED_JSON" <<'JSON'
     {"id":"exit.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/grok.md"},
     {"id":"resume.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/kimi.md"},
     {"id":"recovery.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/cursor.md"},
-    {"id":"recovery.replacement-profile","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md"],"harness":"references/harness/muse.md"},
+    {"id":"recovery.replacement-profile","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md"],"harness":"references/harness/polytoken.md"},
     {"id":"recovery.secondmate","common":["references/common/control-and-recovery.md","references/common/primary-hooks.md"],"harness":"references/harness/claude.md"},
     {"id":"recovery.replacement-secondmate","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md","references/common/primary-hooks.md"],"harness":"references/harness/codex.md"},
     {"id":"primary.default","common":["references/common/primary-hooks.md"],"harness":"references/harness/opencode.md"},
@@ -62,7 +62,7 @@ JSON
     'exit.default grok' \
     'resume.default kimi' \
     'recovery.default cursor' \
-    'recovery.replacement-profile muse' \
+    'recovery.replacement-profile polytoken' \
     'recovery.secondmate claude' \
     'recovery.replacement-secondmate codex' \
     'primary.default opencode' \
@@ -115,7 +115,7 @@ resolve_native_binary() {
   return 1
 }
 
-for harness in claude codex opencode pi pi-signed grok kimi cursor muse; do
+for harness in claude codex opencode pi pi-signed grok kimi cursor polytoken; do
   if binary=$(resolve_native_binary "$harness"); then
     version=$("$binary" --version 2>/dev/null | head -1 | tr -d '\r') || version=unknown
     printf '# native loader not claimed: %s %s is installed, but this harness-neutral evaluation does not exercise its provider transport\n' "$harness" "$version"

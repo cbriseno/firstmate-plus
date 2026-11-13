@@ -383,9 +383,9 @@ test_refused_restart_falls_back_without_claiming_a_reload() {
   dir=$(new_case refused)
   add_local_mate "$dir" sm1
   arm_answer "$dir" sm1
-  # muse is a crewmate-only adapter, so the control plane refuses a secondmate
+  # polytoken is a crewmate-only adapter, so the control plane refuses a secondmate
   # relaunch onto it BEFORE stopping anything.
-  printf 'muse\n' > "$dir/home/config/secondmate-harness"
+  printf 'polytoken\n' > "$dir/home/config/secondmate-harness"
   before=$(cat "$dir/fake/command")
 
   out=$(run_restart "$dir" sm1); rc=$?
@@ -534,7 +534,7 @@ test_remote_restart_uses_the_default_for_an_unpinned_mate() {
   dir=$(new_case matenopin)
   setup_remote_case "$dir" sm2 ok
   export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
-  printf 'codex big-model high\nmate some-other-mate: muse other-model low\n' > "$dir/home/config/secondmate-harness"
+  printf 'codex big-model high\nmate some-other-mate: polytoken other-model low\n' > "$dir/home/config/secondmate-harness"
 
   out=$(run_restart "$dir" sm2); rc=$?
   unset FM_FAKE_ANSWER_STATUS
@@ -572,7 +572,7 @@ test_remote_restart_refuses_an_unreadable_per_mate_pin() {
   dir=$(new_case matebadpin)
   setup_remote_case "$dir" sm2 ok
   export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
-  printf 'codex big-model high\nmate sm2: pi mate-model max\nmate sm2: muse other-model low\n' > "$dir/home/config/secondmate-harness"
+  printf 'codex big-model high\nmate sm2: pi mate-model max\nmate sm2: polytoken other-model low\n' > "$dir/home/config/secondmate-harness"
 
   out=$(run_restart "$dir" sm2); rc=$?
   unset FM_FAKE_ANSWER_STATUS

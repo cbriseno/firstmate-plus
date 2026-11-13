@@ -170,10 +170,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/muse.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/harness-adapters/references/harness/omp.md",
       "audience": "agent-runtime"
     },
@@ -463,10 +459,6 @@
     },
     {
       "path": "docs/verification/lint-option-a.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/muse.md",
       "audience": "maintainer-verification"
     },
     {
