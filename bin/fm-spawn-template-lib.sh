@@ -118,30 +118,6 @@ launch_template() {
   omp)
     printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 __OMPBIN__ --config __OMPWORKERCFG__ --auto-approve --cwd __WORKTREE__ __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     ;;
-  # agy (Antigravity CLI): --prompt-interactive "<brief>" starts the supervised
-  # interactive session and auto-submits it, so the brief rides the launch
-  # command (verified: a multi-line brief submitted itself with no extra Enter,
-  # agy 1.2.0). --model takes the bare catalog id from `agy models`
-  # (gemini-3.8-flash-high, never the unlisted bare gemini-3.8-flash).
-  # --effort takes low|medium|high. --dangerously-skip-permissions
-  # auto-approves every tool call, which an unattended crewmate needs.
-  # Every task worktree is a fresh path, so agy would show a folder-trust
-  # dialog ("Do you trust the contents of this project?") and no launch flag
-  # suppresses it (agy 1.2.0 --help lists none). Left unanswered, the turn
-  # runs in agy's own scratch directory instead of the worktree, so the
-  # worktree is pre-registered in the captain's own
-  # ~/.gemini/antigravity-cli/settings.json trustedWorkspaces before launch
-  # (bin/fm-agy-trust.sh, the claude shape), and the post-launch gate
-  # (agy_wait_for_working) answers the preselected safe default ("Yes, I
-  # trust this folder") with a single Enter if the dialog renders anyway,
-  # then requires the busy signature before the spawn reports success.
-  # The foreign primary markers are cleared for the same
-  # reason cursor clears them: agy publishes no marker of its own and does not
-  # clear an inherited CLAUDECODE (verified in the /proc environ of a live 1.2.0
-  # TUI), so bin/fm-harness.sh must not read an agy worker as its launcher.
-  # agy exposes no hook surface, so busy state is a rendered-tail fallback
-  # (bin/fm-busy-lib.sh) and nothing is armed below.
-  agy) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS __AGYBIN__ --prompt-interactive "$(__OPINPUT__ encode launch-brief < __BRIEF__)" __MODELFLAG____EFFORTFLAG__--dangerously-skip-permissions' ;;
   # grok (Grok Build TUI): a positional prompt starts the supervised interactive
   # session. --always-approve auto-approves every tool execution (verified: the
   # crewmate runs fully autonomously, no permission gate), which an unattended

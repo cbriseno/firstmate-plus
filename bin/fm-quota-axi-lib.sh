@@ -151,7 +151,6 @@ fm_quota_single_provider_table() {
     'grok grok' \
     'kimi kimi' \
     'cursor cursor' \
-    'agy agy' \
     'muse meta'
 }
 

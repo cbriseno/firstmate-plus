@@ -1134,8 +1134,7 @@ omp|omp|
 grok|grok|
 kimi|kimi|
 cursor|cursor|
-muse|muse|
-agy|agy|'
+muse|muse|'
   while IFS='|' read -r harness label want; do
     [ -n "$harness" ] || continue
     got=$(fm_control_relaunch_resume_flag "$harness" "$label") \

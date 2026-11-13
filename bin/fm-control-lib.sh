@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse omp agy polytoken
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse omp polytoken
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -81,14 +81,12 @@ fm_control_harness_supported() {  # <harness>
 # harness= that way), which is why the spawn adapters match `claude*`, `muse*`,
 # and friends. This is the one place that prefix rule is stated. `pi` and
 # `pi-signed` are exact because a `pi*` prefix would swallow the signed adapter,
-# `omp` is exact because an `omp*` prefix would claim unrelated commands, `agy`
-# is exact for the same reason on an even shorter name; an unrecognized value returns nonzero.
+# `omp` is exact because an `omp*` prefix would claim unrelated commands.
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
     pi) printf 'pi' ;;
     pi-signed) printf 'pi-signed' ;;
     omp) printf 'omp' ;;
-    agy) printf 'agy' ;;
     polytoken) printf 'polytoken' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
@@ -102,7 +100,7 @@ fm_control_harness_family() {  # <recorded-harness>
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse, gemini, agy,
+# Which task kinds an adapter is verified to run. muse, gemini,
 # and polytoken are crewmate/scout adapters only: none has a primary
 # supervision protocol, and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control
 # plane asks this BEFORE it stops anything, so an incompatible relaunch target is
@@ -112,7 +110,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|gemini|agy|polytoken) [ "$kind" != secondmate ] || return 1 ;;
+    muse|gemini|polytoken) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -129,7 +127,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 fm_control_interrupt_transport() {  # <harness>
   case "${1-}" in
     polytoken) printf 'rest' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|agy) printf 'key' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse) printf 'key' ;;
     *) return 1 ;;
   esac
 }
@@ -138,14 +136,9 @@ fm_control_interrupt_transport() {  # <harness>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 # gemini names its own key in the running turn's status row
 # (`(esc to cancel, <n>s)`), and a single Escape was verified to cancel it.
-# agy cancels on a single Escape, printing the Interrupted row
-# with an idle composer and no repollution (verified live, agy 1.2.0 through
-# Herdr). omp (Oh My Pi) shares Pi's single Escape, empty composer
-# afterwards, and /quit exit (verified omp 18.1.2 in a PTY, re-verified 18.1.11
-# through Herdr).
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|agy) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -156,7 +149,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|agy) printf '1' ;;
+    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -164,7 +157,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|agy) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse) ;;
     *) return 1 ;;
   esac
 }
@@ -172,7 +165,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|agy) printf '0.2' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -184,7 +177,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
     # a hazard surface on its path; the /quit exit opens only the slash palette,
     # where Enter accepts the preselected /quit row (verified live).
     polytoken) ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|agy) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse) ;;
     *) return 1 ;;
   esac
 }
@@ -205,7 +198,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|agy) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini) ;;
     *) return 1 ;;
   esac
 }
@@ -217,7 +210,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # after an interrupt was measured as variable - sometimes seconds, sometimes
     # not within 20 - so a cancellation claim built on it would be unreliable.
     # Normal turn completion is prompt, which is what the busy fold depends on.
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|agy) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -238,7 +231,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
       esac
       ;;
     claude|grok|kimi|cursor|muse) printf '/exit' ;;
-    codex|pi|pi-signed|omp|gemini|agy|polytoken) printf '/quit' ;;
+    codex|pi|pi-signed|omp|gemini|polytoken) printf '/quit' ;;
     *) return 1 ;;
   esac
 }

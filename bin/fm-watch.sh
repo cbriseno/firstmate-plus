@@ -451,7 +451,7 @@ hash_pane() {
 # adapter whose semantic state is missing, malformed, stale, or unverified is
 # treated as not-provably-working and surfaces rather than being absorbed.
 # <tail40> is the same bounded capture already read for hashing and is passed
-# into the contract's harness-scoped rendered-text checks: the Grok/AGY
+# into the contract's harness-scoped rendered-text checks: the Grok
 # busy fallbacks and the launch-prompt backstop that keeps a launch pinned at
 # its fm-spawn seed from reading as provably working.
 # Retains WINDOW_BUSY_VERDICT so idle-pause triage reuses this same read.

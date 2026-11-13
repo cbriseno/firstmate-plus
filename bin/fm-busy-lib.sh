@@ -45,7 +45,7 @@
 #   fm-interrupt     the legacy Claude fm-send --key Escape idle event
 #   fm-recovery      a documented recovery reset after relaunch
 # Classifier-only sources (never written into a record):
-#   endpoint-gone, herdr-native, grok-regex, agy-regex, muse-session-log,
+#   endpoint-gone, herdr-native, grok-regex, muse-session-log,
 #   cursor-transcript, codex-rollout, missing, malformed, gen-mismatch, source-mismatch,
 #   kimi-unverified, codex-unverified, capture-failed, no-target, launch-prompt
 #
@@ -71,8 +71,8 @@
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
 #      muse session-log and cursor transcript pull sources, then the
-#      Grok/AGY temporary regex fallbacks classify a grok or agy
-#      task from its rendered tail, then unknown missing
+#      Grok temporary regex fallback classifies a grok task from its rendered
+#      tail, then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback
 #
 # fm_busy_launch_prompt_parked (the launch-prompt classifier-only source): a
@@ -91,12 +91,8 @@
 # a real busy verdict once any hook has posted, and it defers to whatever
 # harness-specific trust pre-registration already exists (fm-claude-trust.sh,
 # GEMINI_CLI_TRUST_WORKSPACE) to stop the dialog from appearing at all.
-# Apart from the launch-prompt backstop above, Grok and AGY are the ONLY
-# rendered-text busy fallbacks that survive the redesign, because none of their
-# structured lifecycles was credited-live-verified
-# in the approved audit (agy 1.2.0 exposes no hook surface at all, see
-# references/harness/agy.md); each is scoped to
-# its own harness= and can never classify another adapter. The delivery
+# Apart from the launch-prompt backstop above, Grok has a harness-scoped
+# rendered-text busy fallback. The delivery
 # guards in bin/fm-composer-lib.sh match rendered footers for submit
 # acknowledgement and away-mode supervisor injection only; neither is a
 # recorded worker state source.
@@ -871,8 +867,8 @@ fm_busy_cursor_turn_state() {  # <transcript>
 # fm_busy_classify: semantic classification for a task whose endpoint the
 # caller has already established as present. Prints "<verdict> <source>":
 # busy|idle|unknown plus the producing source (see header). Never probes
-# process state. <tail40> is optional pre-captured plain output: the grok,
-# and agy arms capture it themselves through fm_backend_capture when it
+# process state. <tail40> is optional pre-captured plain output: the grok
+# arm captures it through fm_backend_capture when it
 # is absent (or report unknown capture-failed if that is unavailable too),
 # while the launch-prompt backstop below has no capture fallback of its own -
 # without a supplied tail40 it is skipped entirely and a record still pinned
@@ -988,27 +984,6 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
       fi
       return 0
       ;;
-    agy)
-      if [ -z "$tail40" ]; then
-        if command -v fm_backend_capture >/dev/null 2>&1; then
-          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
-            printf 'unknown capture-failed'
-            return 0
-          }
-        else
-          printf 'unknown capture-failed'
-          return 0
-        fi
-      fi
-      # Best-effort: a long turn can scroll the busy marker out of
-      # the captured tail, so its absence means "can't tell," never idle.
-      if printf '%s' "$tail40" | fm_busy_agy_tail_busy; then
-        printf 'busy agy-regex'
-      else
-        printf 'unknown agy-regex'
-      fi
-      return 0
-      ;;
   esac
   printf 'unknown missing'
 }
@@ -1033,7 +1008,7 @@ fm_busy_classify_live() {  # <backend> <target> <harness> <id> <state-dir> [expe
 # consumer resolves backend, target, and harness the same way instead of
 # re-deriving them. Requires fm-backend.sh to be sourced. <tail40> is
 # optional pre-captured plain output reused by the contract's rendered-text
-# checks: the Grok/AGY busy fallbacks and the launch-prompt backstop.
+# checks: the Grok busy fallback and the launch-prompt backstop.
 fm_busy_classify_meta() {  # <meta-file> <id> <state-dir> [tail40]
   local meta=$1 id=$2 state=$3 tail40=${4-} backend target harness
   [ -f "$meta" ] || { printf 'unknown missing'; return 0; }

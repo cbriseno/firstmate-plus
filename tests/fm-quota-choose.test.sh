@@ -563,7 +563,7 @@ if err=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default 2>&1); t
   fail "legacy quota chooser unexpectedly accepted Agy"
 fi
 printf '%s\n' "$err" | grep -F 'unknown harness: agy' >/dev/null || fail "legacy Agy rejection changed: $err"
-ok "Agy remains resolver-only"
+ok "retired Agy is rejected by the legacy chooser"
 
 jq '.providers += [.providers[] | select(.provider == "claude")]' "$LAB/captured.json" > "$DUPLICATE"
 if err=$(call_choose --snapshot "$DUPLICATE" --candidate claude:default 2>&1); then
@@ -736,7 +736,7 @@ lookup_err=$(bash -c '
   trap "" PIPE
   . "$1/fm-quota-axi-lib.sh"
   for _ in $(seq 200); do
-    for harness in claude codex grok kimi cursor agy muse; do
+    for harness in claude codex grok kimi cursor muse; do
       fm_quota_single_provider_for_harness "$harness" >/dev/null
     done
   done

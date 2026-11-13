@@ -292,7 +292,7 @@ family_for_basename() {
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
-    fm-kimi-harness.test.sh|fm-muse-harness.test.sh|fm-agy-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
+    fm-kimi-harness.test.sh|fm-muse-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-calm-claude-mod.test.sh|\
@@ -361,7 +361,7 @@ family_for_basename() {
     fm-cursor-primary-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-adapter-instructions-live-e2e.test.sh|\
     fm-harness-liveness-drift-live-e2e.test.sh|\
-    fm-muse-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
+    fm-muse-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|\
     fm-pi-seeded-home-trust-live-e2e.test.sh|\
     fm-herdr-version-floor-live-e2e.test.sh|\
@@ -684,8 +684,6 @@ tests/fm-afk-contract.test.sh 11101
 tests/fm-afk-inject-e2e.test.sh 41958
 tests/fm-afk-pi-herdr-return-e2e.test.sh 52
 tests/fm-afk-return.test.sh 47380
-tests/fm-agy-harness.test.sh 50959
-tests/fm-agy-signals-live-e2e.test.sh 53
 tests/fm-ask-user-authority.test.sh 171
 tests/fm-backend-tmux-smoke.test.sh 291
 tests/fm-backend.test.sh 23932
@@ -829,7 +827,6 @@ tests/fm-secondmate-reconcile.test.sh 100853
 tests/fm-secondmate-restart.test.sh 52591
 tests/fm-secondmate-safety.test.sh 69424
 tests/fm-secondmate-sync.test.sh 55501
-tests/fm-send-agy-confirm.test.sh 4440
 tests/fm-send-inbox-doorbell-live-e2e.test.sh 108
 tests/fm-send-inbox.test.sh 41713
 tests/fm-send-remote-delivery.test.sh 31964
@@ -1627,7 +1624,7 @@ families_for_changed_path() {
     bin/fm-claude-native-skills.sh)
       printf '%s\n' '__script__:fm-claude-native-skills.test.sh' live-harness-optin
       ;;
-    bin/fm-spawn.sh|bin/fm-spawn-remote-lib.sh|bin/fm-spawn-cleanup-lib.sh|bin/fm-spawn-template-lib.sh|bin/fm-send.sh|bin/fm-harness.sh|\
+    bin/fm-spawn.sh|bin/fm-spawn-remote-lib.sh|bin/fm-spawn-cleanup-lib.sh|bin/fm-spawn-template-lib.sh|bin/fm-send.sh|bin/fm-send-target-lib.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit

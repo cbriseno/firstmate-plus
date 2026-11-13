@@ -10,25 +10,10 @@ fm_busy_grok_tail_busy() {
     | grep -qiE "${FM_BUSY_REGEX:-${FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT:-Ctrl\\+c:cancel}}"
 }
 
-# fm_busy_agy_tail_busy: the AGY-only temporary rendered-tail fallback.
-# Consumes the tail on stdin; 0 when AGY's verified busy signature matches:
-# the `esc to cancel` token in the status row the TUI pins to the bottom of
-# the pane while a turn runs (verified live on agy 1.2.0; the idle status row
-# shows `? for shortcuts` instead). The `Generating...` spinner word that
-# renders beside it is deliberately NOT matched: it is a free-floating output
-# line, so ordinary worker output echoing the word would classify an idle
-# worker as busy. agy exposes no hook surface, so this fallback is the only
-# pane-side source; it is never armed as a semantic writer
-# (fm_busy_sources_for_harness trusts nothing for agy).
-fm_busy_agy_tail_busy() {
-  grep -v '^[[:space:]]*$' | tail -12 \
-    | grep -qiE 'esc[[:space:]]+to[[:space:]]+cancel'
-}
-
 # --- launch-prompt signatures (fm_busy_launch_prompt_parked) ----------------
 #
 # Each function consumes a captured pane tail on stdin (the caller's whole
-# tail40, NOT reduced to the last 12 non-blank lines the way the Grok/AGY
+# tail40, NOT reduced to the last 12 non-blank lines the way the Grok
 # busy footers above are): a bordered dialog box renders many short lines of
 # pure border/padding (`│  ...  │`) that are NOT whitespace-only, so a 12-line
 # non-blank reduction was verified live to push the box's own heading text
