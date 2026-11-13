@@ -3740,15 +3740,6 @@ cleanup_firstmate_home_children() {
         # cleanup must verify child tabs as that child home, not the parent.
         ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) \
           || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
-      elif [ "$child_backend" = rex ]; then
-        child_rex_home=$home
-        if [ "$child_kind" = secondmate ]; then
-          child_rex_home=$(meta_value "$child_meta" home)
-          [ -n "$child_rex_home" ] || child_rex_home=$child_wt
-        fi
-        ( unset FM_ROOT_OVERRIDE; FM_HOME="$child_rex_home" FM_ROOT="$child_rex_home" STATE="$child_rex_home/state" \
-          fm_backend_kill "$child_backend" "$child_t" "" "fm-$child_id" ) \
-          || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
       else
         fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" \
           || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
@@ -4272,10 +4263,6 @@ elif [ "$BACKEND" = herdr ]; then
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" = rex ] && [ "$KIND" = secondmate ] && [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
-  ( unset FM_ROOT_OVERRIDE; FM_HOME="$HOME_PATH" FM_ROOT="$HOME_PATH" STATE="$HOME_PATH/state" \
-    fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" ) \
-    || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
 elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
     || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1

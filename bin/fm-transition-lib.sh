@@ -2,7 +2,7 @@
 # Shared, backend-neutral agent-state transition shape and supervision policy.
 #
 # This library owns THREE contracts, deliberately backend-independent so any
-# push-capable session backend (herdr and rex today) reuses them instead
+# push-capable session backend (herdr today) reuses them instead
 # of re-deriving a private, per-status escalation hack:
 #
 #   1. The NORMALIZED TRANSITION RECORD - the ONE shape every backend's event
@@ -11,8 +11,7 @@
 #          <pane_id>\t<workspace_id>\t<from_status>\t<to_status>\t<agent>\t<detail>
 #      Only `to_status` is authoritative for the policy below; the other fields
 #      are identity/telemetry and MAY be empty when a backend cannot supply
-#      them. `detail` is the backend's human-readable reason for the edge (Rex
-#      reports a blocked kind such as permission|question|auth and a message),
+#      them. `detail` is the backend's human-readable reason for the edge,
 #      carried into the supervisor's wake reason and never parsed. `from_status` in particular is empty for backends whose event
 #      carries only the new status (herdr's `pane.agent_status_changed` does
 #      not report the previous status, and its stream is edge-triggered, so
@@ -21,7 +20,7 @@
 #      Statuses use the shared agent-state vocabulary
 #      (idle|working|blocked|done|unknown), the same enum herdr's `agent get`
 #      and `pane.agent_status_changed` report, plus `gone` for an endpoint
-#      whose program exited or whose pane closed (Rex reports both as events).
+#      whose program exited or whose pane closed.
 #
 #   2. The STATUS -> ACTION POLICY TABLE (fm_transition_policy) - the SINGLE
 #      OWNER of the mapping from a normalized `to_status` to the supervision
@@ -39,7 +38,7 @@
 # The split is what keeps the escalation general rather than a herdr blocked
 # hack: a backend contributes only a wire->record normalizer and a stream
 # reader; the shape, the policy, and the dedupe are shared. See
-# bin/backends/herdr.sh and bin/backends/rex.sh (fm_backend_<name>_wait_transition)
+# bin/backends/herdr.sh (fm_backend_<name>_wait_transition)
 # for the producers and bin/fm-watch.sh (the watcher's event-wait splice) for
 # the consumer.
 

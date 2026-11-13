@@ -38,7 +38,7 @@ if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   inventory shasum core unknown yes 'home identity (sha256sum is an alternative)'
   inventory tmux backend unknown no 'tmux backend'
   inventory treehouse backend 'lease support' no 'isolated tmux worktrees'
-  for tool in zellij rex; do inventory "$tool" backend unknown no "$tool backend"; done
+  inventory zellij backend unknown no "zellij backend"
   inventory herdr backend unknown no 'Herdr backend'
   inventory orca backend unknown no 'Orca backend'
   inventory cmux backend unknown no 'cmux backend'

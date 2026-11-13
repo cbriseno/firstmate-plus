@@ -303,14 +303,7 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
       target=$window
     fi
     if [ -n "$target" ]; then
-      if [ "$backend" = rex ]; then
-        local home
-        home=$(fm_meta_get "$meta" home)
-        [ -n "$home" ] || home=$(fm_meta_get "$meta" worktree)
-        ( unset FM_ROOT_OVERRIDE; FM_HOME="$home" FM_ROOT="$home" STATE="$home/state" fm_backend_kill "$backend" "$target" ) 2>/dev/null || true
-      else
-        fm_backend_kill "$backend" "$target" 2>/dev/null || true
-      fi
+      fm_backend_kill "$backend" "$target" 2>/dev/null || true
     fi
   fi
   if [ -n "$timeout" ]; then

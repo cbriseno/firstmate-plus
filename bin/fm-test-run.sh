@@ -381,7 +381,6 @@ family_for_basename() {
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh|fm-herdr-codex-delayed-live-e2e.test.sh|\
-    fm-backend-rex-composer-live-e2e.test.sh|\
     fm-watch-wedge-cap-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
@@ -418,9 +417,6 @@ family_for_basename() {
     fm-backend-cmux.test.sh|fm-backend-cmux-smoke.test.sh)
       printf '%s\n' cmux
       ;;
-    fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
-      printf '%s\n' rex
-      ;;
     fm-backend-zellij.test.sh|fm-backend-zellij-smoke.test.sh)
       printf '%s\n' zellij
       ;;
@@ -454,7 +450,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    cmux|zellij|orca|rex) printf '%s\n' optional-binary ;;
+    cmux|zellij|orca) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -475,7 +471,6 @@ snapshot-bearings
 cmux
 zellij
 orca
-rex
 standalone
 unclassified
 EOF
@@ -1486,10 +1481,6 @@ families_for_changed_path() {
       printf '%s\n' cmux
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/rex*|tests/rex-test-safety.sh)
-      printf '%s\n' rex
-      printf '%s\n' backend-dispatch
-      ;;
     bin/backends/orca*|bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' orca
@@ -1669,7 +1660,7 @@ families_for_changed_path() {
     bin/fm-claude-native-skills.sh)
       printf '%s\n' '__script__:fm-claude-native-skills.test.sh' live-harness-optin
       ;;
-    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|\
+    bin/fm-spawn.sh|bin/fm-spawn-remote-lib.sh|bin/fm-spawn-cleanup-lib.sh|bin/fm-spawn-template-lib.sh|bin/fm-send.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit

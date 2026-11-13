@@ -421,50 +421,6 @@ test_backend_name_autodetect_notice() {
   pass "fm_backend_name: verified Herdr and tmux stay silent while experimental cmux remains loud"
 }
 
-# Rex auto-detection (docs/rex-backend.md "Auto-detection"): TERM_PROGRAM=rex
-# with REX_BLOCK selects rex silently; tmux and herdr nested inside a Rex block
-# win (innermost first), and a nested tmux keeps the inherited REX_BLOCK while
-# rewriting TERM_PROGRAM, so REX_BLOCK alone must never select rex.
-test_backend_rex_autodetect() {
-  local dir cfg cfg_tmux out errfile rex_block
-  dir="$TMP_ROOT/rex-autodetect"; cfg="$dir/config-empty"; cfg_tmux="$dir/config-tmux"
-  mkdir -p "$cfg" "$cfg_tmux"; printf 'tmux\n' > "$cfg_tmux/backend"
-  errfile="$dir/err.txt"
-  rex_block='block:01a161a0-3364-72a7-8f87-97e42e4e5ea6'
-
-  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; TERM_PROGRAM=rex REX_BLOCK="$rex_block" fm_backend_detect) \
-    || fail "fm_backend_detect should succeed inside a Rex block"
-  [ "$out" = rex ] || fail "fm_backend_detect should report rex for TERM_PROGRAM=rex with REX_BLOCK, got '$out'"
-
-  : > "$errfile"
-  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; TERM_PROGRAM=rex REX_BLOCK="$rex_block" FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name 2>"$errfile")
-  [ "$out" = rex ] || fail "fm_backend_name should auto-detect rex, got '$out'"
-  [ -s "$errfile" ] && fail "Rex auto-detection must stay silent"$'\n'"$(cat "$errfile")"
-
-  if out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" TERM_PROGRAM=tmux REX_BLOCK="$rex_block" fm_backend_detect); then
-    fail "an inherited REX_BLOCK without TERM_PROGRAM=rex must not detect a backend, got '$out'"
-  fi
-  if out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier REX_BLOCK; PATH="$FAKE_NONDARWIN_BIN:$PATH" TERM_PROGRAM=rex fm_backend_detect); then
-    fail "TERM_PROGRAM=rex without REX_BLOCK must not detect rex, got '$out'"
-  fi
-
-  out=$(unset HERDR_ENV CMUX_WORKSPACE_ID; TMUX='fake,1,0' TERM_PROGRAM=rex REX_BLOCK="$rex_block" fm_backend_detect)
-  [ "$out" = tmux ] || fail "tmux nested in a Rex block should detect tmux, got '$out'"
-  out=$(unset TMUX CMUX_WORKSPACE_ID; HERDR_ENV=1 TERM_PROGRAM=rex REX_BLOCK="$rex_block" fm_backend_detect)
-  [ "$out" = herdr ] || fail "herdr nested in a Rex block should detect herdr, got '$out'"
-  out=$(unset TMUX HERDR_ENV; CMUX_WORKSPACE_ID='fake-uuid' TERM_PROGRAM=rex REX_BLOCK="$rex_block" fm_backend_detect)
-  [ "$out" = rex ] || fail "Rex running inside a cmux shell should detect rex (the innermost multiplexer), got '$out'"
-
-  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; TERM_PROGRAM=rex REX_BLOCK="$rex_block" FM_BACKEND=tmux FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)
-  [ "$out" = tmux ] || fail "FM_BACKEND must win over Rex auto-detection, got '$out'"
-  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; TERM_PROGRAM=rex REX_BLOCK="$rex_block" FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg_tmux" fm_backend_name)
-  [ "$out" = tmux ] || fail "config/backend must win over Rex auto-detection, got '$out'"
-
-  fm_backend_validate_spawn rex 2>/dev/null || fail "rex must be a known spawn-capable backend"
-
-  pass "fm_backend_detect/fm_backend_name: TERM_PROGRAM=rex + REX_BLOCK -> rex (silent); nested tmux/herdr win; REX_BLOCK alone never selects rex; explicit config wins"
-}
-
 # Explicit configuration (FM_BACKEND env or config/backend) always wins over
 # runtime auto-detection, even when a detection marker points the other way.
 test_backend_name_explicit_beats_detection() {
@@ -1226,13 +1182,16 @@ test_backend_detect_cmux_fallback_ancestry_comm_match
 test_backend_detect_cmux_fallback_ancestry_stops_at_launchd
 test_backend_name_cmux_fallback_notice
 test_backend_name_autodetect_notice
-test_backend_rex_autodetect
 test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
 if fm_backend_validate_spawn paseo >/dev/null 2>&1; then
   fail "removed paseo backend must be rejected"
 fi
 pass "removed paseo backend is rejected"
+if fm_backend_validate_spawn rex >/dev/null 2>&1; then
+  fail "removed rex backend must be rejected"
+fi
+pass "removed rex backend is rejected"
 test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
 test_backend_validate_spawn_accepts_orca

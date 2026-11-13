@@ -2360,7 +2360,7 @@ test_launch_environment_inheritance_preserves_on_source_errors
 fi
 
 test_worker_launch_delivers_role_scope() {
-  local rec id out launch kind prompt envelope encoded brief_kind brief content first_line role_line task_line inbox
+  local rec id out launch kind prompt envelope encoded brief_kind brief content first_line role_line task_line inbox role
   for brief_kind in heading legacy scaffold; do
   for kind in no-mistakes direct-PR local-only scout; do
     [ "$brief_kind" = heading ] && [ "$kind" != no-mistakes ] && continue
@@ -2420,7 +2420,9 @@ SH
     assert_grep "do not reject it as another home's state" "$prompt" "$kind command did not distinguish its inbox from another home's namespace"
     assert_grep "Never inspect or change any other home's endpoint namespace" "$prompt" "$kind command weakened cross-home isolation"
     assert_grep 'firstmate-coding-guidelines' "$prompt" "$kind command lost the skill name"
-    assert_no_grep '/.agents/skills/' "$prompt" "$kind command primed home-based skill paths"
+    role="$CASE_DIR/role"
+    sed '/^# Current progress reporting contract$/,$d' "$prompt" > "$role"
+    assert_no_grep '/.agents/skills/' "$role" "$kind generated role primed home-based skill paths"
     assert_grep 'brief for' "$prompt" "$kind command lost the task"
     [ "$(grep -c '^# Current worker role contract$' "$prompt")" -eq 1 ] ||
       fail "$brief_kind $kind duplicated the delivered worker contract"
