@@ -951,7 +951,7 @@ test_pi_harness_routes_itself_to_the_extension_model() {
   local -a pi_env
   blind=$(fm_fakebin "$TMP_ROOT/pi-routing-blind")
   fm_fake_blind_ancestry "$blind"
-  for harness in pi pi-signed; do
+  for harness in pi; do
     pi_env=(PI_CODING_AGENT=true)
     [ "$harness" = pi ] || pi_env+=(FM_PI_HARNESS=pi-signed)
     dir=$(make_guard_case "harness-routing-$harness")

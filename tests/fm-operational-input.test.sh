@@ -165,7 +165,7 @@ test_record_backed_doorbell_carrier() {
   mkdir -p "$state" "$other"
   fm_operational_harness_needs_record claude \
     || fail "the Claude Code harness does not select the record-backed carrier"
-  for kind in pi pi-signed codex opencode cursor unknown ''; do
+  for kind in pi codex opencode cursor unknown ''; do
     fm_operational_harness_needs_record "$kind" \
       && fail "marker-preserving harness '$kind' was switched to the record-backed carrier"
   done

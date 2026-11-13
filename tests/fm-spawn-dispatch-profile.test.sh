@@ -815,7 +815,7 @@ opencode_gate_spawn() {  # <case> <id> <turn-mode> [unknown-reads] -> sets OUT S
 
 test_native_effort_validator_keeps_axes_separate() {
   local harness
-  for harness in pi pi-signed; do
+  for harness in pi; do
     "$ROOT/bin/fm-harness.sh" validate-native-effort "$harness" codex-native/gpt-6-astra ultra \
       || fail "native validator refused supported harness $harness"
   done
@@ -827,7 +827,7 @@ test_native_effort_validator_keeps_axes_separate() {
 
 test_native_pi_ultra_is_explicit_and_model_scoped() {
   local rec id out launch harness mode native_profile model
-  for harness in pi pi-signed; do
+  for harness in pi; do
     for mode in no-mistakes direct-PR; do
       id="ultra-$harness-$mode"
       rec=$(make_spawn_case "$id" "$harness" "$id")
@@ -919,33 +919,9 @@ test_pi_threads_model_and_max_effort() {
   pass "pi receives --model and --thinking max profile flags"
 }
 
-test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
-  local rec id out status launch
-  id=profile-pi-signed-z8b
-  rec=$(make_spawn_case profile-pi-signed pi-signed "$id")
-  read_case_record "$rec"
-
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --model openai-codex/gpt-5.6-sol --effort max)
-  status=$?
-  expect_code 0 "$status" "pi-signed spawn with max effort should succeed"
-  assert_contains "$out" "spawned $id harness=pi-signed" "pi-signed spawn did not preserve its visible identity"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" pi-signed openai-codex/gpt-5.6-sol max
-  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
-    "pi-signed launch did not force the regular TUI with Pi's model, thinking, and extension semantics"
-  assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
-    "pi-signed launch lost the canonical typed launch-brief envelope"
-  assert_present "$HOME_DIR/state/$id.pi-ext.ts" "pi-signed launch did not install Pi's turn-end extension"
-  assert_present "$HOME_DIR/state/$id.busy-gen" "pi-signed spawn did not arm the busy-state contract"
-  assert_contains "$(cat "$HOME_DIR/state/$id.busy-state")" "state=busy source=fm-spawn" \
-    "pi-signed spawn did not seed the busy-state record from the launch brief"
-  pass "pi-signed shares Pi launch semantics while preserving its configured and recorded identity"
-}
-
 test_pi_tui_mode_probe_is_safe_for_old_and_new_pi() {
   local harness version rec id out status launch
-  for harness in pi pi-signed; do
+  for harness in pi; do
     for version in 0.82.0 0.84.0; do
       id="profile-${harness}-tui-${version//./}-z8d"
       rec=$(make_spawn_case "profile-__MODELFLAG__-${harness}-tui-${version//./}" "$harness" "$id")
@@ -973,66 +949,9 @@ test_pi_tui_mode_probe_is_safe_for_old_and_new_pi() {
   pass "Pi launch probing omits --tui-mode on older Pi and preserves it on supporting Pi"
 }
 
-test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata() {
-  local rec id out status
-  id=profile-pi-signed-missing-z8c
-  rec=$(make_spawn_case profile-pi-signed-missing pi-signed "$id")
-  read_case_record "$rec"
-  rm -f "$FAKEBIN_DIR/pi-signed"
-  : > "$LAUNCH_LOG"
-
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
-    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
-    FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" PATH="$FAKEBIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1)
-  status=$?
-  expect_code 1 "$status" "a missing pi-signed executable should refuse the spawn"
-  assert_contains "$out" "pi-signed executable not found on PATH" \
-    "missing pi-signed refusal did not name the actionable requirement"
-  assert_absent "$HOME_DIR/state/$id.meta" "missing pi-signed refusal wrote task metadata"
-  [ ! -s "$LAUNCH_LOG" ] || fail "missing pi-signed refusal typed a launch command"
-  pass "pi-signed refuses safely and actionably when the selected executable is unavailable"
-}
-
-test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity() {
-  local rec id sm out status launch
-  id=profile-pi-signed-secondmate-z8d
-  rec=$(make_spawn_case profile-pi-signed-secondmate codex "$id")
-  read_case_record "$rec"
-  printf '%s\n' pi-signed > "$HOME_DIR/config/secondmate-harness"
-  sm="$CASE_DIR/secondmate-home"
-  make_seeded_secondmate_home "$sm" "$id"
-  sm=$(cd "$sm" && pwd -P)
-  cp "$ROOT/AGENTS.md" "$sm/AGENTS.md"
-  cp "$sm/data/charter.md" "$CASE_DIR/charter-before"
-
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
-  status=$?
-  expect_code 0 "$status" "pi-signed persistent secondmate spawn should succeed"
-  assert_contains "$out" "spawned $id harness=pi-signed kind=secondmate" \
-    "pi-signed secondmate spawn did not preserve its runtime identity"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" pi-signed default default
-  cmp -s "$ROOT/AGENTS.md" "$sm/AGENTS.md" || fail "secondmate launch rewrote the supervisor contract"
-  cmp -s "$CASE_DIR/charter-before" "$sm/data/charter.md" || fail "secondmate launch rewrote the charter"
-  assert_absent "$HOME_DIR/data/$id/launch-brief.md" "secondmate launch received a worker overlay"
-  launch=$(fm_test_launch_payload "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "< '$sm/data/charter.md'" "secondmate launch lost its original charter"
-  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --approve -e '$sm/.pi/extensions/fm-primary-turnend-guard.ts' -e '$sm/.pi/extensions/fm-primary-pi-watch.ts'" \
-    "pi-signed secondmate did not force the regular TUI with Pi's primary extension launch shape and seeded-home --approve"
-  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
-    printf '# evidence begin: persistent secondmate\n%s\n' "$out"
-    printf 'launch command:\n%s\noriginal charter:\n' "$launch"
-    cat "$sm/data/charter.md"
-    printf 'supervisor AGENTS.md and charter remain byte-identical; no worker overlay created\n# evidence end\n'
-  fi
-  pass "pi-signed is a distinct persistent secondmate runtime with shared Pi supervision semantics"
-}
-
 test_pi_seeded_secondmate_preapproves_project_trust() {
   local harness rec id sm out status launch
-  for harness in pi pi-signed; do
+  for harness in pi; do
     id="profile-${harness}-seeded-approve-z8e"
     rec=$(make_spawn_case "profile-${harness}-seeded-approve" codex "$id")
     read_case_record "$rec"
@@ -1074,7 +993,7 @@ test_pi_worker_launch_omits_seeded_home_approve() {
 
 test_pi_approve_probe_omits_unsupported_flag() {
   local harness rec id sm out status launch
-  for harness in pi pi-signed; do
+  for harness in pi; do
     id="profile-${harness}-no-approve-z8g"
     rec=$(make_spawn_case "profile-${harness}-no-approve" codex "$id")
     read_case_record "$rec"
@@ -1107,7 +1026,7 @@ write_exclude_file() {  # <home> <line>...
 
 test_pi_exclude_tools_reach_ship_and_scout_launches() {
   local harness rec id out status launch kindflag
-  for harness in pi pi-signed; do
+  for harness in pi; do
     for kindflag in --ship --scout; do
       id="excl-${harness}-${kindflag#--}-z9a"
       rec=$(make_spawn_case "excl-${harness}-${kindflag#--}" "$harness" "$id")
@@ -1132,7 +1051,7 @@ test_pi_exclude_tools_reach_ship_and_scout_launches() {
 test_pi_exclude_tools_worker_registry_reports() {
   local harness kindflag scenario case_name rec id out status report
   command -v node >/dev/null 2>&1 || fail "node is required to drive Pi worker exclusion reporting"
-  for harness in pi pi-signed; do
+  for harness in pi; do
     for kindflag in --ship --scout; do
       for scenario in matched unmatched unverified; do
         id="excl-registry-${harness}-${kindflag#--}-${scenario}"
@@ -1332,7 +1251,7 @@ test_pi_exclude_tools_malformed_entry_refuses_before_endpoint() {
 
 test_pi_exclude_tools_read_failure_refuses_before_launch() {
   local harness kind rec id out status bash_env
-  for harness in pi pi-signed; do
+  for harness in pi; do
     for kind in ship scout; do
       id="excl-read-failure-${harness}-${kind}"
       rec=$(make_spawn_case "$id" "$harness" "$id")
@@ -2303,9 +2222,6 @@ test_batch_preserves_native_ultra
 test_pi_scout_launch_enters_recorded_worktree
 test_pi_threads_model_and_max_effort
 test_pi_tui_mode_probe_is_safe_for_old_and_new_pi
-test_pi_signed_threads_shared_pi_profile_and_preserves_identity
-test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
-test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_pi_seeded_secondmate_preapproves_project_trust
 test_pi_worker_launch_omits_seeded_home_approve
 test_pi_approve_probe_omits_unsupported_flag

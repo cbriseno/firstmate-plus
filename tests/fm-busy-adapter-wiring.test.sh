@@ -625,7 +625,7 @@ test_secondmate_pi_extension_reports_busy_without_a_parent_turnend() {
 # updated by the launched command.
 test_raw_secondmate_launch_writes_no_busy_wiring() {
   local harness raw case_dir id state sm out launch
-  for harness in claude pi pi-signed; do
+  for harness in claude pi; do
     case_dir="$TMP_ROOT/sm-raw-$harness"
     id="sm-raw-$harness"
     raw="$harness --fm-raw-flag"

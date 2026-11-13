@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|pi|pi-signed|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|pi|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -21,7 +21,7 @@
 #                                        An id selects that mate's override line first.
 #        fm-harness.sh validate-native-effort <harness> <model> <effort>
 #                                        Refuse ultra unless the harness is pi or
-#                                        pi-signed and the model explicitly names
+#                                        and the model explicitly names
 #                                        codex-native/<id>. Other efforts retain
 #                                        their adapter's existing policy. Native
 #                                        Codex validates model support at startup.
@@ -82,7 +82,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 harness_marker() {
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   if [ "${PI_CODING_AGENT:-}" = "true" ]; then
-    if [ "${FM_PI_HARNESS:-}" = pi-signed ]; then echo pi-signed; else echo pi; fi
+    echo pi
     return
   fi
   # codex, opencode, and kimi publish no harness-identity marker at all, so
@@ -109,7 +109,6 @@ harness_process_verdict() {  # <pid>
     # Both Pi identities share this launcher name. Ancestry can only prove the
     # FAMILY; only the launch-boundary marker selects the signed identity, which
     # is why detect_own keeps a marker that agrees on the family.
-    pi-signed) echo "comm pi"; return ;;
     pi) echo "comm pi"; return ;;
     node*|python*)
       # Bare interpreter: match the harness name in its script path.
@@ -255,7 +254,6 @@ harness_ancestry_descent() {  # <root> [<eligible-leaf-pid>...]
 # disagreement. Only Pi has two identities behind one launcher name.
 harness_family() {
   case "$1" in
-    pi-signed) printf 'pi\n' ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -266,7 +264,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|pi|pi-signed)
+    claude|codex|pi)
       printf '%s\n' "$pin"
       ;;
     *)
@@ -491,11 +489,11 @@ validate_native_effort() {
   local harness=${1:-} model=${2:-} effort=${3:-}
   [ "$effort" = ultra ] || return 0
   case "$harness" in
-    pi|pi-signed)
+    pi)
       case "$model" in codex-native/?*) return 0 ;; esac
       ;;
   esac
-  echo "error: ultra effort requires pi or pi-signed with an explicit codex-native/<model> model" >&2
+  echo "error: ultra effort requires pi or with an explicit codex-native/<model> model" >&2
   return 1
 }
 

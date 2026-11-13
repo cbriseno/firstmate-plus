@@ -15,7 +15,7 @@
 # (bin/fm-afk-contract.sh owns the record schema; the words are the whole
 # mandate and no script parses them). The record is the posture in every
 # harness.
-# On Pi and pi-signed the entry ENDS there: the away daemon is no longer launched
+# On Pi and the entry ENDS there: the away daemon is no longer launched
 # on Pi, the ordinary supervision session keeps running in both postures, and
 # `start` refuses on those harnesses. The same holds for away mode (not quiet
 # mode) on a claude, cursor, opencode, grok, or codex primary whose home
@@ -314,7 +314,7 @@ fm_afk_launch_daemon_allowed() {
   local harness mode
   harness=$(fm_afk_launch_primary_harness)
   case "$harness" in
-    pi|pi-signed)
+    pi)
       fm_afk_launch_log "the away daemon is no longer launched on $harness; the away-posture record is the posture there (run bin/fm-afk-launch.sh enter and stop)"
       return 1 ;;
   esac

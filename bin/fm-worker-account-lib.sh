@@ -10,7 +10,7 @@
 # Pinnable runners, each a credential store inside a root its vendor lets a
 # process select:
 #   claude          CLAUDE_CONFIG_DIR     config/claude-account
-#   pi, pi-signed   PI_CODING_AGENT_DIR   config/pi-account
+#   pi,   PI_CODING_AGENT_DIR   config/pi-account
 #
 # The pin is opt-in: an absent file is no pin, and the launch keeps today's
 # ambient behavior byte for byte. A present file must resolve, or the launch
@@ -69,7 +69,7 @@ FM_WORKER_ACCOUNT_CLAUDE_SHED="CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CL
 fm_worker_account_file() {
   case "$1" in
   claude) printf '%s\n' claude-account ;;
-  pi | pi-signed) printf '%s\n' pi-account ;;
+  pi) printf '%s\n' pi-account ;;
   *) return 1 ;;
   esac
 }
@@ -211,7 +211,7 @@ fm_worker_account_check() {
     fi
     return 1
     ;;
-  pi | pi-signed)
+  pi)
     clean+=("PI_CODING_AGENT_DIR=$root")
     out=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
       "$executable" auth check --provider "$provider" --json --no-refresh 2>/dev/null </dev/null)

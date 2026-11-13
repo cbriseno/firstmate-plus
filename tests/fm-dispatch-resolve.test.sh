@@ -893,7 +893,7 @@ assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_
 
 SCHEMA6_PI_NATIVE="$TMP_ROOT/schema6-pi-native.json"
 jq '.providers |= map(select(.provider != "codex" or .accountKey != "default"))' "$SCHEMA6_NATIVE" > "$SCHEMA6_PI_NATIVE"
-for harness in pi pi-signed; do
+for harness in pi; do
   jq --arg harness "$harness" '.rules[0].use |= map(if .harness == "codex" then
     {harness: $harness, model: "codex-native/gpt-6-astra", provider: "codex", effort: "ultra"}
     else . end)' "$LANE_RULES" > "$RULES"

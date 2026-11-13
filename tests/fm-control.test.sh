@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex pi pi-signed"
+VERIFIED_HARNESSES="claude codex pi"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -46,7 +46,6 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     claude) printf '/exit\tEscape\t1\t\n' ;;
     codex) printf '/quit\tEscape\t1\t\n' ;;
     pi) printf '/quit\tEscape\t1\t\n' ;;
-    pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     *) return 1 ;;
   esac
 }
@@ -275,7 +274,7 @@ test_harness_family_resolution() {
   for pair in claude:claude claude-latest:claude codex:codex codex-cli:codex \
       \
       pi:pi \
-      pi-signed:pi-signed; do
+      pi:pi; do
     recorded=${pair%%:*}
     want=${pair#*:}
     got=$(fm_control_harness_family "$recorded") \
@@ -358,7 +357,7 @@ test_harness_kind_capability() {
     fm_control_harness_supports_kind "$harness" scout \
       || fail "$harness should be able to run a scout task"
   done
-  for harness in claude codex pi pi-signed; do
+  for harness in claude codex pi; do
     fm_control_harness_supports_kind "$harness" secondmate \
       || fail "$harness should be able to run a secondmate"
   done
@@ -954,11 +953,8 @@ test_relaunch_resume_flag_is_per_adapter_and_reference_owner() {
   # (harness | registered agent label | expected flag) lines, written out
   # independently of the implementation.
   local cases='pi|pi|--session
-pi-signed|pi|--session
 pi||
-pi-signed||
 pi|codex|
-pi-signed|claude|
 claude|claude|
 codex|codex|
 '

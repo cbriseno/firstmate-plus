@@ -402,7 +402,7 @@ spawn_account_secondmate() {
 
 test_secondmate_account_override() {
   local out rc id=acct-sm-override harness file variable worker
-  for harness in claude pi pi-signed; do
+  for harness in claude pi; do
     new_case "secondmate-override-$harness" "$harness"
     case "$harness" in
     claude) file=claude-account; variable=CLAUDE_CONFIG_DIR; worker=claude ;;

@@ -28,7 +28,7 @@ Hold-for-return is the default and the only reach profile this release records: 
    Plain `/afk` with no words is a valid entry with no mandate; the announcement says no instructions were recorded.
    Re-invoking `/afk` while already away with no new words is a refresh and leaves the standing record untouched; new words replace the mandate at once, preserve the original session entry, and archive the superseded words for the return brief.
 2. **Per harness, after the record exists:**
-   - **Pi and pi-signed**: nothing to launch; go on to the announcement.
+   - **Pi**: nothing to launch; go on to the announcement.
      The away daemon is no longer launched on Pi; the ordinary supervision session (`docs/pi-supervision-branch.md`) keeps running with the record present, and `bin/fm-afk-launch.sh start` refuses on these harnesses.
      With the record present main is parked: the supervision branch takes every safe actionable wake, captain outcomes accumulate for the return brief, and main's standing authority relocates to the branch through the guarded scripts (`docs/pi-supervision-branch.md` "Postures"); only a wake the branch declines (including a broken branch or unsafe scan) or a watcher failure wakes main.
      `/quiet` needs nothing extra on Pi: the attended branch already keeps routine wakes out of this conversation, so quiet-while-present is the attended posture's own shape there.
@@ -103,7 +103,7 @@ Destructive, irreversible, and security-sensitive actions are never pre-authoriz
 
 ## The daemon, where it still runs
 
-On the harnesses that still launch the daemon (every verified harness except Pi and pi-signed, and except away mode on a home that runs the supervision host), the mechanics below are unchanged.
+On the harnesses that still launch the daemon (every verified harness except Pi, and except away mode on a home that runs the supervision host), the mechanics below are unchanged.
 
 ### Operational prefix contract
 

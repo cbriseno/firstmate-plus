@@ -60,14 +60,14 @@ fm_busy_pi_launch_prompt_tail() {
 # fm_busy_launch_prompt_parked: dispatch to the signature above for <harness>,
 # or fail when this harness has none. Consumes the tail on stdin. Scoped to
 # exactly the harnesses fm-spawn.sh arms with the fm-spawn busy source
-# (claude*, opencode*, pi, pi-signed) since only those can ever
+# (claude*, opencode*, pi,) since only those can ever
 # read a pinned "busy fm-spawn" record; codex and standalone Kimi already
 # classify unknown before a record is ever consulted, and opencode ships no
 # trust dialog at all.
 fm_busy_launch_prompt_parked() {  # <harness>
   case "${1:-}" in
     claude*) fm_busy_claude_launch_prompt_tail ;;
-    pi | pi-signed ) fm_busy_pi_launch_prompt_tail ;;
+    pi ) fm_busy_pi_launch_prompt_tail ;;
     *) return 1 ;;
   esac
 }

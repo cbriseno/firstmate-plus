@@ -112,7 +112,7 @@ fm_tmux_composer_identity() {  # <target>
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
         case "${comm##*/}" in
-          pi|pi-signed|pi-launcher|Pi) owner=pi ;;
+          pi|pi-launcher|Pi) owner=pi ;;
         esac
         [ -n "$owner" ] && break
       done <<EOF
@@ -123,7 +123,7 @@ EOF
   if [ -z "$owner" ]; then
     comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || comm=
     case "${comm##*/}" in
-      pi|pi-signed|pi-launcher) owner=pi ;;
+      pi|pi-launcher) owner=pi ;;
     esac
   fi
   [ -n "$owner" ] || return 1

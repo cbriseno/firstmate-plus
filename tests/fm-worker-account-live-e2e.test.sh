@@ -111,7 +111,7 @@ pi_live_cases() {
   CHECKED="$CHECKED $exe"
 }
 
-for runner in claude pi pi-signed; do
+for runner in claude pi; do
   if ! command -v "$runner" >/dev/null 2>&1; then
     printf 'skip-runner: %s is not installed, so its pin check was not exercised\n' "$runner"
     continue

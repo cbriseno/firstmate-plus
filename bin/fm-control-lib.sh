@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex pi pi-signed
+  printf '%s\n' claude codex pi
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -84,7 +84,6 @@ fm_control_harness_supported() {  # <harness>
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
     pi) printf 'pi' ;;
-    pi-signed) printf 'pi-signed' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     *) return 1 ;;
@@ -100,7 +99,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) printf 'Escape' ;;
+    claude|codex|pi) printf 'Escape' ;;
     *) return 1 ;;
   esac
 }
@@ -109,7 +108,7 @@ fm_control_interrupt_key() {  # <harness>
 # Escape; every other verified adapter interrupts on a single press.
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) printf '1' ;;
+    claude|codex|pi) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -117,7 +116,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) ;;
+    claude|codex|pi) ;;
     *) return 1 ;;
   esac
 }
@@ -125,7 +124,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) printf '0.2' ;;
+    claude|codex|pi) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -133,7 +132,7 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) ;;
+    claude|codex|pi) ;;
     *) return 1 ;;
   esac
 }
@@ -141,7 +140,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # The key that must follow an interrupt to clear its composer, when needed.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
-    claude|codex|pi|pi-signed) ;;
+    claude|codex|pi) ;;
     *) return 1 ;;
   esac
 }
@@ -156,7 +155,7 @@ fm_control_interrupt_clear_key() {  # <harness>
 fm_control_exit_command() {  # <harness> [opencode-major]
   case "${1-}" in
     claude) printf '/exit' ;;
-    codex|pi|pi-signed) printf '/quit' ;;
+    codex|pi) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -182,7 +181,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
 # identity the endpoint's own runtime recorded, which is why a matched
 # registered-agent label is required: resuming a reference reported by a
 # DIFFERENT agent would inject another agent's conversation into this launch.
-# `pi` is the label Pi and pi-signed both report, so one entry covers both.
+# `pi` is the label Pi and both report, so one entry covers both.
 # Every other harness returns nothing and keeps today's fresh-session
 # relaunch, which is what the adapter tables above (and the absence of a
 # verified resume form for those harnesses) require.
@@ -191,7 +190,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
 # shell quoting belongs to the owner of the launch line (bin/fm-spawn.sh).
 fm_control_relaunch_resume_flag() {  # <harness> <registered-agent>
   case "${1-}" in
-    pi|pi-signed)
+    pi)
       [ "${2-}" = pi ] && printf -- '--session'
       ;;
   esac
@@ -318,7 +317,7 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
         printf '%s\n' "$wt/.fm-busy-stop"
       fi
       ;;
-    pi|pi-signed) printf '%s\n' "$state/$id.pi-ext.ts" ;;
+    pi) printf '%s\n' "$state/$id.pi-ext.ts" ;;
     grok)
       printf '%s\n' "$wt/.fm-grok-turnend"
       printf '%s\n' "$state/$id.grok-turnend-token"

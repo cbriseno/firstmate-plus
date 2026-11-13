@@ -177,7 +177,7 @@ fm_busy_sources_for_harness() {  # <harness>
       fm_busy_codex_semantic_source || { printf ''; return 0; }
       adapter='codex-hook codex-appserver'
       ;;
-    pi|pi-signed) adapter=pi-ext ;;
+    pi) adapter=pi-ext ;;
     *) printf ''; return 0 ;;
   esac
   printf '%s fm-spawn fm-interrupt fm-recovery' "$adapter"

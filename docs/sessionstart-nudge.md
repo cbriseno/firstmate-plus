@@ -26,7 +26,7 @@ The tier is a property of the harness surface, not of the home.
 
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
-| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed |
+| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi |
 | Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has no tracked compaction or re-emit channel.
@@ -38,7 +38,7 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | Claude | Run | [Claude](#claude) |
 | Codex exec | Run | [Codex exec](#codex-exec) |
 | Codex interactive TUI | Run from codex-cli 0.164.0; compaction and re-emit uncovered | [Codex interactive TUI](#codex-interactive-tui) |
-| Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
+| Pi | Run | [Pi](#pi) |
 
 ### Why the run tier exists
 
@@ -267,9 +267,9 @@ Codex 0.146.0 did not fire it in the interactive TUI.
 The TUI runs project hooks only after the operator trusts them in its hook review, once per clone.
 Firstmate ships no global hook and has no tracked compaction or re-emit channel for it, and does not claim instruction-refresh delivery for those.
 
-### Pi and pi-signed
+### Pi
 
-Pi and pi-signed are run-tier harnesses.
+Pi are run-tier harnesses.
 The tracked transport is `.pi/extensions/fm-primary-turnend-guard.ts`.
 The extension maps Pi events onto wrapper sources:
 

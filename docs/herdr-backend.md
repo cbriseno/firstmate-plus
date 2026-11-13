@@ -907,7 +907,7 @@ The pane-independent max-defer alert is configured in [`wedge-alarm.md`](wedge-a
 ### Where the daemon runs
 
 - Harnesses with native tracked background execution can run the daemon in their terminal.
-- Pi and pi-signed no longer launch the away daemon; their ordinary supervision session continues under the posture record.
+- Pi no longer launch the away daemon; their ordinary supervision session continues under the posture record.
 - A non-Pi home that runs the supervision host also skips the daemon for `/afk`; see [supervision-host.md](supervision-host.md).
 - For another harness without native tracked background execution, `bin/fm-afk-launch.sh` runs the daemon in a Herdr workspace, as described next.
 

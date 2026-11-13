@@ -137,7 +137,7 @@ Without that proof a stale or absent beacon is a genuine lapse and alarms.
 
 #### Extension model
 
-Under the extension model (Pi, pi-signed) a live identity-matched watcher is the ordinary healthy state.
+Under the extension model (Pi) a live identity-matched watcher is the ordinary healthy state.
 A genuinely unheld lock with a beacon fresh within grace is also healthy while a live Pi session provably owns continuity.
 That hand-off is benign because `.pi/extensions/fm-primary-pi-watch.ts` tears the watcher down on every actionable wake and spawns the replacement itself.
 
@@ -401,7 +401,7 @@ A Claude failure notice describes the automatic mechanism as broken and does not
 
 ### Passive adapters
 
-OpenCode, Pi, and pi-signed expose passive callbacks for this purpose.
+OpenCode, Pi, expose passive callbacks for this purpose.
 Their adapters fail open at the hook boundary to protect the user session.
 When the predicate blocks, they schedule one bounded follow-up.
 
@@ -484,11 +484,11 @@ It proves that a live foreign owner still prevents arming while repeated non-own
 
 - The persistent model's fresh-leftover-beacon negative control.
 - The auto-arm model's healthy fresh-beacon-without-a-watcher case, session-and-recovery-bound long-turn rewake tolerance, independently broken tolerance signals, open-claim negative control, stale-beacon alarm, and isolation from other models.
-- The extension model's live-watcher path, ownership-qualified fresh hand-off, held-lock failures, independently broken ownership signals, stale-beacon alarm, queued-wake warning, and Pi and pi-signed harness routing.
+- The extension model's live-watcher path, ownership-qualified fresh hand-off, held-lock failures, independently broken ownership signals, stale-beacon alarm, queued-wake warning, and Pi harness routing.
 
 It also covers true-reason banner wording and reason-keyed episode dedup surviving a beacon mtime change.
 
-`tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.
+`tests/fm-supervision-instructions.test.sh` covers recovery-line ownership's identity-preserving reuse of Pi's protocol.
 
 The opt-in live tests are:
 

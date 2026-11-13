@@ -221,7 +221,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|pi|pi-signed)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|pi)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -1549,7 +1549,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | pi | pi-signed )
+  '' | claude | codex | pi )
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1668,7 +1668,7 @@ if [ "$KIND" != secondmate ]; then
 fi
 
 case "$HARNESS" in
-pi | pi-signed)
+pi)
   PI_BIN=$(resolve_pi_executable "$HARNESS") || {
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
     exit 1
@@ -1725,7 +1725,7 @@ fi
 if [ "$EFFORT" = ultra ]; then
   "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" || exit 1
   [ "$RAW_LAUNCH" = 0 ] || {
-    echo "error: --effort ultra requires the canonical --harness pi or pi-signed launch so its native flag cannot be omitted" >&2
+    echo "error: --effort ultra requires the canonical --harness pi or launch so its native flag cannot be omitted" >&2
     exit 1
   }
 fi
@@ -1801,7 +1801,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2 oc_major=${3:-}
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-  claude | codex | pi | pi-signed )
+  claude | codex | pi )
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   esac
@@ -1828,7 +1828,7 @@ effort_flag_for_harness() {
       ;;
     esac
     ;;
-  pi | pi-signed)
+  pi)
     # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
     # its --thinking flag.
     case "$effort" in
@@ -3407,7 +3407,7 @@ if [ "$KIND" = secondmate ]; then
   busy_notify_turnend=false
   if [ "$RAW_LAUNCH" -ne 0 ]; then
     case "$HARNESS" in
-    claude* | pi | pi-signed )
+    claude* | pi )
       WIRING_HARNESS=
       if [ -e "$STATE_REAL/$ID.busy-gen" ]; then
         "$FM_ROOT/bin/fm-busy-event.sh" retire "$STATE_REAL" "$ID" --current-gen || {
@@ -3444,7 +3444,7 @@ BUSY_GEN=
       "$FM_ROOT/bin/fm-busy-event.sh" retire "$STATE_REAL" "$ID" --current-gen || exit 1
     fi
     ;;
-  claude** | pi | pi-signed )
+  claude** | pi )
     # opencode arms on every detected major: OpenCode 2 and the OpenCode 1 /
     # undetected->1.x path both provision a busy-state plugin below that needs
     # this gen, so gating the arm on major >= 2 would leave OpenCode 1 without
@@ -3523,7 +3523,7 @@ BUSY_GEN=
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
     ;;
-  pi | pi-signed)
+  pi)
     # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
     # loaded from inside the project (verified live), but an explicit -e path
     # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
@@ -3909,7 +3909,7 @@ LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
-pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
+pi) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 # A record-backed launch brief is published into the state dir of the pane
@@ -3954,7 +3954,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | pi | pi-signed)
+claude | codex | pi)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
@@ -3977,7 +3977,7 @@ if [ -n "$WORKER_ACCOUNT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
     fi
     ;;
-  pi | pi-signed)
+  pi)
     LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     ;;
   esac
@@ -3990,12 +3990,12 @@ if [ "$KIND" = secondmate ]; then
   # Keep this in step with fm_supervision_model (bin/fm-wake-lib.sh): Claude's
   # Stop auto-arm and Cursor's stop-hook park both run the watcher only BETWEEN
   # turns, so a fresh beacon with no live watcher is their healthy mid-turn state.
-  # Pi and pi-signed secondmates previously received persistent here and now
+  # Pi and secondmates previously received persistent here and now
   # receive extension to match fm_supervision_model's own table, so their pull
   # guard tolerates the extension hand-off exactly as a Pi primary does.
   case "$HARNESS" in
   claude) supervision_model=autoarm ;;
-  pi | pi-signed ) supervision_model=extension ;;
+  pi ) supervision_model=extension ;;
   *) supervision_model=persistent ;;
   esac
   # Deliver the primary's EFFECTIVE trace-context decision as a normalized on/off

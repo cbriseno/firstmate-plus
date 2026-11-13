@@ -218,7 +218,7 @@ test_stale_gen_record_unknown() {
 test_missing_record_unknown_not_idle() {
   local state out h
   state=$(new_state_dir missing)
-  for h in claude pi pi-signed; do
+  for h in claude pi; do
     out=$(fm_busy_classify tmux w1 "$h" t1 "$state")
     [ "$out" = "unknown missing" ] || fail "$h with no record must be 'unknown missing', got '$out'"
   done
@@ -280,7 +280,7 @@ test_converted_adapters_ignore_footer_text() {
    ■■■■⬝⬝⬝⬝  esc interrupt
 Working...
 Ctrl+c:cancel'
-  for h in claude pi pi-signed; do
+  for h in claude pi; do
     out=$(fm_busy_classify tmux w1 "$h" t1 "$state" "$tail")
     [ "$out" = "unknown missing" ] || fail "$h must never classify from footer text, got '$out'"
   done
@@ -315,7 +315,7 @@ This project'"'"'s CLAUDE.md imports files outside the current working directory
 
 test_launch_prompt_pi_trust_dialog() {
   local state out h
-  for h in pi pi-signed; do
+  for h in pi; do
     state=$(new_state_dir "launch-prompt-$h")
     "$EV" arm "$state" t1 >/dev/null
     out=$(fm_busy_classify tmux w1 "$h" t1 "$state" ' Trust project folder?

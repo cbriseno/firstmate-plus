@@ -184,25 +184,6 @@ test_genuine_marker_and_ancestry_agree() {
 # Both Pi identities share the launcher name, so ancestry can only prove the
 # family. A marker that agrees on the family must keep its finer verdict rather
 # than being flattened to pi by the ancestry walk.
-test_pi_signed_survives_agreeing_ancestry() {
-  local bin got
-  bin=$(named_bin "$TMP_ROOT/pi-tree" pi)
-  got=$(under_process "$bin" PI_CODING_AGENT=true FM_PI_HARNESS=pi-signed)
-  [ "$got" = pi-signed ] || fail "signed Pi over pi ancestry resolved '$got', expected pi-signed"
-  got=$(under_process "$bin" PI_CODING_AGENT=true)
-  [ "$got" = pi ] || fail "plain Pi over pi ancestry resolved '$got', expected pi"
-  got=$(under_process "$bin")
-  [ "$got" = pi ] || fail "unmarked pi ancestry resolved '$got', expected pi"
-
-  bin=$(named_bin "$TMP_ROOT/pi-signed-tree" pi-signed)
-  got=$(under_process "$bin" PI_CODING_AGENT=true FM_PI_HARNESS=pi-signed)
-  [ "$got" = pi-signed ] \
-    || fail "signed Pi over shared signed-wrapper ancestry resolved '$got', expected pi-signed"
-  got=$(under_process "$bin")
-  [ "$got" = pi ] \
-    || fail "unmarked signed-wrapper ancestry resolved '$got', expected pi"
-  pass "an agreeing marker keeps Pi's finer identity that ancestry cannot prove"
-}
 
 # --- 4. The weakest ancestry signal does not outrank a marker ---------------
 
@@ -821,7 +802,6 @@ test_supervision_protocol_follows_corrected_verdict() {
 
 test_markerless_ancestry_outranks_foreign_marker
 test_genuine_marker_and_ancestry_agree
-test_pi_signed_survives_agreeing_ancestry
 test_interpreter_args_match_does_not_outrank_a_marker
 test_native_child_of_an_interpreter_shim_decides_at_comm_strength
 test_deep_markerless_chain_still_finds_the_harness
