@@ -4042,10 +4042,12 @@ EOF
             ;;
           *)
             [ "$agent_state" != alive ] || rm -f "$STATE/.dead-reported-$key"
-            printf '%s' "$h" > "$sf"
-            wedge_episode_end "$key"
-            clear_write_tracking "$key"
-            continue
+            if [ "$agent_state" != alive ] || stale_is_terminal "$w" "$STATE" || status_is_paused_or_captain_held "$last"; then
+              printf '%s' "$h" > "$sf"
+              wedge_episode_end "$key"
+              clear_write_tracking "$key"
+              continue
+            fi
             ;;
         esac
         if [ "$kind" = secondmate ]; then

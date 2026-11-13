@@ -284,6 +284,7 @@ test_wedge_cap_disabled_by_default() {
   pane_hash=$(hash_text "wedged default-config pane")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=claude
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
   # Drive five wedge polls. Each must escape (escalation n, no PERMANENTLY-WEDGED),
   # and no cap marker may ever appear.
@@ -318,7 +319,7 @@ test_wedge_cap_disabled_by_default() {
     ack_stopped_cycle "$state" || fail "default-config round $n ack failed"
     n=$((n + 1))
   done
-  unset FM_FAKE_CREW_STATE
+  unset FM_FAKE_CREW_STATE FM_FAKE_TMUX_CURRENT_COMMAND
   pass "FM_WEDGE_MAX_ESCALATIONS=0 keeps the cap inert and never writes a cap marker"
 }
 
