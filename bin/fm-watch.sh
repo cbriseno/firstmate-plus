@@ -3796,10 +3796,6 @@ while :; do
   # published while this watcher was between cycles.
   procevent_surface_queued
 
-  # A process-event result carries richer adapter-owned wake context than the
-  # generic recovery reason, so give that owner first refusal.
-  resurface_after_downtime
-
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation
   # was created, so quiet cycles never wake firstmate or consume model tokens.
@@ -4066,6 +4062,10 @@ EOF
       triage_log "absorbed benign $reason"
     fi
   fi
+
+  # Pending results and status events carry their own durable wake. Fall back
+  # to the generic downtime reason only after those owners have classified them.
+  resurface_after_downtime
 
   # Layer 1 backbone: pane staleness. Two consecutive identical hashes with no busy
   # signature means the crewmate finished, is waiting, or is wedged. Each distinct
