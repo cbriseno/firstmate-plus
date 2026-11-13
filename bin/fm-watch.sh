@@ -255,6 +255,9 @@ WATCH_HOME_EXISTED=0
 # shellcheck source=bin/fm-project-capacity-lib.sh
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
 
+# shellcheck source=bin/fm-supervisor-target-lib.sh
+. "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
+
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
 WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
@@ -881,6 +884,50 @@ signal_turnend_panes_churned() {  # <file> ...
     fi
   done
   return 0
+}
+
+# Optional installation notification: one accepted alert per visible login-error
+# episode and endpoint, surviving watcher re-arms. A successful clean capture
+# rearms it; failed captures/delivery do not. No model or extra service is used.
+# Uses fm-notify.py's config/notification-command.json or the installation's
+# FM_NOTIFICATION_COMMAND_FILE override; delivery remains installation-owned.
+login_expiry_notice() {  # <backend> <target> <label> <capture>
+  local backend=$1 target=$2 label=$3 text=$4 provider action marker
+  marker="$STATE/.login-expired-$(window_key "$backend-$target")"
+  text=$(printf '%s' "$text" | tr '\n\r' '  ')
+  case "$text" in
+    *'Login expired · Please run /login'*) provider=Claude; action='run /login in that session' ;;
+    *'Your access token could not be refreshed'*'Please '*'sign in again.'*)
+      provider=Codex; action='run codex logout, then codex login' ;;
+    *) rm -f -- "$marker"; return 0 ;;
+  esac
+  [ ! -e "$marker" ] || return 0
+  text=$(printf '%s' "$provider login expired: $label ($target). $action." | cut -c1-240)
+  if python3 "$SCRIPT_DIR/fm-notify.py" --home "$FM_HOME" \
+    --command-file "${FM_NOTIFICATION_COMMAND_FILE:-$CONFIG/notification-command.json}" \
+    --event login-expired --text "$text"; then
+    touch "$marker"
+  else
+    triage_log "login-expired notification failed: $label ($target)"
+  fi
+}
+
+login_expiry_tick() {
+  [ -f "${FM_NOTIFICATION_COMMAND_FILE:-$CONFIG/notification-command.json}" ] || return 0
+  local target backend w
+  # Only a positively discovered primary, never the legacy fallback target.
+  if target=$(discover_supervisor_target); then
+    backend=$(discover_supervisor_backend) || return 0
+    if watcher_capture "$backend" "$target" 40; then
+      login_expiry_notice "$backend" "$target" primary "$WATCHER_CAPTURE"
+    fi
+  fi
+  while IFS= read -r w; do
+    backend=$(window_backend "$w")
+    if watcher_capture "$backend" "$w" 40 "$(window_label "$w")"; then
+      login_expiry_notice "$backend" "$w" "$(window_to_task "$w" "$STATE")" "$WATCHER_CAPTURE"
+    fi
+  done < <(recorded_windows)
 }
 
 recorded_windows() {
@@ -3647,6 +3694,8 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  login_expiry_tick
 
   spawn_deferred_tick || exit 1
 
