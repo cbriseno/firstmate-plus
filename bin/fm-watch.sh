@@ -3649,6 +3649,8 @@ watcher_require_home() {
 }
 
 resurface_after_downtime() {
+  # A result can arrive after the poll's first adapter scan. Give its owner
+  # another look after the locked recovery decision, before a generic wake.
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
   # unbounded recovery loop. A handled host turn explicitly settles its
@@ -3663,6 +3665,7 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
     main_has_eligible_queued_row || return 0
+    procevent_surface_queued
     wake "check: rearm-resurface"
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
@@ -3676,6 +3679,7 @@ resurface_after_downtime() {
   fi
   # A downtime episode can contain an open decision or a lost watcher even
   # with no queued rows. Its generation bounds recovery to one announcement.
+  procevent_surface_queued
   wake "check: rearm-resurface"
 }
 
