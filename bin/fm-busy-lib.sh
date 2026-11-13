@@ -32,8 +32,6 @@
 #   omp-ext          omp (Oh My Pi) per-task extension (agent_start/agent_end without willContinue)
 #   opencode-plugin  OpenCode per-task plugin (session.status)
 #   claude-hook      Claude lifecycle hooks (UserPromptSubmit/Stop/StopFailure/SessionEnd)
-#   commandcode-mod  Command Code per-task mod (run_start opens; run_end, including
-#                    an Escape interrupt, and session end close)
 #   gemini-hook      Gemini agent hooks (BeforeAgent opens; AfterAgent and
 #                    SessionEnd close)
 #   polytoken-hook   Polytoken pre_user_prompt / pre_model_turn open and stop
@@ -234,7 +232,6 @@ fm_busy_sources_for_harness() {  # <harness>
       ;;
     opencode*) adapter=opencode-plugin ;;
     gemini*) adapter=gemini-hook ;;
-    commandcode) adapter=commandcode-mod ;;
     polytoken) adapter=polytoken-hook ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;

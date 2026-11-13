@@ -228,13 +228,6 @@ launch_template() {
   # axis rides `__MODELFLAG__` after mapping to the nearest compatible
   # level in the installed model's selectable set.
   polytoken) printf '%s' 'for _fmv in $(env | cut -d= -f1 | grep -E '\''^(ORCA_|FM_)'\''); do case $_fmv in FM_TASK_ID|FM_TASK_INBOX) ;; *) unset $_fmv ;; esac; done; env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u FM_OMP_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI -u AGENT __POLYTOKENBIN__ --config-dir __POLYTOKENCONFIG__ new --sessions-dir __POLYTOKENSESSIONS__ --facet firstmate-worker --facets-dir __POLYTOKENFACETS__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-  # Command Code receives the typed launch envelope after -- as its initial
-  # message. --yolo bypasses permission prompts, --trust skips the folder-trust
-  # prompt of a fresh worktree, and --skip-onboarding skips taste onboarding.
-  # __COMMANDCODEMOD__ loads the tracked busy-state mod for this process only.
-  # NO_COLOR is cleared and COLORTERM pinned so the composer placeholder keeps
-  # the truecolor styling the shared composer guard reads.
-  commandcode) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u FM_OMP_HARNESS -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI -u NO_COLOR COLORTERM=truecolor __COMMANDCODEBIN__ --yolo --trust --skip-onboarding --no-auto-update __MODELFLAG____EFFORTFLAG____COMMANDCODEMOD__-- "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   # Kimi Code rejects a positional prompt, so it launches bare and receives
   # only an absolute brief pointer after the TUI readiness gate below.
   # Its turn-end signal is a globally configured Stop hook plus a guarded

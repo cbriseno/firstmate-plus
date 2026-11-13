@@ -775,15 +775,15 @@ test_turn_ended_notification_is_generation_bound() {
   local state gen
   state=$(new_state_dir turn-ended)
   gen=$("$EV" arm "$state" t1)
-  "$EV" apply "$state" t1 idle --gen "$gen" --source commandcode-mod --event run-end \
+  "$EV" apply "$state" t1 idle --gen "$gen" --source claude-hook --event stop \
     || fail "current idle event was refused"
   [ ! -e "$state/t1.turn-ended" ] || fail "an idle event without --turn-ended notified"
-  "$EV" apply "$state" t1 idle --gen "$gen" --source commandcode-mod --event run-end --turn-ended \
+  "$EV" apply "$state" t1 idle --gen "$gen" --source claude-hook --event stop --turn-ended \
     || fail "current turn-ended event was refused"
   [ -f "$state/t1.turn-ended" ] || fail "turn-ended notification missing"
   rm "$state/t1.turn-ended"
   "$EV" arm "$state" t1 >/dev/null
-  if "$EV" apply "$state" t1 idle --gen "$gen" --source commandcode-mod --event run-end --turn-ended 2>/dev/null; then
+  if "$EV" apply "$state" t1 idle --gen "$gen" --source claude-hook --event stop --turn-ended 2>/dev/null; then
     fail "stale turn-ended event was accepted"
   fi
   [ ! -e "$state/t1.turn-ended" ] || fail "stale turn-ended event woke the replacement"

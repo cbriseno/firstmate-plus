@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp commandcode"
+VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -49,7 +49,6 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     pi) printf '/quit\tEscape\t1\t\n' ;;
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     omp) printf '/quit\tEscape\t1\t\n' ;;
-    commandcode) printf '/quit\tEscape\t1\t\n' ;;
     grok) printf '/exit\tC-c\t1\t\n' ;;
     kimi) printf '/exit\tEscape\t1\t\n' ;;
     cursor) printf '/exit\tEscape\t1\t\n' ;;
@@ -249,7 +248,6 @@ test_exit_types_each_harness_verified_command() {
     add_task "$dir" t1 "$harness"
     case "$harness" in
       cursor) alive_as "$dir" cursor-agent ;;
-      commandcode) alive_as "$dir" command-code ;;
       *) alive_as "$dir" "$harness" ;;
     esac
     out=$(run_control "$dir" t1 exit); rc=$?
@@ -332,7 +330,6 @@ test_interrupt_sends_each_harness_verified_key() {
     add_task "$dir" t1 "$harness"
     case "$harness" in
       cursor) alive_as "$dir" cursor-agent ;;
-      commandcode) alive_as "$dir" command-code ;;
       *) alive_as "$dir" "$harness" ;;
     esac
     out=$(run_control "$dir" t1 interrupt); rc=$?
@@ -461,8 +458,6 @@ test_harness_kind_capability() {
   done
   fm_control_harness_supports_kind muse secondmate \
     && fail "muse has no primary supervision protocol and must not claim a secondmate"
-  fm_control_harness_supports_kind commandcode secondmate \
-    && fail "commandcode has no primary supervision protocol and must not claim a secondmate"
   for harness in claude codex opencode pi pi-signed grok kimi omp; do
     fm_control_harness_supports_kind "$harness" secondmate \
       || fail "$harness should be able to run a secondmate"
@@ -472,10 +467,6 @@ test_harness_kind_capability() {
   pass "fm-control-lib: adapter capability is per task kind, not per adapter alone"
 }
 
-
-# bin/fm-spawn.sh refuses a Command Code launch off tmux and herdr, but only
-# after a relaunch has stopped the old agent, so fm-control must refuse a
-# relaunch onto commandcode there while the running agent is untouched.
 
 test_state_verified_backends_are_exactly_tmux_and_herdr() {
   fm_control_backend_state_verified tmux || fail "tmux has a recovery-grade classifier"

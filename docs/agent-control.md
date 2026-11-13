@@ -40,7 +40,6 @@ An exit that delivers lifecycle input but cannot prove the agent stopped fails w
 Interrupt never rewrites busy state as proof of its own success.
 Claude exposes no lifecycle acknowledgement for a manual interrupt, so delivery succeeds with `cancel=unconfirmed` and its adapter-owned busy state remains as observed.
 An interrupt whose first press shows no running turn stops there and reports `cancel=not-running`, leaving busy state untouched; a picker a mistimed press opened is closed with one Escape and reported as `revert-picker=dismissed`, and `exit` refuses to type into an open picker.
-Command Code cancels a running turn on one Escape and its own busy mod records the cancelled run idle, while two quick Escapes on an idle agent open its Rewind checkpoint picker, where Enter restores a checkpoint; it therefore gets exactly one press, and the same picker dismissal and `exit` refusal apply.
 [`bin/fm-control-lib.sh`](../bin/fm-control-lib.sh) owns the arm signal, press gap, and picker signal.
 muse's session log records `terminal=cancelled` for the interrupted run, so the control plane reports `cancel=confirmed` only after observing that exact acknowledgement.
 
@@ -58,7 +57,7 @@ A stopped agent whose pane still shows the dialog text is not refused.
 Removing a worktree, closing an endpoint, or discarding work stays with [`bin/fm-teardown.sh`](../bin/fm-teardown.sh), which owns the landed-work test.
 
 **`resume` is not a verb.**
-It is not deterministic across the verified adapters: codex, grok, gemini and commandcode resume only from a session id printed at exit, polytoken resumes only from a session id held in its own sessions registry, opencode continues the most recent session for the cwd, and claude, pi, pi-signed, omp, kimi, and agy have no verified general pane-resume contract.
+It is not deterministic across the verified adapters: codex, grok, and gemini resume only from a session id printed at exit, polytoken resumes only from a session id held in its own sessions registry, opencode continues the most recent session for the cwd, and claude, pi, pi-signed, omp, kimi, and agy have no verified general pane-resume contract.
 `relaunch` uses the brief on disk - not a harness-private session - as the durable instruction when the backend can prove the old agent stopped and the composer is empty.
 A relaunch does take one session reference when the endpoint's own runtime recorded it - see [the relaunch transaction](#transactional-relaunch) - but that is a relaunch input, not a caller-facing verb.
 

@@ -225,7 +225,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|omp|agy|commandcode)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|omp|agy)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -240,13 +240,6 @@
 #   operator's trust.json. Ordinary Pi worker launches never receive --approve.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
-#   Command Code (`commandcode`) is worker-only and tmux/herdr-only (see the
-#   backend refusal below): --yolo and --trust allow
-#   unattended tools in a fresh worktree, and --mod loads the tracked
-#   bin/fm-commandcode-mod.ts busy-state writer for that one process with the
-#   task's generation in --mod-option values; no global or project config is
-#   edited. Its --effort is passed only where the model's accepted set is
-#   verified, because an unknown value exits the launch.
 #   For omp (Oh My Pi), fm-spawn resolves the `omp` executable from PATH once and
 #   refuses when it is absent. Every omp launch clears the foreign harness
 #   markers (omp publishes none of its own), sets the Firstmate-owned
@@ -458,8 +451,6 @@
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
 #     __GEMINISETTINGS__ firstmate-owned per-task gemini settings file (busy-state hooks)
-#     __COMMANDCODEBIN__ resolved Command Code executable
-#     __COMMANDCODEMOD__ --mod and --mod-option arguments of the busy-state mod
 #     __AGYBIN__    resolved, agy-verified executable for an agy launch
 #     __OPENCODEBIN__ quoted concrete opencode executable path resolved from PATH -
 #                  the same binary the version-gate probe reads, so the recorded
@@ -501,7 +492,7 @@
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
 # muse installs no hook at all - its plugin engine is off in the default build - so
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
-# log; muse, gemini, agy, and commandcode are crewmate/scout only and are refused for --secondmate.
+# log; muse, gemini, and agy are crewmate/scout only and are refused for --secondmate.
 # agy installs no hook either - it exposes no hook surface at all - so it
 # carries no busy-source wiring and no turn-end hook. Its brief rides the launch
 # command, but a fresh worktree would park it on a folder-trust dialog, so the
@@ -1671,7 +1662,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy |  commandcode | polytoken)
+  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy | polytoken)
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1841,7 +1832,7 @@ case "$ARG3" in
   ;;
 esac
 
-# muse, gemini, agy, commandcode, and polytoken are verified as CREWMATE/SCOUT adapters only. A secondmate is
+# muse, gemini, agy, and polytoken are verified as CREWMATE/SCOUT adapters only. A secondmate is
 # a firstmate instance, so it needs a primary supervision protocol.
 # gemini has none: docs/supervision-protocols/ carries no gemini wake protocol
 # and this task verified only crewmate-side launch, busy state, interrupt, and
@@ -1853,20 +1844,10 @@ esac
 # secondmate whose supervision cycle could never be armed.
 # agy has none either: it exposes no hook surface for primary supervision and
 # docs/supervision-protocols/ carries no agy wake protocol (agy 1.2.0).
-# commandcode has none either: only its worker busy mod is verified, and
-# docs/supervision-protocols/ carries no Command Code wake protocol (1.74.1).
 # polytoken has none either: only the crewmate/scout lifecycle is verified;
 # docs/supervision-protocols/ carries no polytoken primary wake protocol.
-if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ] || [ "$HARNESS" = commandcode ] || [ "$HARNESS" = polytoken ]; }; then
+if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ] || [ "$HARNESS" = polytoken ]; }; then
   echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-fi
-
-# Command Code's idle placeholder reads empty only with a Command Code pane
-# identity, which tmux and Herdr supply, so
-# there the composer would never read empty and steering would stall.
-if [ "$HARNESS" = commandcode ] && [ "$BACKEND" != tmux ] && [ "$BACKEND" != herdr ]; then
-  echo "error: commandcode is verified on the tmux and herdr backends only; backend=$BACKEND cannot prove its composer empty. Select backend tmux or herdr." >&2
   exit 1
 fi
 
@@ -1878,12 +1859,6 @@ if [ "$KIND" != secondmate ]; then
 fi
 
 case "$HARNESS" in
-commandcode)
-  COMMANDCODE_BIN=$(command -v commandcode) || {
-    echo "error: commandcode executable not found on PATH" >&2
-    exit 1
-  }
-  ;;
 pi | pi-signed)
   PI_BIN=$(resolve_pi_executable "$HARNESS") || {
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
@@ -2167,7 +2142,7 @@ model_flag_for_harness() {
     [ "$oc_major" = 1 ] || return 0
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
-  claude | codex | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy |  commandcode)
+  claude | codex | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy)
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   # polytoken encodes reasoning effort inside the model reference, so the
@@ -2217,17 +2192,6 @@ effort_flag_for_harness() {
     # omitted rather than passed as known-bad values (record-and-omit).
     case "$effort" in
     low | medium | high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
-    esac
-    ;;
-  commandcode)
-    # Command Code's --effort set is model-scoped and an unknown value exits
-    # the launch (verified, 1.74.1). DeepSeek V4.1 Flash accepts
-    # off|low|high|max, so medium and xhigh are omitted there, and every other
-    # model, whose set is unverified, keeps its own default (record-and-omit).
-    case "$model:$effort" in
-    deepseek/deepseek-v4.1-flash:low | deepseek/deepseek-v4.1-flash:high | deepseek/deepseek-v4.1-flash:max)
-      printf -- '--effort %s ' "$(shell_quote "$effort")"
-      ;;
     esac
     ;;
   pi | pi-signed)
@@ -4400,7 +4364,7 @@ BUSY_GEN=
     }
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
     ;;
-  gemini |  commandcode | polytoken)
+  gemini | polytoken)
     if [ "$RAW_LAUNCH" -eq 0 ]; then
       BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
         echo "error: failed to arm the busy-state contract for $ID" >&2
@@ -4486,13 +4450,6 @@ BUSY_GEN=
       session_keys="$session_keys\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},"
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
-    ;;
-  commandcode)
-    # Command Code's busy wiring rides the launch command (__COMMANDCODEMOD__).
-    # Its taste learning, which has no per-process switch, seeds
-    # .commandcode/taste/ in the project on every start (verified, 1.74.1) and
-    # learns into it, so that vendor runtime state stays out of worker commits.
-    exclude_path '.commandcode/taste/'
     ;;
   gemini)
     if [ "$RAW_LAUNCH" -eq 0 ]; then
@@ -5278,18 +5235,6 @@ pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
-commandcode)
-  LAUNCH=${LAUNCH//__COMMANDCODEBIN__/"$(shell_quote "$COMMANDCODE_BIN")"}
-  COMMANDCODEMOD=
-  if [ -n "${BUSY_GEN:-}" ]; then
-    COMMANDCODEMOD="--mod $(shell_quote "$FM_ROOT/bin/fm-commandcode-mod.ts")"
-    COMMANDCODEMOD="$COMMANDCODEMOD --mod-option $(shell_quote "fmWriter=$FM_ROOT/bin/fm-busy-event.sh")"
-    COMMANDCODEMOD="$COMMANDCODEMOD --mod-option $(shell_quote "fmState=$STATE_REAL")"
-    COMMANDCODEMOD="$COMMANDCODEMOD --mod-option $(shell_quote "fmId=$ID")"
-    COMMANDCODEMOD="$COMMANDCODEMOD --mod-option $(shell_quote "fmGen=$BUSY_GEN") "
-  fi
-  LAUNCH=${LAUNCH//__COMMANDCODEMOD__/$COMMANDCODEMOD}
-  ;;
 agy) LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "$AGY_BIN")"} ;;
 opencode)
   # The resolved absolute path probed for the version gate above, so the pane
@@ -5357,7 +5302,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse |  agy |  commandcode)
+claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse |  agy)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
