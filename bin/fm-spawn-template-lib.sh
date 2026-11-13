@@ -271,33 +271,6 @@ launch_template() {
   # verified launch behavior their evidence records, not as the only thing
   # standing between a retained marker and a misidentified worker.
   muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-  # rovo (Atlassian Rovo CLI): a positional brief is dead-on-arrival - rovo
-  # loads, never enters a working state, and drops back to an idle shell within
-  # about 10-15 seconds (confirmed live four times over a raw PTY and once under
-  # real tmux with the exact send-keys shape below). So rovo launches BARE,
-  # exactly like kimi, and receives an absolute brief pointer only after the TUI
-  # readiness gate below. --disable-permission-checks/--yolo makes every file
-  # CRUD operation and bash command run without confirmation; Atlassian-data and
-  # user MCP-server tools still prompt per its own printed caveat, which crew and
-  # scout tasks never touch. --startup-receipt is not used either: it requires
-  # "prompt-free interactive mode", so it cannot gate a launch that will have a
-  # message typed into it. rovo does NOT scrub an inherited
-  # CLAUDECODE/CURSOR_AGENT/etc, so foreign primary markers are cleared here as
-  # defense in depth alongside the marker-ordering fix in bin/fm-harness.sh
-  # (issue #3517); CURSOR_AGENT/CURSOR_INVOKED_AS are cleared by the shared
-  # outer wrap below, like every other non-cursor harness. rovo has no
-  # turn-end hook (its eventHooks fire at tool granularity only, never
-  # turn-end), so no launch placeholder for one exists.
-  # __ROVOCONFIGOVERRIDE__ (not __EFFORTFLAG__) carries rovo's single
-  # --config-override flag: it always grants allowedExternalPaths for this
-  # task's home-side brief dir, steering inbox, and status file - the file
-  # tool confinement that otherwise blocks the standard
-  # instructions/steering/status/report loop (rovo's bash tool has no such
-  # grant and stays confined to the worktree; the worker's own file tools do
-  # respect the grant, confirmed live) - merged with agent.efficiencyLevel
-  # when a supported effort is requested, since a second --config-override
-  # would silently discard the first (confirmed live).
-  rovo) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS __ROVOBIN__ run --yolo __MODELFLAG____ROVOCONFIGOVERRIDE__' ;;
   *) return 1 ;;
   esac
 }

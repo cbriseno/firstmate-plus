@@ -1286,7 +1286,6 @@ grok|grok|
 kimi|kimi|
 cursor|cursor|
 muse|muse|
-rovo|rovo|
 agy|agy|'
   while IFS='|' read -r harness label want; do
     [ -n "$harness" ] || continue

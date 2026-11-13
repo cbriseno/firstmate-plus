@@ -225,7 +225,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|commandcode)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|omp|agy|devin|commandcode)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -465,7 +465,6 @@
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
 #     __GEMINISETTINGS__ firstmate-owned per-task gemini settings file (busy-state hooks)
-#     __ROVOBIN__   resolved, rovo-verified executable for a rovo launch
 #     __DEVINBIN__ resolved Devin executable
 #     __DEVINCONFIG__ private per-task Devin config with lifecycle hooks
 #     __COMMANDCODEBIN__ resolved Command Code executable
@@ -489,7 +488,7 @@
 # a mate's completed turns stay in its own home. Codex stays unknown until a semantic
 # source exists. Grok keeps its rendered-tail fallback and is not given a parent
 # turn-end hook. Cursor's transcript binding is written for a secondmate the same way
-# as for a crewmate. Muse, gemini, agy, devin, and rovo are refused as secondmates.
+# as for a crewmate. Muse, gemini, agy, and devin are refused as secondmates.
 # A raw launch command for a claude, pi, pi-signed, or omp secondmate is not armed
 # and retires any arm an earlier launch of that mate left, so its verdict is unknown:
 # the raw command carries no --settings or -e flag to load the wiring.
@@ -512,21 +511,14 @@
 # muse installs no hook at all - its plugin engine is off in the default build - so
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
 # log; muse, gemini, agy, devin, and commandcode are crewmate/scout only and are refused for --secondmate.
-# rovo installs no hook either - its eventHooks fire at tool granularity only,
-# never turn-end - so it carries no busy-source wiring at all and no turn-end
-# hook. A positional brief is dead-on-arrival (rovo loads, never works, and drops
-# to an idle shell), so rovo launches BARE and receives an absolute brief pointer
-# only after a TUI readiness gate, then a delivery-confirmation gate - the same
-# launch-then-send shape as kimi. Its busy state is a screen-scrape fallback like
-# grok. rovo is crewmate/scout only and is refused for --secondmate, like muse.
 # agy installs no hook either - it exposes no hook surface at all - so it
 # carries no busy-source wiring and no turn-end hook. Its brief rides the launch
 # command, but a fresh worktree would park it on a folder-trust dialog, so the
 # spawn pre-registers the worktree in agy's own trust store through
 # bin/fm-agy-trust.sh (the claude shape, but non-fatal) and then waits for a
 # busy turn - answering the dialog first if it renders anyway - before
-# reporting success (the rovo/kimi launch-then-confirm shape). Its busy state
-# is a screen-scrape fallback like grok and rovo, and it is crewmate/scout only.
+# reporting success (the Kimi launch-then-confirm shape). Its busy state
+# is a screen-scrape fallback like grok, and it is crewmate/scout only.
 # cursor installs no per-task hook either: it writes state/<id>.cursor-session to
 # bind the pane to cursor's own conversation transcript (projects root, the exact
 # workspace path cursor records in .workspace-trusted, and the conversations that
@@ -1688,7 +1680,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy | devin | commandcode | polytoken)
+  '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy | devin | commandcode | polytoken)
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1878,15 +1870,6 @@ esac
 # docs/supervision-protocols/ carries no polytoken primary wake protocol.
 if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ] || [ "$HARNESS" = devin ] || [ "$HARNESS" = commandcode ] || [ "$HARNESS" = polytoken ]; }; then
   echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-fi
-
-# rovo carries the same primary-supervision gap as muse: no turn-end hook, no
-# verified primary integration, so a secondmate (a firstmate instance that must
-# itself act as a primary) could never be supervised. Refuse loudly rather than
-# standing one up with no way to arm its watch cycle.
-if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
-  echo "error: rovo is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
 fi
 
@@ -2109,33 +2092,6 @@ resolve_muse_binary() {
   return 1
 }
 
-resolve_rovo_binary() {
-  local candidate dir fallback
-  candidate=$(command -v rovo 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-    /*)
-      printf '%s\n' "$candidate"
-      return 0
-      ;;
-    *)
-      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-      if [ -n "$dir" ]; then
-        printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-        return 0
-      fi
-      ;;
-    esac
-  fi
-  fallback="${HOME:-}/.local/bin/rovo"
-  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
-    printf '%s\n' "$fallback"
-    return 0
-  fi
-  echo "error: rovo executable not found; searched PATH for 'rovo' and fallback '$fallback'" >&2
-  return 1
-}
-
 # muse_credential_present: 0 when a launched muse pane can reach its provider
 # without an interactive login. muse offers exactly two credential paths
 # (verified, muse 0.1.0-R708.1): the META_API_KEY environment variable, which
@@ -2228,7 +2184,7 @@ model_flag_for_harness() {
     [ "$oc_major" = 1 ] || return 0
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
-  claude | codex | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy | devin | commandcode)
+  claude | codex | pi | pi-signed | grok | kimi | cursor | gemini | muse |  omp | agy | devin | commandcode)
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   # polytoken encodes reasoning effort inside the model reference, so the
@@ -2358,10 +2314,6 @@ effort_flag_for_harness() {
     max) printf -- '--reasoning-effort %s ' "$(shell_quote ultra)" ;;
     esac
     ;;
-    # rovo has no --effort flag on `run`; its effort mapping rides
-    # --config-override, but that flag is single-value (see
-    # rovo_config_override_flag below) so it is built there, merged with the
-    # mandatory allowedExternalPaths grant, rather than here.
     # kimi provider catalogs expose supported and default effort values, but a
     # launch flag and mapping have not been live-verified; the requested axis
     # stays in task metadata but never reaches the launch command. Cursor encodes
@@ -2407,48 +2359,8 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
-*__ROVOBIN__*)
-  ROVO_BIN=$(resolve_rovo_binary) || exit 1
-  LAUNCH=${LAUNCH//__ROVOBIN__/$(shell_quote "$ROVO_BIN")}
-  ;;
-esac
-
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-# rovo confines every file-tool operation (open_files, create_file, grep, ...)
-# to its worktree by default; toolPermissions.allowedExternalPaths
-# (~/.rovo/config.yml) is the only lift, and it must be granted at launch
-# through --config-override since there is no per-session escalation once
-# the process is running. rovo's bash tool is NOT covered by this grant and
-# stays confined to the worktree regardless (confirmed live) - the standard
-# crewmate flow's literal `echo ... >> status file` bash line therefore still
-# fails under rovo, but the worker recovers by falling back to its own file
-# tools for the same append (confirmed live), which the grant below does cover.
-# --config-override itself is single-value (a second occurrence silently
-# discards the first, confirmed live), so this is the ONE place that must
-# also fold in agent.efficiencyLevel when a supported effort was requested.
-# Granted paths are real (symlink-resolved) directories/files under this
-# task's home, matching BRIEF_REAL's own resolution: the brief dir (covers
-# brief.md/launch-brief.md/report.md), the steering inbox directory (covers
-# every steer and its handled/ acknowledgement), and the status file itself.
-rovo_config_override_flag() {
-  local effort=$1 data_dir=$2 state_dir=$3 id=$4
-  local data_real state_real agent_json paths_json config_json
-  data_real=$(cd "$data_dir" && pwd -P) || return 1
-  state_real=$(cd "$state_dir" && pwd -P) || return 1
-  agent_json=
-  case "$effort" in
-  low | medium | high | max) agent_json="\"agent\":{\"efficiencyLevel\":\"$(json_escape "$effort")\"}," ;;
-  esac
-  paths_json=$(printf '"%s","%s","%s"' \
-    "$(json_escape "$data_real/$id")" \
-    "$(json_escape "$state_real/$id.inbox")" \
-    "$(json_escape "$state_real/$id.status")")
-  config_json="{${agent_json}\"toolPermissions\":{\"allowedExternalPaths\":[$paths_json]}}"
-  printf -- '--config-override %s ' "$(shell_quote "$config_json")"
 }
 
 # Claude Code path-checks the Read/Glob/Grep file tools (and an Edit's
@@ -2467,7 +2379,7 @@ rovo_config_override_flag() {
 # fresh spawn and relaunch, in both permission modes, grants exactly those
 # task-channel directories. The skills grant is that directory, not the
 # checkout root, so the grant does not open the whole checkout. Paths resolve
-# the way rovo_config_override_flag resolves them
+# as real paths
 # (real paths under the task's home). The state channel dirs are created
 # lazily by their first record, so they are made here: an --add-dir naming a
 # directory that does not exist at launch would leave the channel created
@@ -3924,80 +3836,8 @@ kimi_spawn_fail() { # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-# rovo mirrors kimi's launch-then-send shape exactly: a positional brief is
-# dead-on-arrival, so rovo launches bare and takes its brief pointer only after a
-# readiness gate, then a delivery-confirmation gate. Both route their
-# composer-emptiness half through the shared classifier (fm_backend_composer_state)
-# like kimi. The banner and context-usage greps are launch-progress signals, not
-# composer shapes.
-rovo_capture() {
-  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
-}
-
-rovo_composer_is_empty() {
-  [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]
-}
-
-rovo_wait_for_ready() {
-  local pane i=0 max=${FM_ROVO_READY_POLLS:-60} interval=${FM_ROVO_POLL_INTERVAL:-0.5}
-  while [ "$i" -lt "$max" ]; do
-    pane=$(rovo_capture)
-    # Lead with rovo's fresh-launch ASCII welcome banner (confirmed live), the
-    # same primary evidence kimi's own 'Welcome to Kimi Code!' match uses. The
-    # composer-empty fallback is WEAKER for rovo than for kimi: rovo's idle
-    # composer renders an inline placeholder chip (luminance ~163, above the
-    # ghost-strip threshold) that bin/fm-composer-lib.sh does not currently strip
-    # (see the deliberately-unfixed composer-ghost gap in rovo.md), so it can read
-    # non-empty - hence the banner is the primary signal.
-    if printf '%s\n' "$pane" | grep -Fq 'Welcome to Rovo!' ||
-      rovo_composer_is_empty; then
-      return 0
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-rovo_delivery_is_confirmed() { # <plain-pane-capture>
-  local pane=$1
-  rovo_composer_is_empty || return 1
-  # rovo's real footer is `Context: <bar> N.N% NN.NK/NNNK` (e.g.
-  # "Context: ▎ 3.3% 30.1K/922K"). Confirm delivery when the sent pointer has
-  # scrolled into view OR the context-usage PERCENTAGE has advanced off zero. The
-  # regex tolerates the bar glyph and arbitrary spacing between the colon and the
-  # number (the [^%]* runs, unlike kimi's exact spacing) but is anchored to the
-  # digits BEFORE the % sign, so the always-nonzero total in the denominator
-  # (e.g. .../922K) can never masquerade as a nonzero usage percentage.
-  if printf '%s\n' "$pane" | grep -Fq 'Read the brief at' ||
-    printf '%s\n' "$pane" | grep -qiE 'context:[^%]*[1-9][^%]*%'; then
-    return 0
-  fi
-  return 1
-}
-
-rovo_wait_for_delivery() {
-  local pane i=0 max=${FM_ROVO_DELIVERY_POLLS:-40} interval=${FM_ROVO_POLL_INTERVAL:-0.5}
-  while [ "$i" -lt "$max" ]; do
-    pane=$(rovo_capture)
-    rovo_delivery_is_confirmed "$pane" && return 0
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-rovo_spawn_fail() { # <detail>
-  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
-  if [ -e "$CONFIG/fleet-ledger" ]; then
-    bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
-  fi
-  echo "error: $1; inspect window $T" >&2
-  rovo_endpoint_cleanup
-}
-
 # A post-launch gate failure closes the recorded endpoint.
-rovo_endpoint_cleanup() {
+spawn_endpoint_cleanup() {
   fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
@@ -4050,7 +3890,7 @@ opencode2_wait_for_delivery() {
 # and an unanswered dialog sends the turn into agy's scratch directory instead
 # of the worktree. The trust is pre-registered before launch
 # (bin/fm-agy-trust.sh, verified to remove the dialog), and this gate is the
-# backstop in the rovo/kimi launch-then-confirm shape: answer the dialog once
+# backstop in the Kimi launch-then-confirm shape: answer the dialog once
 # with the preselected safe default if it renders anyway, then require
 # positive proof that the brief is being processed - the same verdict the
 # supervisor reads (Herdr's native working state or the pinned `esc to cancel`
@@ -4101,7 +3941,7 @@ agy_spawn_fail() {  # <detail>
     bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
   fi
   echo "error: $1; inspect window $T" >&2
-  rovo_endpoint_cleanup
+  spawn_endpoint_cleanup
 }
 
 # polytoken's launch-then-confirm gate, in the same shape as agy's: the brief
@@ -4199,7 +4039,7 @@ polytoken_spawn_fail() {  # <detail>
       --sessions-dir "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")" >/dev/null 2>&1 || true
   fi
   clear_relaunch_harness_wiring polytoken "$WT" "$STATE_REAL" "$ID" || true
-  rovo_endpoint_cleanup
+  spawn_endpoint_cleanup
 }
 
 if [ "$RELAUNCH" -eq 1 ]; then
@@ -4513,7 +4353,7 @@ esac
 # tmux-backed mate's active-turn gate unable to return busy. The launch
 # brief sent below IS a submitted turn, so the seed record is busy/fm-spawn.
 # The minted gen is embedded into each adapter's wiring so an event from a
-# superseded incarnation is rejected as stale. Grok and rovo stay on their
+# superseded incarnation is rejected as stale. Grok stays on their
 # isolated rendered-tail fallbacks and standalone Kimi stays unknown until
 # fm_busy_kimi_verified opens, so none of the three is armed here. Gemini IS
 # armed: its BeforeAgent / AfterAgent / SessionEnd hooks are a verified
@@ -5439,13 +5279,6 @@ if [ "$KEEP_AI_TRAILERS" = 1 ]; then
 else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
-if [ "$HARNESS" = rovo ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
-    echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
-    exit 1
-  }
-  LAUNCH=${LAUNCH//__ROVOCONFIGOVERRIDE__/$ROVOCONFIGOVERRIDE}
-fi
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 # Codex notify proves a normal turn completion only. Its classifier continues to
@@ -5550,7 +5383,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo | agy | devin | commandcode)
+claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse |  agy | devin | commandcode)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
@@ -5857,30 +5690,6 @@ if [ "$HARNESS" = kimi ]; then
     exit 1
   fi
 fi
-if [ "$HARNESS" = rovo ]; then
-  if ! rovo_wait_for_ready; then
-    rovo_spawn_fail "rovo did not show a verified ready signal before brief delivery in window $T"
-    exit 1
-  fi
-  ROVO_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
-  ROVO_SUBMIT_RETRIES=${FM_ROVO_SUBMIT_RETRIES:-3}
-  ROVO_SUBMIT_SLEEP=${FM_ROVO_SUBMIT_SLEEP:-${FM_ROVO_POLL_INTERVAL:-0.5}}
-  ROVO_SUBMIT_SETTLE=${FM_ROVO_SUBMIT_SETTLE:-0}
-  if ! ROVO_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
-    "$BACKEND" "$T" "$ROVO_POINTER" "$ROVO_SUBMIT_RETRIES" \
-    "$ROVO_SUBMIT_SLEEP" "$ROVO_SUBMIT_SETTLE" "$W"); then
-    rovo_spawn_fail "rovo brief pointer could not be submitted into window $T"
-    exit 1
-  fi
-  if [ "$ROVO_SUBMIT_VERDICT" = send-failed ]; then
-    rovo_spawn_fail "rovo brief pointer could not be submitted into window $T"
-    exit 1
-  fi
-  if ! rovo_wait_for_delivery; then
-    rovo_spawn_fail "rovo brief pointer delivery was not confirmed in window $T"
-    exit 1
-  fi
-fi
 if [ "$HARNESS" = opencode ] && [ "$OPENCODE_MAJOR" -ge 2 ]; then
   if ! opencode2_wait_for_delivery; then
     printf '%s\n' "$(status_stamp_line "failed: opencode $OPENCODE_VERSION did not start the brief turn in window $T")" >>"$STATE/$ID.status"
@@ -5888,7 +5697,7 @@ if [ "$HARNESS" = opencode ] && [ "$OPENCODE_MAJOR" -ge 2 ]; then
       bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
     fi
     echo "error: opencode $OPENCODE_VERSION did not start the brief turn; inspect window $T" >&2
-    rovo_endpoint_cleanup
+    spawn_endpoint_cleanup
     exit 1
   fi
 fi

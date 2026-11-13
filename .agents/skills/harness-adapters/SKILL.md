@@ -91,7 +91,6 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "cursor": "references/harness/cursor.md",
     "gemini": "references/harness/gemini.md",
     "muse": "references/harness/muse.md",
-    "rovo": "references/harness/rovo.md",
     "omp": "references/harness/omp.md",
     "agy": "references/harness/agy.md",
     "devin": "references/harness/devin.md",
