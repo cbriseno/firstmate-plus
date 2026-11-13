@@ -728,8 +728,8 @@ test_missing_registration_consults_real_descendants() {
   local lab standin shell_pid out
   standin=$(fm_agent_standin "$TMP_ROOT/standin") || fail "no agent stand-in available"
   lab="$TMP_ROOT/missing-agent-bin"; mkdir -p "$lab"
-  ln -sf "$standin" "$lab/pi"
-  sh -c "'$lab/pi' 300; :" &
+  ln -sf "$standin" "$lab/claude"
+  sh -c "'$lab/claude' 300; :" &
   shell_pid=$!
   sleep 0.3
   out=$(stale_registration_case missing-live missing "$(shell_only_process_info "$shell_pid")")

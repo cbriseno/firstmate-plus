@@ -660,6 +660,7 @@ ROWS
   wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet under memory pressure"
   FM_HOME="$home" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1
   wait "$pid" || true
+  ack_stopped_cycle "$home/state" || fail "could not settle the intentional capacity test stop"
   assert_present "$home/state/task-c.spawn-deferred" "watcher stop lost the retry reminder"
   before=$(call_count "$case_dir")
   rc=0
