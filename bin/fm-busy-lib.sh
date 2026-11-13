@@ -32,8 +32,6 @@
 #   omp-ext          omp (Oh My Pi) per-task extension (agent_start/agent_end without willContinue)
 #   opencode-plugin  OpenCode per-task plugin (session.status)
 #   claude-hook      Claude lifecycle hooks (UserPromptSubmit/Stop/StopFailure/SessionEnd)
-#   gemini-hook      Gemini agent hooks (BeforeAgent opens; AfterAgent and
-#                    SessionEnd close)
 #   polytoken-hook   Polytoken pre_user_prompt / pre_model_turn open and stop
 #                    closes; a REST turn cancel emits no stop (verified live),
 #                    so the control plane writes the close itself
@@ -79,7 +77,7 @@
 # launch whose busy record never advanced past the fm-spawn seed is
 # indistinguishable, from the record alone, between "still reading its
 # brief" and "parked on an interactive prompt the harness never gets past
-# without a human" - a Claude/Gemini/Pi workspace-trust dialog, a sign-in or
+# without a human" - a Claude/Pi workspace-trust dialog, a sign-in or
 # auth-method picker, or a first-run setup menu. Left alone this reads as
 # ordinary busy for the full BUSY_TURN_MAX_SECS (one hour) before the
 # separate wedge-suspect bound even looks at it. The signature table matches
@@ -90,7 +88,7 @@
 # dialog. This is a best-effort backstop, not prevention: it never suppresses
 # a real busy verdict once any hook has posted, and it defers to whatever
 # harness-specific trust pre-registration already exists (fm-claude-trust.sh,
-# GEMINI_CLI_TRUST_WORKSPACE) to stop the dialog from appearing at all.
+# the verified harness settings) to stop the dialog from appearing at all.
 # Apart from the launch-prompt backstop above, Grok has a harness-scoped
 # rendered-text busy fallback. The delivery
 # guards in bin/fm-composer-lib.sh match rendered footers for submit
@@ -227,7 +225,6 @@ fm_busy_sources_for_harness() {  # <harness>
       adapter='codex-hook codex-appserver'
       ;;
     opencode*) adapter=opencode-plugin ;;
-    gemini*) adapter=gemini-hook ;;
     polytoken) adapter=polytoken-hook ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;

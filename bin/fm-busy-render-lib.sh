@@ -17,7 +17,7 @@ fm_busy_grok_tail_busy() {
 # busy footers above are): a bordered dialog box renders many short lines of
 # pure border/padding (`│  ...  │`) that are NOT whitespace-only, so a 12-line
 # non-blank reduction was verified live to push the box's own heading text
-# (e.g. Gemini's "How would you like to authenticate for this project?")
+# (for example, a first-run authentication prompt)
 # outside the window entirely, silently defeating the match. Matching the
 # full capture avoids that trap; a signature is still best-effort exactly like
 # the footer fallbacks - a screen taller than the capture can still scroll a
@@ -67,44 +67,10 @@ fm_busy_pi_launch_prompt_tail() {
     && printf '%s' "$buf" | grep -qiE 'Do not trust'
 }
 
-# fm_busy_gemini_launch_prompt_tail: Gemini's workspace-trust dialog ("Do you
-# trust the files in this folder?"), its first-run auth-method picker ("How
-# would you like to authenticate for this project?"), and the credential
-# entry it falls through to with no resolvable key ("Enter Gemini API Key").
-# GEMINI_CLI_TRUST_WORKSPACE=true (fm-spawn.sh's launch template) already
-# suppresses the first; the other two have no pre-registration and are the
-# primary target of this backstop. The trust dialog and the auth-method picker
-# were live-verified on gemini 0.60.0 in a credential-less scratch environment
-# (docs/verification/runtime-backends.md "Launch-prompt backstop signatures"),
-# and each question is paired with one of its own rendered option lines,
-# required together, for the same reason as Claude's pairing above: the
-# question text alone is plausible prose this very file's own comments could
-# render. The auth-method picker's live capture is also what proved the
-# full-capture match necessary: its heading renders more than 12 non-blank-
-# looking lines above the bordered box's bottom border. The API-key entry
-# screen is carried over from .agents/skills/harness-adapters/references/
-# harness/gemini.md "Trust, and why the two documented options are not
-# equivalent" rather than this guard's own live capture, and stays a single
-# marker: it is reached only after actively selecting that auth method, so
-# self-referential prose is a materially smaller risk there.
-fm_busy_gemini_launch_prompt_tail() {
-  local buf
-  buf=$(cat)
-  if printf '%s' "$buf" | grep -qiE "${FM_BUSY_GEMINI_TRUST_PROMPT_REGEX:-Do you trust the files in this folder\\?}" \
-    && printf '%s' "$buf" | grep -qiE "Trust folder|Don't trust"; then
-    return 0
-  fi
-  if printf '%s' "$buf" | grep -qiE "${FM_BUSY_GEMINI_AUTH_PROMPT_REGEX:-How would you like to authenticate for this project\\?}" \
-    && printf '%s' "$buf" | grep -qiE 'Use Gemini API Key|No authentication method selected'; then
-    return 0
-  fi
-  printf '%s' "$buf" | grep -qiE "${FM_BUSY_GEMINI_APIKEY_PROMPT_REGEX:-Enter Gemini API Key}"
-}
-
 # fm_busy_launch_prompt_parked: dispatch to the signature above for <harness>,
 # or fail when this harness has none. Consumes the tail on stdin. Scoped to
 # exactly the harnesses fm-spawn.sh arms with the fm-spawn busy source
-# (claude*, opencode*, pi, pi-signed, omp, gemini) since only those can ever
+# (claude*, opencode*, pi, pi-signed, omp) since only those can ever
 # read a pinned "busy fm-spawn" record; codex and standalone Kimi already
 # classify unknown before a record is ever consulted, and opencode ships no
 # trust dialog at all.
@@ -112,7 +78,6 @@ fm_busy_launch_prompt_parked() {  # <harness>
   case "${1:-}" in
     claude*) fm_busy_claude_launch_prompt_tail ;;
     pi | pi-signed | omp) fm_busy_pi_launch_prompt_tail ;;
-    gemini) fm_busy_gemini_launch_prompt_tail ;;
     *) return 1 ;;
   esac
 }

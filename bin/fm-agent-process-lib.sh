@@ -17,8 +17,6 @@ _FM_AGENT_PROCESS_LIB_DIR=${BASH_SOURCE[0]%/*}
 [ "$_FM_AGENT_PROCESS_LIB_DIR" != "${BASH_SOURCE[0]}" ] || _FM_AGENT_PROCESS_LIB_DIR=.
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "${_FM_AGENT_PROCESS_LIB_DIR:-/}/fm-session-lock-lib.sh"
-# shellcheck source=bin/fm-gemini-lib.sh
-. "${_FM_AGENT_PROCESS_LIB_DIR:-/}/fm-gemini-lib.sh"
 unset _FM_AGENT_PROCESS_LIB_DIR
 
 # fm_agent_process_classify_name: the single owner of the process-name
@@ -78,12 +76,8 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
 #            on Linux the exec name, on macOS argv[0] truncated to 16 bytes.
 #   <argv0>  argv[0] as the process reports it - a bare name or an install
 #            path, whichever the launcher used (empty when unknown).
-#   <args>   the flattened command line, read only for the node-bundle
-#            harnesses whose identity sits in argv[1] (bin/fm-gemini-lib.sh).
-#   [pid]    when given, lets the Gemini rule read argv boundaries from the
-#            live process instead of the flattened line.
 fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|other
-  local name=${1:-} argv0=${2:-} args=${3:-} pid=${4:-} by_name by_argv0
+  local name=${1:-} argv0=${2:-} by_name by_argv0
   by_name=$(fm_agent_process_classify_name "$name" "$argv0")
   [ "$by_name" != agent ] || { printf 'agent'; return 0; }
   if [ -n "$argv0" ]; then
@@ -93,14 +87,6 @@ fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|othe
     [ "$by_argv0" != agent ] || { printf 'agent'; return 0; }
   else
     by_argv0=$by_name
-  fi
-  if [ -n "$pid" ] && fm_gemini_pid_is_gemini "$pid"; then
-    printf 'agent'
-    return 0
-  fi
-  if [ -n "$args" ] && fm_gemini_args_are_gemini "$args"; then
-    printf 'agent'
-    return 0
   fi
   if [ "$by_name" = shell ] && [ "$by_argv0" = shell ]; then
     printf 'shell'

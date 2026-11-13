@@ -139,41 +139,6 @@ launch_template() {
   # only reads the environment. Cursor exposes no effort flag, so the shared
   # effort axis is deliberately omitted and stays in task metadata only.
   cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-  # gemini (Google Gemini CLI): a positional query starts the supervised
-  # interactive session and auto-submits it, so the brief rides the launch
-  # command exactly as it does for claude and grok (verified: a multi-line
-  # brief submitted itself with no extra Enter, gemini-cli 0.58.0).
-  # -y (--yolo) auto-approves every tool call, which an unattended crewmate
-  # needs; the footer renders ` YOLO Ctrl+Y` while it is on and a WriteFile
-  # was verified to land with no approval gate.
-  # Every task worktree is a fresh path, so gemini refuses to start at all
-  # without a trust control. GEMINI_CLI_TRUST_WORKSPACE=true - NOT
-  # --skip-trust - is the one used, and the difference is load-bearing
-  # rather than cosmetic: the CLI's refusal message offers the two as
-  # equivalents, but a controlled A/B on one worktree (same config home,
-  # same prompt) showed --skip-trust runs the turn while leaving PROJECT
-  # configuration unloaded, so the project's own .agents/skills are never
-  # discovered. A firstmate-repo task needs exactly those, so the workspace
-  # is trusted.
-  # GEMINI_CLI_SYSTEM_SETTINGS_PATH points gemini at the firstmate-owned
-  # per-task settings file written below. It is deliberately NOT the
-  # worktree's .gemini/settings.json: unlike claude's settings.local.json,
-  # that path is the PROJECT's own committed settings file, so writing it
-  # would clobber a project's configuration and removing it at teardown
-  # would delete a tracked file. The system layer also makes the busy
-  # contract independent of the trust decision above (its hooks were
-  # verified firing under --skip-trust in an untrusted folder), and hook
-  # arrays MERGE across settings layers rather than overriding, so a
-  # project's own hooks still run alongside firstmate's.
-  # The foreign primary markers are cleared for the same reason cursor
-  # clears them: gemini does not clear an inherited CLAUDECODE, and
-  # bin/fm-harness.sh must not read a gemini worker as its launcher.
-  # gemini exposes no reasoning-effort flag (checked against 0.58.0
-  # --help), so the shared effort axis is deliberately omitted here and
-  # stays in task metadata only, per the record-and-omit contract.
-  # Its turn-end and busy-state signals do NOT ride the launch command:
-  # they are project hooks written into the worktree below.
-  gemini) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS GEMINI_CLI_TRUST_WORKSPACE=true GEMINI_CLI_SYSTEM_SETTINGS_PATH=__GEMINISETTINGS__ gemini -y __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   # polytoken (Polytoken CLI): a pane-attached TUI worker whose control verbs
   # ride the daemon REST API (the captain-approved hybrid). The launch runs in
   # the task worktree so the worktree's `.polytoken/` is the project hook and

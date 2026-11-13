@@ -236,7 +236,6 @@ test_backend_source_shell_portable() {
     : > "$stub/fm-transition-lib.sh"
     : > "$stub/fm-agent-process-lib.sh"
     : > "$stub/fm-session-lock-lib.sh"
-    : > "$stub/fm-gemini-lib.sh"
     zsh -c "cd '$ROOT' && source bin/fm-backend.sh && FM_BACKEND_LIB_DIR='$stub' && fm_backend_source herdr" >/dev/null 2>&1 \
       || fail "zsh: fm_backend_source herdr should load a stub adapter"
     [ -s "$probe" ] \

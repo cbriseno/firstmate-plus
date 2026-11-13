@@ -11,10 +11,10 @@
 # caught it.
 #
 # For each of claude, pi (covering pi-signed and omp, which share Pi's engine
-# and trust gate), and gemini that is actually installed, this drives the REAL
+# and trust gate) that is actually installed, this drives the REAL
 # binary in an isolated tmux server into its genuine interactive launch prompt
 # (a fresh untrusted worktree carrying a project-local trust-requiring
-# resource for claude and pi, a fresh credential-less environment for gemini),
+# resource for claude and pi),
 # captures the pane with the exact production shape (bin/fm-backend.sh's
 # fm_backend_tmux_capture: `tmux capture-pane -p -S -40`), arms a scratch
 # busy-state record exactly as fm-spawn.sh does at launch, and requires
@@ -35,7 +35,7 @@
 #
 # Run explicitly with FM_LAUNCH_PROMPT_SIGNALS_LIVE=1. Refresh
 # docs/verification/runtime-backends.md ("Launch-prompt backstop signatures")
-# from this guard's output after any of claude/pi/gemini upgrades.
+# from this guard's output after any of claude/pi upgrades.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -185,18 +185,6 @@ if [ -x "${PI_BIN:-}" ]; then
   pass "pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate"
 else
   note "pi not installed - launch-prompt signature not checked"
-fi
-
-GEMINI_BIN=$(command -v gemini 2>/dev/null || true)
-if [ -x "${GEMINI_BIN:-}" ]; then
-  VERSION_OUT=$("$GEMINI_BIN" --version 2>&1) || fail "gemini --version failed: $VERSION_OUT"
-  note "live gemini version: $VERSION_OUT"
-  check_harness gemini fm-lp-gemini-$$ '' '' \
-    'How would you like to authenticate for this project|Do you trust the files in this folder|Enter Gemini API Key' '' \
-    env GEMINI_CLI_TRUST_WORKSPACE=true GEMINI_API_KEY= "$GEMINI_BIN" -y hello
-  pass "gemini: a real launch parked on its own rendered auth or trust dialog surfaces through the watcher gate"
-else
-  note "gemini not installed - launch-prompt signature not checked"
 fi
 
 [ "$CHECKED" -gt 0 ] || fail "no installed harness could be checked; this run verified nothing"

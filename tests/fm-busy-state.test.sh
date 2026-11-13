@@ -349,33 +349,6 @@ test_launch_prompt_pi_requires_both_markers() {
   pass "the Pi signature requires both the dialog heading and its decline option, not the bare word trust"
 }
 
-test_launch_prompt_gemini_dialogs() {
-  local state out
-  state=$(new_state_dir launch-prompt-gemini-trust)
-  "$EV" arm "$state" t1 >/dev/null
-  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'Do you trust the files in this folder?
-● 1. Trust folder (worktree)
-  2. Trust parent folder (project)
-  3. Don'"'"'t trust')
-  [ "$out" = "unknown launch-prompt" ] \
-    || fail "a Gemini launch parked on the workspace-trust dialog must classify unknown launch-prompt, got '$out'"
-
-  state=$(new_state_dir launch-prompt-gemini-auth)
-  "$EV" arm "$state" t1 >/dev/null
-  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'How would you like to authenticate for this project?
-● 2. Use Gemini API Key')
-  [ "$out" = "unknown launch-prompt" ] \
-    || fail "a Gemini launch parked on the auth-method picker must classify unknown launch-prompt, got '$out'"
-
-  state=$(new_state_dir launch-prompt-gemini-apikey)
-  "$EV" arm "$state" t1 >/dev/null
-  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'Enter Gemini API Key
-> ')
-  [ "$out" = "unknown launch-prompt" ] \
-    || fail "a Gemini launch parked on the API-key entry dialog must classify unknown launch-prompt, got '$out'"
-  pass "a Gemini launch parked on its trust, auth-picker, or API-key dialog classifies unknown launch-prompt"
-}
-
 test_launch_prompt_never_shortens_a_working_launch() {
   local state out
   state=$(new_state_dir launch-prompt-working)
@@ -811,7 +784,6 @@ test_converted_adapters_ignore_footer_text
 test_launch_prompt_claude_trust_dialog
 test_launch_prompt_pi_trust_dialog
 test_launch_prompt_pi_requires_both_markers
-test_launch_prompt_gemini_dialogs
 test_launch_prompt_never_shortens_a_working_launch
 test_launch_prompt_scoped_to_armed_harnesses
 test_launch_prompt_never_reclassifies_an_advanced_record
