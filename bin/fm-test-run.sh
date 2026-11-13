@@ -1647,6 +1647,7 @@ families_for_changed_path() {
       # tests/fixtures/<dir>/<name>-fixture.sh and scan for its basename
       # instead of the fixture directory its readers actually name.
       families_for_test_reference "$(basename "$path")" \
+        || [ ! -e "$path" ] \
         || printf '%s\n' "__unmapped__:$path"
       ;;
     bin/*)
@@ -1657,9 +1658,6 @@ families_for_changed_path() {
         families_for_unmapped_bin "$path" \
           || printf '%s\n' "__unmapped__:$path"
       fi
-      ;;
-    tests/*)
-      printf '%s\n' "__unmapped__:$path"
       ;;
     README.md|LICENSE|assets/*|docs/*|.gitignore)
       ;;

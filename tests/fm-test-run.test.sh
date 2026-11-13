@@ -135,6 +135,7 @@ init_changed_fixture_repo() {
   # beside a tests/ file nothing reads at all.
   : >"$repo/tests/shared-probe-fixture.sh"
   : >"$repo/tests/unread-thing.sh"
+  : >"$repo/tests/unread-helpers.sh"
   printf '# shared-probe-fixture.sh\n' >>"$repo/tests/fm-pr-merge.test.sh"
   printf '# shared-probe-fixture.sh\n' >>"$repo/tests/fm-secondmate-safety.test.sh"
   # A nested fixture whose consuming suite names only the fixture directory,
@@ -419,9 +420,9 @@ test_changed_dependency_selection_and_unmapped_failure() {
   grep -Fq 'no changed-test mapping for source path: src/unmapped.ts' "$tmp/err" \
     || fail "unmapped changed source failure is not actionable: $(cat "$tmp/err")"
 
-  rm -f "$repo/src/unmapped.ts"
+  rm -f "$repo/src/unmapped.ts" "$repo/tests/unread-thing.sh" "$repo/tests/unread-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
-  [ -z "$listed" ] || fail "a retired unmapped source without consumers selected tests: $listed"
+  [ -z "$listed" ] || fail "retired sources and helpers without consumers selected tests: $listed"
   rm -rf "$tmp"
   pass "changed selection covers dependents, fails closed for live unmapped source, and accepts retired unconsumed source"
 }
