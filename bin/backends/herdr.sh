@@ -2253,8 +2253,8 @@ EOF
 #                 on a live server makes herdr immediately drop both the pane
 #                 and its tab from `pane get`/`tab list`).
 #   no-agent    - `pane get` succeeds (the pane structurally exists) but `agent
-#                 get` responds with error code agent_not_found: nothing is
-#                 registered in it - exactly what a herdr session-layout restore
+#                 get` responds with agent_not_found and the process view is
+#                 shell-only - a shape a herdr session-layout restore
 #                 produces (verified empirically: `session stop` + fresh `herdr
 #                 server` restart leaves the pane alive, agent_status "unknown",
 #                 agent get -> agent_not_found - docs/herdr-backend.md "ID
@@ -2262,7 +2262,7 @@ EOF
 #                 `resume_agents_on_restore = false` restore would produce too
 #                 (a plain shell, never an agent).
 #   stale-agent - `agent get` reports a registered agent_status (working, idle,
-#                 done, or blocked) but fm_backend_herdr_pane_process_state
+#                 done, blocked, or unknown) but fm_backend_herdr_pane_process_state
 #                 proves the pane is shell-only: the registered agent's process
 #                 has exited and Herdr kept its registration (issue #4115;
 #                 Herdr does not release a Pi registration on TUI shutdown when
@@ -2272,8 +2272,8 @@ EOF
 #                 running agent. No registered status outranks the process
 #                 view, because a killed mid-turn agent leaves `working`
 #                 behind just as a quit one leaves `idle`.
-#   live        - `agent get` succeeds with a registered agent_status and the
-#                 process-level view is `agent` or `other`: a harness process
+#   live        - the process-level view is `agent`, or a known registered
+#                 status accompanies `other`: a harness process
 #                 is running, or something that is not a bare shell is, so the
 #                 registration keeps its authority. An idle or blocked agent
 #                 is still a genuine, still-registered agent, not a restored
@@ -2300,16 +2300,22 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
-    [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
+    [ "$code" = "agent_not_found" ] || { printf 'unknown'; return 0; }
+    case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
+      agent) printf 'live' ;;
+      shell) printf 'no-agent' ;;
+      *) printf 'unknown' ;;
+    esac
     return 0
   fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
   case "$status" in
-    working|idle|done|blocked) ;;
+    working|idle|done|blocked|unknown) ;;
     *) printf 'unknown'; return 0 ;;
   esac
   case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
-    agent|other) printf 'live' ;;
+    agent) printf 'live' ;;
+    other) [ "$status" != unknown ] && printf 'live' || printf 'unknown' ;;
     shell) printf 'stale-agent' ;;
     *) printf 'unknown' ;;
   esac

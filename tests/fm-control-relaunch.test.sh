@@ -1111,6 +1111,18 @@ test_explicit_model_wins_over_the_recorded_one() {
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
 }
 
+test_control_relaunch_explicitly_resets_profile() {
+  local dir out
+  dir=$(new_case controlreset rlreset)
+  add_ship_task "$dir" rlreset claude
+  sed -i.bak 's/^model=.*/model=sonnet/; s/^effort=.*/effort=high/' "$dir/home/state/rlreset.meta"
+  out=$(run_control "$dir" rlreset relaunch --model default --effort default --note reset) \
+    || fail "control reset failed: $out"
+  [ "$(meta_field "$dir" rlreset model)" = default ] || fail "control lost model reset"
+  [ "$(meta_field "$dir" rlreset effort)" = default ] || fail "control lost effort reset"
+  pass "fm-control relaunch carries explicit resets through spawn"
+}
+
 test_relaunch_onto_an_unverified_harness_is_refused() {
   local dir out rc
   dir=$(new_case badharness rl8)
@@ -1600,6 +1612,30 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
     || fail "fm-spawn --relaunch without --harness must reuse the recorded harness, got '$(meta_field "$dir" rl21 harness)'"
   assert_contains "$out" "spawned rl21 harness=claude" "the launch should report the recorded harness"
   pass "fm-spawn --relaunch: with no explicit harness it reuses the task's recorded one, never the crew default"
+}
+
+test_spawn_relaunch_preserves_profile_axes() {
+  local dir out
+  dir=$(new_case spawnprofile rlprofile)
+  add_ship_task "$dir" rlprofile claude
+  sed -i.bak 's/^model=.*/model=sonnet/; s/^effort=.*/effort=high/' "$dir/home/state/rlprofile.meta"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rlprofile --relaunch)
+  [ "$(meta_field "$dir" rlprofile model)" = sonnet ] || fail "omitted model was lost: $out"
+  [ "$(meta_field "$dir" rlprofile effort)" = high ] || fail "omitted effort was lost: $out"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rlprofile --relaunch --effort low)
+  [ "$(meta_field "$dir" rlprofile model)" = sonnet ] || fail "omitted model was lost: $out"
+  [ "$(meta_field "$dir" rlprofile effort)" = low ] || fail "explicit effort was lost: $out"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rlprofile --relaunch --model opus)
+  [ "$(meta_field "$dir" rlprofile model)" = opus ] || fail "explicit model was lost: $out"
+  [ "$(meta_field "$dir" rlprofile effort)" = low ] || fail "omitted effort was lost: $out"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rlprofile --relaunch --model default --effort default)
+  [ "$(meta_field "$dir" rlprofile model)" = default ] || fail "explicit model reset was lost: $out"
+  [ "$(meta_field "$dir" rlprofile effort)" = default ] || fail "explicit effort reset was lost: $out"
+  pass "fm-spawn relaunch preserves omitted axes and honors explicit resets"
 }
 
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
@@ -2530,7 +2566,7 @@ case "${1:-} ${2:-}" in
   'pane process-info')
     # A retained registration with a shell-only pane models an exited agent
     # whose Herdr status authority still belongs to its previous session.
-    if [ -f "$D/herdr-agent-registration" ]; then
+    if [ ! -f "$D/herdr-agent-live" ]; then
       printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[]}}}\n' \
         "$(cat "$D/herdr-pane")"
     else
@@ -2582,7 +2618,7 @@ SH
   chmod +x "$fb/herdr"
   cat > "$fb/ps" <<'SH'
 #!/usr/bin/env bash
-if [ -f "$FM_FAKE_DIR/herdr-agent-registration" ]; then
+if [ ! -f "$FM_FAKE_DIR/herdr-agent-live" ]; then
   case "$*" in
     '-axo pid=,ppid=,comm=') printf '4242 1 bash\n' ;;
     '-p 4242 -o args=') printf 'bash\n' ;;
@@ -3035,6 +3071,7 @@ test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_pi_exclude_tools_follow_the_relaunch
 test_exclude_tools_refusals_happen_before_the_agent_stops
 test_explicit_model_wins_over_the_recorded_one
+test_control_relaunch_explicitly_resets_profile
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
@@ -3050,6 +3087,7 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
+test_spawn_relaunch_preserves_profile_axes
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
