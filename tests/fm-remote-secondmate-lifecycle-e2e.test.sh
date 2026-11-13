@@ -290,6 +290,8 @@ publish_healthy_watcher_identity() { # <state> <home> <watch-script>
 # machine, which on a loaded runner can outlast the production per-mate
 # convergence budget; tests/fm-bootstrap-network-parallel.test.sh owns that
 # budget's behavior, so this suite gives convergence ample time.
+# The liveness leg performs the same remote convergence and launch work, so it
+# gets the same fixture budget; its exit wait below outlasts that bound.
 # The inheritance push overlaps its sends to hide real SSH round trips, but
 # this fixture's transport has none and its job worker still runs one home's
 # commands one at a time, so overlap only adds submission overhead to every
@@ -297,6 +299,7 @@ publish_healthy_watcher_identity() { # <state> <home> <watch-script>
 # overlapped scheduler to tests/fm-bootstrap-network-parallel.test.sh.
 remote_env() {
   FM_SECONDMATE_CONVERGENCE_TIMEOUT="${FM_SECONDMATE_CONVERGENCE_TIMEOUT:-900}" \
+  FM_SECONDMATE_LIVENESS_TIMEOUT="${FM_SECONDMATE_LIVENESS_TIMEOUT:-900}" \
   FM_REMOTE_INHERIT_PUSH_JOBS=1 \
   FM_HOME="$PARENT" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
@@ -1319,7 +1322,7 @@ FM_STATE_OVERRIDE="$WATCH_STATE" FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 \
   > "$TMP_ROOT/watch-liveness.out" 2> "$TMP_ROOT/watch-liveness.err" &
 watch_pid=$!
 watch_wait=0
-while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 3000 ]; do
+while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 48000 ]; do
   sleep 0.02
   watch_wait=$((watch_wait + 1))
 done
