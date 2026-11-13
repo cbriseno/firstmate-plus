@@ -22,7 +22,7 @@ An arm owner is the component in each primary harness that starts watcher cycles
 
 The host runs by default on a Claude primary and is opt-in per home on the other five primaries it supports; [configuration.md](configuration.md#supervision-host-configsupervision-host) owns the home gate and inherited opt-out.
 A home that does not run the host behaves exactly as it does without it.
-Today it runs beside a Claude, OpenCode, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
+Today it runs beside a Claude, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
 
 ### Behavior by posture and harness
 
@@ -66,7 +66,6 @@ The host's header owns the output contract they read.
 | Primary | Arm owner | A handed-back wake reaches main as |
 |---|---|---|
 | Claude | the Stop auto-arm, `bin/fm-claude-stop-autoarm.sh`, inside its single-flight generation | the hook's exit-2 rewake (`Stop hook feedback`) |
-| OpenCode | the TUI plugin, `.opencode/plugins/fm-primary-watch-arm.js`, which restarts its own successor after each close | a `watcher` prompt through `ctx.session.prompt` |
 | Codex | the foreground checkpoint, `bin/fm-watch-checkpoint.sh`, in the watcher's place | the checkpoint's own output |
 
 Hook, plugin, extension, and checkpoint owners pass their harness as the primary pin.
@@ -307,7 +306,6 @@ Main drains and acknowledges, and the owner starts the next park:
 | Primary | When the next park starts |
 |---|---|
 | Claude and Cursor | At the next turn end. |
-| OpenCode | At once. |
 
 The host checks the boundary on every loop pass, so closes that are already waiting cannot carry it past the boundary.
 It also starts no engine turn that could still be running at the boundary (the turn bound plus the engine grace).

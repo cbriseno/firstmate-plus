@@ -19,13 +19,12 @@ In this document, an arm is one run of `bin/fm-watch-arm.sh`, which starts a wat
 
 ## Ownership
 
-On Pi, OpenCode, and Claude primaries, one component owns re-arming the watcher.
+On Pi, and Claude primaries, one component owns re-arming the watcher.
 Codex keep their own protocols; see [Manual recovery and other harnesses](#manual-recovery-and-other-harnesses).
 
 | Harness | Re-arm owner |
 | --- | --- |
 | Pi | `.pi/extensions/fm-primary-pi-watch.ts` |
-| OpenCode | `.opencode/plugins/fm-primary-watch-arm.js` |
 | Claude | `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) |
 
 On a non-Pi primary, a home that runs the supervision host also changes what the owner runs; see [Supervision host](#supervision-host).

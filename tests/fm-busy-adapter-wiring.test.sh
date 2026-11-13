@@ -192,153 +192,6 @@ oc_exec_terminal() {  # <sessionID> <succeeded|interrupted|failed>
   printf '{"type":"session.execution.%s","properties":{"sessionID":"%s"}}' "$2" "$1"
 }
 
-test_opencode_plugin_semantic_lifecycle() {
-  local rec id=busy-oc-1 out state plugin
-  rec=$(make_spawn_case oc-lifecycle opencode "$id")
-  read_case_record "$rec"
-  # A detected 1.x install provisions the pre-port session.status/session.idle
-  # busy-state plugin (OpenCode 1 genuinely needs a busy plugin, so it keeps the
-  # exact wiring it had before the OpenCode 2 port). Report 1.18.32 so this test
-  # exercises that OpenCode 1 plugin; the v2 execution test covers major >= 2.
-  cat > "$FAKEBIN_DIR/opencode" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-1.18.32}"
-fi
-exit 0
-SH
-  chmod +x "$FAKEBIN_DIR/opencode"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
-  expect_code 0 $? "opencode spawn should succeed: $out"
-  state="$HOME_DIR/state"
-  plugin="$WT_DIR/.opencode/plugins/fm-busy-state.js"
-  assert_present "$plugin" "opencode 1.x spawn did not write the pre-port busy-state plugin"
-
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "seed after spawn must be 'busy fm-spawn', got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" "$(oc_status ses_main busy)") || fail "busy drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "session busy must classify 'busy opencode-plugin', got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_status ses_main busy)" \
-    "$(oc_status ses_child busy)" \
-    "$(oc_status ses_child idle)") || fail "child-session drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "a child session's idle must not clear the worker, got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_status ses_main retry)" \
-    "$(oc_status ses_main idle)") || fail "retry/idle drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "the latched session's idle must classify idle, got '$out'"
-
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_status ses_main busy)" \
-    "$(oc_idle ses_main)") || fail "session.idle drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "session.idle no longer touches the notification marker"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "session.idle for the latched session must classify idle, got '$out'"
-
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_status ses2 busy)" \
-    "$(oc_idle ses_other)") || fail "other-session idle drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "the marker touch must stay a notification for every session.idle"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "another session's idle must not clear the latched busy, got '$out'"
-
-  # Behavioral proof of the version gate: the OpenCode 1 plugin fm-spawn
-  # provisioned for a 1.x install does NOT react to OpenCode 2
-  # session.execution.* events. Settle to idle on session.status, then drive a
-  # session.execution.started: the OpenCode 2 plugin would latch busy here, so a
-  # state that stays idle proves fm-spawn emitted the pre-port session.status
-  # plugin and not the OpenCode 2 execution plugin.
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_status ses_v1 busy)" \
-    "$(oc_status ses_v1 idle)") || fail "settle-to-idle drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "pre-check: latched session.status idle must classify idle, got '$out'"
-  out=$(drive_oc_plugin "$plugin" "$(oc_exec_started ses_v1)") || fail "exec-started drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "the OpenCode 1 plugin must ignore session.execution.started (would be 'busy opencode-plugin' on the OpenCode 2 plugin), got '$out'"
-  pass "opencode 1.x plugin classifies from session.status and ignores OpenCode 2 session.execution.* events"
-}
-
-test_opencode_plugin_v2_execution_lifecycle() {
-  local rec id=busy-oc-2 out state plugin
-  rec=$(make_spawn_case oc-exec-lifecycle opencode "$id")
-  read_case_record "$rec"
-  # The session.execution.* lifecycle this test drives is only emitted by the
-  # OpenCode 2.x busy-state plugin. fm-spawn keys that shape off the probed
-  # `opencode --version`, but the shared make_spawn_fakebin opencode stub is a
-  # bare exit-0 that reports nothing, so the probe would fall back to the 1.x
-  # session.status plugin. Report a 2.x version (as the dispatch-profile suite
-  # does) so the 2.x plugin is generated and these events reach a handler.
-  cat > "$FAKEBIN_DIR/opencode" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-2.0.21}"
-fi
-exit 0
-SH
-  chmod +x "$FAKEBIN_DIR/opencode"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
-  expect_code 0 $? "opencode spawn should succeed: $out"
-  state="$HOME_DIR/state"
-  plugin="$WT_DIR/.opencode/plugins/fm-busy-state.js"
-  assert_present "$plugin" "opencode spawn did not write the busy-state plugin"
-
-  out=$(drive_oc_plugin "$plugin" "$(oc_exec_started ses_main)") || fail "exec-started drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "session.execution.started must classify 'busy opencode-plugin', got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses_main)" \
-    "$(oc_exec_started ses_child)" \
-    "$(oc_exec_terminal ses_child succeeded)") || fail "child-session exec drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "a child session's terminal event must not clear the worker, got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses_main)" \
-    '{"type":"session.execution.succeeded","properties":{"session":{"parentID":"ses_main"}}}') \
-    || fail "parent-keyed child exec drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "a child event carrying only its parent's id must not settle the parent, got '$out'"
-
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses_main)" \
-    "$(oc_exec_terminal ses_main succeeded)") || fail "exec-succeeded drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "session.execution.succeeded no longer touches the notification marker"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "the latched session's terminal event must classify idle, got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses_main)" \
-    "$(oc_exec_terminal ses_main interrupted)") || fail "exec-interrupted drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "session.execution.interrupted must settle the latched session to idle, got '$out'"
-
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses_main)" \
-    "$(oc_exec_terminal ses_main failed)") || fail "exec-failed drive failed: $out"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "session.execution.failed must settle the latched session to idle, got '$out'"
-
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" \
-    "$(oc_exec_started ses2)" \
-    "$(oc_exec_terminal ses_other succeeded)") || fail "other-session terminal drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "the marker touch must stay a notification for every session.execution terminal event"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy opencode-plugin" ] || fail "another session's terminal event must not clear the latched busy, got '$out'"
-  pass "opencode plugin classifies from session.execution.* (OpenCode 2), scoped to the latched worker session"
-}
-
 run_claude_hook() {  # <settings.json> <hook-event>
   local cmd
   cmd=$(jq -r ".hooks[\"$2\"][0].hooks[0].command" "$1")
@@ -766,26 +619,6 @@ test_secondmate_pi_extension_reports_busy_without_a_parent_turnend() {
 }
 
 
-test_secondmate_opencode_plugin_closes_without_a_parent_turnend() {
-  local case_dir id=sm-oc primary sm state plugin out
-  case_dir="$TMP_ROOT/sm-oc"
-  primary="$case_dir/primary"
-  sm="$case_dir/sm"
-  out=$(spawn_secondmate_harness "$case_dir" "$id" opencode) \
-    || fail "opencode secondmate spawn failed: $out"
-  state="$primary/state"
-  plugin="$sm/.opencode/plugins/fm-busy-state.js"
-  assert_present "$plugin" "opencode secondmate spawn did not write the busy plugin"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "opencode secondmate seed must be busy fm-spawn, got '$out'"
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" "$(oc_status ses_main busy)" "$(oc_idle ses_main)") \
-    || fail "opencode secondmate idle drive failed: $out"
-  [ ! -e "$state/$id.turn-ended" ] || fail "opencode secondmate session.idle touched the parent's turn-ended marker"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "opencode secondmate idle must classify idle, got '$out'"
-  pass "an opencode secondmate plugin closes the parent busy record without a parent turn-end"
-}
 
 # A raw launch command carries none of the launch-template flags (--settings,
 # -e) that load the secondmate wiring, so a record armed for it would never be
@@ -849,12 +682,9 @@ test_secondmate_claude_stop_guard_owns_the_stop_verdict
 test_secondmate_claude_older_home_guard_keeps_the_stop_idle_hook
 test_secondmate_claude_spawn_leaves_local_settings_untouched
 test_secondmate_pi_extension_reports_busy_without_a_parent_turnend
-test_secondmate_opencode_plugin_closes_without_a_parent_turnend
 test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected
-test_opencode_plugin_semantic_lifecycle
-test_opencode_plugin_v2_execution_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_permission_dialog_writes_status_blocker
 test_claude_hooks_stale_incarnation_harmless

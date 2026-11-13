@@ -61,7 +61,7 @@ test_supervision_host_protocol_on_every_arm_owner() {
   home="$TMP_ROOT/host-owners-home"
   config="$TMP_ROOT/host-owners-config"
   mkdir -p "$home/state" "$config"
-  for harness in claude opencode codex; do
+  for harness in claude codex; do
     : > "$config/supervision-host-off"
     plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness")
     assert_not_contains "$plain" "- Supervision host: on;" "$harness: a home opted out by config/supervision-host-off rendered the host protocol"
@@ -163,7 +163,7 @@ test_repair_lines() {
   assert_contains "$out" "source '$home/config/x-mode.env' first" "x-mode repair line did not source the effective cadence config"
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
 
-  out=$(FM_HOME="$home" "$RENDER" --harness opencode --read-only 1 --repair-line)
+  out=$(FM_HOME="$home" "$RENDER" --harness codex --read-only 1 --repair-line)
   assert_contains "$out" "session holding the fleet lock" "read-only repair line missing"
 
   out=$(FM_HOME="$home" "$RENDER" --harness pi --repair-line)
@@ -185,13 +185,6 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   out=$("$RENDER" --harness pi --repair-line)
   assert_contains "$out" "fm_watch_arm_pi" "pi recovery line lost the extension-owned repair tool"
 
-
-  out=$("$RENDER" --harness opencode)
-  ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
-  assert_contains "$ordinary" "plugin already owns watcher continuity" "opencode ordinary-wake line does not leave continuity to the plugin"
-  assert_not_contains "$ordinary" "bin/fm-watch-arm.sh" "opencode ordinary-wake line incorrectly calls the recovery probe"
-  out=$("$RENDER" --harness opencode --repair-line)
-  assert_contains "$out" "manual recovery probe" "opencode recovery line lost its manual probe"
 
   out=$("$RENDER" --harness claude)
   ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')

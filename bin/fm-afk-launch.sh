@@ -230,7 +230,7 @@ fm_afk_launch_primary_harness() {
 # home runs it (docs/supervision-host.md).
 fm_afk_launch_host_primary() {  # <harness>
   case "$1" in
-    claude|opencode|codex) return 0 ;;
+    claude|codex) return 0 ;;
   esac
   return 1
 }

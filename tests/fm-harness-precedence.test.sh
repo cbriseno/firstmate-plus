@@ -136,7 +136,7 @@ test_markerless_ancestry_outranks_foreign_marker() {
   local dir fakebin bin got name
   dir="$TMP_ROOT/markerless"
   fakebin=$(blind_ancestry_bin "$dir/blind")
-  for name in codex opencode; do
+  for name in codex; do
     bin=$(named_bin "$dir/$name-tree" "$name")
     local expect=$name
 

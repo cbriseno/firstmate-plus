@@ -366,7 +366,7 @@ family_for_basename() {
     fm-herdr-version-floor-live-e2e.test.sh|\
     fm-herdr-pi-stale-registration-live-e2e.test.sh|\
     fm-worker-account-live-e2e.test.sh|fm-codex-activity-live-e2e.test.sh|\
-    fm-opencode-primary-live-e2e.test.sh|fm-pi-branch-live-e2e.test.sh|\
+    fm-pi-branch-live-e2e.test.sh|\
     fm-pi-branch-responsiveness-live-e2e.test.sh|\
     fm-pi-primary-live-e2e.test.sh|fm-pi-codex-native.test.sh|\
     fm-pr-state-live-e2e.test.sh|\
@@ -765,7 +765,6 @@ tests/fm-mail.test.sh 9684
 tests/fm-nm-test-contract.test.sh 853
 tests/fm-no-mistakes-required.test.sh 270
 tests/fm-on.test.sh 11473
-tests/fm-opencode-primary-live-e2e.test.sh 47
 tests/fm-operational-input.test.sh 2404
 tests/fm-peek-remote.test.sh 1082
 tests/fm-pending-reply.test.sh 41090

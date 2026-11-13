@@ -724,22 +724,6 @@ test_harness_switch_moves_the_record_and_clears_prior_wiring() {
   pass "fm-control relaunch: switching harness is one ordinary relaunch, and the old wiring goes with the old agent"
 }
 
-test_relaunch_off_opencode_removes_tracked_wiring() {
-  local dir out
-  dir=$(new_case opencodetracked rl78)
-  add_ship_task "$dir" rl78 opencode
-  mkdir -p "$dir/wt/.opencode/plugins"
-  printf 'prior busy plugin\n' > "$dir/wt/.opencode/plugins/fm-busy-state.js"
-  git -C "$dir/wt" add .opencode/plugins/fm-busy-state.js
-  git -C "$dir/wt" -c user.email=t@t -c user.name=t commit -q -m "tracked prior wiring"
-  printf 'zsh' > "$dir/fake/command"
-  out=$(run_spawn "$dir" rl78 --relaunch --harness claude)
-  assert_contains "$out" "spawned rl78 harness=claude" "the relaunch off opencode should complete"
-  [ ! -e "$dir/wt/.opencode/plugins/fm-busy-state.js" ] \
-    || fail "retiring opencode wiring must still remove tracked files as on main"
-  pass "fm-spawn --relaunch: tracked opencode wiring is retired as on main"
-}
-
 test_harness_switch_does_not_carry_the_old_profile_axes() {
   local dir out rc
   dir=$(new_case profile rl5)
@@ -2895,7 +2879,6 @@ SH
   pass "fm-control exit removes the dialog file before it releases the control lock"
 }
 
-test_relaunch_off_opencode_removes_tracked_wiring
 test_exit_and_relaunch_remove_the_dialog_file
 test_exit_removes_the_dialog_file_before_releasing_the_lock
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint

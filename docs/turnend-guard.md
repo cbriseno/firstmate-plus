@@ -260,7 +260,6 @@ Each enabled primary harness adapts its own turn-end mechanism to the shared gua
 | --- | --- | --- |
 | Claude | Two `Stop` hooks in `.claude/settings.json` | Blocks with exit status 2, cooperating with the Stop auto-arm |
 | Codex | `Stop` hook in `.codex/hooks.json` | Blocks with exit status 2 |
-| OpenCode | `session.execution.succeeded`/`failed`/`interrupted` (OpenCode 2) or `session.idle` (OpenCode 1) in `.opencode/plugins/fm-primary-turnend-guard.js` | Passive callback that schedules one follow-up |
 | Pi | `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts` | Passive callback that schedules one follow-up |
 
 The registrations in detail:

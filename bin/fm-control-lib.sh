@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed
+  printf '%s\n' claude codex pi pi-signed
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -87,7 +87,6 @@ fm_control_harness_family() {  # <recorded-harness>
     pi-signed) printf 'pi-signed' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
-    opencode*) printf 'opencode' ;;
     *) return 1 ;;
   esac
 }
@@ -101,7 +100,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed) printf 'Escape' ;;
+    claude|codex|pi|pi-signed) printf 'Escape' ;;
     *) return 1 ;;
   esac
 }
@@ -110,7 +109,6 @@ fm_control_interrupt_key() {  # <harness>
 # Escape; every other verified adapter interrupts on a single press.
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
-    opencode) printf '2' ;;
     claude|codex|pi|pi-signed) printf '1' ;;
     *) return 1 ;;
   esac
@@ -119,7 +117,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed) ;;
+    claude|codex|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -127,7 +125,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed) printf '0.2' ;;
+    claude|codex|pi|pi-signed) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -135,7 +133,7 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed) ;;
+    claude|codex|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +141,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # The key that must follow an interrupt to clear its composer, when needed.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed) ;;
+    claude|codex|pi|pi-signed) ;;
     *) return 1 ;;
   esac
 }
@@ -157,12 +155,6 @@ fm_control_interrupt_clear_key() {  # <harness>
 # exits both lines.
 fm_control_exit_command() {  # <harness> [opencode-major]
   case "${1-}" in
-    opencode)
-      case "${2-}" in
-        ''|1) printf '/exit' ;;
-        *) printf 'C-c' ;;
-      esac
-      ;;
     claude) printf '/exit' ;;
     codex|pi|pi-signed) printf '/quit' ;;
     *) return 1 ;;
@@ -326,7 +318,6 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
         printf '%s\n' "$wt/.fm-busy-stop"
       fi
       ;;
-    opencode) printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js" ;;
     pi|pi-signed) printf '%s\n' "$state/$id.pi-ext.ts" ;;
     grok)
       printf '%s\n' "$wt/.fm-grok-turnend"

@@ -158,10 +158,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/harness-adapters/references/harness/pi.md",
       "audience": "agent-runtime"
     },
@@ -378,10 +374,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": "docs/supervision-protocols/opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": "docs/supervision-protocols/pi.md",
       "audience": "agent-runtime"
     },
@@ -408,10 +400,6 @@
     {
       "path": "docs/turnend-guard.md",
       "audience": "operator-current"
-    },
-    {
-      "path": "docs/opencode-2-plugin-port-scope.md",
-      "audience": "maintainer-verification"
     },
     {
       "path": "docs/usage-warner.md",

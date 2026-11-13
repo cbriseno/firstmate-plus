@@ -166,7 +166,6 @@ fm_quota_provider_for_harness() {
   case "$1" in
     claude)       printf 'claude\n' ;;
     codex)        printf 'codex\n' ;;
-    opencode)     printf 'codex\n' ;;
     pi|pi-signed) printf 'pi\n' ;;
     *)            return 1 ;;
   esac

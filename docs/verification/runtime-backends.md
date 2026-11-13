@@ -387,16 +387,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-## OpenCode 2 launch and brief delivery
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
-## OpenCode 1 compatibility of the dual-export plugins
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
 ## Codex native Stop owner
 
 Historical machine-specific probe transcripts are not distributed.

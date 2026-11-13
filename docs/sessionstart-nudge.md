@@ -27,7 +27,7 @@ The tier is a property of the harness surface, not of the home.
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
 | Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed |
-| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode, and run-tier sources routed to the nudge |
+| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has no tracked compaction or re-emit channel.
 
@@ -39,7 +39,6 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | Codex exec | Run | [Codex exec](#codex-exec) |
 | Codex interactive TUI | Run from codex-cli 0.164.0; compaction and re-emit uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
-| OpenCode | Nudge | [OpenCode](#opencode) |
 
 ### Why the run tier exists
 
@@ -314,23 +313,6 @@ The extension encodes an unencoded digest or fallback as `session-start` operati
 
 The extension streams the hook to completion and retains at most 512 KiB for message delivery.
 Whenever the digest is incomplete, this approved containment keeps the prefix and appends a loud `PI SESSION-START DELIVERY TRUNCATED` marker with direct-inspection guidance.
-
-### OpenCode
-
-OpenCode is a nudge-tier harness.
-The `.opencode/plugins/fm-primary-sessionstart-nudge.js` plugin does three things:
-
-- It listens for `session.created`.
-- It runs once per session id.
-- It calls `ctx.session.prompt` only when the wrapper prints a nudge.
-
-Interactive TUI delivery is supported.
-Headless `opencode run` is intentionally fail-open, because the process can exit before the queued turn.
-That early exit is also why OpenCode cannot use the run tier.
-
-The OpenCode nudge runs only on `session.created`.
-The watcher-arm and turn-end plugins run later, on the terminal `session.execution.succeeded`, `session.execution.failed`, and `session.execution.interrupted` events in OpenCode 2, or `session.idle` in OpenCode 1.
-The guard lets the watcher coordinator act first, so the plugins do not race for one lifecycle event.
 
 ## Regression coverage
 

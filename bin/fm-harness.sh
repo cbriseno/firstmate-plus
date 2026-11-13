@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|pi|pi-signed|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -106,7 +106,6 @@ harness_process_verdict() {  # <pid>
   case "$(basename -- "$comm")" in
     *claude*) echo "comm claude"; return ;;
     *codex*) echo "comm codex"; return ;;
-    *opencode*) echo "comm opencode"; return ;;
     # Both Pi identities share this launcher name. Ancestry can only prove the
     # FAMILY; only the launch-boundary marker selects the signed identity, which
     # is why detect_own keeps a marker that agrees on the family.
@@ -118,7 +117,6 @@ harness_process_verdict() {  # <pid>
       case "$args" in
         *claude*) echo "args claude"; return ;;
         *codex*) echo "args codex"; return ;;
-        *opencode*) echo "args opencode"; return ;;
         *" pi "*|*/pi) echo "args pi"; return ;;
       esac ;;
   esac
@@ -268,7 +266,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed)
+    claude|codex|pi|pi-signed)
       printf '%s\n' "$pin"
       ;;
     *)

@@ -224,7 +224,7 @@ shift 2
 if ! fm_control_verb_allowed "$VERB"; then
   {
     if [ "$VERB" = resume ]; then
-      echo "error: 'resume' is not a control verb: resuming an exited agent is not deterministic across the verified adapters (codex and need a session id printed at exit, opencode continues the most recent session for the cwd, and claude, pi, pi-signed have no verified pane-resume contract). Use 'relaunch', which carries the brief plus a progress note into a fresh agent on any adapter."
+      echo "error: 'resume' is not a control verb: resuming an exited agent is not deterministic across the verified adapters (Codex needs a session id printed at exit, and the other adapters have no verified pane-resume contract). Use 'relaunch', which carries the brief plus a progress note into a fresh agent on any adapter."
     else
       echo "error: '$VERB' is not a control verb"
     fi
@@ -358,7 +358,6 @@ WT=$(fm_meta_get "$META" worktree)
 # OpenCode's composer exit key changed between its 1.x and 2.x lines; the major
 # spawn detected is recorded here so the exit command below matches the running
 # agent. Absent (a legacy record or a non-opencode task) it stays empty.
-OPENCODE_MAJOR=$(fm_meta_get "$META" opencode_version); OPENCODE_MAJOR=${OPENCODE_MAJOR%%.*}
 
 HARNESS=$(fm_control_harness_family "$RECORDED_HARNESS") \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
@@ -654,7 +653,7 @@ do_exit_agent() {
       esac
       ;;
   esac
-  cmd=$(fm_control_exit_command "$HARNESS" "$OPENCODE_MAJOR")
+  cmd=$(fm_control_exit_command "$HARNESS")
   hazard=$(fm_control_interrupt_hazard_signal "$HARNESS")
   if [ -n "$hazard" ] && rendered_matches "$hazard"; then
     die "task $ID shows the $HARNESS revert picker, where typed text becomes a search and Enter reverts file changes; refusing to type the $cmd exit command. Close it with $(fm_control_interrupt_key "$HARNESS"), never Enter, then retry '$VERB'"

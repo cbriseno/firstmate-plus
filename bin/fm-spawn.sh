@@ -221,7 +221,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|pi|pi-signed)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -1549,7 +1549,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed )
+  '' | claude | codex | pi | pi-signed )
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1801,14 +1801,6 @@ model_flag_for_harness() {
   local harness=$1 model=$2 oc_major=${3:-}
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-  opencode)
-    # OpenCode 1.x takes the model as an interactive --model flag; 2.x removed
-    # it, so there the model rides OPENCODE_CONFIG_CONTENT via
-    # effort_flag_for_harness instead. The caller normalizes an undetected
-    # (empty/unparseable) major to 1, so only a parsed major >= 2 omits --model.
-    [ "$oc_major" = 1 ] || return 0
-    printf -- '--model %s ' "$(shell_quote "$model")"
-    ;;
   claude | codex | pi | pi-signed )
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
@@ -1817,9 +1809,7 @@ model_flag_for_harness() {
 
 effort_flag_for_harness() {
   local harness=$1 effort=$2 model=${3:-} oc_major=${4:-}
-  if [ "$harness" != opencode ]; then
-    [ -n "$effort" ] && [ "$effort" != default ] || return 0
-  fi
+  [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
   claude)
     case "$effort" in
@@ -1848,41 +1838,6 @@ effort_flag_for_harness() {
       ;;
     low | medium | high | xhigh | max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
     esac
-    ;;
-  opencode)
-    # opencode's interactive `opencode --prompt` launch has no effort flag
-    # (`opencode run --variant` is a different, non-interactive mode), so the
-    # reasoning axis rides the OPENCODE_CONFIG_CONTENT JSON the launch already
-    # writes, keyed per-model as a variant. The variant is emitted only when the
-    # resolved model's provider is known to expose that effort (`anthropic/*`:
-    # high|max, `openai/*`: low|medium|high|xhigh); other providers, absent
-    # effort, or out-of-family efforts omit it (record-and-omit, as codex and
-    # do). Without a resolved model there is nothing to key to. The
-    # fragment lands inside the launch's single-quoted assignment, so a literal
-    # quote in the model id must close and reopen that quoting. The config SHAPE
-    # is version-sensitive: 1.x carries the effort as agent.build.variant only
-    # (the model still arrives via --model, config schema verified on 1.18.32);
-    # 2.x dropped --model, so there the model is pinned both globally and on the
-    # build agent alongside the variant (re-verified on 2.0.21). The caller
-    # normalizes an undetected (empty/unparseable) major to 1, so only a parsed
-    # major >= 2 takes the 2.x shape.
-    [ -n "$model" ] && [ "$model" != default ] || return 0
-    local model_json variant_fragment=
-    model_json=$(json_escape "$model")
-    model_json=${model_json//\'/\'\\\'\'}
-    case "${model%%/*}:$effort" in
-    anthropic:high | anthropic:max | openai:low | openai:medium | openai:high | openai:xhigh)
-      variant_fragment=",\"variant\":\"$effort\""
-      ;;
-    esac
-    if [ "$oc_major" = 1 ]; then
-      # 1.x: the build agent carries model + variant only for a recognized
-      # effort; with no variant the launch keeps its permission-only config.
-      [ -n "$variant_fragment" ] || return 0
-      printf ',"agent":{"build":{"model":"%s"%s}}' "$model_json" "$variant_fragment"
-    else
-      printf ',"model":"%s","agent":{"build":{"model":"%s"%s}}' "$model_json" "$model_json" "$variant_fragment"
-    fi
     ;;
   esac
 }
@@ -3196,50 +3151,6 @@ spawn_endpoint_cleanup() {
   fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
-# OpenCode 2 takes its brief on the launch command (--prompt), but some 2.x
-# releases (2.0.11) only prefill the composer and never submit it, while later
-# ones (2.0.22) submit it on their own. This post-launch gate makes both work:
-# the turn has started once the worker's own busy-state plugin has written a
-# record (source opencode-plugin; the arm-time record is source fm-spawn), so
-# the gate waits for that. If none arrives within the settle window it sends
-# one Enter once the shared composer classifier reads the brief as pending -
-# skipped when it proves the composer empty, since the brief has then already
-# left it - and keeps waiting. An unknown read (a TUI that has not drawn yet)
-# keeps polling and only spends the Enter at the later submit deadline, so a
-# backend whose classifier can only answer unknown still gets its one Enter.
-# The composer is only a veto, never proof of delivery: OpenCode 2's sidebar
-# can make an already-submitted composer read pending.
-opencode2_turn_started() {
-  local rec
-  rec=$(fm_busy_record_read "$STATE_REAL" "$ID" 2>/dev/null) || return 1
-  set -f
-  # shellcheck disable=SC2086 # the record is four space-separated tokens
-  set -- $rec
-  set +f
-  [ "${2:-}" = opencode-plugin ]
-}
-
-opencode2_wait_for_delivery() {
-  local i=0 max=${FM_OPENCODE_DELIVERY_POLLS:-120} interval=${FM_OPENCODE_POLL_INTERVAL:-0.5}
-  local settle=${FM_OPENCODE_SUBMIT_SETTLE_POLLS:-20} deadline=${FM_OPENCODE_SUBMIT_DEADLINE_POLLS:-80}
-  local sent=0 composer
-  while [ "$i" -lt "$max" ]; do
-    opencode2_turn_started && return 0
-    if [ "$sent" -eq 0 ] && [ "$i" -ge "$settle" ]; then
-      composer=$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)
-      if [ "$composer" != unknown ] || [ "$i" -ge "$deadline" ]; then
-        sent=1
-        if [ "$composer" != empty ]; then
-          spawn_send_key "$T" Enter || return 1
-        fi
-      fi
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  opencode2_turn_started
-}
-
 if [ "$RELAUNCH" -eq 1 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
@@ -3476,46 +3387,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_STATE=$STATE_REAL
   RELAUNCH_REPLACEMENT_WT=$WT
 fi
-# OpenCode changed its interactive launch surface, its composer exit key, and
-# its plugin surface between the 1.x and 2.x lines: 2.x dropped the top-level
-# --model flag (the model rides OPENCODE_CONFIG_CONTENT instead), exits on a raw
-# Ctrl-C, and reports activity through session.execution.* events from a plugin
-# that exports a default definition; 1.x takes --model, exits on /exit, and
-# reports through session.status/session.idle. Detect the installed major once,
-# here, before the busy-state plugin is provisioned below, so the plugin shape,
-# the launch shape, and fm-control's recorded exit mechanics all key off the one
-# resolved version. Only a parsed major >= 2 selects the 2.x shape: an
-# undetectable probe (opencode unresolvable, or --version without a parseable
-# x.y.z) falls back to the 1.x shape everywhere - --model, the 1.x config and
-# busy-state plugin, and the version-agnostic /exit - matching the pre-gate
-# behavior.
-# Resolve the opencode executable exactly once, to the absolute path the worker
-# pane's launch will run (baked into the launch command as __OPENCODEBIN__
-# below). The probe reads that same binary, so the recorded major can never
-# describe a different executable than the pane starts: a PATH that resolves one
-# opencode here and another in the pane can no longer make the launch drop
-# --model or fm-control pick the wrong exit key. An unresolvable executable
-# leaves the version empty - the probe records no version (1.x launch/exit
-# defaults) and the launch falls back to a bare `opencode` the pane resolves
-# itself, exactly as before this gate existed.
-OPENCODE_BIN=
-OPENCODE_VERSION=
-if [ "$HARNESS" = opencode ]; then
-  OPENCODE_BIN=$(resolve_pi_executable opencode) || OPENCODE_BIN=
-  if [ -n "$OPENCODE_BIN" ]; then
-    OPENCODE_VERSION=$("$OPENCODE_BIN" --version 2>/dev/null \
-      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-  fi
-fi
-# The effective major the launch, plugin, and exit shapes branch on. A resolved
-# x.y.z yields its numeric major (the grep above guarantees digits); an empty or
-# unparseable probe falls back to 1, so only a genuine major >= 2 ever takes the
-# 2.x path.
-case "$OPENCODE_VERSION" in
-'') OPENCODE_MAJOR=1 ;;
-*) OPENCODE_MAJOR=${OPENCODE_VERSION%%.*} ;;
-esac
-
 # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
 # adapter with a verified semantic source, including a --secondmate launch.
 # The parent watcher reads this home's record; skipping the arm left a
@@ -3573,7 +3444,7 @@ BUSY_GEN=
       "$FM_ROOT/bin/fm-busy-event.sh" retire "$STATE_REAL" "$ID" --current-gen || exit 1
     fi
     ;;
-  claude* | opencode* | pi | pi-signed )
+  claude** | pi | pi-signed )
     # opencode arms on every detected major: OpenCode 2 and the OpenCode 1 /
     # undetected->1.x path both provision a busy-state plugin below that needs
     # this gen, so gating the arm on major >= 2 would leave OpenCode 1 without
@@ -3651,170 +3522,6 @@ BUSY_GEN=
       session_keys="$session_keys\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},"
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
-    ;;
-  opencode*)
-    # The worker's generated busy-state plugin is version-keyed off the major
-    # resolved above. A detected OpenCode 2 (major >= 2) gets the
-    # session.execution.* plugin that exports a default definition with setup();
-    # OpenCode 1.x and an undetected install that falls back to 1.x get the
-    # pre-port session.status / session.idle plugin, so OpenCode 1 keeps the
-    # busy-state wiring it had before the OpenCode 2 port. OpenCode 1 genuinely
-    # needs a busy plugin, so gating it off entirely would regress OpenCode 1
-    # from its pre-port behavior; only the plugin SHAPE is version-gated.
-    mkdir -p "$WT/.opencode/plugins"
-    if [ "$OPENCODE_MAJOR" -ge 2 ]; then
-      cat >"$WT/.opencode/plugins/fm-busy-state.js" <<EOF
-// Firstmate semantic busy-state events + turn-end notification; written by
-// fm-spawn under the contract owned by bin/fm-busy-lib.sh.
-// Semantic state comes from OpenCode 2's session.execution.started and terminal
-// session.execution.* events, with the OpenCode 1 session.status/session.idle
-// names retained as legacy inputs. Scoping latches the first session that
-// reports activity and ignores other sessions until the latched session settles,
-// so a child's terminal event can never clear the worker's busy state. The
-// turn-ended touch stays the watcher's wake NOTIFICATION, never current-state
-// truth.
-import { execFile } from "node:child_process";
-const notifyTurnEnd = $busy_notify_turnend;
-const busyEvent = (state, event) =>
-  new Promise((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "apply", "$STATE_REAL", "$ID", state,
-      "--gen", "$BUSY_GEN", "--source", "opencode-plugin", "--event", event,
-    ], () => resolve());
-  });
-const touchTurnEnded = () =>
-  new Promise((resolve) => {
-    execFile("touch", ["$TURNEND"], () => resolve());
-  });
-const eventType = (event) => event && (event.type || event.name) || "";
-const eventProperties = (event) => event && (event.properties || event.data) || {};
-const sessionID = (event) => {
-  const properties = eventProperties(event);
-  return properties.sessionID || properties.sessionId || (properties.session && properties.session.id) || properties.id || "";
-};
-const setupEventSubscription = (ctx, handler) => {
-  if (!ctx || !ctx.event || !ctx.event.subscribe) return false;
-  const controller = new AbortController();
-  void (async () => {
-    try {
-      const stream = await ctx.event.subscribe({ signal: controller.signal, onActivity() {} });
-      for await (const event of stream) await handler(event);
-    } catch {
-    }
-  })();
-  return true;
-};
-const makeHandler = () => {
-  let activeSession = null;
-  return async (event) => {
-    const type = eventType(event);
-    const id = sessionID(event);
-    if (type === "session.execution.started") {
-      if (activeSession === null) activeSession = id;
-      if (id === activeSession) await busyEvent("busy", "session-execution-started");
-      return;
-    }
-    if (type === "session.execution.succeeded" || type === "session.execution.interrupted" || type === "session.execution.failed") {
-      if (id === activeSession) {
-        activeSession = null;
-        await busyEvent("idle", type.replace(/\./g, "-"));
-      }
-      if (notifyTurnEnd) await touchTurnEnded();
-      return;
-    }
-    if (type === "session.status") {
-      const properties = eventProperties(event);
-      const statusType = properties.status && properties.status.type;
-      if (statusType === "busy" || statusType === "retry") {
-        if (activeSession === null) activeSession = id;
-        if (id === activeSession) await busyEvent("busy", "session-" + statusType);
-        return;
-      }
-      if (statusType === "idle" && id === activeSession) {
-        activeSession = null;
-        await busyEvent("idle", "session-status-idle");
-      }
-      return;
-    }
-    if (type === "session.idle") {
-      if (id === activeSession) {
-        activeSession = null;
-        await busyEvent("idle", "session-idle");
-      }
-      if (notifyTurnEnd) await touchTurnEnded();
-    }
-  };
-};
-export const FmBusyState = async () => {
-  const handleEvent = makeHandler();
-  return {
-    event: async ({ event }) => handleEvent(event),
-  };
-};
-
-export default {
-  id: "fm.busy-state",
-  server: FmBusyState,
-  setup(ctx) {
-    setupEventSubscription(ctx, makeHandler());
-  },
-};
-EOF
-    else
-      cat >"$WT/.opencode/plugins/fm-busy-state.js" <<EOF
-// Firstmate semantic busy-state events + turn-end notification; written by
-// fm-spawn under the contract owned by bin/fm-busy-lib.sh.
-// Semantic state comes from OpenCode's session.status events: busy and retry
-// are active, idle is inactive. Scoping latches the first session that
-// reports activity (the worker's main session - a subagent child session can
-// only start while the main session is already busy) and ignores other
-// sessions' status until the latched session settles, so a child's idle can
-// never clear the worker's busy state. The session.idle touch stays the
-// watcher's wake NOTIFICATION, never current-state truth.
-import { execFile } from "node:child_process";
-const notifyTurnEnd = $busy_notify_turnend;
-const busyEvent = (state, event) =>
-  new Promise((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "apply", "$STATE_REAL", "$ID", state,
-      "--gen", "$BUSY_GEN", "--source", "opencode-plugin", "--event", event,
-    ], () => resolve());
-  });
-export const FmBusyState = async () => {
-  let activeSession = null;
-  return {
-    event: async ({ event }) => {
-      if (event.type === "session.status") {
-        const sessionID = event.properties.sessionID;
-        const statusType = event.properties.status && event.properties.status.type;
-        if (statusType === "busy" || statusType === "retry") {
-          if (activeSession === null) activeSession = sessionID;
-          if (sessionID === activeSession) await busyEvent("busy", "session-" + statusType);
-          return;
-        }
-        if (statusType === "idle" && sessionID === activeSession) {
-          activeSession = null;
-          await busyEvent("idle", "session-status-idle");
-        }
-        return;
-      }
-      if (event.type === "session.idle") {
-        if (event.properties.sessionID === activeSession) {
-          activeSession = null;
-          await busyEvent("idle", "session-idle");
-        }
-        if (notifyTurnEnd) {
-          await new Promise((resolve) => {
-            execFile("touch", ["$TURNEND"], () => resolve());
-          });
-        }
-      }
-    },
-  };
-};
-EOF
-    fi
-    exclude_path '.opencode/plugins/fm-busy-state.js'
     ;;
   pi | pi-signed)
     # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
@@ -4023,7 +3730,6 @@ preserve_relaunch_meta() {
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
   # non-opencode or undetectable task record stays byte-identical.
-  [ -z "$OPENCODE_VERSION" ] || echo "opencode_version=$OPENCODE_VERSION"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
@@ -4157,10 +3863,10 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL" "$OPENCODE_MAJOR")
+MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 # A pinned Pi launch confines Pi's model lookup to the declared provider.
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL" "$OPENCODE_MAJOR") || exit 1
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 CODEX_ACTIVITY=
@@ -4204,22 +3910,6 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
 pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
-opencode)
-  # The resolved absolute path probed for the version gate above, so the pane
-  # runs exactly the binary whose major was recorded. An unresolved executable
-  # keeps the bare `opencode` the pane resolves itself (pre-gate fallback).
-  # A detected OpenCode 2 also gets --standalone: its default launch attaches to
-  # the shared background service, which hosts plugins with the service's own
-  # environment and ignores this pane's OPENCODE_CONFIG_CONTENT, so per-worker
-  # model, permissions, FM_HOME, and lock ancestry would be wrong.
-  if [ -n "$OPENCODE_BIN" ]; then
-    oc_launch_bin=$(shell_quote "$OPENCODE_BIN")
-  else
-    oc_launch_bin=opencode
-  fi
-  [ "$OPENCODE_MAJOR" -lt 2 ] || oc_launch_bin="$oc_launch_bin --standalone"
-  LAUNCH=${LAUNCH//__OPENCODEBIN__/"$oc_launch_bin"}
-  ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 # A record-backed launch brief is published into the state dir of the pane
@@ -4264,7 +3954,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | opencode | pi | pi-signed)
+claude | codex | pi | pi-signed)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
@@ -4545,17 +4235,6 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
 fi
 if ! spawn_send_key "$T" Enter; then
   exit 1
-fi
-if [ "$HARNESS" = opencode ] && [ "$OPENCODE_MAJOR" -ge 2 ]; then
-  if ! opencode2_wait_for_delivery; then
-    printf '%s\n' "$(status_stamp_line "failed: opencode $OPENCODE_VERSION did not start the brief turn in window $T")" >>"$STATE/$ID.status"
-    if [ -e "$CONFIG/fleet-ledger" ]; then
-      bash "$FM_ROOT/bin/fm-fleet-ledger.sh" appended "$CONFIG" "$STATE/$ID.status" || true
-    fi
-    echo "error: opencode $OPENCODE_VERSION did not start the brief turn; inspect window $T" >&2
-    spawn_endpoint_cleanup
-    exit 1
-  fi
 fi
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then

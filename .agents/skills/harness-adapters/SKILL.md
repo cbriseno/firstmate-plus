@@ -80,7 +80,6 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
   "harnesses": {
     "claude": "references/harness/claude.md",
     "codex": "references/harness/codex.md",
-    "opencode": "references/harness/opencode.md",
     "pi": "references/harness/pi.md",
     "pi-signed": "references/harness/pi.md"
   }

@@ -351,7 +351,7 @@ See the [current direct-input verification](verification/runtime-backends.md#cod
 Two optional local, gitignored files control the supervision host for this home: `config/supervision-host-off` opts the home out, and `config/supervision-host` opts a home in and selects its engine.
 The host runs the supervision branch's contract on a headless engine session beside a non-Pi primary.
 [docs/supervision-host.md](supervision-host.md) defines its design, current scope, and verified engines.
-A Claude, OpenCode, or Codex primary can run the host.
+A Claude, or Codex primary can run the host.
 
 A present `config/supervision-host-off`, whatever it holds, opts the home out on every primary.
 Otherwise a Claude primary runs the host by default: with no `config/supervision-host` it runs exactly as with an empty one, at the Claude engine's default model.
@@ -1024,7 +1024,7 @@ For a checkout with a private integration branch, run `bin/fm-local-sync.sh <rep
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed are empirically verified for crewmate and secondmate launches.
+claude, codex, pi, pi-signed are empirically verified for crewmate and secondmate launches.
 The verified primary harnesses are Claude Code, Pi, `pi-signed`, Codex, OpenCode.
 
 ### Harness restrictions and credentials
@@ -1500,7 +1500,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
 | `claude`, `codex` | The resolver has an authoritative single-provider mapping. |
-| Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, and `opencode`; omission is an actionable configuration error before any request. |
+| Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.
 
@@ -1514,7 +1514,6 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - `ultra` is native-only: the model-aware validation contract and launch mapping are owned by `bin/fm-harness.sh validate-native-effort` and `bin/fm-spawn.sh` respectively.
 - Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 - An omitted model or effort means the selected harness uses its own default for that axis.
-- OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
 - If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.

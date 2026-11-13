@@ -90,7 +90,6 @@ launch_template() {
       printf '%s' '__CODEXACTIVITY__codex __MODELFLAG____EFFORTFLAG____CODEXAPPROVALFLAG__ -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__; __CODEXLEDGER__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
-  opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' __OPENCODEBIN__ __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   pi | pi-signed)
     printf '%s' '__PIBIN____PITUIMODE____PIAPPROVE____PIEXCLUDE____PIRESUME__'
     if [ "$kind" = secondmate ]; then

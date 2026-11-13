@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed"
+VERIFIED_HARNESSES="claude codex pi pi-signed"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -45,7 +45,6 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
   case "$1" in
     claude) printf '/exit\tEscape\t1\t\n' ;;
     codex) printf '/quit\tEscape\t1\t\n' ;;
-    opencode) printf '/exit\tEscape\t2\t\n' ;;
     pi) printf '/quit\tEscape\t1\t\n' ;;
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     *) return 1 ;;
@@ -245,64 +244,9 @@ test_exit_types_each_harness_verified_command() {
 # fm-control must send the key the recorded version's TUI understands. The
 # default adapter contract above (no opencode_version) already proves the
 # version-agnostic /exit fallback; this locks both recorded branches.
-test_opencode_exit_matches_recorded_major() {
-  local dir out rc
-  # 1.x: the recorded major keeps the typed /exit command.
-  dir=$(new_case exit-opencode1)
-  add_task "$dir" t1 opencode
-  printf 'opencode_version=1.18.32\n' >> "$dir/home/state/t1.meta"
-  alive_as "$dir" opencode
-  out=$(run_control "$dir" t1 exit); rc=$?
-  expect_code 0 "$rc" "exit on a recorded OpenCode 1.x task should succeed"$'\n'"$out"
-  [ "$(literals "$dir")" = /exit ] \
-    || fail "OpenCode 1.x exit must type /exit, got: $(literals "$dir")"
-  [ -z "$(keys_sent "$dir")" ] \
-    || fail "OpenCode 1.x exit must send no control key, got: $(keys_sent "$dir")"
-  assert_contains "$out" "stopped t1 harness=opencode" "OpenCode 1.x exit should report the stop"
-
-  # 2.x: the recorded major clears the composer with Ctrl-U, then exits on a
-  # raw Ctrl-C, and types nothing. An agent that stops on that Ctrl-C gets no
-  # second one.
-  dir=$(new_case exit-opencode2)
-  add_task "$dir" t1 opencode
-  printf 'opencode_version=2.0.21\n' >> "$dir/home/state/t1.meta"
-  alive_as "$dir" opencode
-  out=$(FM_FAKE_INTERRUPT_STOPS_AGENT=1 run_control "$dir" t1 exit); rc=$?
-  expect_code 0 "$rc" "exit on a recorded OpenCode 2.x task should succeed"$'\n'"$out"
-  [ "$(keys_sent "$dir" | paste -sd' ' -)" = "C-u C-c" ] \
-    || fail "OpenCode 2.x exit must send Ctrl-U then one Ctrl-C, got keys: $(keys_sent "$dir")"
-  [ -z "$(literals "$dir")" ] \
-    || fail "OpenCode 2.x exit must type no composer text, got: $(literals "$dir")"
-  assert_contains "$out" "stopped t1 harness=opencode" "OpenCode 2.x exit should report the stop"
-  pass "fm-control exit: a recorded OpenCode major picks /exit (1.x) or Ctrl-U then Ctrl-C (2.x)"
-}
 
 # An OpenCode 2 TUI whose first Ctrl-C only clears leftover composer text stays
 # alive; exit sends exactly one more Ctrl-C and then confirms the stop.
-test_opencode2_exit_retries_ctrl_c_once() {
-  local dir out rc
-  dir=$(new_case exit-opencode2-retry)
-  add_task "$dir" t1 opencode
-  printf 'opencode_version=2.0.22\n' >> "$dir/home/state/t1.meta"
-  alive_as "$dir" opencode
-  out=$(FM_FAKE_SECOND_CTRL_C_STOPS_AGENT=1 run_control "$dir" t1 exit); rc=$?
-  expect_code 0 "$rc" "exit on an OpenCode 2.x task needing a second Ctrl-C should succeed"$'\n'"$out"
-  [ "$(keys_sent "$dir" | paste -sd' ' -)" = "C-u C-c C-c" ] \
-    || fail "OpenCode 2.x exit must retry Ctrl-C once while the agent lives, got keys: $(keys_sent "$dir")"
-  assert_contains "$out" "stopped t1 harness=opencode" "OpenCode 2.x exit should report the stop after the retry"
-
-  dir=$(new_case exit-opencode2-stuck)
-  add_task "$dir" t1 opencode
-  printf 'opencode_version=2.0.22\n' >> "$dir/home/state/t1.meta"
-  alive_as "$dir" opencode
-  out=$(run_control "$dir" t1 exit); rc=$?
-  [ "$rc" -ne 0 ] || fail "exit on an OpenCode 2.x agent that never stops must fail"$'\n'"$out"
-  [ "$(keys_sent "$dir" | paste -sd' ' -)" = "C-u C-c C-c" ] \
-    || fail "OpenCode 2.x exit must retry Ctrl-C only once, got keys: $(keys_sent "$dir")"
-  assert_contains "$out" "exit=unconfirmed" "a still-alive OpenCode 2.x agent must report an unconfirmed exit"
-  pass "fm-control exit: OpenCode 2.x retries Ctrl-C exactly once while the agent is still alive"
-}
-
 test_interrupt_sends_each_harness_verified_key() {
   local dir out rc harness expected key repeat clear got want
   for harness in $VERIFIED_HARNESSES; do
@@ -329,7 +273,7 @@ test_interrupt_sends_each_harness_verified_key() {
 test_harness_family_resolution() {
   local pair recorded want got
   for pair in claude:claude claude-latest:claude codex:codex codex-cli:codex \
-      opencode:opencode \
+      \
       pi:pi \
       pi-signed:pi-signed; do
     recorded=${pair%%:*}
@@ -377,25 +321,6 @@ test_prefixed_recorded_harness_reaches_each_control_verb() {
   pass "fm-control: prefixed recorded harnesses reach interrupt and exit mechanics"
 }
 
-test_opencode_interrupts_twice_and_others_once() {
-  # The one adapter that differs, asserted through the delivered keys rather
-  # than the table, so a regression in either shows up here.
-  local dir
-  dir=$(new_case int-double)
-  add_task "$dir" t1 opencode
-  alive_as "$dir" opencode
-  run_control "$dir" t1 interrupt >/dev/null
-  [ "$(keys_sent "$dir" | wc -l | tr -d ' ')" = 2 ] \
-    || fail "opencode should receive a double Escape"
-  dir=$(new_case int-single)
-  add_task "$dir" t1 claude
-  alive_as "$dir" claude
-  run_control "$dir" t1 interrupt >/dev/null
-  [ "$(keys_sent "$dir" | wc -l | tr -d ' ')" = 1 ] \
-    || fail "claude should receive a single Escape"
-  pass "fm-control interrupt: opencode needs a double Escape, claude a single one"
-}
-
 test_unverified_harness_is_refused() {
   local dir out rc
   dir=$(new_case unverified)
@@ -433,7 +358,7 @@ test_harness_kind_capability() {
     fm_control_harness_supports_kind "$harness" scout \
       || fail "$harness should be able to run a scout task"
   done
-  for harness in claude codex opencode pi pi-signed; do
+  for harness in claude codex pi pi-signed; do
     fm_control_harness_supports_kind "$harness" secondmate \
       || fail "$harness should be able to run a secondmate"
   done
@@ -1036,7 +961,6 @@ pi|codex|
 pi-signed|claude|
 claude|claude|
 codex|codex|
-opencode|opencode|
 '
   while IFS='|' read -r harness label want; do
     [ -n "$harness" ] || continue
@@ -1051,10 +975,7 @@ EOF
 }
 
 test_exit_types_each_harness_verified_command
-test_opencode_exit_matches_recorded_major
-test_opencode2_exit_retries_ctrl_c_once
 test_interrupt_sends_each_harness_verified_key
-test_opencode_interrupts_twice_and_others_once
 test_unverified_harness_is_refused
 test_harness_family_resolution
 test_relaunch_resume_flag_is_per_adapter_and_reference_owner

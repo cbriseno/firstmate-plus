@@ -3197,25 +3197,6 @@ test_teardown_missing_busy_sidecar_completes() {
   pass "teardown completes when an exact busy-state sidecar is already absent"
 }
 
-test_teardown_preserves_opencode_busy_plugin_on_pool_return() {
-  local case_dir rc plugin
-  case_dir=$(make_case opencode-busy-wiring)
-  write_meta "$case_dir" local-only ship
-  printf 'harness=opencode\n' >> "$case_dir/state/task-x1.meta"
-  # Keep scratch cleanup from removing the file independently of hook retirement.
-  printf '.opencode/\n' >> "$(git -C "$case_dir/wt" rev-parse --git-path info/exclude)"
-  plugin="$case_dir/wt/.opencode/plugins/fm-busy-state.js"
-  mkdir -p "$(dirname "$plugin")"
-  printf 'prior busy plugin\n' > "$plugin"
-  rc=0
-  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  expect_code 0 "$rc" "opencode-busy-wiring: teardown should succeed ($(cat "$case_dir/stderr"))"
-  [ -f "$plugin" ] || fail "opencode-busy-wiring: pool return must retain the busy plugin as on main"
-  assert_contains "$(cat "$plugin")" "prior busy plugin" \
-    "opencode-busy-wiring: pool return must leave the plugin unchanged"
-  pass "teardown leaves opencode's busy plugin in the returned pool worktree as on main"
-}
-
 seed_polytoken_wiring() {
   local case_dir=$1
   mkdir -p "$case_dir/wt/.polytoken/facets"
@@ -5676,8 +5657,6 @@ test_retained_sources_still_reach_the_ordinary_refusal() {
     "retained-sources: the ordinary refusal was replaced"
   pass "present required sources still reach the ordinary teardown refusal"
 }
-
-test_teardown_preserves_opencode_busy_plugin_on_pool_return
 
 # Archive coverage uses the real teardown entry point over isolated homes.
 test_status_archive_opt_in() {
