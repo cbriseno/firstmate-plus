@@ -3674,7 +3674,8 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
-  main_has_eligible_queued_row || return 0
+  # A downtime episode can contain an open decision or a lost watcher even
+  # with no queued rows. Its generation bounds recovery to one announcement.
   wake "check: rearm-resurface"
 }
 
@@ -3986,7 +3987,8 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if [ "$signal_actionable" -eq 0 ] || signal_worker_stopped $files; then
+    if [ "$signal_actionable" -eq 0 ] \
+      || { signal_worker_stopped $files && ! signal_turnend_panes_churned $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"

@@ -673,15 +673,16 @@ test_interrupted_handling_is_redrained_on_rearm() {
   [ -n "$generation_before" ] || fail "crash-gap recovery left no recovery generation"
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/reason-emit-crash-replay.out"
-  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a crash after reason emission stranded the durable wake"
-  recovery_arm=$ARM_PID
-  grep -F 'check: rearm-resurface' "$dir/reason-emit-crash-replay.out" >/dev/null \
-    || fail "a crash after reason emission did not re-drain recovery"
+  is_live_non_zombie "$ARM_PID" || fail "an unchanged announced episode woke again on restart"
+  ! grep -F 'check: rearm-resurface' "$dir/reason-emit-crash-replay.out" >/dev/null \
+    || fail "a restart repeated the already-announced recovery"
   generation_replay=$(recovery_marker_generation "$state/.watcher-down")
-  [ -n "$generation_replay" ] \
-    || fail "reason-emission replay left no recovery generation"
+  [ "$generation_replay" = "$generation_before" ] \
+    || fail "an unchanged restart replaced the announced recovery generation"
   grep "$(printf '\tsignal\tinterrupted.status\t')" "$state/.wake-queue" >/dev/null \
-    || fail "reason-emission replay removed the unacknowledged durable wake"
+    || fail "an unchanged restart removed the unacknowledged durable wake"
+  kill -TERM "$ARM_PID" 2>/dev/null || fail "could not stop the quiet restart"
+  wait "$ARM_PID" 2>/dev/null || true
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/handling-successor-arm.out" "$recovery_arm"
   is_live_non_zombie "$ARM_PID" \

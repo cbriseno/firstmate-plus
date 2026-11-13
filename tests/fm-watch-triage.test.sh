@@ -743,6 +743,7 @@ test_new_status_with_turnend_surfaces() {
   local dir state out pid verb verdict
   for verb in working needs-decision blocked 'done' failed paused; do
     dir=$(make_case "turnend-new-$verb"); state="$dir/state"; out="$dir/out"
+    printf 'kind=ship\nharness=codex\n' > "$state/task.meta"
     printf 'working: old event\n' > "$state/task.status"
     prime_status_seen "$state" "$state/task.status"
     printf '%s: new event\n' "$verb" >> "$state/task.status"
@@ -751,10 +752,17 @@ test_new_status_with_turnend_surfaces() {
     [ "$verb" != working ] || verdict='state: unknown'
     watch_bg "$state" "$dir/fakebin" "$out" env FM_FAKE_CREW_STATE="$verdict"
     pid=$!
+    if [ "$verb" = paused ]; then
+      wait_for_absorbed "$state" "$pid" 'absorbed benign signal:' \
+        || { reap "$pid"; fail 'declared pause was not absorbed'; }
+      [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail 'declared pause queued a wake'; }
+      reap "$pid"
+      continue
+    fi
     wait_for_exit "$pid" 100 || { reap "$pid"; fail "new $verb was swallowed"; }
     grep -F "$state/task.status" "$state/.wake-queue" >/dev/null || fail "new $verb not queued"
   done
-  pass 'new status lines still surface with a coalesced turn-end'
+  pass 'new results and undeclared stops surface with a coalesced turn-end; declared pauses stay quiet'
 }
 
 # Fixed-input decision and signature regression. The real working -> idle ->
