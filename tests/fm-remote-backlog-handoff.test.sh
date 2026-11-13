@@ -27,7 +27,7 @@ mkdir -p "$PARENT/data" "$PARENT/state" "$REMOTE_ROOT/bin" \
 # before removing the tree, then retry rm -rf until the now-quiesced tree is gone.
 fm_remote_handoff_teardown() {
   local worker_pid i
-  touch "$TMP_ROOT/put.release" "$TMP_ROOT/route.release" 2>/dev/null || true
+  touch "$TMP_ROOT/put.release" "$TMP_ROOT/route.release" "$TMP_ROOT/serialize.release" 2>/dev/null || true
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid" 2>/dev/null || true)
     if [ -n "$worker_pid" ]; then
@@ -282,10 +282,18 @@ FM_FAKE_SSH_MODE=serialize handoff_env "$ROOT/bin/fm-backlog-handoff.sh" ios ser
 handoff_a=$!
 wait_for_serialization=0
 while [ ! -f "$TMP_ROOT/serialize.entered" ]; do
-  kill -0 "$handoff_a" 2>/dev/null || fail "first serialized handoff exited before receipt"
+  kill -0 "$handoff_a" 2>/dev/null || {
+    touch "$TMP_ROOT/serialize.release"
+    wait "$handoff_a" 2>/dev/null || true
+    fail "first serialized handoff exited before receipt"
+  }
   wait_for_serialization=$((wait_for_serialization + 1))
-  [ "$wait_for_serialization" -le 250 ] || fail "first serialized handoff never reached receipt"
-  sleep 0.02
+  [ "$wait_for_serialization" -le $((FM_TEST_STUB_MAX_BLOCK_SECONDS * 20)) ] || {
+    touch "$TMP_ROOT/serialize.release"
+    wait "$handoff_a" 2>/dev/null || true
+    fail "first serialized handoff never reached receipt within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
+  }
+  sleep 0.05
 done
 write_backlog '- [ ] serialized-b - second concurrent handoff (repo: alpha)'
 FM_FAKE_SSH_MODE=serialize handoff_env "$ROOT/bin/fm-backlog-handoff.sh" ios serialized-b \

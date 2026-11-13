@@ -811,6 +811,8 @@ test_turn_ended_not_working_surfaced() {
   local dir state fakebin out drain_out pid
   dir=$(make_case turn-ended-stopped); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # Turn-end surfacing now requires a registered worker (2339e639).
+  fm_write_meta "$state/task.meta" "kind=ship" "harness=codex"
   : > "$state/task.turn-ended"
   # No running pipeline, no busy pane: the crew has stopped (e.g. it finished via
   # an interactive menu and wrote no done: status). Default unknown verdict.

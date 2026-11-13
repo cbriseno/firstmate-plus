@@ -92,7 +92,8 @@ case "${1:-}" in
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
-            while [ ! -e "$FM_FAKE_TRACE_RELEASE" ]; do /bin/sleep 0.01; done
+            while [ ! -e "$FM_FAKE_TRACE_RELEASE" ] \
+              && kill -0 "${FM_TEST_SUITE_PID:-}" 2>/dev/null; do /bin/sleep 0.01; done
           fi
           ;;
         'export TRACEPARENT='*)
@@ -109,7 +110,8 @@ case "${1:-}" in
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
-            while [ ! -e "$FM_FAKE_CWD_RACE_READY.release" ]; do /bin/sleep 0.01; done
+            while [ ! -e "$FM_FAKE_CWD_RACE_READY.release" ] \
+              && kill -0 "${FM_TEST_SUITE_PID:-}" 2>/dev/null; do /bin/sleep 0.01; done
           fi
           cat "$D/cwd"; printf '\n'; exit 0 ;;
       esac
@@ -514,7 +516,7 @@ test_relaunch_preserves_durable_task_metadata() {
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
-  local dir control_pid link_pid rc i=0 traceparent prepare launch_release waiting ready release
+  local dir control_pid link_pid rc i=0 wait_limit traceparent prepare launch_release waiting ready release
   dir=$(new_case metadata-race rl28)
   add_ship_task "$dir" rl28 claude
   printf '%s\n' "$$" > "$dir/home/state/.lock"
@@ -530,14 +532,20 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
     FM_FAKE_TRACE_RELEASE="$launch_release" \
     run_control "$dir" rl28 relaunch --note "continue after publication" > "$dir/control.out" &
   control_pid=$!
-  while [ ! -e "$prepare" ] && [ "$i" -lt 500 ]; do
-    /bin/sleep 0.01
+  wait_limit=$((FM_TEST_STUB_MAX_BLOCK_SECONDS * 20))
+  while [ ! -e "$prepare" ] && [ "$i" -lt "$wait_limit" ]; do
+    kill -0 "$control_pid" 2>/dev/null || {
+      : > "$launch_release"
+      wait "$control_pid" 2>/dev/null || true
+      fail "relaunch exited before trace delivery: $(cat "$dir/control.out")"
+    }
+    /bin/sleep 0.05
     i=$((i + 1))
   done
   [ -e "$prepare" ] || {
-    kill "$control_pid" 2>/dev/null || true
+    : > "$launch_release"
     wait "$control_pid" 2>/dev/null || true
-    fail "relaunch did not reach trace delivery"
+    fail "relaunch did not reach trace delivery within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
   }
   env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_REAL_MV="$(command -v mv)" \
@@ -549,28 +557,41 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
       --carry-platform x --carry-max 280 > "$dir/link.out" 2>&1 &
   link_pid=$!
   i=0
-  while [ ! -e "$waiting" ] && [ "$i" -lt 500 ]; do
-    /bin/sleep 0.01
+  while [ ! -e "$waiting" ] && [ "$i" -lt "$wait_limit" ]; do
+    kill -0 "$link_pid" 2>/dev/null || {
+      : > "$launch_release"
+      : > "$release"
+      wait "$link_pid" 2>/dev/null || true
+      wait "$control_pid" 2>/dev/null || true
+      fail "durable metadata writer exited before its lock wait: $(cat "$dir/link.out")"
+    }
+    /bin/sleep 0.05
     i=$((i + 1))
   done
-  [ -e "$waiting" ] && [ ! -e "$ready" ] || {
+  if [ ! -e "$waiting" ] || [ -e "$ready" ]; then
     : > "$launch_release"
     : > "$release"
     wait "$link_pid" 2>/dev/null || true
     wait "$control_pid" 2>/dev/null || true
-    fail "a durable metadata writer was not blocked during relaunch delivery"
-  }
+    fail "a durable metadata writer was not blocked during relaunch delivery within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
+  fi
   : > "$launch_release"
   i=0
-  while [ ! -e "$ready" ] && [ "$i" -lt 500 ]; do
-    /bin/sleep 0.01
+  while [ ! -e "$ready" ] && [ "$i" -lt "$wait_limit" ]; do
+    kill -0 "$link_pid" 2>/dev/null || {
+      : > "$release"
+      wait "$link_pid" 2>/dev/null || true
+      wait "$control_pid" 2>/dev/null || true
+      fail "durable metadata writer exited before resuming: $(cat "$dir/link.out")"
+    }
+    /bin/sleep 0.05
     i=$((i + 1))
   done
   [ -e "$ready" ] || {
-    kill "$link_pid" "$control_pid" 2>/dev/null || true
+    : > "$release"
     wait "$link_pid" 2>/dev/null || true
     wait "$control_pid" 2>/dev/null || true
-    fail "durable metadata writer did not resume after relaunch delivery committed"
+    fail "durable metadata writer did not resume after relaunch delivery committed within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
   }
   : > "$release"
   wait "$link_pid"; rc=$?
@@ -1689,8 +1710,13 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
       || fail "$mode: scout promotion should succeed: $out"
     assert_grep 'This is a SCOUT task' "$brief" \
       "$mode: the reproduction fixture lost the original scout delivery text"
-    assert_grep 'Never push to any remote and never open a PR' "$brief" \
-      "$mode: the reproduction fixture lost the stale scout prohibition"
+    # For local-only the current ship safety rule repeats the scout phrase (aa921774).
+    assert_grep 'Any earlier "Never push" or scout-only delivery language in this file is superseded.' "$brief" \
+      "$mode: promotion omitted the delivery-rule precedence contract (aa921774)"
+    if [ "$mode" != local-only ]; then
+      assert_no_grep 'Never push to any remote and never open a PR' "$brief" \
+        "$mode: promotion retained the superseded scout delivery rule (aa921774)"
+    fi
 
     printf 'zsh' > "$dir/fake/command"
     out=$(run_spawn "$dir" "$id" --relaunch) \
@@ -1869,7 +1895,7 @@ test_launch_failure_keeps_the_prior_record_and_reports_it() {
 }
 
 test_prepublication_failure_keeps_concurrent_durable_metadata() {
-  local dir control_pid link_pid rc i=0
+  local dir control_pid link_pid rc i=0 wait_limit
   dir=$(new_case rollback-race rl30)
   add_ship_task "$dir" rl30 claude
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
@@ -1877,26 +1903,39 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!
-  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 200 ]; do
+  wait_limit=$((FM_TEST_STUB_MAX_BLOCK_SECONDS * 20))
+  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt "$wait_limit" ]; do
     kill -0 "$control_pid" 2>/dev/null \
-      || fail "relaunch exited before its pre-publication endpoint check: $(cat "$dir/control.out")"
-    /bin/sleep 0.01
+      || { : > "$dir/cwd-race-ready.release"; wait "$control_pid" 2>/dev/null || true;
+        fail "relaunch exited before its pre-publication endpoint check: $(cat "$dir/control.out")"; }
+    /bin/sleep 0.05
     i=$((i + 1))
   done
-  [ -e "$dir/cwd-race-ready" ] || fail "relaunch never reached its pre-publication endpoint check"
+  if [ ! -e "$dir/cwd-race-ready" ]; then
+    : > "$dir/cwd-race-ready.release"
+    wait "$control_pid" 2>/dev/null || true
+    fail "relaunch never reached its pre-publication endpoint check within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
+  fi
   env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_FAKE_LOCK_WAITING="$dir/writer-waiting" \
     "$X_LINK" rl30 request-30 --carry-count 2 --carry-ts 1700000000 \
       --carry-platform x --carry-max 280 > "$dir/link.out" 2>&1 &
   link_pid=$!
   i=0
-  while [ ! -e "$dir/writer-waiting" ] && [ "$i" -lt 200 ]; do
+  while [ ! -e "$dir/writer-waiting" ] && [ "$i" -lt "$wait_limit" ]; do
     kill -0 "$link_pid" 2>/dev/null \
-      || fail "metadata writer exited before waiting for relaunch: $(cat "$dir/link.out")"
-    /bin/sleep 0.01
+      || { : > "$dir/cwd-race-ready.release"; wait "$control_pid" 2>/dev/null || true;
+        wait "$link_pid" 2>/dev/null || true;
+        fail "metadata writer exited before waiting for relaunch: $(cat "$dir/link.out")"; }
+    /bin/sleep 0.05
     i=$((i + 1))
   done
-  [ -e "$dir/writer-waiting" ] || fail "metadata writer never waited for relaunch"
+  if [ ! -e "$dir/writer-waiting" ]; then
+    : > "$dir/cwd-race-ready.release"
+    wait "$control_pid" 2>/dev/null || true
+    wait "$link_pid" 2>/dev/null || true
+    fail "metadata writer never waited for relaunch within ${FM_TEST_STUB_MAX_BLOCK_SECONDS}s"
+  fi
   [ -z "$(meta_field "$dir" rl30 x_request)" ] \
     || fail "the metadata writer bypassed the relaunch lock"
   : > "$dir/cwd-race-ready.release"

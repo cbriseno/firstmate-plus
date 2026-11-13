@@ -853,18 +853,21 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
 }
 
 test_watch_restart_rejects_reused_pid() {
-  local dir state fakebin out live pid i
+  local dir state fakebin out live pid i watcher_alive=no live_preserved=no
   dir=$(make_case restart-reused-pid)
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
-  sleep 300 &
+  node -e 'setTimeout(() => {}, 300000)' "$dir/unrelated-live-process" &
   live=$!
   mkdir "$state/.watch.lock"
   printf '%s\n' "$live" > "$state/.watch.lock/pid"
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "stale watcher identity" > "$state/.watch.lock/pid-identity"
+  # Restart resurfaces queued work, not an empty recovery marker (c47a03b8).
+  append_wake "$state" check startup-network 'check: startup-network reused-pid fixture' \
+    || fail "could not seed eligible restart work"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" --restart > "$out" &
   pid=$!
   i=0
@@ -872,14 +875,19 @@ test_watch_restart_rejects_reused_pid() {
     sleep 0.1
     i=$((i + 1))
   done
-  is_live_non_zombie "$pid" \
-    && fail "restart did not surface recovery after replacing a reused-pid lock"
+  if is_live_non_zombie "$pid"; then
+    watcher_alive=yes
+    kill "$pid" 2>/dev/null || true
+  fi
   wait "$pid" 2>/dev/null || true
-  grep -F 'check: rearm-resurface' "$out" >/dev/null \
-    || fail "restart replaced reused-pid lock without surfacing recovery: $(cat "$out")"
-  is_live_non_zombie "$live" || fail "restart killed a reused unrelated pid"
+  is_live_non_zombie "$live" && live_preserved=yes
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
+  [ "$watcher_alive" = no ] \
+    || fail "restart did not surface recovery after replacing a reused-pid lock"
+  grep -F 'check: rearm-resurface' "$out" >/dev/null \
+    || fail "restart replaced reused-pid lock without surfacing recovery: $(cat "$out")"
+  [ "$live_preserved" = yes ] || fail "restart killed a reused unrelated pid"
   pass "watch restart preserves recovery without signaling a reused pid"
 }
 
@@ -1170,7 +1178,7 @@ test_arm_starts_and_self_heals() {
   # before reporting 'started' - whether the lock is empty (clean start) or held
   # by a dead pid with a fresh-looking leftover beacon (self-heal). It must never
   # report 'healthy' off a dead pid. One row per pre-state, one assertion block.
-  local row dir state fakebin armout armpid i lock_pid dead_pid
+  local row dir state fakebin armout armpid i lock_pid dead_pid arm_alive
   for row in clean dead-pid; do
     dir=$(make_case "arm-$row")
     state="$dir/state"
@@ -1186,6 +1194,9 @@ test_arm_starts_and_self_heals() {
       printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
       printf '%s\n' "dead watcher identity" > "$state/.watch.lock/pid-identity"
       touch "$state/.last-watcher-beat"
+      # Restart recovery resurfaces queued work, not an empty recovery marker (c47a03b8).
+      append_wake "$state" check startup-network 'check: startup-network dead-pid arm fixture' \
+        || fail "could not seed eligible work for dead-pid recovery"
     fi
     PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
     armpid=$!
@@ -1199,9 +1210,14 @@ test_arm_starts_and_self_heals() {
       sleep 0.1; i=$((i + 1))
     done
     if [ "$row" = dead-pid ]; then
-      is_live_non_zombie "$armpid" \
-        && fail "arm did not surface recovery after reclaiming a dead-pid lock"
+      arm_alive=no
+      if is_live_non_zombie "$armpid"; then
+        arm_alive=yes
+        kill "$armpid" 2>/dev/null || true
+      fi
       wait "$armpid" 2>/dev/null || true
+      [ "$arm_alive" = no ] \
+        || fail "arm did not surface recovery after reclaiming a dead-pid lock"
       grep -F 'check: rearm-resurface' "$armout" >/dev/null \
         || fail "arm reclaimed dead-pid lock without surfacing recovery: $(cat "$armout")"
       continue

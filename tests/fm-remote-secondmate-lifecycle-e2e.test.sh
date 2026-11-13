@@ -33,7 +33,8 @@ mkdir -p "$PARENT/data" "$PARENT/state" "$PARENT/config" "$PARENT/projects" "$RE
 cleanup() {
   local worker_pid=''
   touch "$TMP_ROOT/provision.release" "$TMP_ROOT/seed.release" "$TMP_ROOT/handoff.release" \
-    "$TMP_ROOT/inherit.release" "$TMP_ROOT/launch.release" "$TMP_ROOT/race-clone.release" 2>/dev/null || true
+    "$TMP_ROOT/inherit.release" "$TMP_ROOT/launch.release" "$TMP_ROOT/race-clone.release" \
+    "$TMP_ROOT/liveness.release" 2>/dev/null || true
   # A watcher leg cut short by a failed assertion is still polling the root.
   if [ -n "${watch_pid:-}" ]; then
     kill "$watch_pid" 2>/dev/null || true
@@ -45,8 +46,13 @@ cleanup() {
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
     # The published pid is the serving child; killing it alone lets its
     # detached supervisor restart it while the fixture root is being removed.
+    # The tree helper waits for its verified worker group to exit; keep the
+    # fixture intact if that join cannot be proved.
     . "$ROOT/bin/fm-remote-job-lib.sh"
-    fm_remote_job_stop_worker_tree "$worker_pid" || true
+    if ! fm_remote_job_stop_worker_tree "$worker_pid"; then
+      printf 'cleanup: remote job worker tree did not stop; preserving fixture at %s\n' "$TMP_ROOT" >&2
+      return 1
+    fi
   fi
   fm_test_remove_tree "$TMP_ROOT"
 }
@@ -1535,8 +1541,12 @@ printf '%s\tdead\n' "$(date +%s)" > "$PARENT/state/.secondmate-relaunch-bound-io
 liveness_lock="$PARENT/state/.secondmate-liveness-ios.lock"
 # The link is published before the claim finishes; signal only after acquire.
 # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
-( STATE="$PARENT/state" exec bash -c '. "$1" && fm_lock_acquire_wait "$2" && touch "$3" && exec sleep 120' \
-    _ "$ROOT/bin/fm-wake-lib.sh" "$liveness_lock" "$TMP_ROOT/liveness.entered" ) &
+( STATE="$PARENT/state" exec bash -c '
+  . "$1" && fm_lock_acquire_wait "$2" && touch "$3"
+  while [ ! -f "$4" ]; do sleep 0.02; done
+  fm_lock_release "$2"
+' _ "$ROOT/bin/fm-wake-lib.sh" "$liveness_lock" "$TMP_ROOT/liveness.entered" \
+  "$TMP_ROOT/liveness.release" ) &
 liveness_holder_pid=$!
 liveness_wait=0
 while [ ! -f "$TMP_ROOT/liveness.entered" ]; do
@@ -1558,8 +1568,8 @@ assert_present "$PARENT/state/ios.meta" "a liveness-busy retirement removed pare
 assert_grep '- ios ' "$PARENT/data/secondmates.md" "a liveness-busy retirement removed the registry route"
 [ "$(cat "$liveness_lock/pid" 2>/dev/null)" = "$liveness_owner" ] \
   || fail "a liveness-busy retirement removed or took the episode's lock"
-kill "$liveness_holder_pid" 2>/dev/null || true
-wait "$liveness_holder_pid" 2>/dev/null || true
+: > "$TMP_ROOT/liveness.release"
+wait "$liveness_holder_pid" || fail "liveness lock holder failed to release the episode lock"
 handoff_lock="$PARENT/state/.backlog-handoff-ios.lock"
 FM_HOME="$PARENT" /bin/bash -c '
   . "$1"
@@ -1578,6 +1588,9 @@ while [ ! -f "$TMP_ROOT/handoff.entered" ]; do
   sleep 0.02
 done
 rm -f "$TMUX_STATE" "$TMP_ROOT/launch.entered" "$TMP_ROOT/launch.release"
+control_lock="$PARENT/state/.control-ios.lock"
+[ ! -e "$control_lock" ] && [ ! -L "$control_lock" ] \
+  || fail "remote retirement control lock was already present before the respawn race"
 FM_FAKE_SSH_MODE=launch-block remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate \
   > "$TMP_ROOT/spawn-retirement.out" 2>&1 &
 spawn_retirement_pid=$!
@@ -1599,7 +1612,18 @@ grep '^- ios ' "$PARENT/data/secondmates.md" > "$TMP_ROOT/remote-route.saved"
 FM_FAKE_SSH_MODE=retire-lost-slot remote_env "$ROOT/bin/fm-teardown.sh" ios \
   > "$TMP_ROOT/teardown-serialized.out" 2> "$TMP_ROOT/teardown-serialized.err" &
 teardown_pid=$!
-sleep 0.2
+control_wait=0
+while [ ! -e "$control_lock" ] && [ ! -L "$control_lock" ]; do
+  kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement exited before contending with the respawn"
+  control_wait=$((control_wait + 1))
+  [ "$control_wait" -le 2400 ] || {
+    : > "$TMP_ROOT/launch.release"
+    : > "$TMP_ROOT/handoff.release"
+    wait "$teardown_pid" 2>/dev/null || true
+    fail "remote retirement never acquired its control lock within 120s"
+  }
+  sleep 0.05
+done
 kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active remote respawn"
 assert_present "$REMOTE_HOME" "remote retirement removed the home during an active remote respawn"
 touch "$TMP_ROOT/launch.release"
@@ -1607,7 +1631,6 @@ if ! wait "$spawn_retirement_pid"; then
   printf 'serialized respawn output:\n%s\n' "$(cat "$TMP_ROOT/spawn-retirement.out")" >&2
   fail "serialized remote respawn failed"
 fi
-sleep 0.2
 kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active backlog handoff"
 touch "$TMP_ROOT/handoff.release"
 wait "$handoff_holder_pid" || fail "handoff lock holder failed to release"

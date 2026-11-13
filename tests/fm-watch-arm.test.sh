@@ -341,7 +341,7 @@ test_attached_arm_hands_a_stalled_holder_to_its_replacement() {
   rearmout="$dir/rearm.out"
   # A live process the lock records under its real identity, which never beats:
   # the shape of a watcher wedged mid-cycle that still answers TERM.
-  sleep 300 &
+  node -e 'setTimeout(() => {}, 300000)' "$dir/stalled-holder" &
   holder=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
     || fail "could not identify the fake holder"
@@ -372,6 +372,9 @@ test_attached_arm_hands_a_stalled_holder_to_its_replacement() {
   # The owner's retry: a fresh arm reaches the watcher's eviction path, and the
   # replacement surfaces an ordinary wake instead of the refusal that used to
   # end in the auto-arm FAILED notice.
+  # A re-arm surfaces durable work, so seed the intended fixture work (c47a03b8).
+  append_wake "$state" check startup-network 'check: startup-network stalled-holder retry fixture' \
+    || fail "could not seed eligible retry work"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     FM_ARM_CONFIRM_TIMEOUT=10 FM_GUARD_GRACE=5 FM_WATCHER_STALL_BOUND=12 "$WATCH_ARM" > "$rearmout" 2>&1 &

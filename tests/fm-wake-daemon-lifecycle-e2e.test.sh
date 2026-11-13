@@ -2,7 +2,7 @@
 # tests/fm-wake-daemon-lifecycle-e2e.test.sh - the watcher + supervise-daemon
 # lifecycle, end to end, over one shared state root and a shimmed tmux:
 #
-#   routine status -> self-handled, queued
+#   routine status -> classified silently without a wake
 #   terminal status written while the watcher is DOWN -> caught on restart (catch-up)
 #   drain queued records -> exactly ONE captain-relevant digest is buffered
 #   housekeeping catch-all scan -> NO duplicate digest
@@ -57,9 +57,9 @@ ack_handled_wakes() {  # <state> <drain-stderr>
     --recovery-generation "$generation"
 }
 
-# --- Phase 1: routine self-handled, queued; terminal caught after restart ---
+# --- Phase 1: routine progress absorbed; terminal caught after restart ---
 test_routine_then_terminal_after_restart() {
-  local dir state fakebin out drain_out drain_err status_file
+  local dir state fakebin out drain_out drain_err status_file seen routine_pid i
   dir=$(make_supercase wd-lifecycle)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -68,18 +68,25 @@ test_routine_then_terminal_after_restart() {
   drain_err="$dir/drain.err"
   status_file="$state/task-w1.status"
 
-  # A routine status fires a signal; the watcher queues it and exits.
+  # Routine progress is absorbed without creating another supervision turn (fc6fe65f).
   printf 'working: building\n' > "$status_file"
-  run_watcher_once "$state" "$fakebin" "$out" || fail "watcher did not exit for the routine signal"
-  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not report the routine signal"
-
-  # Drain it and route through the daemon: a routine status self-handles.
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2> "$drain_err" \
-    || fail "drain after routine signal failed"
-  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
-    || fail "routine signal was not queued"
-  FM_STATE_OVERRIDE="$state" handle_wake "signal: $status_file" "$state"
-  ack_handled_wakes "$state" "$drain_err" || fail "routine wake acknowledgement failed"
+  date '+%s' > "$state/.afk"
+  seen=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_signal_seen_path "$2" "$3"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$state" "$status_file")
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  routine_pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$seen" ] && is_live_non_zombie "$routine_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$seen" ] || { kill "$routine_pid" 2>/dev/null || true; wait "$routine_pid" 2>/dev/null || true; fail "routine status was not classified"; }
+  [ ! -s "$out" ] || { kill "$routine_pid" 2>/dev/null || true; wait "$routine_pid" 2>/dev/null || true; fail "routine status emitted a wake: $(cat "$out")"; }
+  is_live_non_zombie "$routine_pid" \
+    || fail "routine status ended the away watcher instead of remaining silent"
+  kill "$routine_pid" 2>/dev/null || true
+  wait "$routine_pid" 2>/dev/null || true
   [ ! -s "$state/.subsuper-escalations" ] || fail "routine status was escalated by the daemon"
 
   # The watcher is now DOWN (one-shot exit). A terminal status lands while it is
