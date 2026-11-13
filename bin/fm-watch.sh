@@ -2,8 +2,9 @@
 # Firstmate watcher.
 # Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
 # and keeps blocking; it queues and exits only for actionable wakes.
-# Status wakes require a captain-relevant status event. A worker's turn-end also
-# wakes once when it has neither a result, a declared wait nor execution proof.
+# Status wakes require a captain-relevant event or parent-directed secondmate
+# content. A worker's turn-end also wakes once when it has neither a result,
+# a declared wait nor execution proof.
 # Routine progress and healthy secondmate turn-ends stay silent. Stale
 # panes wake when the recorded endpoint is confirmed dead or missing, or an idle
 # worker's deadline-free pause has no active validation run to explain its wait.
@@ -3079,8 +3080,9 @@ EOF
   [ "$linger" -le 0 ] || sleep "$linger"
 }
 
-# 0 when any signaled status file carries a captain-relevant event in the bytes
-# appended since this watcher last classified it. The start offset is the
+# 0 when any signaled status file carries a captain-relevant event or
+# parent-directed secondmate content in the bytes appended since this watcher
+# last classified it. The start offset is the
 # classified-position field in that file's .seen-* marker, and fm-classify-lib.sh's
 # status-span contract owns both that format and what counts as actionable in
 # the span. Reading the SPAN rather than the last line is what stops a later
@@ -3121,7 +3123,9 @@ signal_files_actionable() {  # <status-file> ...
     if [ "$needs_decision" -eq 1 ]; then
       FM_SIGNAL_NEEDS_DECISION_FILES="${FM_SIGNAL_NEEDS_DECISION_FILES} ${f}"
     fi
-    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ]; then
+    if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ] \
+      || { [ "$(_fm_status_kind "$f")" = secondmate ] \
+        && ! _fm_secondmate_status_new_lines_routine "$f" "$STATE"; }; then
       found=0
     fi
   done
