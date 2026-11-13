@@ -260,7 +260,6 @@ fm_supervision_model() {
   harness=$("$FM_WAKE_LIB_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
   case "$harness" in
     claude|cursor) printf 'autoarm\n' ;;
-    pi|pi-signed|omp) printf 'extension\n' ;;
     *) printf 'persistent\n' ;;
   esac
 }
@@ -329,24 +328,12 @@ fm_pi_extension_owns_supervision() {
     "fm-primary-turnend-guard.ts:.pi-turnend-extension-loaded"
 }
 
-# fm_omp_extension_owns_supervision <state> <root>
-# The omp (Oh My Pi) primary's proof, keyed on its own two tracked extensions
-# under .omp/extensions/ and their own state markers. It is a separate proof on
-# purpose: omp must never inherit the Pi tolerance by accident, and a Pi home
-# never satisfies the omp markers. Both proofs bind to the pid in state/.lock,
-# so a session on one harness cannot vouch for a home held by the other.
-fm_omp_extension_owns_supervision() {
-  fm_extension_pair_owns_supervision "$1" "$2/.omp/extensions" \
-    "fm-primary-omp-watch.ts:.omp-watch-extension-loaded" \
-    "fm-primary-turnend-guard.ts:.omp-turnend-extension-loaded"
-}
-
 # fm_extension_owns_supervision <state> <root>
 # The extension-model proof the verdict below consults: whichever extension
 # family's markers the lock-owning session recorded. Exactly one family can
 # match because both bind to the same lock pid.
 fm_extension_owns_supervision() {
-  fm_pi_extension_owns_supervision "$1" "$2" || fm_omp_extension_owns_supervision "$1" "$2"
+  fm_pi_extension_owns_supervision "$1" "$2"
 }
 
 fm_extension_pair_owns_supervision() {  # <state> <extension-dir> <source:marker[:phase]>...

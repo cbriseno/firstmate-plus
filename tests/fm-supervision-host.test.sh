@@ -394,7 +394,7 @@ SH
 # still runs on the engine.
 test_primary_without_a_verified_mirror_runs_away_only() {
   local home harness
-  for harness in grok opencode omp codex; do
+  for harness in grok opencode codex; do
     home=$(make_home "attended-$harness" attended claude)
     FM_SUPERVISION_HOST_PRIMARY=$harness start_host "$home"
     wait_until 150 watcher_live "$home" || fail "$harness: the host never started a watcher cycle"

@@ -37,7 +37,7 @@ cat > "$EXPECTED_JSON" <<'JSON'
     {"id":"exit.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/grok.md"},
     {"id":"resume.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/kimi.md"},
     {"id":"recovery.default","common":["references/common/control-and-recovery.md"],"harness":"references/harness/cursor.md"},
-    {"id":"recovery.replacement-profile","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md"],"harness":"references/harness/omp.md"},
+    {"id":"recovery.replacement-profile","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md"],"harness":"references/harness/codex.md"},
     {"id":"recovery.secondmate","common":["references/common/control-and-recovery.md","references/common/primary-hooks.md"],"harness":"references/harness/claude.md"},
     {"id":"recovery.replacement-secondmate","common":["references/common/control-and-recovery.md","references/common/dispatch.md","references/common/model-and-effort.md","references/common/primary-hooks.md"],"harness":"references/harness/codex.md"},
     {"id":"primary.default","common":["references/common/primary-hooks.md"],"harness":"references/harness/opencode.md"},
@@ -62,7 +62,7 @@ JSON
     'exit.default grok' \
     'resume.default kimi' \
     'recovery.default cursor' \
-    'recovery.replacement-profile omp' \
+    'recovery.replacement-profile codex' \
     'recovery.secondmate claude' \
     'recovery.replacement-secondmate codex' \
     'primary.default opencode' \

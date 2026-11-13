@@ -164,23 +164,6 @@ wait_for_state "$SESSION:agent" alive \
   || fail "a running harness-named foreground process must classify alive"
 pass "tmux liveness: a harness-named foreground process classifies alive"
 
-# --- omp's bare binary name -------------------------------------------------
-# omp (Oh My Pi) runs as a single binary whose live process name is exactly
-# `omp`, with no path component to fall back on, so the anchored name is the
-# only signal and the two decoys prove it never widens into a substring match.
-
-new_window omp "$LAB/bin/omp" 900
-wait_for_state "$SESSION:omp" alive \
-  || fail "omp's bare binary name must classify alive"
-pass "tmux liveness: omp's bare binary name classifies alive"
-
-for decoy in ompd comp; do
-  new_window "decoy-$decoy" "$LAB/bin/$decoy" 900
-  wait_for_state "$SESSION:decoy-$decoy" ambiguous \
-    || fail "'$decoy' merely contains 'omp' and must not classify as a live agent pane"
-done
-pass "tmux liveness: unrelated omp-containing command names stay ambiguous"
-
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that
 # Claude Code 2.1.220 reports drives the two sources apart on both supported

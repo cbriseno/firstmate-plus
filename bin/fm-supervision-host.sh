@@ -36,7 +36,7 @@
 # the arm's. --restart starts the first cycle with fm-watch-arm.sh --restart,
 # and an FM_WATCH_PREDECESSOR_ARM_PID the owner passes reaches that first
 # cycle only, for owners that start their own successor after every close
-# (OpenCode, omp).
+# (OpenCode).
 #
 # THE LOOP. It owns watcher cycles through bin/fm-watch-arm.sh. The posture is
 # the away-posture record state/.afk-contract, read at every close and again

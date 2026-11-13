@@ -62,8 +62,7 @@
 #                A bare composer's WRAP region (typed input continuing on the
 #                rows beneath the glyph row) is bounded by blank rows, by
 #                structural edges, and by the FURNITURE rows a harness draws
-#                directly below its composer - omp's status row and
-#                braille-only animation rows (declared once below, next to
+#                directly below its composer - braille-only animation rows (declared once below, next to
 #                the idle placeholders) - none of which is ever typed input.
 #   left-bar   - opencode: rows prefixed by a heavy left bar `┃` with no
 #                closing border, holding the idle hint, blank rows, and a
@@ -350,7 +349,7 @@ fm_composer_strip_ghost() {
 # Matching a footer to confirm a keystroke landed is a different question from
 # asking what a worker is doing, and the two must not be conflated.
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; omp: "Working…"; grok: "Ctrl+c:cancel";
+# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel";
 # Claude's current spinner has a rotating glyph and word, but every active-turn
 # line has an ellipsis followed by a parenthesized elapsed duration. Keep this
 # signature separate from the shared default because that shape is not generic
@@ -376,23 +375,6 @@ FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
-# omp (Oh My Pi) renders its TUI busy line as `Working…` with U+2026 HORIZONTAL
-# ELLIPSIS, not Pi's three ASCII dots (verified byte-level on omp 18.1.2,
-# re-verified live on 18.1.11 through the Herdr backend). Only the TUI form is
-# accepted: every supervised omp pane is the TUI, and the three-dot spelling its
-# headless -p mode writes to stderr never reaches a pane. The status row's
-# leading braille spinner plus elapsed cell (`⠧ 11s`) is the second, independent
-# busy signal, so no single vendor string is load-bearing; its idle form is a
-# static identity glyph with no elapsed time.
-# The spinner is an alternation of omp 18.1.11's unicode-preset frames (its
-# `status` set ⣾⣽⣻⢿⡿⣟⣯⣷ and `activity` set ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, read from the
-# build that rendered the live `⠧`), declared once for the busy regex and the
-# status-row furniture rule below. It is deliberately NOT a bracket range over
-# the braille block: GNU grep rejects a range between multibyte endpoints
-# ("Invalid collation character"), so `[⠁-⣿]` compiled on macOS and failed
-# every omp busy and furniture read on Linux CI.
-FM_OMP_SPINNER_FRAMES_RE='(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⣾|⣽|⣻|⢿|⡿|⣟|⣯|⣷)'
-FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT='Working…|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]'
 FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 # cursor-agent's busy footer. The TOKEN is matched, not the spinner verb: the
 # same version rendered both `Working` and `Running` beside its braille spinner
@@ -415,7 +397,6 @@ fm_busy_lines_match() {  # [harness]
       codex) regex=$FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT ;;
       opencode) regex=$FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT ;;
       pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
-      omp) regex=$FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT ;;
       cursor) regex=$FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT ;;
@@ -469,25 +450,6 @@ FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
 # is deliberately not matched - and the marker is quantifier-free so the same
 # bytes match under LC_ALL=C as under a UTF-8 locale.
 FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
-# omp (Oh My Pi) draws a one-row status line directly BELOW its borderless
-# composer: an identity or spinner cell, then middle-dot separated model, path,
-# git, and context cells. Verified live through Herdr on omp 18.1.11:
-# ` π  · ◔ GPT-6-Astra · 🌳 …-workspace · ⑂ detached · ◫ 15.4%/272K ⟲ · (sub)`
-# idle under the unicode preset, ` 󰵗  ·  qwen3:8b ·  … ·  36.7%/41K` under
-# nerd, and ` ⠧ 11s  · …` while busy. Without this rule the bare composer's
-# wrap region walks straight into that row and an idle omp pane reads
-# `pending`, the false verdict that skipped the doorbell on the first live omp
-# worker. A row is omp status furniture when it opens with omp's identity cell
-# then a middle dot (`π` under the unicode preset, `󰵗` under nerd: the
-# `icon.omp` of those omp 18.1.11 presets, never an arbitrary short token, so
-# a wrapped typed row such as `fix · tests` stays composer input; the ascii
-# preset's `pi` is deliberately absent because that preset's `sep.dot` is
-# ` - `, so its status row never carries a middle dot and a `pi ·` alternative
-# could only ever match typed text), when it opens with one of omp's spinner
-# frames then an elapsed cell, or when it carries the context-usage cell after
-# a middle dot. It is consulted only as the boundary BELOW a bare composer,
-# never on the composer row itself.
-FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
@@ -512,8 +474,8 @@ FM_COMPOSER_PI_STATUS_RE_DEFAULT='^\$[0-9]+(\.[0-9]+)?([[:space:]]|$)'
 # fm_composer_strip_braille is the ONE byte-exact remover: under LC_ALL=C awk
 # walks bytes and drops every UTF-8 sequence E2 A0..A3 80..BF. It is
 # deliberately not a grep bracket range over the block, for the reason
-# FM_OMP_SPINNER_FRAMES_RE records (GNU grep rejects a range between multibyte
-# endpoints). Reads stdin, prints the line with its braille cells removed.
+# GNU grep rejects a range between multibyte endpoints.
+# Reads stdin, prints the line with its braille cells removed.
 fm_composer_strip_braille() {
   LC_ALL=C awk '
     {
@@ -1250,13 +1212,6 @@ _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
   printf '%s' "$state"
 }
 
-# _fm_composer_row_is_omp_status: 0 when the trimmed row is omp's status line
-# (FM_COMPOSER_OMP_STATUS_RE_DEFAULT above) - composer furniture that sits
-# below a bare composer and must bound its wrap region exactly as an edge does.
-_fm_composer_row_is_omp_status() {  # <trimmed-row>
-  fm_composer_idle_matches "$1" "${FM_COMPOSER_OMP_STATUS_RE:-$FM_COMPOSER_OMP_STATUS_RE_DEFAULT}" sensitive
-}
-
 # _fm_composer_row_is_pi_status: 0 when the trimmed row is Pi's dollar-first
 # footer stats row (FM_COMPOSER_PI_STATUS_RE_DEFAULT above). Furniture below
 # the separated pair; a `$` cost cell must not count as a dead-shell prompt.
@@ -1306,7 +1261,6 @@ _fm_composer_wrap_region_ok() {  # <plain-screen> <glyph-row> <cursor-row>
     fm_composer_normalize_trim_var trimmed
     [ -n "$trimmed" ] || return 1
     if fm_composer_row_has_edge "$trimmed"; then return 1; fi
-    if _fm_composer_row_is_omp_status "$trimmed"; then return 1; fi
     if _fm_composer_row_is_braille_furniture "$trimmed"; then return 1; fi
     if fm_composer_leading_shell_glyph_var glyph "$trimmed"; then return 1; fi
     row=$((row + 1))
@@ -1583,7 +1537,7 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 # a harness's own furniture drawn below its composer, given <proof-glyph> - the
 # agent glyph that proved the envelope above it. Exactly four things qualify,
 # every one of them already owned elsewhere in this file:
-#   - omp's status row and braille-only animation rows, the two furniture rows
+#   - braille-only animation rows, the furniture rows
 #     that already bound a bare composer's wrap region;
 #   - claude's permission-mode hint row (FM_COMPOSER_MODE_HINT_RE_DEFAULT);
 #   - a row leading with an agent glyph OTHER than the one that proved the
@@ -1597,7 +1551,6 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1
-  _fm_composer_row_is_omp_status "$row" && return 0
   _fm_composer_row_is_braille_furniture "$row" && return 0
   fm_composer_idle_matches "$row" \
     "${FM_COMPOSER_MODE_HINT_RE:-$FM_COMPOSER_MODE_HINT_RE_DEFAULT}" sensitive && return 0
@@ -1767,7 +1720,6 @@ _fm_composer_select_cursorless() {
       fm_composer_normalize_trim_var trimmed
       [ -n "$trimmed" ] || break
       fm_composer_row_has_edge "$trimmed" && break
-      _fm_composer_row_is_omp_status "$trimmed" && break
       _fm_composer_row_is_braille_furniture "$trimmed" && break
       FM_COMPOSER_SELECTED_LAST=$next
       next=$((next + 1))

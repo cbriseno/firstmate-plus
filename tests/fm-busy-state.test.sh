@@ -315,7 +315,7 @@ This project'"'"'s CLAUDE.md imports files outside the current working directory
 
 test_launch_prompt_pi_trust_dialog() {
   local state out h
-  for h in pi pi-signed omp; do
+  for h in pi pi-signed; do
     state=$(new_state_dir "launch-prompt-$h")
     "$EV" arm "$state" t1 >/dev/null
     out=$(fm_busy_classify tmux w1 "$h" t1 "$state" ' Trust project folder?
@@ -333,7 +333,7 @@ test_launch_prompt_pi_trust_dialog() {
     [ "$out" = "unknown launch-prompt" ] \
       || fail "a $h launch pinned at fm-spawn parked on the project-trust dialog must classify unknown launch-prompt, got '$out'"
   done
-  pass "a Pi-family launch (pi, pi-signed, omp) parked on the project-trust dialog classifies unknown launch-prompt"
+  pass "a Pi-family launch (pi, pi-signed) parked on the project-trust dialog classifies unknown launch-prompt"
 }
 
 test_launch_prompt_pi_requires_both_markers() {

@@ -292,7 +292,7 @@ mkdir -p "$CORE"
 for core_dir in /usr/bin /bin; do
   for core_tool in "$core_dir"/*; do
     case "${core_tool##*/}" in
-      tmux | herdr | claude | codex | pi | omp | opencode | grok | kimi | cursor-agent | agent | \
+      tmux | herdr | claude | codex | pi | opencode | grok | kimi | cursor-agent | agent | \
         lavish-axi | gh | gh-axi | treehouse | cmux) continue ;;
     esac
     [ -e "$CORE/${core_tool##*/}" ] || ln -s "$core_tool" "$CORE/${core_tool##*/}"

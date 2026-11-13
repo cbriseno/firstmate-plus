@@ -174,19 +174,19 @@ unit_test_harness_seam_requires_the_marker() {
   ref=$(env -u FM_TEST_SEAM -u FM_TEST_HARNESS CLAUDECODE=1 \
     bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
   # shellcheck disable=SC2016 # positional params expand in the child shell.
-  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS=omp \
+  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS=codex \
     bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
   [ "$stray" = "$ref" ] \
     || fail "FM_TEST_HARNESS without FM_TEST_SEAM changed harness detection ($stray != $ref)"
   # shellcheck disable=SC2016 # positional params expand in the child shell.
-  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS='1 omp' \
+  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS='1 codex' \
     bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
   [ "$stray" = "$ref" ] \
     || fail "a marker-shaped FM_TEST_HARNESS without FM_TEST_SEAM changed harness detection ($stray != $ref)"
   # shellcheck disable=SC2016 # positional params expand in the child shell.
-  pinned=$(FM_TEST_SEAM=1 CLAUDECODE=1 FM_TEST_HARNESS=omp \
+  pinned=$(FM_TEST_SEAM=1 CLAUDECODE=1 FM_TEST_HARNESS=codex \
     bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
-  [ "$pinned" = omp ] \
+  [ "$pinned" = codex ] \
     || fail "FM_TEST_SEAM-armed FM_TEST_HARNESS did not pin the harness ($pinned)"
   pass "FM_TEST_HARNESS seam is inert without the test marker"
 }
@@ -1004,17 +1004,17 @@ unit_supervision_host_other_harnesses_run_no_away_daemon() {
     FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" FM_TEST_HARNESS="$1" FM_AFK_MODE="${2:-}" \
       bash -c '. "$1"; fm_afk_launch_primary_harness() { printf "%s" "$FM_TEST_HARNESS"; }; fm_afk_launch_daemon_allowed' _ "$LAUNCH" 2>&1
   }
-  for harness in cursor opencode omp grok codex; do
+  for harness in cursor opencode codex grok codex; do
     daemon_allowed "$harness" >/dev/null || fail "$harness: a home without config/supervision-host must keep the away daemon"
   done
   daemon_allowed claude >/dev/null && fail "claude: a home without config/supervision-host runs the host, so it must refuse the away daemon"
   : > "$st/config/supervision-host-off"
-  for harness in claude cursor opencode omp grok codex; do
+  for harness in claude cursor opencode codex grok codex; do
     daemon_allowed "$harness" >/dev/null || fail "$harness: a home opted out by config/supervision-host-off must keep the away daemon"
   done
   rm -f "$st/config/supervision-host-off"
   : > "$st/config/supervision-host"
-  for harness in cursor opencode omp grok codex; do
+  for harness in cursor opencode codex grok codex; do
     out=$(daemon_allowed "$harness"); rc=$?
     [ "$rc" -ne 0 ] || fail "$harness: an opted-in home must refuse the away daemon"
     printf '%s' "$out" | grep -F "not launched on this $harness home, which runs the supervision host" >/dev/null \
@@ -1022,7 +1022,7 @@ unit_supervision_host_other_harnesses_run_no_away_daemon() {
     daemon_allowed "$harness" quiet >/dev/null || fail "$harness: quiet mode must still launch the daemon on an opted-in home"
   done
   daemon_allowed kimi >/dev/null || fail "kimi has no arm owner to run the host, so it must keep the away daemon"
-  pass "supervision host: away mode on an opted-in cursor, opencode, omp, grok, or codex home launches no daemon"
+  pass "supervision host: away mode on an opted-in cursor, opencode, codex, grok, or codex home launches no daemon"
 
   enter_with() {  # <harness> <config line, off for the opt-out, or ->
     rm -f "$st/state/.afk-contract" "$st/config/supervision-host" "$st/config/supervision-host-off"
@@ -1181,7 +1181,7 @@ unit_supervision_host_quiet_fallback() {
   : > "$st/config/supervision-host"
   unready "no supervision engine: the primary harness 'cursor' has no verified supervision engine" cursor
   printf 'claude\n' > "$st/config/supervision-host"
-  for bad in opencode omp grok codex; do
+  for bad in opencode codex grok codex; do
     unready "no verified dialog mirror for $bad" "$bad"
   done
   printf '999999999\n' > "$st/state/.lock"

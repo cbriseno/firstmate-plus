@@ -1,7 +1,5 @@
 # Runtime backend verification
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
 
 ## Worker session bindings
 
@@ -420,8 +418,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
-
-## Oh My Pi (omp)
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.

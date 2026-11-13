@@ -26,7 +26,7 @@ The tier is a property of the harness surface, not of the home.
 
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
-| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed, omp, Cursor |
+| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, the Codex interactive TUI from codex-cli 0.164.0, Pi / pi-signed, Cursor |
 | Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has no tracked compaction or re-emit channel.
@@ -42,7 +42,6 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | OpenCode | Nudge | [OpenCode](#opencode) |
 | Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
-| omp | Run | [omp](#omp) |
 | Cursor compaction | Uncovered | [Cursor compaction](#cursor-compaction) |
 
 ### Why the run tier exists
@@ -359,26 +358,6 @@ Project hooks load only when the workspace is launched with `--trust`.
 Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session.
 So a resume re-runs the full digest.
 That is redundant and idempotent rather than a lost helm.
-
-### omp
-
-omp is a run-tier harness.
-The tracked transport is `.omp/extensions/fm-primary-turnend-guard.ts`, which is auto-discovered from the home with no trust gate.
-The extension starts the wrapper at `session_start`.
-It has `before_agent_start` await the wrapper and return one persistent context message before the first provider call, exactly as Pi's does.
-`session_compact` is the compaction equivalent.
-
-omp's `session_start` carries no reason field (verified 18.1.11).
-So the source is derived following the Cursor precedent:
-
-| omp session start | Source |
-| --- | --- |
-| The first start of the process | `startup` |
-| The first start of the process, when the launch line carried `--continue`/`-c` or `--resume`/`-r` | `resume` |
-| A later in-process start (`/new`, `/resume`, `/fork`) | `clear` |
-
-A later in-process `clear` re-emits only when this lock owner completed a full startup.
-`before_agent_start` message delivery was verified to reach model context on 18.1.11.
 
 ### Cursor compaction
 

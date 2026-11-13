@@ -59,7 +59,6 @@ fm_busy_claude_launch_prompt_tail() {
 # class of check must be proven end to end rather than read off strings or a
 # name. Matching BOTH the heading and "Do not trust" keeps this from firing on
 # a worker's own prose that happens to use the common word "trust" alone.
-# Covers omp too: it shares Pi's engine and the same project-trust gate.
 fm_busy_pi_launch_prompt_tail() {
   local buf
   buf=$(cat)
@@ -70,14 +69,14 @@ fm_busy_pi_launch_prompt_tail() {
 # fm_busy_launch_prompt_parked: dispatch to the signature above for <harness>,
 # or fail when this harness has none. Consumes the tail on stdin. Scoped to
 # exactly the harnesses fm-spawn.sh arms with the fm-spawn busy source
-# (claude*, opencode*, pi, pi-signed, omp) since only those can ever
+# (claude*, opencode*, pi, pi-signed) since only those can ever
 # read a pinned "busy fm-spawn" record; codex and standalone Kimi already
 # classify unknown before a record is ever consulted, and opencode ships no
 # trust dialog at all.
 fm_busy_launch_prompt_parked() {  # <harness>
   case "${1:-}" in
     claude*) fm_busy_claude_launch_prompt_tail ;;
-    pi | pi-signed | omp) fm_busy_pi_launch_prompt_tail ;;
+    pi | pi-signed ) fm_busy_pi_launch_prompt_tail ;;
     *) return 1 ;;
   esac
 }

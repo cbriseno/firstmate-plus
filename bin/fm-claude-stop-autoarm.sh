@@ -50,7 +50,7 @@
 #     records the failure durably without waking an idle primary; nothing here
 #     shortens a quiet park, because no-change heartbeats are absorbed without
 #     closing the arm.
-#   - Handling successor: Pi, omp, and OpenCode start the next arm before they
+#   - Handling successor: Pi, and OpenCode start the next arm before they
 #     deliver an actionable wake, so the fleet stays covered while the model
 #     handles it. After an actionable close, including an attached peer cycle
 #     that ended, this hook starts one successor bin/fm-watch-arm.sh with the
@@ -366,7 +366,7 @@ run_arm() {  # <output file, or empty for none>
 }
 
 # --- handling successor --------------------------------------------------------
-# Start the next arm before the rewake delivers the wake, as the Pi, omp, and
+# Start the next arm before the rewake delivers the wake, as the Pi, and
 # OpenCode adapters do from their child-close handlers, so a watcher covers the
 # handling turn instead of the home waiting uncovered for the next Stop. The
 # successor receives the closed arm's pid as FM_WATCH_PREDECESSOR_ARM_PID; it

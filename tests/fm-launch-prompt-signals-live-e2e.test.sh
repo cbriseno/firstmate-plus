@@ -10,7 +10,7 @@
 # real screen ("Trust project folder?") until this guard's first live run
 # caught it.
 #
-# For each of claude, pi (covering pi-signed and omp, which share Pi's engine
+# For each of claude, pi (covering pi-signed, which share Pi's engine
 # and trust gate) that is actually installed, this drives the REAL
 # binary in an isolated tmux server into its genuine interactive launch prompt
 # (a fresh untrusted worktree carrying a project-local trust-requiring
@@ -171,10 +171,10 @@ if [ -x "${PI_BIN:-}" ]; then
   check_harness pi fm-lp-pi-$$ '.pi/extensions/dummy.ts' 'export default {};' \
     'Trust project folder' "$PI_TAIL_FILE" \
     env HOME="$PI_HOME_LAB" "$PI_BIN" hello
-  # pi-signed and omp share Pi's engine and the same project-trust gate
+  # pi-signed share Pi's engine and the same project-trust gate
   # (fm_busy_launch_prompt_parked), so the one real capture also proves them,
   # each against its own freshly armed fm-spawn seed record.
-  for h in pi-signed omp; do
+  for h in pi-signed; do
     hstate=$(mktemp -d "${TMPDIR:-/tmp}/fm-launch-prompt-$h.XXXXXX") || fail "$h: could not create the isolated state dir"
     LABS+=("$hstate")
     "$EV" arm "$hstate" t1 >/dev/null || fail "$h: could not arm the scratch busy-state record"
@@ -182,7 +182,7 @@ if [ -x "${PI_BIN:-}" ]; then
     [ "$out" = "unknown launch-prompt" ] \
       || fail "$h: the same real Pi trust-dialog capture classified '$out', expected 'unknown launch-prompt'"
   done
-  pass "pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate"
+  pass "pi, pi-signed: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate"
 else
   note "pi not installed - launch-prompt signature not checked"
 fi

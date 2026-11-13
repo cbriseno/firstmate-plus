@@ -150,7 +150,7 @@ The output contract is identical to [`cd-guard.md`](cd-guard.md):
 | --- | --- | --- |
 | Claude | `.claude/settings.json` PreToolUse: the `Bash` group and a `^(Read\|Edit\|MultiEdit\|Write\|NotebookEdit)$` group, each passing `--claude` | Bash and edit transports live-verified below; the Read route is covered by offline tests. |
 | Codex | `.codex/hooks.json` PreToolUse group matching `^(Bash\|apply_patch)$`, anchored from `pwd -P` like the cd-guard entry | Wired and live-verified; Codex fires PreToolUse for `apply_patch` with the patch in `tool_input.command`. An updated home shows Codex's hook-review dialog once for the new hook ([Codex reference](../.agents/skills/harness-adapters/references/harness/codex.md#hook-trust)). |
-| Grok, OpenCode, Pi, pi-signed, omp, Cursor, Kimi | Their shell hook surfaces carry the cd-guard, but their file-edit tool names and this guard's behavior there are unverified | Not wired. |
+| Grok, OpenCode, Pi, pi-signed, Cursor, Kimi | Their shell hook surfaces carry the cd-guard, but their file-edit tool names and this guard's behavior there are unverified | Not wired. |
 
 The two tracked Claude entries do not carry the Grok marker guard, matching the delegation guard's documented exception in [`turnend-guard.md`](turnend-guard.md): Grok has no counterpart registration, so standing down would remove the guard from Grok rather than deduplicate it.
 That reach under Grok is incidental, because `--claude` suppresses the stdout object Grok reads.

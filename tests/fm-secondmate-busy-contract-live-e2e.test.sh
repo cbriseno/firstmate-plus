@@ -128,12 +128,6 @@ real_harness_stays_up() {  # <harness> <version> <case> <id> <bin>
         -e "$state/$id.pi-ext.ts" \
         || fail "$harness $version: could not start the real binary"
       ;;
-    omp)
-      "$REAL_TMUX" -L "$SOCKET" new-window -d -t firstmate: -n "live-$harness" -c "$sm" -- \
-        env -u CLAUDECODE -u PI_CODING_AGENT FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 \
-        "$bin" --auto-approve --cwd "$sm" -e "$state/$id.omp-ext.ts" \
-        || fail "$harness $version: could not start the real binary"
-      ;;
     opencode)
       "$REAL_TMUX" -L "$SOCKET" new-window -d -t firstmate: -n "live-$harness" -c "$sm" -- \
         env OPENCODE_CONFIG_CONTENT='{"permission":{"*":"allow"}}' "$bin" \
@@ -182,7 +176,7 @@ check_harness() {  # <harness>
     || fail "$harness $version: secondmate spawn failed: $out"
   state="$case_dir/primary/state"
   case "$harness" in
-    claude|opencode|pi|pi-signed|omp) armed=1 ;;
+    claude|opencode|pi|pi-signed) armed=1 ;;
   esac
   if [ "$armed" -eq 1 ]; then
     [ -f "$state/$id.busy-state" ] || fail "$harness $version: real tmux secondmate spawn did not arm the busy contract"
@@ -200,7 +194,7 @@ check_harness() {  # <harness>
   CHECKED=$((CHECKED + 1))
 }
 
-for harness in claude opencode pi pi-signed omp grok codex; do
+for harness in claude opencode pi pi-signed grok codex; do
   check_harness "$harness"
 done
 

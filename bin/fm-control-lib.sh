@@ -64,7 +64,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor omp
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor
 }
 
 fm_control_harness_supported() {  # <harness>
@@ -81,12 +81,10 @@ fm_control_harness_supported() {  # <harness>
 # harness= that way), which is why the spawn adapters match `claude*`,
 # and friends. This is the one place that prefix rule is stated. `pi` and
 # `pi-signed` are exact because a `pi*` prefix would swallow the signed adapter,
-# `omp` is exact because an `omp*` prefix would claim unrelated commands.
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
     pi) printf 'pi' ;;
     pi-signed) printf 'pi-signed' ;;
-    omp) printf 'omp' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     opencode*) printf 'opencode' ;;
@@ -106,7 +104,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|kimi|cursor) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -117,7 +115,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|omp|grok|kimi|cursor) printf '1' ;;
+    claude|codex|pi|pi-signed|grok|kimi|cursor) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -125,7 +123,7 @@ fm_control_interrupt_repeat() {  # <harness>
 # The rendered proof required between presses, empty for current adapters.
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
     *) return 1 ;;
   esac
 }
@@ -133,7 +131,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The settle interval after an interrupt press.
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) printf '0.2' ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -141,7 +139,7 @@ fm_control_interrupt_press_gap() {  # <harness>
 # A rendered surface that a mistimed interrupt press can open.
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
     *) return 1 ;;
   esac
 }
@@ -149,7 +147,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # The key that must follow an interrupt to clear its composer, when needed.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
     *) return 1 ;;
   esac
 }
@@ -170,7 +168,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
       esac
       ;;
     claude|grok|kimi|cursor) printf '/exit' ;;
-    codex|pi|pi-signed|omp) printf '/quit' ;;
+    codex|pi|pi-signed) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -334,7 +332,6 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
       ;;
     opencode) printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js" ;;
     pi|pi-signed) printf '%s\n' "$state/$id.pi-ext.ts" ;;
-    omp) printf '%s\n' "$state/$id.omp-ext.ts" ;;
     grok)
       printf '%s\n' "$wt/.fm-grok-turnend"
       printf '%s\n' "$state/$id.grok-turnend-token"

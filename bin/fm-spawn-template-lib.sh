@@ -102,22 +102,6 @@ launch_template() {
       printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
-  # omp (Oh My Pi), a Pi fork. Same one-positional-brief, --model, --thinking,
-  # and -e shape as Pi, verified on omp 18.1.11. The differences are all at
-  # the launch boundary and documented in the header above: foreign markers
-  # cleared (omp has none of its own, so an inherited CLAUDECODE would win),
-  # FM_OMP_HARNESS=omp established for bin/fm-harness.sh, OMP_SKIP_SETUP=1
-  # against the fresh-profile provider wizard, --auto-approve so no approval
-  # prompt can park an unattended worker, the tracked posture overlay so a
-  # captain-level plan, prewalk, or usage dialog cannot either, and --cwd
-  # pinned to the worktree because omp's extension discovery is cwd-only. A
-  # secondmate loads its two primary extensions by that discovery alone:
-  # naming them with -e as well loads each twice (verified), doubling every
-  # session_stop continuation. The busy extension is the exception: it lives
-  # outside the home, so discovery never sees it, and -e is the only load.
-  omp)
-    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 __OMPBIN__ --config __OMPWORKERCFG__ --auto-approve --cwd __WORKTREE__ __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
-    ;;
   # grok (Grok Build TUI): a positional prompt starts the supervised interactive
   # session. --always-approve auto-approves every tool execution (verified: the
   # crewmate runs fully autonomously, no permission gate), which an unattended

@@ -62,7 +62,7 @@ if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   inventory codex agent unknown no 'Codex agent'
   inventory claude agent unknown no 'Claude agent'
   inventory pi agent unknown no 'Pi agent'
-  for tool in opencode grok kimi cursor omp; do
+  for tool in opencode grok kimi cursor; do
     inventory "$tool" agent unknown no "$tool agent"
   done
   printf '%s\n' 'Extensions and agent-specific helpers are conditional; see docs/configuration.md. Versions marked unknown are not established minimums.'

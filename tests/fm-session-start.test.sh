@@ -760,20 +760,7 @@ write_pi_loaded_markers() {
   write_pi_turnend_loaded_marker "$home" "$root" "$pid"
 }
 
-install_omp_extension_fixtures() {
-  local root=$1
-  mkdir -p "$root/.omp/extensions"
-  cp "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$root/.omp/extensions/fm-primary-omp-watch.ts"
-  cp "$ROOT/.omp/extensions/fm-primary-turnend-guard.ts" "$root/.omp/extensions/fm-primary-turnend-guard.ts"
-}
 
-write_omp_loaded_markers() {
-  local home=$1 root=$2 pid=$3 version
-  version=$(hash_file_for_test "$root/.omp/extensions/fm-primary-omp-watch.ts")
-  printf '%s\n%s\n' "$version" "$pid" > "$home/state/.omp-watch-extension-loaded"
-  version=$(hash_file_for_test "$root/.omp/extensions/fm-primary-turnend-guard.ts")
-  printf '%s\n%s\n' "$version" "$pid" > "$home/state/.omp-turnend-extension-loaded"
-}
 
 # --- context digest: absent vs empty vs present -----------------------------
 
@@ -3024,88 +3011,8 @@ EOF
   pass "session start accepts current Pi markers written before lock acquisition"
 }
 
-test_omp_supervision_block_and_diagnostic() {
-  local rec root home fakebin out block_count
-  rec=$(new_world omp-supervision-block)
-  IFS='|' read -r root home fakebin <<EOF
-$rec
-EOF
-  make_fake_toolchain "$fakebin"
-  make_fake_ps_harness "$fakebin" omp
 
-  out=$(FM_FAKE_HARNESS=omp run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  block_count=$(printf '%s\n' "$out" | grep -c '^SUPERVISION OPERATING INSTRUCTIONS - primary harness:')
-  [ "$block_count" -eq 1 ] || fail "expected exactly one supervision block, got $block_count"
-  assert_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS - primary harness: omp" "omp supervision block missing"
-  assert_contains "$out" "Mode: omp (Oh My Pi) extension background wake." "omp snippet missing from session start"
-  assert_contains "$out" "OMP_WATCH_EXTENSION: not loaded" "omp extension load diagnostic missing"
-  assert_contains "$out" "$root/.omp/extensions/fm-primary-turnend-guard.ts and $root/.omp/extensions/fm-primary-omp-watch.ts auto-load" "omp diagnostic omits the two tracked extension paths"
-  # shellcheck disable=SC2016  # backticks are literal text
-  assert_contains "$out" 'exit omp and relaunch through `fm <project>` (the launcher sets FM_HOME and --cwd)' "omp diagnostic for a non-checkout home must direct to the fm launcher"
-  assert_contains "$out" "a bare omp or /resume from the firstmate checkout does not register the extensions for this home" "omp diagnostic omits the bare omp warning"
-  assert_not_contains "$out" "restart omp with this home as its working directory" "omp diagnostic still tells a non-checkout home to restart omp inside it"
-  assert_not_contains "$out" "PI_WATCH_EXTENSION" "omp primary must not receive the Pi diagnostic"
-  assert_not_contains "$out" "project trust" "omp diagnostic must not carry Pi's trust prerequisite"
-  pass "session start emits the omp block and reports omp extension load state"
-}
-
-test_omp_diagnostic_checkout_home_keeps_restart_wording_and_names_cause() {
-  local rec root home fakebin out
-  rec=$(new_world omp-checkout-home)
-  IFS='|' read -r root home fakebin <<EOF
-$rec
-EOF
-  make_fake_toolchain "$fakebin"
-  make_fake_ps_harness "$fakebin" omp
-  mkdir -p "$root/state" "$root/data" "$root/config"
-
-  # Home is the checkout, FM_HOME exported, no marker: today's wording, no cause line.
-  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT FM_FAKE_HARNESS=omp \
-    FM_HOME="$root" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" "$SESSION_START")
-  assert_contains "$out" "OMP_WATCH_EXTENSION: not loaded - restart omp with this home as its working directory" "omp diagnostic lost today's wording for the checkout home"
-  assert_not_contains "$out" "fm <project>" "omp diagnostic named the launcher for the checkout home"
-  assert_not_contains "$out" "OMP_WATCH_CAUSE" "omp diagnostic named a cause that no fact establishes"
-
-  # FM_HOME unset in the process environment.
-  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u FM_HOME FM_FAKE_HARNESS=omp \
-    FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" "$SESSION_START")
-  assert_contains "$out" "OMP_WATCH_EXTENSION: not loaded - restart omp with this home as its working directory" "omp diagnostic lost the checkout wording with FM_HOME unset"
-  assert_not_contains "$out" "OMP_WATCH_CAUSE" "omp diagnostic named a cause for the checkout home with FM_HOME unset"
-
-  # Marker names a pid that is not this session.
-  install_omp_extension_fixtures "$root"
-  write_omp_loaded_markers "$root" "$root" 424242
-  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT FM_FAKE_HARNESS=omp \
-    FM_HOME="$root" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" "$SESSION_START")
-  assert_contains "$out" "OMP_WATCH_EXTENSION: not loaded" "stale-pid marker must still report not loaded"
-  assert_contains "$out" "OMP_WATCH_CAUSE: the extension marker $root/state/.omp-watch-extension-loaded names pid 424242, which is not this session" "omp diagnostic did not name the foreign marker pid"
-  assert_not_contains "$out" "FM_HOME is unset" "omp diagnostic named an unset FM_HOME cause"
-  pass "omp diagnostic keeps today's wording for the checkout home and names the establishable cause"
-}
-
-test_omp_diagnostic_accepts_prelock_loaded_marker() {
-  local rec root home fakebin out holder_pid
-  rec=$(new_world omp-prelock-loaded-marker)
-  IFS='|' read -r root home fakebin <<EOF
-$rec
-EOF
-  make_fake_toolchain "$fakebin"
-
-  sleep 300 &
-  holder_pid=$!
-  make_fake_ps_pi_holder "$fakebin" "$holder_pid" omp
-  install_omp_extension_fixtures "$root"
-  write_omp_loaded_markers "$home" "$root" "$holder_pid"
-
-  out=$(FM_FAKE_HARNESS=omp run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  kill "$holder_pid" 2>/dev/null || true
-  wait "$holder_pid" 2>/dev/null || true
-
-  assert_contains "$out" "primary harness: omp" "omp holder ancestry was not detected as omp"
-  assert_not_contains "$out" "OMP_WATCH_EXTENSION: not loaded" "omp diagnostic rejected a current pre-lock loaded marker"
-  pass "session start accepts current omp markers written before lock acquisition"
-}
 
 test_pi_diagnostic_rejects_missing_turnend_guard_marker() {
   local rec root home fakebin out holder_pid
@@ -3223,9 +3130,6 @@ test_pi_signed_primary_uses_pi_extensions_without_identity_normalization
 test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_rejects_handoff_generation_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker
-test_omp_supervision_block_and_diagnostic
-test_omp_diagnostic_checkout_home_keeps_restart_wording_and_names_cause
-test_omp_diagnostic_accepts_prelock_loaded_marker
 test_pi_diagnostic_rejects_missing_turnend_guard_marker
 test_pi_diagnostic_rejects_previous_session_loaded_marker
 test_runtime_bound_truncates_loudly_and_exits_zero

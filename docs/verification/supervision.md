@@ -1,7 +1,5 @@
 # Supervision integration verification
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
 
 ## Durable answer delivery and foreground continuation
 
@@ -12,8 +10,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
-
-### omp (Oh My Pi) native delivery, 2026-09-05
 
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.

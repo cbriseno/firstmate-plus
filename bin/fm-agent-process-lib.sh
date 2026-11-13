@@ -30,10 +30,7 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
   base=${path##*/}
   base=${base#-}
   case "$base" in
-    # omp (Oh My Pi) is anchored: its live process
-    # name is the bare word `omp` (verified, omp 18.1.11) and a glob would claim
-    # unrelated commands such as ompd or comp.
-    *claude*|*codex*|*opencode*|*grok*|*kimi*|pi|pi-signed|pi-launcher|Pi|omp) printf 'agent' ;;
+    *claude*|*codex*|*opencode*|*grok*|*kimi*|pi|pi-signed|pi-launcher|Pi) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)
       if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
