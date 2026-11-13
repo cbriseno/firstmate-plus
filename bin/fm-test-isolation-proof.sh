@@ -145,9 +145,6 @@ exclusion_reason() {
     fm-backend-cmux.test.sh|fm-backend-cmux-smoke.test.sh)
       printf '%s\n' 'cmux GUI backend; never parallel with another cmux mutator'
       ;;
-    fm-backend-orca.test.sh)
-      printf '%s\n' 'orca backend surface; keep serial until dedicated isolation proof'
-      ;;
     *)
       return 1
       ;;

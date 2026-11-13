@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
+# Spawn a direct report: a crewmate in a treehouse worktree, or a
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> --host [--path <path>...] [--harness <name>] [--backend <name>]
@@ -119,13 +119,8 @@
 #   runtime signals (via bin/fm-backend.sh's fm_backend_detect, with cmux
 #   fallback details in docs/cmux-backend.md),
 #   then tmux.
-#   Spawn-capable backends are the reference tmux adapter, verified herdr
-#   adapter, and experimental orca and cmux adapters. Orca owns
-#   both the task worktree and terminal, so ship/scout Orca spawns do not run
-#   treehouse get; cmux and herdr are session providers and use treehouse.
-#   Auto-detected herdr stays silent like tmux;
-#   auto-detected cmux prints a loud stderr notice; orca is
-#   never auto-detected.
+#   Spawn-capable backends are tmux, herdr and cmux; all use treehouse.
+#   Auto-detected herdr stays silent; auto-detected cmux prints a notice.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
 #   absent backend= means tmux. cmux does not support --secondmate
@@ -209,7 +204,7 @@
 #   the declaration, what holds a place, and the race argument), a fresh ship or
 #   scout spawn counts the places already held while holding that same
 #   project-identity lock - taken on every backend whenever the declaration caps
-#   any project, Orca included, because an uncapped clone's worker still holds a
+#   any project, because an uncapped clone's worker still holds a
 #   place for a capped clone of the same origin - and holds it through metadata
 #   publication. A spawn that finds
 #   every place held prints one `deferred:` line and exits 75 before any brief
@@ -373,7 +368,7 @@
 #   blank lines and lines beginning with # are ignored. Invalid input refuses
 #   before launch, as do path inspection errors such as inaccessible config
 #   directories. An empty file retains only the operational floor below.
-#   Names are read once per spawn; unless the Orca source below applies, values
+#   Names are read once per spawn; values
 #   are expanded in the destination pane, not copied from the invoking process
 #   or written into the launch text.
 #   Unset names stay unset and empty values stay empty.
@@ -395,36 +390,6 @@
 #   This is an exec environment boundary, not a sandbox for the pane's startup
 #   shell, credential files, same-user processes, or later shell initialization.
 #   See docs/configuration.md for provider/Git setup and supported limits.
-#   On backend=orca the destination is an Orca terminal whose environment comes
-#   from the Orca app and shell startup, not this home, so a nonempty allowlist
-#   without the source below prints a stderr warning and launches unchanged.
-# Orca environment source (config/launch-env-tmux-session):
-#   Optional local file containing one exact tmux session name (letters, digits,
-#   underscores or hyphens). Only fresh Orca spawns use it; other backends are
-#   unchanged. It requires config/launch-env-allowlist and refuses without one,
-#   so tmux's automatic update-environment names (SSH_AUTH_SOCK) never ride
-#   along. Before allocation, each allowlisted name is read from that session's
-#   local environment (tmux -u show-environment -t =<session> <name>), never
-#   tmux's server-global or the invoking process's environment; -u keeps values
-#   intact under absent or C locales. A missing name, unreadable session, or
-#   malformed selector refuses before the Orca worktree or terminal exists,
-#   while an explicit -NAME record deliberately leaves that name unset. Launch
-#   keeps env -i and the operational floor, replaces destination expansion of
-#   allowlisted names with the snapshotted values, and sets
-#   GIT_CONFIG_NOSYSTEM=1 so a system credential helper cannot answer for the
-#   worker. Values are shell-quoted only in the owner-only staged launch file,
-#   never terminal input, and the pane deletes that file as sourcing starts,
-#   before the worker executes; a deletion failure refuses the worker launch and
-#   keeps the interactive shell, even with errexit set (a Bash 3.2 or dash
-#   errexit pane still exits if spawn reclaims the file in the instant between
-#   the pane's existence check and its source). Spawn waits up to 30
-#   seconds for that deletion; if the pane never ran the command or could not
-#   delete the file, or HUP, INT or TERM interrupts spawn first, spawn removes
-#   it unless the pane already did, refuses the worker launch, and leaves the
-#   Orca terminal open.
-#   The selector is not inherited into secondmate homes. This is not a
-#   filesystem sandbox; project and harness sandbox
-#   settings still own access to personal credential files.
 # Claude permission mode (config/claude-permission-mode):
 #   One token selecting the permission flag every claude launch (ship, scout,
 #   secondmate, and relaunch) carries. Absent or `bypass` selects
@@ -1200,9 +1165,6 @@ fi
 . "$SCRIPT_DIR/fm-spawn-remote-lib.sh"
 
 BACKEND=
-ORCA_ABORT_CLEANUP=0
-ORCA_WORKTREE_ID=
-ORCA_TERMINAL=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -1485,8 +1447,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   fi
 fi
-ORCA_LAUNCH_ENV_ENABLED=0
-ORCA_LAUNCH_ENV_ARGS=
 if [ "$RELAUNCH" -eq 0 ]; then
   mkdir -p "$STATE" || {
     echo "error: could not create parent state directory" >&2
@@ -1561,39 +1521,11 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
-  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=orca does not support --secondmate spawns yet" >&2
-    exit 1
-  fi
   if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
     echo "error: backend=cmux does not support --secondmate spawns yet" >&2
     exit 1
   fi
-  if [ "$BACKEND" = orca ]; then
-    fm_backend_orca_runtime_check || exit 1
-    ORCA_LAUNCH_ENV_ENABLED=$(fm_config_source_present "$CONFIG/launch-env-tmux-session") || exit 1
-    if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-      if [ "$LAUNCH_ENV_ENABLED" != 1 ]; then
-        echo "error: config/launch-env-tmux-session requires config/launch-env-allowlist; refusing Orca launch" >&2
-        exit 1
-      fi
-      if [ ! -f "$CONFIG/launch-env-tmux-session" ] || [ ! -r "$CONFIG/launch-env-tmux-session" ]; then
-        echo "error: config/launch-env-tmux-session must be a readable regular file" >&2
-        exit 1
-      fi
-      ORCA_LAUNCH_ENV_SESSION=$(cat "$CONFIG/launch-env-tmux-session") || exit 1
-      case "$ORCA_LAUNCH_ENV_SESSION" in
-        ''|*[!A-Za-z0-9_-]*)
-          echo "error: config/launch-env-tmux-session must contain one session name (letters, digits, underscores or hyphens)" >&2
-          exit 1
-          ;;
-      esac
-      ORCA_LAUNCH_ENV_ARGS=$(fm_backend_orca_launch_env_args \
-        "$ORCA_LAUNCH_ENV_SESSION" "$LAUNCH_ENV_NAMES") || exit 1
-    elif [ -n "$LAUNCH_ENV_NAMES" ]; then
-      echo "warning: backend=orca resolves config/launch-env-allowlist names from the Orca terminal's own environment, not this home's; set config/launch-env-tmux-session to take them from a scoped tmux session" >&2
-    fi
-  fi
+
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
@@ -1969,7 +1901,7 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
 fi
 
 # Command Code's idle placeholder reads empty only with a Command Code pane
-# identity, which tmux and Herdr supply and cmux and orca do not, so
+# identity, which tmux and Herdr supply and cmux does not, so
 # there the composer would never read empty and steering would stall.
 if [ "$HARNESS" = commandcode ] && [ "$BACKEND" != tmux ] && [ "$BACKEND" != herdr ]; then
   echo "error: commandcode is verified on the tmux and herdr backends only; backend=$BACKEND cannot prove its composer empty. Select backend tmux or herdr." >&2
@@ -2768,7 +2700,6 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 elif [ "$KIND" = host ]; then
-  [ "$BACKEND" != orca ] || { echo 'error: backend=orca requires a Git worktree; choose a terminal backend for --host' >&2; exit 1; }
   [ ! -L "$DATA/$ID/host-paths" ] && [ -f "$DATA/$ID/host-paths" ] || { echo 'error: --host requires an fm-brief.sh --host path manifest' >&2; exit 1; }
   HOST_DECLARED=()
   while IFS= read -r host_path; do HOST_DECLARED+=("$host_path"); done < "$DATA/$ID/host-paths"
@@ -2822,7 +2753,6 @@ fi
 # deferral leaves the task exactly as queued as it was. A relaunch replaces a
 # worker that already holds a place, and a secondmate is not a worker.
 SPAWN_PROJECT_CAPACITY=
-SPAWN_PROJECT_CAPACITY_ANY=
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
     echo "error: could not resolve the root Firstmate home that declares project capacity for $PROJ_ABS" >&2
@@ -2833,20 +2763,14 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; th
     exit 1
   fi
   SPAWN_PROJECT_CAPACITY=$FM_PROJECT_CAPACITY
-  SPAWN_PROJECT_CAPACITY_ANY=$FM_PROJECT_CAPACITY_ANY
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
-  { [ "$BACKEND" != orca ] || [ -n "$SPAWN_PROJECT_CAPACITY_ANY" ]; }; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
-    if [ "$BACKEND" = orca ]; then
-      echo "error: another spawn or cleanup holds the shared project lock for $PROJ_ABS; refusing to race its capacity admission" >&2
-    else
-      echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
-    fi
+    echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
     exit 1
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
@@ -3794,36 +3718,11 @@ EOF
     fi
     T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
     ;;
-  orca)
-    set +e
-    ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
-    ORCA_WT_STATUS=$?
-    set -e
-    if [ "$ORCA_WT_STATUS" -ne 0 ]; then
-      if [ "$ORCA_WT_STATUS" -eq 2 ] && [ -n "$ORCA_WT_RAW" ]; then
-        if parse_orca_worktree_result "$ORCA_WT_RAW" && [ -n "$ORCA_WORKTREE_ID" ]; then
-          ORCA_ABORT_CLEANUP=1
-        fi
-      fi
-      exit 1
-    fi
-    parse_orca_worktree_result "$ORCA_WT_RAW" || true
-    ORCA_ABORT_CLEANUP=1
-    if [ -z "$ORCA_WORKTREE_ID" ] || [ -z "$WT" ]; then
-      echo "error: orca did not return a worktree id/path for $W" >&2
-      exit 1
-    fi
-    validate_spawn_worktree "orca worktree create" "$W"
-    if [ -z "$ORCA_TERMINAL" ]; then
-      ORCA_TERMINAL=$(fm_backend_orca_terminal_create "$ORCA_WORKTREE_ID" "$W") || exit 1
-    fi
-    T="$ORCA_TERMINAL"
-    ;;
   esac
-  # Orca and the Herdr projection own their own abort cleanup above; every other
+  # The Herdr projection owns its own abort cleanup above; every other
   # endpoint a fresh polytoken spawn opened is closed by spawn_abort_cleanup when
   # the spawn ends with no record before its launch is delivered.
-  if [ "$HARNESS" = polytoken ] && [ "$BACKEND" != orca ] && [ "${HERDR_PROJECTED:-0}" -ne 1 ]; then
+  if [ "$HARNESS" = polytoken ] && [ "${HERDR_PROJECTED:-0}" -ne 1 ]; then
     SPAWN_FRESH_ENDPOINT_OPENED=1
   fi
 fi
@@ -3842,7 +3741,6 @@ spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
   herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
-  orca) fm_backend_orca_send_text_line "$1" "$2" ;;
   cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   esac
 }
@@ -3857,7 +3755,6 @@ spawn_send_literal() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
   herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-  orca) fm_backend_orca_send_literal "$1" "$2" ;;
   cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
   esac
 }
@@ -3865,7 +3762,6 @@ spawn_send_key() { # <target> <key>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_key "$1" "$2" ;;
   herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-  orca) fm_backend_orca_send_key "$1" "$2" ;;
   cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
   esac
 }
@@ -3889,7 +3785,6 @@ spawn_enter_recorded_worktree() {
 spawn_assert_agent_worktree() {
   local expected seen i
   [ "$KIND" = secondmate ] && return 0
-  [ "$BACKEND" = orca ] && return 0
   expected=$(real_path_or_raw "$WT")
   for i in $(seq 1 20); do
     seen=$(spawn_current_path "$WT_TARGET" || true)
@@ -4129,18 +4024,8 @@ rovo_spawn_fail() { # <detail>
   rovo_endpoint_cleanup
 }
 
-# The launch-then-confirm gates run after the task record is published, when
-# ORCA_ABORT_CLEANUP is already cleared and neither the abort trap nor a
-# teardown owns this endpoint yet, so a gate failure must close the launched
-# process here or it keeps running as an orphaned autonomous agent outside
-# task control. Mirrors fm-teardown.sh's own generic kill call. On orca only
-# the exact terminal is closed: that stops the CLI while its worktree stays
-# for the record's own teardown, which owns worktree deletion.
+# A post-launch gate failure closes the recorded endpoint.
 rovo_endpoint_cleanup() {
-  if [ "$BACKEND" = orca ]; then
-    fm_backend_kill orca "$T" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
-    return 0
-  fi
   fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
@@ -4345,9 +4230,7 @@ polytoken_spawn_fail() {  # <detail>
   rovo_endpoint_cleanup
 }
 
-if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
-  [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
   # that worktree, so the replacement agent starts where the work is rather
@@ -4380,7 +4263,7 @@ elif [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$BACKEND" != orca ]; then
+elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -5365,7 +5248,6 @@ else
 fi
 
 META_WINDOW=$T
-[ "$BACKEND" = orca ] && META_WINDOW=$W
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PATH="$STATE/$ID.meta"
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
@@ -5444,10 +5326,6 @@ preserve_relaunch_meta() {
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
     echo "herdr_tab_id=$HERDR_TAB_ID"
     echo "herdr_pane_id=$HERDR_PANE_ID"
-  fi
-  if [ "$BACKEND" = orca ]; then
-    echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-    echo "terminal=$ORCA_TERMINAL"
   fi
   if [ "$BACKEND" = cmux ]; then
     echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
@@ -5552,7 +5430,6 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
 fi
 python3 "$SCRIPT_DIR/fm_task_sessions.py" start "$STATE" "$ID" || echo "warning: session launch record failed for $ID" >&2
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
@@ -5906,10 +5783,7 @@ if [ "$KIND" != secondmate ]; then
 fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH_ENV_PREFIX='/usr/bin/env -i'
-  # A configured Orca source replaces destination expansion of allowlisted
-  # names, so a name the source leaves unset cannot revive a personal pane value.
   LAUNCH_ENV_FORWARD_NAMES=$LAUNCH_ENV_NAMES
-  [ "$ORCA_LAUNCH_ENV_ENABLED" != 1 ] || LAUNCH_ENV_FORWARD_NAMES=
   # COMPACT_ADVISER_DISABLE is the intentional declarative floor-membership
   # entry; the explicit COMPACT_ADVISER_DISABLE=1 assignment below is the
   # authoritative setter.
@@ -5920,20 +5794,12 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     TERM_PROGRAM \
     FM_TASK_ID COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
     $LAUNCH_ENV_FORWARD_NAMES; do
-    if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-      case $'\n'"$LAUNCH_ENV_NAMES"$'\n' in
-        *$'\n'"$env_name"$'\n'*) continue ;;
-      esac
-    fi
     # Only validated names enter shell syntax. Values expand once, quoted, in
     # the pane shell and never become source text or spawn-process snapshots.
     # shellcheck disable=SC2016
     printf -v env_arg '${%s+"%s=$%s"}' "$env_name" "$env_name" "$env_name"
     LAUNCH_ENV_PREFIX="$LAUNCH_ENV_PREFIX $env_arg"
   done
-  if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-    LAUNCH_ENV_PREFIX="$LAUNCH_ENV_PREFIX $ORCA_LAUNCH_ENV_ARGS GIT_CONFIG_NOSYSTEM=1"
-  fi
   # COMPACT_ADVISER_DISABLE is retained by the floor loop above, which forwards
   # whatever the pane export set, and then pinned here to the one value Firstmate
   # launches on. The literal assignment comes last deliberately: `env` applies
@@ -5975,11 +5841,6 @@ if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
 fi
 LAUNCH_FILE="$LAUNCH_DIR/launch.$SPAWN_GEN.sh"
 LAUNCH_STAGE="$LAUNCH_DIR/.launch.$SPAWN_GEN.tmp"
-if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-  # The sourcing shell already holds the open file; unlink the credentials
-  # before launching the worker, including on a later command failure.
-  LAUNCH="command rm -- $(shell_quote "$LAUNCH_FILE") || { echo 'error: cannot remove private launch file; refusing worker launch' >&2; return 1 2>/dev/null || exit 1; }; $LAUNCH"
-fi
 if [ -e "$LAUNCH_FILE" ] || [ -L "$LAUNCH_FILE" ]; then
   echo "error: task launch file $LAUNCH_FILE already exists; refusing to replace it" >&2
   exit 1
@@ -5991,51 +5852,10 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
   exit 1
 fi
 SPAWN_STAGED_LAUNCH_FILE=$LAUNCH_FILE
-if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-  # Bash runs the EXIT trap for an untrapped fatal signal with status 0, which
-  # abort cleanup reads as success, so exit with the signal's status instead
-  # until the pane has consumed the published launch file.
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-fi
 sleep 0.3
-spawn_orca_launch_send_fail() {
-  rm -f -- "$LAUNCH_FILE" 2>/dev/null || true
-  kimi_spawn_fail "launch command could not be delivered to Orca terminal $T"
-  rovo_endpoint_cleanup
-  exit 1
-}
-# Orca source mode: the pane unlinks the credential-bearing file as it starts
-# sourcing it. A pane that accepted the text but never ran it, or ran it and
-# could not unlink it, would otherwise leave the file until teardown, so wait a
-# bounded time and reclaim it. The worker never started, but the interactive
-# pane stays open.
-spawn_orca_wait_launch_consumed() {
-  local i=0 max=${FM_ORCA_LAUNCH_CONSUME_POLLS:-150} reclaim_status=0
-  while [ -e "$LAUNCH_FILE" ]; do
-    i=$((i + 1))
-    if [ "$i" -gt "$max" ]; then
-      spawn_orca_reclaim_launch_file || reclaim_status=$?
-      [ "$reclaim_status" != 1 ] || return 0
-      kimi_spawn_fail "Orca terminal $T did not run the launch command or could not remove the launch file; refused the worker launch"
-      exit 1
-    fi
-    sleep 0.2
-  done
-}
 SPAWN_LAUNCH_SENT=1
-# errexit is on here: a failed send still exits, and Orca source mode first
-# removes the credential-bearing file the pane never received.
 LAUNCH_SOURCE_TEXT=". $(shell_quote "$LAUNCH_FILE")"
-if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-  # A refused source-mode launch fails the source command, and some shells exit
-  # under errexit on sourcing a file spawn already reclaimed even inside ||, so
-  # keep an errexit pane shell open in both cases.
-  LAUNCH_SOURCE_TEXT="if [ -e $(shell_quote "$LAUNCH_FILE") ]; then $LAUNCH_SOURCE_TEXT || true; else echo 'error: private launch file was already removed; refusing worker launch' >&2; fi"
-fi
 if ! spawn_send_literal "$T" "$LAUNCH_SOURCE_TEXT"; then
-  [ "$ORCA_LAUNCH_ENV_ENABLED" != 1 ] || spawn_orca_launch_send_fail
   exit 1
 fi
 sleep 0.3
@@ -6044,12 +5864,7 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 if ! spawn_send_key "$T" Enter; then
-  [ "$ORCA_LAUNCH_ENV_ENABLED" != 1 ] || spawn_orca_launch_send_fail
   exit 1
-fi
-if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-  spawn_orca_wait_launch_consumed
-  trap - HUP INT TERM
 fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then

@@ -115,10 +115,10 @@
 #   - An unverified harness, or a harness whose control mechanics are unknown,
 #     is refused rather than guessed at.
 #   - A backend that cannot deliver the harness's interrupt key is refused
-#     (Orca's terminal API has no Escape).
+#     if the backend cannot send that key.
 #   - `exit` and `relaunch` require a backend with a recovery-grade agent-state
 #     classifier (tmux, herdr), because without one the "the agent stopped"
-#     postcondition cannot be proven. orca, cmux are refused
+#     postcondition cannot be proven. cmux is refused
 #     rather than reported as successful blind.
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
 #     classified state acts.

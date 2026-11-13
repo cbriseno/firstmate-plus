@@ -454,7 +454,6 @@ test_backend_name_explicit_beats_detection() {
 
 test_backend_validate_refuses_unknown() {
   fm_backend_validate tmux 2>/dev/null || fail "fm_backend_validate should accept tmux"
-  fm_backend_validate orca 2>/dev/null || fail "fm_backend_validate should accept orca"
   local out
   # bogus names a backend with no adapter at all; tmux, herdr, orca,
   # and cmux are all known adapters and spawn-supported.
@@ -487,10 +486,11 @@ test_backend_source_shell_portable() {
     stub="$TMP_ROOT/zsh-source-path"
     probe="$stub/probe"
     mkdir -p "$stub/backends"
-    printf 'command -v dirname > "%s"\n' "$probe" > "$stub/backends/orca.sh"
+    printf 'command -v dirname > "%s"\n' "$probe" > "$stub/backends/cmux.sh"
     : > "$stub/fm-composer-lib.sh"
-    zsh -c "cd '$ROOT' && source bin/fm-backend.sh && FM_BACKEND_LIB_DIR='$stub' && fm_backend_source orca" >/dev/null 2>&1 \
-      || fail "zsh: fm_backend_source orca should load a stub adapter"
+    : > "$stub/fm-backend-hometag-lib.sh"
+    zsh -c "cd '$ROOT' && source bin/fm-backend.sh && FM_BACKEND_LIB_DIR='$stub' && fm_backend_source cmux" >/dev/null 2>&1 \
+      || fail "zsh: fm_backend_source cmux should load a stub adapter"
     [ -s "$probe" ] \
       || fail "zsh: fm_backend_source clobbered PATH while loading a backend adapter"
     pass "zsh: fm_backend_source keeps PATH intact while loading a backend adapter"
@@ -543,11 +543,10 @@ test_backend_source_requires_adapter_file() {
   done
 }
 
-test_backend_validate_spawn_accepts_orca() {
+test_backend_validate_spawn_supported() {
   local out
   fm_backend_validate_spawn tmux 2>/dev/null || fail "fm_backend_validate_spawn should accept tmux"
   fm_backend_validate_spawn herdr 2>/dev/null || fail "fm_backend_validate_spawn should accept herdr"
-  fm_backend_validate_spawn orca 2>/dev/null || fail "fm_backend_validate_spawn should accept orca"
   fm_backend_validate_spawn cmux 2>/dev/null || fail "fm_backend_validate_spawn should accept cmux"
   out=$(fm_backend_validate_spawn bogus 2>&1) && fail "fm_backend_validate_spawn should still refuse unknown backends"
   assert_contains "$out" "unknown backend 'bogus'" "fm_backend_validate_spawn did not preserve unknown-backend validation"
@@ -637,7 +636,6 @@ test_backend_of_selector_matches_explicit_target_meta() {
   fm_write_meta "$state/fm-turnend-all-harnesses-v9.meta" "window=default:wB:p3" "backend=herdr"
   fm_write_meta "$state/tmux-task.meta" "window=firstmate:fm-tmux-task"
   fm_write_meta "$state/custom-window-task.meta" "window=custom-window"
-  fm_write_meta "$state/orca-task.meta" "window=fm-orca-task" "terminal=term-orca-task" "backend=orca"
 
   [ "$(fm_backend_of_selector 'dotfiles-d6' 'default:wA:p2' "$state")" = herdr ] \
     || fail "bare non-fm task id selector should use its recorded backend"
@@ -645,14 +643,8 @@ test_backend_of_selector_matches_explicit_target_meta() {
     || fail "exact fm-* task id selector should use exact metadata before legacy stripping"
   [ "$(fm_backend_of_selector 'fm-herdr-task' 'default:w1:p2' "$state")" = herdr ] \
     || fail "legacy fm-<id> selector should use its recorded backend"
-  [ "$(fm_backend_resolve_selector 'fm-orca-task' "$state")" = term-orca-task ] \
-    || fail "Orca fm-<id> selector should resolve to terminal=, not window="
-  [ "$(fm_backend_resolve_selector 'term-orca-task' "$state")" = term-orca-task ] \
-    || fail "raw Orca terminal selector should resolve through metadata"
   [ "$(fm_backend_resolve_selector 'custom-window' "$state")" = custom-window ] \
     || fail "raw window selector matching metadata should not require tmux fallback"
-  [ "$(fm_backend_of_selector 'term-orca-task' 'term-orca-task' "$state")" = orca ] \
-    || fail "matching an explicit Orca terminal handle should inherit metadata backend"
   [ "$(fm_backend_of_selector 'default:w1:p2' 'default:w1:p2' "$state")" = herdr ] \
     || fail "explicit backend target matching metadata should use that task's backend"
   [ "$(fm_backend_of_selector 'firstmate:fm-tmux-task' 'firstmate:fm-tmux-task' "$state")" = tmux ] \
@@ -1195,9 +1187,13 @@ if fm_backend_validate_spawn zellij >/dev/null 2>&1; then
   fail "removed zellij backend must be rejected"
 fi
 pass "removed zellij backend is rejected"
+if fm_backend_validate_spawn orca >/dev/null 2>&1; then
+  fail "removed orca backend must be rejected"
+fi
+pass "removed orca backend is rejected"
 test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
-test_backend_validate_spawn_accepts_orca
+test_backend_validate_spawn_supported
 test_meta_get_and_backend_of_meta
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta

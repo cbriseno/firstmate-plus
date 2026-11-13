@@ -13,14 +13,12 @@
 # when firstmate itself is running inside herdr with no explicit backend setting;
 # see herdr-addendum.md and data/fm-backend-design-d7/herdr-verification-p2.md for
 # its empirical basis.
-# Orca owns both the
-# task worktree and the terminal endpoint. P5 adds bin/backends/cmux.sh, also
+# P5 adds bin/backends/cmux.sh,
 # EXPERIMENTAL and spawn-capable, behind `--backend cmux`/`FM_BACKEND=cmux`/
 # `config/backend`, and behind runtime auto-detection when firstmate itself is
 # running inside a cmux-spawned terminal (primary CMUX_WORKSPACE_ID marker, or
 # the documented macOS fallback signals when cmux's claude wrapper strips that
-# marker) with no explicit backend setting - unlike Orca, which stays
-# never-auto-detected because it also owns the task worktree; see
+# marker) with no explicit backend setting; see
 # docs/cmux-backend.md for its empirical basis.
 # Codex App is intentionally not in the known set yet.
 # docs/codex-app-backend.md owns that blocked backend contract.
@@ -29,7 +27,7 @@
 # treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh does not write
 # `backend=tmux` for a default-backend task, so existing and newly spawned
 # default-path metas stay byte-identical. Only a task spawned on a non-tmux
-# spawn-capable backend, currently herdr, orca, or cmux, carries
+# spawn-capable backend, currently herdr or cmux, carries
 # an explicit `backend=` line.
 #
 # Event-source framing (herdr-addendum "Events as the core abstraction"): a
@@ -55,11 +53,10 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # section 4's harness-verification discipline. herdr is verified (P2;
 # data/fm-backend-design-d7/herdr-addendum.md) and has its own required CI lane,
 # with current coverage in docs/herdr-backend.md and
-# docs/verification/runtime-backends.md. Orca is experimental and also
-# provides worktrees; cmux is an experimental session provider.
+# docs/verification/runtime-backends.md. cmux is an experimental session provider.
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
-FM_BACKEND_KNOWN="tmux herdr orca cmux"
-FM_BACKEND_SPAWN="tmux herdr orca cmux"
+FM_BACKEND_KNOWN="tmux herdr cmux"
+FM_BACKEND_SPAWN="tmux herdr cmux"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -287,13 +284,12 @@ fm_backend_validate_spawn() {  # <name>
 # docs/configuration.md "Toolchain" and bootstrap's COMMON list). This is the
 # single owner of the per-backend dependency delta, so bootstrap follows the
 # RESOLVED backend instead of demanding an inactive backend's tools. Each set is:
-#   - the session-provider CLI itself (tmux/herdr/orca/cmux);
+#   - the session-provider CLI itself (tmux/herdr/cmux);
 #   - jq, for the JSON-emitting adapters (herdr, cmux) whose spawn/liveness
 #     paths parse the backend's JSON output (see each adapter's
 #     tool check, e.g. fm_backend_herdr_tool_check);
 #   - the treehouse worktree provider for every session-provider-only backend
-#     (tmux, herdr, cmux); orca owns its own task worktree and terminal,
-#     so it drops both treehouse and any other backend's session CLI.
+#     (tmux, herdr, cmux).
 # Prints a single space-separated line and returns 0 for a known backend; returns
 # 1 and prints nothing for an unknown backend.
 fm_backend_required_tools() {  # <backend>
@@ -301,7 +297,6 @@ fm_backend_required_tools() {  # <backend>
     tmux)   printf '%s' 'tmux treehouse' ;;
     herdr)  printf '%s' 'herdr jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
-    orca)   printf '%s' 'orca' ;;
     *) return 1 ;;
   esac
 }
@@ -342,12 +337,7 @@ fm_backend_of_meta() {  # <meta-file>
 }
 
 fm_backend_target_of_meta() {  # <meta-file>
-  local meta=$1 backend terminal window
-  backend=$(fm_backend_of_meta "$meta")
-  if [ "$backend" = orca ]; then
-    terminal=$(fm_meta_get "$meta" terminal)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
-  fi
+  local meta=$1 window
   window=$(fm_meta_get "$meta" window)
   [ -n "$window" ] && printf '%s' "$window"
 }
@@ -375,28 +365,9 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
-# An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
-# that Orca itself returns, so the `:` and `/` characters every real value
-# carries make the simple-atom check reject it. Firstmate hands the id back to
-# Orca opaquely and resolves it through Orca before removing anything, so this
-# proves only the shape that can name one worktree: both halves of the first
-# `::` split present, and the path half absolute.
-fm_backend_orca_worktree_id_valid() {  # <value>
-  case "$1" in
-    *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
-    *::*) ;;
-    *) return 1 ;;
-  esac
-  [ -n "${1%%::*}" ] || return 1
-  case "${1#*::}" in
-    /*) ;;
-    *) return 1 ;;
-  esac
-}
-
 fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface
+  local session pane recorded_session workspace tab surface
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -480,29 +451,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
-      ;;
-    orca)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Orca endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      terminal=$(fm_backend_meta_exact_value "$meta" terminal) || terminal=
-      worktree_id=$(fm_backend_meta_exact_value "$meta" orca_worktree_id) || worktree_id=
-      [ -n "$terminal" ] || {
-        echo "REFUSED: missing terminal in $meta; cannot close Orca endpoint; preserving task state." >&2
-        return 1
-      }
-      [ -n "$worktree_id" ] || {
-        echo "REFUSED: missing orca_worktree_id in $meta; cannot remove Orca worktree; preserving task state." >&2
-        return 1
-      }
-      if [ "$window" != "fm-$id" ] \
-        || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_orca_worktree_id_valid "$worktree_id"; then
-        echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      window=$terminal
       ;;
     cmux)
       [ "$binding" = "$id" ] || {
@@ -608,9 +556,6 @@ fm_backend_source() {  # <name>
     herdr)
       set -- fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh
       ;;
-    orca)
-      set -- fm-composer-lib.sh
-      ;;
     cmux)
       set -- fm-backend-hometag-lib.sh fm-composer-lib.sh
       ;;
@@ -638,13 +583,6 @@ fm_backend_source() {  # <name>
         _FM_BACKEND_HERDR_SOURCED=1
       fi
       ;;
-    orca)
-      if [ -z "${_FM_BACKEND_ORCA_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_ORCA_SOURCED=1
-      fi
-      ;;
     cmux)
       if [ -z "${_FM_BACKEND_CMUX_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
@@ -660,7 +598,7 @@ fm_backend_source() {  # <name>
 #   target with ":"   used as-is (the escape hatch for a window/pane outside
 #                      this firstmate home) - backend-independent, a literal string.
 #   exact task id      routed through <state-dir>/<id>.meta's backend target
-#                      (`window=` normally, `terminal=` for Orca) -
+#                      (`window=`) -
 #                      backend-independent, a stored value, NOT re-verified
 #                      against a live backend inventory (matches today's
 #                      behavior: tmux window names can be trusted from meta
@@ -720,7 +658,6 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   case "$backend" in
     tmux) fm_backend_tmux_capture "$@" ;;
     herdr) fm_backend_herdr_capture "$@" ;;
-    orca) fm_backend_orca_capture "$@" ;;
     cmux) fm_backend_cmux_capture "$@" ;;
     *) echo "error: no capture implementation for backend '$backend'" >&2; return 1 ;;
   esac
@@ -731,8 +668,7 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
 # capability question and the dispatch, so they cannot disagree. cmux is absent
 # pending live verification: its `read-screen` without `--scrollback` plausibly
 # reads only the viewport, but that has not been observed on a real cmux, and
-# the adapter's own capture opts into history with `--scrollback`. orca's
-# `terminal read --limit` is a history read with no viewport mode.
+# the adapter's own capture opts into history with `--scrollback`.
 FM_BACKEND_VISIBLE_CAPTURE="tmux herdr"
 
 # fm_backend_visible_capture_supported: whether <backend> can read the visible
@@ -764,7 +700,6 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
   case "$backend" in
     tmux) fm_backend_tmux_send_key "$@" ;;
     herdr) fm_backend_herdr_send_key "$@" ;;
-    orca) fm_backend_orca_send_key "$@" ;;
     cmux) fm_backend_cmux_send_key "$@" ;;
     *) echo "error: no send-key implementation for backend '$backend'" >&2; return 1 ;;
   esac
@@ -803,7 +738,6 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
   case "$backend" in
     tmux) fm_backend_tmux_send_text_submit "$@" || rc=$? ;;
     herdr) fm_backend_herdr_send_text_submit "$@" || rc=$? ;;
-    orca) fm_backend_orca_send_text_submit "$@" || rc=$? ;;
     cmux) fm_backend_cmux_send_text_submit "$@" || rc=$? ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; rc=1 ;;
   esac
@@ -818,8 +752,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
 # refusal and must not delete the durable records that are the only thing
 # naming the endpoint (bin/fm-teardown.sh's retain-and-stop path).
 # How much each adapter can prove differs, and no arm ever guesses: tmux
-# resolves a failed close against the window's exact recorded identity, Orca
-# reports a close its missing CLI never attempted, and the remaining arms
+# resolves a failed close against the window's exact recorded identity; the remaining arms
 # still report 0 for a close command that failed after being accepted.
 # docs/verification/runtime-backends.md "Endpoint close" is the per-backend
 # record.
@@ -831,29 +764,8 @@ fm_backend_kill() {  # <backend> <target>
   case "$backend" in
     tmux) fm_backend_tmux_kill "$@" ;;
     herdr) fm_backend_herdr_kill "$@" ;;
-    orca) fm_backend_orca_kill "$@" ;;
     cmux) fm_backend_cmux_kill "$@" ;;
     *) echo "error: no kill implementation for backend '$backend'" >&2; return 1 ;;
-  esac
-}
-
-fm_backend_remove_worktree() {  # <backend> <worktree-id>
-  local backend=$1
-  shift
-  fm_backend_source "$backend" || return 1
-  case "$backend" in
-    orca) fm_backend_orca_remove_worktree "$@" ;;
-    *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
-  esac
-}
-
-fm_backend_worktree_path() {  # <backend> <worktree-id>
-  local backend=$1
-  shift
-  fm_backend_source "$backend" || return 1
-  case "$backend" in
-    orca) fm_backend_orca_worktree_path "$@" ;;
-    *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
   esac
 }
 
@@ -892,7 +804,6 @@ fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pe
   case "$backend" in
     tmux) fm_tmux_composer_state "$@" ;;
     herdr) fm_backend_herdr_composer_state "$@" ;;
-    orca) fm_backend_orca_composer_state "$@" ;;
     cmux) fm_backend_cmux_composer_state "$@" ;;
     *) printf 'unknown' ;;
   esac
@@ -905,7 +816,7 @@ fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pe
 # server as a side effect via fm_backend_herdr_server_ensure - fine for an
 # operation that is about to use the pane, wrong for a passive liveness
 # probe). A gone tmux window or an unqueryable herdr pane (server down, pane
-# closed), or unreadable Orca terminal simply fails, which
+# closed) simply fails, which
 # IS "does not exist" for this purpose.
 # Owns fm-crew-state.sh's pane_readable check too, so callers that only need a
 # fast alive/dead read (recovery digests, the session-start fleet digest) do
@@ -935,10 +846,6 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       # a DIFFERENT one than the target's.
       fm_backend_herdr_cli "$session" pane get "$pane" >/dev/null 2>&1
       ;;
-    orca)
-      fm_backend_source orca || return 1
-      fm_backend_orca_capture "$target" 1 >/dev/null 2>&1
-      ;;
     cmux)
       fm_backend_source cmux || return 1
       fm_backend_cmux_target_ready "$target" "$expected_label"
@@ -966,7 +873,7 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # which verifies a registered agent against `pane process-info` and the real
 # process table, so a registration Herdr kept over a shell-only pane reads
 # `dead` here (issue #4115) - then maps a positively stopped session server to
-# `missing` only in this recovery-grade view. Orca and cmux do not support
+# `missing` only in this recovery-grade view. cmux does not support
 # secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2

@@ -63,7 +63,7 @@
 # two concurrent spawns for one project can never both publish from the same
 # count. A spawn on an uncapped project can still publish a holder for a capped
 # same-origin clone, so every backend takes that lock whenever the declaration
-# caps any project; Orca, which otherwise never takes it, is included. Freeing a
+# caps any project. Freeing a
 # place needs no lock, because removing a record or adding pr= only ever lowers
 # the count.
 #

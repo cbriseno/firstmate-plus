@@ -870,7 +870,7 @@ secondmate_handoff_detect() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|git|gh|curl|jq|orca|cmux)
+    tmux|node|git|gh|curl|jq|cmux)
       [ "$(fm_platform_name)" != macos ] || return 1
       if [ "$1" = cmux ]; then
         echo "brew install --cask cmux  # or see https://cmux.com"
@@ -900,7 +900,7 @@ upgrade_cmd() {
 
 manual_install_url() {
   case "$1" in
-    node|git|tmux|jq|gh|orca|cmux|curl)
+    node|git|tmux|jq|gh|cmux|curl)
       [ "$(fm_platform_name)" = macos ] || return 1
       echo "docs/platforms.md (provide $1 on PATH manually)" ;;
     herdr) echo "https://herdr.dev" ;;
@@ -1555,8 +1555,7 @@ detect_local_tools() {
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
   # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  # backend actually requires treehouse.
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"

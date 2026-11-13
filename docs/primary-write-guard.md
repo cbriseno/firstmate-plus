@@ -32,7 +32,7 @@ The scaffold records canonical outside paths in its brief and a private path man
 Paths into this checkout, `projects/`, or the linked worktrees of its clones are refused.
 The worker starts in a fresh non-repository `data/<id>/work` with a Git discovery ceiling at its task directory, follows the usual status, card, and steering-inbox protocols, and reports its verified result without a delivery mode, branch, or merge.
 Teardown validates that exact scratch directory and removes only scratch and task runtime records, leaving authorized outside paths untouched.
-Terminal backends use their existing launch path; Orca requires a Git worktree and therefore refuses host tasks explicitly.
+Terminal backends use their existing launch path.
 
 ## Purpose and boundary
 

@@ -98,7 +98,7 @@
 #                              only on a home that runs the host; exit 2 with one
 #                              line naming a live away record on that home.
 #
-# Supported backends: herdr and tmux. Others (orca, cmux) have
+# Supported backends: herdr and tmux. Others (cmux) have
 # no verified non-visible-launch primitive here yet and refuse loudly.
 #
 # Test seam: FM_AFK_LAUNCH_ENTRY overrides the command run in the created

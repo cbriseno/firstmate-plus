@@ -77,7 +77,7 @@ Run `/doctor` for the listing's estimated cost and biggest contributors, and `/s
 Two vendor settings are opt-in per home, never part of the shared contract:
 
 - `skillListingBudgetFraction` raises the budget from its `0.01` default, up to `1` ([settings reference](https://code.claude.com/docs/en/settings-reference#skilllistingbudgetfraction)).
-- `skillOverrides` set to `"name-only"` lists a skill by name without its description ([visibility overrides](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings)); use it only for a skill this home never needs, such as `fmx-respond` without Relay or `firstmate-orca` without Orca, because it removes that skill's trigger.
+- `skillOverrides` set to `"name-only"` lists a skill by name without its description ([visibility overrides](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings)); use it only for a skill this home never needs, such as `fmx-respond` without Relay, because it removes that skill's trigger.
 
 Put either in user settings or the untracked `.claude/settings.local.json`, never the tracked project `.claude/settings.json`, which would impose one home's choice on every home and worker copy.
 

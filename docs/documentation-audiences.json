@@ -76,10 +76,6 @@
       "target": "docs/verification/runtime-backends.md"
     },
     {
-      "source": "docs/orca-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
       "source": "docs/cmux-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
@@ -127,10 +123,6 @@
     },
     {
       "path": ".agents/skills/firstmate-coding-guidelines/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/firstmate-orca/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -396,10 +388,6 @@
     {
       "path": "docs/jev-guards.md",
       "audience": "maintainer-architecture"
-    },
-    {
-      "path": "docs/orca-backend.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/pi-supervision-branch.md",
