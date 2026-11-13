@@ -1004,17 +1004,17 @@ unit_supervision_host_other_harnesses_run_no_away_daemon() {
     FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" FM_TEST_HARNESS="$1" FM_AFK_MODE="${2:-}" \
       bash -c '. "$1"; fm_afk_launch_primary_harness() { printf "%s" "$FM_TEST_HARNESS"; }; fm_afk_launch_daemon_allowed' _ "$LAUNCH" 2>&1
   }
-  for harness in cursor opencode codex grok codex; do
+  for harness in cursor opencode codex codex; do
     daemon_allowed "$harness" >/dev/null || fail "$harness: a home without config/supervision-host must keep the away daemon"
   done
   daemon_allowed claude >/dev/null && fail "claude: a home without config/supervision-host runs the host, so it must refuse the away daemon"
   : > "$st/config/supervision-host-off"
-  for harness in claude cursor opencode codex grok codex; do
+  for harness in claude cursor opencode codex codex; do
     daemon_allowed "$harness" >/dev/null || fail "$harness: a home opted out by config/supervision-host-off must keep the away daemon"
   done
   rm -f "$st/config/supervision-host-off"
   : > "$st/config/supervision-host"
-  for harness in cursor opencode codex grok codex; do
+  for harness in cursor opencode codex codex; do
     out=$(daemon_allowed "$harness"); rc=$?
     [ "$rc" -ne 0 ] || fail "$harness: an opted-in home must refuse the away daemon"
     printf '%s' "$out" | grep -F "not launched on this $harness home, which runs the supervision host" >/dev/null \
@@ -1181,7 +1181,7 @@ unit_supervision_host_quiet_fallback() {
   : > "$st/config/supervision-host"
   unready "no supervision engine: the primary harness 'cursor' has no verified supervision engine" cursor
   printf 'claude\n' > "$st/config/supervision-host"
-  for bad in opencode codex grok codex; do
+  for bad in opencode codex codex; do
     unready "no verified dialog mirror for $bad" "$bad"
   done
   printf '999999999\n' > "$st/state/.lock"

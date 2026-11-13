@@ -31,7 +31,6 @@ This record owns concurrent isolation evidence for the portable parallel candida
 - `tests/fm-composer-lib.test.sh`
 - `tests/fm-crew-state.test.sh`
 - `tests/fm-ensure-agents-md.test.sh`
-- `tests/fm-grok-harness.test.sh`
 - `tests/fm-herdr-lab.test.sh`
 - `tests/fm-lint.test.sh`
 - `tests/fm-pi-primary-types.test.sh`
@@ -60,7 +59,6 @@ This record owns concurrent isolation evidence for the portable parallel candida
 | 16582 | 0 | 5 | `tests/fm-cd-pretool-check.test.sh` |
 | 9766 | 0 | 12 | `tests/fm-lint.test.sh` |
 | 9562 | 0 | 11 | `tests/fm-herdr-lab.test.sh` |
-| 6768 | 0 | 10 | `tests/fm-grok-harness.test.sh` |
 | 6290 | 0 | 14 | `tests/fm-pr-merge.test.sh` |
 | 5569 | 0 | 6 | `tests/fm-composer-ghost.test.sh` |
 | 4563 | 0 | 16 | `tests/fm-send-popup-settle.test.sh` |

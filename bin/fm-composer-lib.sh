@@ -239,7 +239,7 @@ fm_composer_normalize_trim_var() {  # <varname>
 #     A reset (SGR 0) or normal-intensity (SGR 22) ends a dim run.
 #   - dark/muted TRUECOLOR foreground runs (SGR 38;2;r;g;b or the colon form
 #     38:2::r:g:b) whose perceived luminance (0.299R + 0.587G + 0.114B) is below
-#     FM_COMPOSER_GHOST_LUMA_MAX (default 128): how grok renders its placeholder
+#     FM_COMPOSER_GHOST_LUMA_MAX (default 128): how renders its placeholder
 #     and hint text. A reset (SGR 0), a default-foreground (SGR 39), any base
 #     foreground colour (30-37 / 90-97), or a lighter 38;2 foreground ends the
 #     dark-foreground run. This assumes a DARK terminal theme, the firstmate
@@ -365,7 +365,6 @@ FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
-FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 # cursor-agent's busy footer. The TOKEN is matched, not the spinner verb: the
 # same version rendered both `Working` and `Running` beside its braille spinner
 # in two consecutive turns, while `ctrl+c to stop` was present for the whole
@@ -386,7 +385,6 @@ fm_busy_lines_match() {  # [harness]
       codex) regex=$FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT ;;
       opencode) regex=$FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT ;;
       pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
-      grok) regex=$FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT ;;
       cursor) regex=$FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_DELIVERY_BUSY_REGEX_DEFAULT ;;
       *)
@@ -501,7 +499,7 @@ FM_COMPOSER_PI_MAX_LINES=${FM_COMPOSER_PI_MAX_LINES:-8}
 # (see docs/verification/runtime-backends.md). Not re-verified against a live
 # Grok install since; may need to change if a future Grok release renders a
 # different overhang or scales it with title/model-name length.
-FM_COMPOSER_GROK_TITLE_OVERHANG=3
+FM_COMPOSER_TITLE_OVERHANG=3
 
 # 0 when <content> is exactly one glyph drawn from <glyph-list>.
 _fm_composer_is_prompt_glyph() {  # <content> <glyph-list>
@@ -1068,7 +1066,7 @@ _fm_composer_titled_bottom_ok() {  # <family> <bottom-inner> <top-spaces>
   esac
   [ "$spaces" = "$expected" ] && return 0
 
-  # Grok 1.0.5 renders its real model title FM_COMPOSER_GROK_TITLE_OVERHANG
+  # Grok 1.0.5 renders its real model title FM_COMPOSER_TITLE_OVERHANG
   # columns wider than the otherwise aligned top and content rows (issue
   # #3436; see the constant's definition for provenance and caveats). Accept
   # only that exact overhang and only the typed Grok model/effort title
@@ -1078,7 +1076,7 @@ _fm_composer_titled_bottom_ok() {  # <family> <bottom-inner> <top-spaces>
   # ambiguous while preserving the complete-box proof around a genuinely idle
   # or pending Grok composer.
   local overhang
-  overhang=$(printf '%*s' "$FM_COMPOSER_GROK_TITLE_OVERHANG" '')
+  overhang=$(printf '%*s' "$FM_COMPOSER_TITLE_OVERHANG" '')
   [ "$spaces" = "$expected$overhang" ] || return 1
   _fm_composer_grok_typed_title_ok "$title"
 }

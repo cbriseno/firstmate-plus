@@ -221,7 +221,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|cursor)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|cursor)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -436,8 +436,6 @@
 # A claude secondmate gets no Stop busy hook; its home's tracked Stop guard is its
 # only Stop writer, through the .fm-busy-stop pointer in that home. A home whose
 # guard predates that pointer keeps the ordinary Stop idle hook instead.
-# grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
-# plus a gitignored .fm-grok-turnend worktree pointer and a state token.
 # cursor installs no per-task hook either: it writes state/<id>.cursor-session to
 # bind the pane to cursor's own conversation transcript (projects root, the exact
 # workspace path cursor records in .workspace-trusted, and the conversations that
@@ -1570,7 +1568,7 @@ elif [ "$KIND" = host ]; then
   ARG3=$HARNESS_ARG
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-  '' | claude | codex | opencode | pi | pi-signed | grok | cursor )
+  '' | claude | codex | opencode | pi | pi-signed | cursor )
     ARG3=${POS[1]:-}
     ;;
   *' '*)
@@ -1846,7 +1844,7 @@ model_flag_for_harness() {
     [ "$oc_major" = 1 ] || return 0
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
-  claude | codex | pi | pi-signed | grok | cursor )
+  claude | codex | pi | pi-signed | cursor )
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   esac
@@ -1875,15 +1873,6 @@ effort_flag_for_harness() {
       ;;
     esac
     ;;
-  grok)
-    # grok exposes both --effort and --reasoning-effort; firstmate's profile
-    # axis is the reasoning knob. As of grok 0.2.99, --reasoning-effort accepts
-    # only low|medium|high and rejects both xhigh and max, so omit those rather
-    # than passing a known-bad value.
-    case "$effort" in
-    low | medium | high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
-    esac
-    ;;
   pi | pi-signed)
     # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
     # its --thinking flag.
@@ -1903,7 +1892,7 @@ effort_flag_for_harness() {
     # resolved model's provider is known to expose that effort (`anthropic/*`:
     # high|max, `openai/*`: low|medium|high|xhigh); other providers, absent
     # effort, or out-of-family efforts omit it (record-and-omit, as codex and
-    # grok do). Without a resolved model there is nothing to key to. The
+    # do). Without a resolved model there is nothing to key to. The
     # fragment lands inside the launch's single-quoted assignment, so a literal
     # quote in the model id must close and reopen that quoting. The config SHAPE
     # is version-sensitive: 1.x carries the effort as agent.build.variant only
@@ -3931,59 +3920,6 @@ EOF
     # capability and process/session binding. Secondmates and raw launches keep
     # their existing launch and unknown semantics. notify remains a notification.
     ;;
-  grok*)
-    # Parent turn-end wiring only. A secondmate already classifies through the
-    # rendered-tail fallback, and a parent turn-ended marker is not its signal.
-    if [ "$KIND" != secondmate ]; then
-    # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
-    # clean equivalent of codex's notify= and pi's turn_end. But grok only loads
-    # PROJECT hooks (<worktree>/.grok/hooks/, <worktree>/.claude/settings.local.json)
-    # after the folder is granted hook-trust, which is not automatic and which
-    # firstmate cannot establish at launch without editing grok's own managed
-    # trust store (a high-blast-radius write). GLOBAL hooks in ~/.grok/hooks/ are
-    # always trusted and load on first launch with no gate. So the turn-end hook
-    # lives OUTSIDE the worktree as a single firstmate-owned global hook that is a
-    # guarded no-op for every non-firstmate grok session: it fires only when the
-    # current workspace holds a .fm-grok-turnend token pointer that matches the
-    # firstmate-owned hook registry. firstmate then drops that per-task pointer
-    # (gitignored, like the other harnesses' worktree hook files).
-    # Result: the hook is outside the worktree, needs no trust grant, and never
-    # touches grok's managed config - only firstmate-owned files.
-    GROK_HOOKS_DIR="${GROK_HOME:-$HOME/.grok}/hooks"
-    GROK_AUTH_DIR="$GROK_HOOKS_DIR/fm-turn-end.d"
-    mkdir -p "$GROK_AUTH_DIR"
-    old_umask=$(umask)
-    umask 077
-    auth_file=$(mktemp "$GROK_AUTH_DIR/fm.XXXXXXXXXXXX")
-    umask "$old_umask"
-    printf '%s\n' "$TURNEND" >"$auth_file"
-    printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.grok-turnend-token"
-    sq_grok_auth_dir=$(shell_quote "$GROK_AUTH_DIR")
-    cat >"$GROK_HOOKS_DIR/fm-turn-end.sh" <<EOF
-#!/usr/bin/env bash
-set -u
-auth_dir=$sq_grok_auth_dir
-workspace=\${GROK_WORKSPACE_ROOT:-}
-[ -n "\$workspace" ] || exit 0
-p="\$workspace/.fm-grok-turnend"
-[ -f "\$p" ] || exit 0
-first=
-IFS= read -r -n 256 first < "\$p" 2>/dev/null || [ -n "\$first" ] || exit 0
-case "\$first" in token=*) token=\${first#token=} ;; *) exit 0 ;; esac
-case "\$token" in fm.????????????) : ;; *) exit 0 ;; esac
-case "\$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
-t=\$(cat "\$auth_dir/\$token" 2>/dev/null) || exit 0
-case "\$t" in /*.turn-ended) : ;; *) exit 0 ;; esac
-touch "\$t" 2>/dev/null || true
-exit 0
-EOF
-    chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
-    hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
-    printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" >"$GROK_HOOKS_DIR/fm-turn-end.json"
-    printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-grok-turnend"
-    exclude_path '.fm-grok-turnend'
-    fi
-    ;;
   cursor*)
     # Cursor's turn lifecycle is neither a hook nor a launch flag: it writes
     # its own durable per-conversation transcript and brackets every turn
@@ -4387,7 +4323,7 @@ case "$LAUNCH" in
   ;;
 esac
 case "$HARNESS" in
-claude | codex | opencode | pi | pi-signed | grok)
+claude | codex | opencode | pi | pi-signed)
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac

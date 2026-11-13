@@ -52,7 +52,7 @@
 # Why the terminal lifecycle exists (docs/herdr-backend.md "Away-mode daemon terminal launch"):
 # bin/fm-afk-start.sh execs the supervise daemon in the FOREGROUND of whatever
 # terminal it is already in. Harnesses with a native in-pane tracked-background
-# tool (claude, grok) run it there directly and it is fine. A harness with NO
+# tool (claude,) run it there directly and it is fine. A harness with NO
 # native background mechanism (pi) has to manufacture a terminal, and doing that
 # by SPLITTING the captain's active pane visibly shrinks it - the regression this
 # script fixes. Instead this creates a non-visible tracked terminal (a herdr tab/
@@ -230,7 +230,7 @@ fm_afk_launch_primary_harness() {
 # home runs it (docs/supervision-host.md).
 fm_afk_launch_host_primary() {  # <harness>
   case "$1" in
-    claude|cursor|opencode|grok|codex) return 0 ;;
+    claude|cursor|opencode|codex) return 0 ;;
   esac
   return 1
 }

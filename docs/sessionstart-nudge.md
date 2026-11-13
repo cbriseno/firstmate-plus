@@ -40,7 +40,6 @@ Codex's interactive TUI runs the startup digest from codex-cli 0.164.0 but has n
 | Codex interactive TUI | Run from codex-cli 0.164.0; compaction and re-emit uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
 | OpenCode | Nudge | [OpenCode](#opencode) |
-| Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
 | Cursor compaction | Uncovered | [Cursor compaction](#cursor-compaction) |
 
@@ -334,18 +333,6 @@ That early exit is also why OpenCode cannot use the run tier.
 The OpenCode nudge runs only on `session.created`.
 The watcher-arm and turn-end plugins run later, on the terminal `session.execution.succeeded`, `session.execution.failed`, and `session.execution.interrupted` events in OpenCode 2, or `session.idle` in OpenCode 1.
 The guard lets the watcher coordinator act first, so the plugins do not race for one lifecycle event.
-
-### Grok
-
-Grok is a nudge-tier harness.
-`.grok/hooks/fm-primary-sessionstart-nudge.json` registers a project `SessionStart` hook and invokes the wrapper through inline-defaulted `${GROK_WORKSPACE_ROOT:-}`.
-The project hook runs when the checkout is trusted.
-Grok currently discards hook stdout from model context.
-So this path is intentionally fail-open and cannot use the run tier.
-
-Grok's guaranteed-loading alternative is a global token-guarded hook like the pattern used by `bin/fm-spawn.sh`.
-That alternative expands trust and writes outside this repository.
-So Firstmate never installs it or grants folder trust automatically.
 
 ### Cursor
 

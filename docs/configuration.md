@@ -351,11 +351,11 @@ See the [current direct-input verification](verification/runtime-backends.md#cod
 Two optional local, gitignored files control the supervision host for this home: `config/supervision-host-off` opts the home out, and `config/supervision-host` opts a home in and selects its engine.
 The host runs the supervision branch's contract on a headless engine session beside a non-Pi primary.
 [docs/supervision-host.md](supervision-host.md) defines its design, current scope, and verified engines.
-A Claude, Cursor, OpenCode, Grok, or Codex primary can run the host.
+A Claude, Cursor, OpenCode, or Codex primary can run the host.
 
 A present `config/supervision-host-off`, whatever it holds, opts the home out on every primary.
 Otherwise a Claude primary runs the host by default: with no `config/supervision-host` it runs exactly as with an empty one, at the Claude engine's default model.
-A Cursor, OpenCode, Grok, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
+A Cursor, OpenCode, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
 A home that does not run the host behaves exactly as it does without it, and a Pi primary keeps its in-process supervision branch whatever either file says.
 `fm_supervision_host_enabled` in `bin/fm-supervision-engine-lib.sh` implements this gate for every reader.
 
@@ -363,7 +363,6 @@ While the home runs the host, the primary's arm owner runs it in place of the wa
 The host handles wakes on the engine under the [posture rules](supervision-host.md#postures), including an away record and attended operation on a Claude or Cursor primary with a verified dialog mirror.
 On that home, `/afk` launches no away daemon; see [Quiet mode](supervision-host.md#quiet-mode) for `/quiet`'s attended statement and fallback.
 The same gate governs the primary's dialog-mirror hooks (`bin/fm-host-mirror.sh`), which record on a Claude or Cursor primary ([supervision-host.md](supervision-host.md#the-dialog-mirror)).
-Grok's arm command is rendered at session start, so a change to its host mode takes effect at its next session start; the other arm owners check the gate at every arm.
 
 ### Engine selection
 
@@ -372,7 +371,7 @@ Grok's arm command is rendered at session start, so a change to its host mode ta
 - empty or `default` selects the primary harness's own engine at that engine's default model (`sonnet` for the Claude engine);
 - `<engine> [<model>]` names a verified engine, currently only `claude`, and optionally the engine's own model name or alias; `default <model>` selects the primary harness's engine with that model.
 
-Only Claude has a verified engine of its own, so a Cursor, OpenCode, Grok, or Codex home names `claude` in the file.
+Only Claude has a verified engine of its own, so a Cursor, OpenCode, or Codex home names `claude` in the file.
 
 ### Failures, when changes apply, and inheritance
 
@@ -1025,8 +1024,8 @@ For a checkout with a private integration branch, run `bin/fm-local-sync.sh <rep
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, cursor are empirically verified for crewmate and secondmate launches.
-The verified primary harnesses are Claude Code, Grok, Pi, `pi-signed`, Codex, OpenCode, and Cursor Agent CLI.
+claude, codex, opencode, pi, pi-signed, cursor are empirically verified for crewmate and secondmate launches.
+The verified primary harnesses are Claude Code, Pi, `pi-signed`, Codex, OpenCode, and Cursor Agent CLI.
 
 ### Harness restrictions and credentials
 
@@ -1054,7 +1053,7 @@ Enabled primary-session turn-end guard integrations are tracked as repo-level ho
 
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 
-Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, and OpenCode uses its TUI plugin.
+Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, and OpenCode uses its TUI plugin.
 
 ### Choose the worker harness
 
@@ -1111,7 +1110,6 @@ Those inherited values are defaults and rules only; `fm-spawn` still permits a c
 
 ### Installed hooks and launch details
 
-For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
 For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree, plus the parent home's `state/<id>.pi-ext.ts` busy extension.
 Pi-family secondmates can start unattended in Firstmate-seeded homes without accepting project trust manually; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the capability requirement, session-only approval scope, and older-version fallback, with [regression evidence](verification/runtime-backends.md#pi-seeded-secondmate-project-trust).
 
@@ -1503,7 +1501,7 @@ Bootstrap's resolver-only validation gate is described under "Validation and dia
 
 | Harness | Provider declaration on the opted-in resolver path |
 | --- | --- |
-| `claude`, `codex`, `grok`, `cursor` | The resolver has an authoritative single-provider mapping. |
+| `claude`, `codex`, `cursor` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, and `opencode`; omission is an actionable configuration error before any request. |
 
 This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.
@@ -2936,13 +2934,12 @@ FM_STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=   # legacy alias for FM_TREEHOUSE_RETURN
 FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=3        # fetch retries after fm-fleet-sync.sh hits the orphaned .git/packed-refs.lock signature
 FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1 # seconds fm-fleet-sync.sh waits before each of those retries
 FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=30       # min mtime age before fm-fleet-sync.sh treats a leftover packed-refs.lock as provably stale
-FM_BUSY_REGEX=          # optional override for rendered delivery guards and Grok's isolated task-state fallback; converted worker state ignores it
+FM_BUSY_REGEX=          # optional override for rendered delivery guards; converted worker state ignores it
 FM_COMPOSER_IDLE_RE=    # optional fleet-wide idle-placeholder regex override (bin/fm-composer-lib.sh); a match alone does not prove emptiness because shape-specific position and ANSI de-emphasis safety gates still apply
 FM_COMPOSER_LEFTBAR_FOOTER_RE=   # optional fleet-wide override of the opencode left-bar mode/model footer's regex (bin/fm-composer-lib.sh's FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT, matched against both the ghost-stripped and the ANSI-stripped form of a run's LAST row); an override that cannot match the de-emphasised 1.19.0 footer puts the false `pending` back on an idle pane, so keep the default's required space after the separator and its exact `Build`/`Plan` mode words rather than widening it - widening it is the one path that turns typed text into the `empty` verdict which authorizes typing into a live session; see [runtime backend verification](verification/runtime-backends.md#2026-10-14-opencode-1190-de-emphasised-modefooter-row-in-the-left-bar-composer)
 FM_COMPOSER_CAPTURE_LINES=20   # fleet-wide bound for tail-capture composer reads; it no longer bounds the adapter composer state/content reads on tmux and herdr, which supply their visible pane instead; it still bounds the shared inbox composer read (bin/fm-task-inbox-lib.sh) on every backend, and on herdr it also floors how many Ctrl+U presses a refused leftover may take
 FM_COMPOSER_PI_MAX_LINES=8     # fleet-wide: maximum rows admitted between Pi's identity-corroborated separator pair; taller or ambiguous candidates stay unknown
 FM_COMPOSER_GHOST_LUMA_MAX=128   # fleet-wide: max perceived luminance (0.299R+0.587G+0.114B, 0-255) for a TRUECOLOR foreground to count as de-emphasised ghost/placeholder text and be stripped; dim/faint (SGR 2) is stripped regardless,. Assumes a dark terminal theme (bin/fm-composer-lib.sh's fm_composer_strip_ghost, used by styled adapter reads). The default sits between the two populations it separates: harnesses draw their own de-emphasised composer furniture below it (opencode 1.19.0's mode footer at luminance 119.8 and its cwd row) and typed text above it. While it sits above the furniture the mode cells are stripped as ghost, so the footer's own identifying cells are gone from the ghost-stripped row and only the row's ANSI-stripped form still proves the footer - which is why the left-bar footer rule reads both forms and an idle opencode pane reads `empty` instead of the false `pending` that position produced - while dropping it under the furniture's luminance leaves those cells in the row and the footer then matches the left-bar footer rule in its stripped form too (still `empty`), and raising it over real typed text deletes typed text and reads as the false `empty` that authorizes typing into a live session; the measured luminances and the left-bar footer proof this threshold decides are in [runtime backend verification](verification/runtime-backends.md#2026-10-14-opencode-1190-de-emphasised-modefooter-row-in-the-left-bar-composer), so move it only against a fresh live capture
-GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send typed-plane Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send typed-plane submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful typed-plane submit; 0 disables

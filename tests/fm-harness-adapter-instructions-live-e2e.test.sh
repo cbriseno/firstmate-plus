@@ -111,7 +111,7 @@ resolve_native_binary() {
   return 1
 }
 
-for harness in claude codex opencode pi pi-signed grok cursor; do
+for harness in claude codex opencode pi pi-signed cursor; do
   if binary=$(resolve_native_binary "$harness"); then
     version=$("$binary" --version 2>/dev/null | head -1 | tr -d '\r') || version=unknown
     printf '# native loader not claimed: %s %s is installed, but this harness-neutral evaluation does not exercise its provider transport\n' "$harness" "$version"

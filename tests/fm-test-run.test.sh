@@ -690,7 +690,7 @@ test_family_proofs_run_in_separate_concurrent_phases() {
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
-    fm-calm-pi-extension.test.sh fm-vendor-auth-probe.test.sh \
+    fm-calm-pi-extension.test.sh fm-harness-precedence.test.sh \
     fm-pr-check-security.test.sh fm-teardown.test.sh; do
     cat >"$repo/tests/$script" <<'SH'
 #!/usr/bin/env bash
@@ -702,7 +702,7 @@ SH
 
   (cd "$repo" && bin/fm-test-run.sh \
       tests/fm-pr-check-security.test.sh tests/fm-calm-pi-extension.test.sh \
-      tests/fm-teardown.test.sh tests/fm-vendor-auth-probe.test.sh --jobs 4) \
+      tests/fm-teardown.test.sh tests/fm-harness-precedence.test.sh --jobs 4) \
     >"$tmp/out" 2>"$tmp/err" \
     || fail "cross-family phase fixture failed: $(cat "$tmp/err")"
 

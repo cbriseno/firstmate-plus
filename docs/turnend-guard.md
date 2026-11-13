@@ -264,7 +264,6 @@ Each enabled primary harness adapts its own turn-end mechanism to the shared gua
 | OpenCode | `session.execution.succeeded`/`failed`/`interrupted` (OpenCode 2) or `session.idle` (OpenCode 1) in `.opencode/plugins/fm-primary-turnend-guard.js` | Passive callback that schedules one follow-up |
 | Pi | `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts` | Passive callback that schedules one follow-up |
 | Cursor | `stop` hook in `.cursor/hooks.json` | Cannot block, so it parks and returns at most one follow-up |
-| Grok | `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` | Native blocking, or one legacy `grok --resume` fallback |
 
 The registrations in detail:
 
@@ -283,24 +282,6 @@ The registrations in detail:
   The guarded set is the `SessionStart` entry, the watcher-arm and cd `PreToolUse` Bash entries, and both `Stop` entries.
   Cursor 2026.08.11-e8db854 does not fire the Claude-shaped `Stop` entry at all, but it is guarded anyway because Cursor has no `asyncRewake`.
   If a later build did fire it, `bin/fm-claude-stop-autoarm.sh` would run synchronously inside Cursor's stop step and hold that turn open for its declared multi-hour timeout, exactly the wedge grok 1.0.0 produced.
-- Grok registers a `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` and delegates capability selection to `bin/fm-turnend-guard-grok.sh`.
-  The tracked Claude Stop entries are inert when `GROK_AGENT` or `GROK_HOOK_EVENT` is present, so Grok's Claude-compatible settings loading cannot create a second continuation path.
-  Both markers are required because Grok does not inject the same variables into every process kind.
-  grok 0.2.73 set `GROK_AGENT` for child and tool processes, while grok 1.0.0 hook processes carry `GROK_HOOK_EVENT`, `GROK_HOOK_NAME`, `GROK_SESSION_ID`, and `GROK_WORKSPACE_ROOT` but no `GROK_AGENT`.
-  A guard keyed on `GROK_AGENT` alone therefore stopped firing on grok 1.0.0, and the resulting Claude-only auto-arm ran synchronously under Grok.
-  Grok has no `asyncRewake`, so it waited on the foregrounded watcher for the declared 28800-second timeout and the Grok turn never ended.
-  Do NOT widen this guard to `GROK_SESSION_ID`: Grok injects that into every child process, so it can survive into a Claude session that Grok launched and would silently disable Claude's own continuity.
-  The same marker guard carries every tracked `.claude/settings.json` entry whose event Grok already covers through its own `.grok/hooks/` registration, which is both `Stop` entries, the `SessionStart` entry, and the two `PreToolUse` Bash entries for the watcher-arm and cd seatbelts.
-  `bin/fm-subagent-pretool-check.sh` and both `bin/fm-primary-write-pretool-check.sh` entries are the deliberate unguarded exceptions because no Grok registration covers those events, recorded in [`subagent-guard.md`](subagent-guard.md) "Known residual gap" and [`primary-write-guard.md`](primary-write-guard.md) "Harness wiring".
-  `tests/fm-turnend-guard.test.sh` pins that inventory so neither the guarded set nor the exception can change silently.
-- pi-code, Pi's Claude-hook compatibility extension, also loads `<project>/.claude/settings.json` and has no `asyncRewake`, so it awaits every Stop hook it delivers.
-  `bin/fm-claude-stop-autoarm.sh` therefore stands down on a pi-code-delivered payload.
-  Otherwise its foreground arm would run synchronously and hold Pi's turn open for the declared multi-hour timeout, exactly the wedge Cursor and grok 1.0.0 would produce (issue #3343).
-  Pi's own native extensions own its supervision.
-  The discriminator is the payload's own `transcript_path`, not the environment and not the shared foreign-host predicate above.
-  pi-code stamps it with Pi's session file under `/.pi/`, a path component a Claude transcript never carries.
-  The stand-down fails toward running, matching the guards above, so no payload, no `jq`, or no `transcript_path` still arms, and every other Claude-shaped hook pi-code delivers keeps running.
-
 ### Claude and Codex blocking
 
 Claude and Codex can block a Stop directly with exit status 2 and stderr.
@@ -440,20 +421,6 @@ Each passive adapter owns a loop latch:
 - Pi keeps the latch across internal tool turns and clears it only when the generated follow-up settles or delivery fails.
 - OpenCode's forced follow-up is supported for persistent TUI sessions and remains fail-open in headless `opencode run`.
 
-### Grok capability selection
-
-Grok makes exactly one typed capability decision from each running Stop payload:
-
-- A boolean `stopHookActive` selects native blocking, including both false on the initial stop and true on the bounded continuation.
-- The camel-case field has precedence when both spellings appear.
-- When it is absent, a boolean `stop_hook_active` selects the same native path for compatibility.
-- When both capability spellings are absent, the adapter preserves one pre-native `grok --resume` fallback guarded by `GROK_TURNEND_GUARD_ACTIVE` and intentionally omits `--permission-mode`.
-- Malformed JSON, a selected field with a non-boolean type, missing `jq`, missing hook prerequisites, or an already-active legacy guard allows the stop without starting either continuation path.
-
-The native path returns the shared guard's status and stderr to the same Grok process and never starts `grok --resume`.
-Grok's project hook requires the checkout to be trusted with `/hooks-trust` or launch-time `--trust`.
-Genuine pre-native builds can run the same tracked hook from an isolated global hook directory.
-
 ### Cursor park
 
 Cursor cannot block a turn end at all.
@@ -524,7 +491,7 @@ Baton invalidation and the `preCompact` surface remain deferred.
 
 ### Adapter failures in the pull guard
 
-If a passive adapter cannot invoke its SDK, or the Grok legacy fallback cannot find `grok` or a session id, the next pull-based `fm-guard.sh` call reports the problem.
+If a passive adapter cannot invoke its SDK, the next pull-based `fm-guard.sh` call reports the problem.
 That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it always points to the active harness protocol rather than embedding another repair command.
 
 ## Compatibility limits
@@ -533,7 +500,7 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - A valid secondmate home is in scope.
   An idle secondmate endpoint with no Relay poll remains healthy because it has no supervision need.
 - The blocking and bounded-follow-up mechanisms are limited to the primary integrations listed above.
-- OpenCode headless mode and untrusted Grok project hooks remain fail-open at the host boundary.
+- OpenCode headless mode remain fail-open at the host boundary.
 - Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode headless; firstmate primaries run interactive.
 - A Cursor primary must be launched with `--trust`, or its project hooks never load and the whole integration is inert.
 - Cursor's `preCompact` step is deliberately unregistered.
@@ -562,7 +529,6 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Pi logical-run latching.
 - Missing-`jq` behavior.
 - All five primary registrations.
-- Grok native and legacy selection.
 - Typed field precedence.
 - Malformed input.
 - Exactly-one-path safety.

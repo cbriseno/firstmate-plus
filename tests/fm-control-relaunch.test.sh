@@ -757,38 +757,12 @@ test_harness_switch_does_not_carry_the_old_profile_axes() {
   pass "fm-control relaunch: a harness switch resets model and effort unless they are named too"
 }
 
-test_harness_switch_resolves_a_prefixed_recorded_harness() {
-  local dir out rc auth
-  dir=$(new_case prefixcontrol rl32)
-  add_ship_task "$dir" rl32 grok-2
-  printf 'grok-2' > "$dir/fake/command"
-  mkdir -p "$dir/grokhome/hooks/fm-turn-end.d"
-  printf 'fm.abcdefabcdef\n' > "$dir/home/state/rl32.grok-turnend-token"
-  auth="$dir/grokhome/hooks/fm-turn-end.d/fm.abcdefabcdef"
-  printf '%s\n' "$dir/home/state/rl32.turn-ended" > "$auth"
-  printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
-
-  out=$(run_control "$dir" rl32 relaunch --harness claude --note "switching runtime"); rc=$?
-  expect_code 0 "$rc" "relaunch should resolve a prefixed recorded harness"$'\n'"$out"
-  [ "$(sed -n '1p' "$dir/fake/literal")" = /exit ] \
-    || fail "relaunch should stop a grok-prefixed task with grok's exit command"
-  [ "$(meta_field "$dir" rl32 harness)" = claude ] \
-    || fail "relaunch should publish the explicitly selected replacement harness"
-  [ "$(journal_field "$dir" rl32 from_harness)" = grok-2 ] \
-    || fail "relaunch should retain the recorded harness basename in its provenance"
-  assert_contains "$out" "harness=claude from=grok-2" \
-    "relaunch should report the recorded-to-selected harness transition"
-  [ ! -e "$auth" ] && [ ! -e "$dir/home/state/rl32.grok-turnend-token" ] \
-    && [ ! -e "$dir/wt/.fm-grok-turnend" ] \
-    || fail "relaunch should retire wiring owned by the prefixed prior harness"
-  pass "fm-control relaunch: a prefixed recorded harness can switch adapters transactionally"
-}
 
 test_prefixed_recorded_harness_requires_explicit_replacement() {
   local dir out rc meta brief
   dir=$(new_case prefixrefuse rl34)
-  add_ship_task "$dir" rl34 grok-2
-  printf 'grok-2' > "$dir/fake/command"
+  add_ship_task "$dir" rl34 codex-cli
+  printf 'codex-cli' > "$dir/fake/command"
   meta="$dir/home/state/rl34.meta"
   brief="$dir/home/data/rl34/brief.md"
   cp "$meta" "$dir/meta.before"
@@ -798,7 +772,7 @@ test_prefixed_recorded_harness_requires_explicit_replacement() {
   expect_code 1 "$rc" "implicit relaunch from a prefixed command should refuse"
   assert_contains "$out" "original launch command cannot be reconstructed from its recorded basename" \
     "the refusal should name the missing launch identity"
-  assert_contains "$out" "would substitute the canonical adapter 'grok'" \
+  assert_contains "$out" "would substitute the canonical adapter 'codex'" \
     "the refusal should name the unsafe substitution"
   assert_contains "$out" "Pass an explicit --harness" \
     "the refusal should name the deliberate replacement path"
@@ -806,7 +780,7 @@ test_prefixed_recorded_harness_requires_explicit_replacement() {
     || fail "a refused prefixed relaunch must leave metadata byte-identical"
   cmp -s "$brief" "$dir/brief.before" \
     || fail "a refused prefixed relaunch must leave instructions byte-identical"
-  [ "$(cat "$dir/fake/command")" = grok-2 ] \
+  [ "$(cat "$dir/fake/command")" = codex-cli ] \
     || fail "a refused prefixed relaunch must leave the original agent alive"
   [ -z "$(cat "$dir/fake/literal")" ] && [ -z "$(cat "$dir/fake/keys")" ] \
     || fail "a refused prefixed relaunch must deliver no lifecycle input"
@@ -1062,21 +1036,6 @@ test_relaunch_onto_an_unverified_harness_is_refused() {
   pass "fm-control relaunch: refuses to relaunch onto an adapter with no verified mechanics"
 }
 
-test_prior_harness_turnend_registry_entry_is_cleared() {
-  local dir auth
-  dir=$(new_case grokauth rl9)
-  add_ship_task "$dir" rl9 grok
-  mkdir -p "$dir/grokhome/hooks/fm-turn-end.d"
-  printf 'fm.abcdefabcdef\n' > "$dir/home/state/rl9.grok-turnend-token"
-  auth="$dir/grokhome/hooks/fm-turn-end.d/fm.abcdefabcdef"
-  printf '%s\n' "$dir/home/state/rl9.turn-ended" > "$auth"
-  printf 'grok' > "$dir/fake/command"
-  printf 'grok' > "$dir/fake/becomes"
-  run_control "$dir" rl9 relaunch --note "restart on the same runtime" >/dev/null
-  [ ! -e "$auth" ] \
-    || fail "the previous incarnation's turn-end registry entry must not outlive it"
-  pass "fm-control relaunch: the retired incarnation's global turn-end token is revoked"
-}
 
 test_wiring_removal_failure_refuses_before_replacement_arm() {
   local dir hook out rc real_rm
@@ -1336,7 +1295,7 @@ test_secondmate_relaunch_refuses_an_unreadable_configured_pin_before_stop() {
   dir=$(new_case smbadminpin smp3)
   home="$dir/home"
   mkdir -p "$home/config" "$home/data/smp3"
-  printf 'codex default-model high\nmate smp3: claude mate-model xhigh\nmate smp3: grok other-model max\n' > "$home/config/secondmate-harness"
+  printf 'codex default-model high\nmate smp3: claude mate-model xhigh\nmate smp3: codex other-model max\n' > "$home/config/secondmate-harness"
   printf '# secondmate brief\n' > "$home/data/smp3/brief.md"
   fm_git_worktree "$dir/proj" "$dir/smhome" sm-branch
   mkdir -p "$dir/smhome/state" "$dir/smhome/data" "$dir/smhome/bin"
@@ -1657,27 +1616,8 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
 # fm-spawn arms per-task wiring on harness PREFIXES, because a task launched
 # from a raw command records that command's basename rather than the exact
 # adapter name. Retirement must resolve the same way, or a task recorded as
-# `grok-2` would have its turn-end token and hook pointer armed and never
+# `codex-cli` would have its turn-end token and hook pointer armed and never
 # retired - leaving a registry entry that outlives the agent that owned it.
-test_prefixed_prior_harness_wiring_is_still_retired() {
-  local dir auth
-  dir=$(new_case prefixwiring rl30)
-  add_ship_task "$dir" rl30 grok-2
-  mkdir -p "$dir/grokhome/hooks/fm-turn-end.d"
-  printf 'fm.abcdefabcdef\n' > "$dir/home/state/rl30.grok-turnend-token"
-  auth="$dir/grokhome/hooks/fm-turn-end.d/fm.abcdefabcdef"
-  printf '%s\n' "$dir/home/state/rl30.turn-ended" > "$auth"
-  printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
-  printf 'zsh' > "$dir/fake/command"
-  run_spawn "$dir" rl30 --relaunch --harness claude >/dev/null
-  [ ! -e "$auth" ] \
-    || fail "a prefixed prior harness must still have its turn-end registry entry revoked"
-  [ ! -e "$dir/home/state/rl30.grok-turnend-token" ] \
-    || fail "a prefixed prior harness must still have its private token retired"
-  [ ! -e "$dir/wt/.fm-grok-turnend" ] \
-    || fail "a prefixed prior harness must still have its worktree hook pointer removed"
-  pass "fm-spawn --relaunch: wiring armed under a prefixed harness name is still retired"
-}
 
 test_cursor_session_binding_is_retired_on_a_harness_switch() {
   local dir
@@ -2983,7 +2923,6 @@ test_relaunch_note_inbox_listing_is_safe_on_empty_inbox
 test_relaunch_requires_a_note_for_a_ship_task
 test_harness_switch_moves_the_record_and_clears_prior_wiring
 test_harness_switch_does_not_carry_the_old_profile_axes
-test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
@@ -2995,7 +2934,6 @@ test_exclude_tools_refusals_happen_before_the_agent_stops
 test_explicit_model_wins_over_the_recorded_one
 test_control_relaunch_explicitly_resets_profile
 test_relaunch_onto_an_unverified_harness_is_refused
-test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
 test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
@@ -3012,7 +2950,6 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_spawn_relaunch_preserves_profile_axes
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
-test_prefixed_prior_harness_wiring_is_still_retired
 test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything

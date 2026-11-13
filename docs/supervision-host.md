@@ -22,13 +22,13 @@ An arm owner is the component in each primary harness that starts watcher cycles
 
 The host runs by default on a Claude primary and is opt-in per home on the other five primaries it supports; [configuration.md](configuration.md#supervision-host-configsupervision-host) owns the home gate and inherited opt-out.
 A home that does not run the host behaves exactly as it does without it.
-Today it runs beside a Claude, Cursor, OpenCode, Grok, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
+Today it runs beside a Claude, Cursor, OpenCode, or Codex primary: away on all six, and attended on Claude and Cursor, the primaries with a verified [dialog mirror](#the-dialog-mirror).
 
 ### Behavior by posture and harness
 
 - Attended (no away record: no `state/.afk-contract`, or quiet mode's) on Claude and Cursor, the engine triages fleet observations, including check wakes, and never wakes main for a routine outcome; see [Postures](#postures).
   Every other close reaches main exactly as the plain watcher arm delivers it.
-- Attended on OpenCode, Grok, and Codex, the host is a pass-through: every close reaches main as without the host.
+- Attended on OpenCode, and Codex, the host is a pass-through: every close reaches main as without the host.
 - Away (an away record exists), the host hands each close to the engine.
   Main stays parked unless the host hands the wake back.
 - `/afk` launches no away daemon on a home of those harnesses that runs the host, because the host is the away session there.
@@ -68,7 +68,6 @@ The host's header owns the output contract they read.
 | Claude | the Stop auto-arm, `bin/fm-claude-stop-autoarm.sh`, inside its single-flight generation | the hook's exit-2 rewake (`Stop hook feedback`) |
 | Cursor | the `stop` hook park, `bin/fm-turnend-guard-cursor.sh` | the park's `watcher` follow-up |
 | OpenCode | the TUI plugin, `.opencode/plugins/fm-primary-watch-arm.js`, which restarts its own successor after each close | a `watcher` prompt through `ctx.session.prompt` |
-| Grok | the model's tracked background call, rendered as `bin/fm-supervision-host.sh park` at session start | the background task's completion notification |
 | Codex | the foreground checkpoint, `bin/fm-watch-checkpoint.sh`, in the watcher's place | the checkpoint's own output |
 
 Hook, plugin, extension, and checkpoint owners pass their harness as the primary pin.
@@ -310,7 +309,6 @@ Main drains and acknowledges, and the owner starts the next park:
 |---|---|
 | Claude and Cursor | At the next turn end. |
 | OpenCode | At once. |
-| Grok | At the model's re-arm. |
 
 The host checks the boundary on every loop pass, so closes that are already waiting cannot carry it past the boundary.
 It also starts no engine turn that could still be running at the boundary (the turn bound plus the engine grace).
@@ -409,7 +407,7 @@ The default model is `sonnet`, which handled every measured wake correctly at a 
 `config/supervision-host` can name another.
 
 The Claude engine runs beside any of the six primaries, but only a Claude primary selects it by default when the host is enabled, even with no file.
-A Cursor, OpenCode, Grok, or Codex home names it (`claude`, optionally with a model) in `config/supervision-host`.
+A Cursor, OpenCode, or Codex home names it (`claude`, optionally with a model) in `config/supervision-host`.
 `/afk` there says so when the file selects no engine.
 
 ## Verification

@@ -194,7 +194,7 @@ check_harness() {  # <harness>
   CHECKED=$((CHECKED + 1))
 }
 
-for harness in claude opencode pi pi-signed grok codex; do
+for harness in claude opencode pi pi-signed codex; do
   check_harness "$harness"
 done
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|cursor|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|cursor|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -97,16 +97,6 @@ harness_marker() {
     if [ "${FM_PI_HARNESS:-}" = pi-signed ]; then echo pi-signed; else echo pi; fi
     return
   fi
-  # grok set GROK_AGENT=1 for its child/tool processes (verified, grok 0.2.73).
-  # It does NOT set CLAUDECODE despite being Claude-Code-compatible, so the marker
-  # is unambiguous WHEN PRESENT - but it is not guaranteed present. A grok 1.0.0
-  # hook process carries GROK_HOOK_EVENT, GROK_HOOK_NAME, GROK_SESSION_ID, and
-  # GROK_WORKSPACE_ROOT with no GROK_AGENT at all (verified from the live process
-  # environment of a wedged grok 1.0.0 Stop hook, 2026-08-07). Treat this marker as
-  # a fast path only; the ancestry walk below is what actually guarantees grok is
-  # identified, and any rule that must be RELIABLE under grok has to test the hook
-  # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
-  [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
   # codex, opencode, and kimi publish no harness-identity marker at all, so
   # they are never named here and are identified by ancestry alone. That is the
   # whole reason a foreign marker must not outrank ancestry: with markers winning
@@ -134,7 +124,6 @@ harness_process_verdict() {  # <pid>
     *claude*) echo "comm claude"; return ;;
     *codex*) echo "comm codex"; return ;;
     *opencode*) echo "comm opencode"; return ;;
-    *grok*) echo "comm grok"; return ;;
     # Both Pi identities share this launcher name. Ancestry can only prove the
     # FAMILY; only the launch-boundary marker selects the signed identity, which
     # is why detect_own keeps a marker that agrees on the family.
@@ -147,7 +136,6 @@ harness_process_verdict() {  # <pid>
         *claude*) echo "args claude"; return ;;
         *codex*) echo "args codex"; return ;;
         *opencode*) echo "args opencode"; return ;;
-        *grok*) echo "args grok"; return ;;
         *" pi "*|*/pi) echo "args pi"; return ;;
       esac ;;
   esac
@@ -297,7 +285,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|cursor)
+    claude|codex|opencode|pi|pi-signed|cursor)
       printf '%s\n' "$pin"
       ;;
     *)

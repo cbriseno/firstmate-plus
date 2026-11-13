@@ -173,11 +173,6 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
-### Grok approval-titled bottom border
-
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
-
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
 Historical machine-specific probe transcripts are not distributed.

@@ -284,12 +284,12 @@ family_for_basename() {
   case "$1" in
     fm-public-export.test.sh|fm-notification-command.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
-    fm-brief.test.sh|fm-dod-lib.test.sh|fm-vendor-auth-probe.test.sh|\
+    fm-brief.test.sh|fm-dod-lib.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
-    fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
+    fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
     fm-herdr-lab.test.sh|fm-lint.test.sh|\
@@ -357,9 +357,9 @@ family_for_basename() {
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-codex-hook-layer-live-e2e.test.sh|fm-codex-native-owner-live.test.sh|fm-lock-release-live.test.sh|\
-    fm-grok-continuity-live-e2e.test.sh|\
+    \
     fm-cursor-primary-live-e2e.test.sh|\
-    fm-grok-stop-live-e2e.test.sh|fm-harness-adapter-instructions-live-e2e.test.sh|\
+    fm-harness-adapter-instructions-live-e2e.test.sh|\
     fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|\
     fm-pi-seeded-home-trust-live-e2e.test.sh|\
@@ -488,7 +488,6 @@ tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-ensure-agents-md.test.sh
-tests/fm-grok-harness.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-lint.test.sh
 tests/fm-pi-primary-types.test.sh
@@ -520,7 +519,6 @@ tests/fm-composer-ghost.test.sh 2292
 tests/fm-composer-lib.test.sh 9521
 tests/fm-crew-state.test.sh 82058
 tests/fm-ensure-agents-md.test.sh 895
-tests/fm-grok-harness.test.sh 7666
 tests/fm-herdr-lab.test.sh 18325
 tests/fm-lint.test.sh 252498
 tests/fm-pi-primary-types.test.sh 5426
@@ -581,7 +579,6 @@ tests/fm-crew-state.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-brief.test.sh
-tests/fm-grok-harness.test.sh
 tests/fm-send-strict.test.sh
 tests/fm-spawn-batch.test.sh
 tests/fm-tmux-submit-busy.test.sh
@@ -742,8 +739,6 @@ tests/fm-gate-refuse.test.sh 9953
 tests/fm-git-strip-ai-trailers.test.sh 2067
 tests/fm-gitignore-config.test.sh 59
 tests/fm-gotmp.test.sh 1509
-tests/fm-grok-continuity-live-e2e.test.sh 46
-tests/fm-grok-stop-live-e2e.test.sh 48
 tests/fm-guard-stale-banner.test.sh 17234
 tests/fm-harness-adapter-instructions-live-e2e.test.sh 72
 tests/fm-harness-adapter-references.test.sh 64
@@ -864,7 +859,6 @@ tests/fm-trace-context-spawn.test.sh 57488
 tests/fm-turnend-foreign-owner-arm-fix.test.sh 5575
 tests/fm-turnend-guard.test.sh 34727
 tests/fm-update.test.sh 11894
-tests/fm-vendor-auth-probe.test.sh 43278
 tests/fm-voice-relay.test.sh 28917
 tests/fm-wake-daemon-lifecycle-e2e.test.sh 7345
 tests/fm-wake-drain-open-decisions-cursor.test.sh 47677
@@ -1643,7 +1637,6 @@ families_for_changed_path() {
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
     bin/fm-captain-hold.sh|bin/fm-hold-reason-lib.sh|bin/fm-decision-hold.sh|bin/fm-supervision*|bin/fm-transition-lib.sh|\
     bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-operational-input.sh|bin/fm-tasks-axi-lib.sh|\
-    bin/fm-vendor-auth-probe.sh|\
     bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-forge-detect.sh|bin/fm-promote.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*)
       printf '%s\n' pure-contract-unit

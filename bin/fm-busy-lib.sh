@@ -64,7 +64,7 @@
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
 #      cursor transcript pull source, then the
-#      Grok temporary regex fallback classifies a grok task from its rendered
+#      Grok temporary regex fallback classifies a task from its rendered
 #      tail, then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback
 #
@@ -553,27 +553,6 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
           return 0
         fi
       fi
-      ;;
-  esac
-  case "$harness" in
-    grok*)
-      if [ -z "$tail40" ]; then
-        if command -v fm_backend_capture >/dev/null 2>&1; then
-          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
-            printf 'unknown capture-failed'
-            return 0
-          }
-        else
-          printf 'unknown capture-failed'
-          return 0
-        fi
-      fi
-      if printf '%s' "$tail40" | fm_busy_grok_tail_busy; then
-        printf 'busy grok-regex'
-      else
-        printf 'idle grok-regex'
-      fi
-      return 0
       ;;
   esac
   printf 'unknown missing'

@@ -448,7 +448,7 @@ test_only_proven_writers_are_verified() {
   for harness in claude cursor; do
     "$MIRROR" verified "$harness" || fail "$harness has proven writers but is not verified"
   done
-  for harness in codex grok opencode pi unknown; do
+  for harness in codex opencode pi unknown; do
     if "$MIRROR" verified "$harness"; then
       fail "$harness has no proven writer but is verified"
     fi

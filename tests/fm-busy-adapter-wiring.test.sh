@@ -836,33 +836,6 @@ test_raw_secondmate_launch_writes_no_busy_wiring() {
   pass "a raw claude, pi, pi-signed secondmate launch writes no busy wiring and classifies unknown"
 }
 
-test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend() {
-  local case_dir id state launch out sm
-  case_dir="$TMP_ROOT/sm-codex"
-  id='sm-codex'
-  out=$(spawn_secondmate_harness "$case_dir" "$id" codex) \
-    || fail "codex secondmate spawn failed: $out"
-  state="$case_dir/primary/state"
-  launch=$(cat "$case_dir/launch.log")
-  assert_absent "$state/$id.busy-gen" "codex secondmate must not arm a busy contract with no verified source"
-  assert_not_contains "$launch" "turn-ended" "codex secondmate launch referenced a parent turn-ended signal"
-  assert_not_contains "$launch" "notify=" "codex secondmate launch included the parent turn-end notify hook"
-  out=$(classify codex "$id" "$state")
-  [ "$out" = "unknown codex-unverified" ] || fail "codex secondmate must stay unknown, got '$out'"
-
-  case_dir="$TMP_ROOT/sm-grok"
-  id='sm-grok'
-  sm="$case_dir/sm"
-  out=$(GROK_HOME="$case_dir/grok-home" spawn_secondmate_harness "$case_dir" "$id" grok) \
-    || fail "grok secondmate spawn failed: $out"
-  state="$case_dir/primary/state"
-  assert_absent "$state/$id.busy-gen" "grok secondmate must keep its rendered-tail fallback instead of an armed record"
-  assert_absent "$sm/.fm-grok-turnend" "grok secondmate spawn installed a parent turn-end pointer"
-  assert_absent "$state/$id.grok-turnend-token" "grok secondmate spawn installed a parent turn-end token"
-  out=$(fm_busy_classify tmux "firstmate:fm-$id" grok "$id" "$state" 'Ctrl+c:cancel')
-  [ "$out" = "busy grok-regex" ] || fail "grok secondmate must still classify from its tail, got '$out'"
-  pass "codex and grok secondmates stay on their existing verdicts and do not emit a parent turn-end"
-}
 
 if [ "${FM_BUSY_ADAPTER_CODEX_ONLY:-0}" = 1 ]; then
   test_codex_unverified_until_a_semantic_source_exists
@@ -877,7 +850,6 @@ test_secondmate_claude_older_home_guard_keeps_the_stop_idle_hook
 test_secondmate_claude_spawn_leaves_local_settings_untouched
 test_secondmate_pi_extension_reports_busy_without_a_parent_turnend
 test_secondmate_opencode_plugin_closes_without_a_parent_turnend
-test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend
 test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected

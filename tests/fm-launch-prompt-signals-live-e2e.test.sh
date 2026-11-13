@@ -174,14 +174,13 @@ if [ -x "${PI_BIN:-}" ]; then
   # pi-signed share Pi's engine and the same project-trust gate
   # (fm_busy_launch_prompt_parked), so the one real capture also proves them,
   # each against its own freshly armed fm-spawn seed record.
-  for h in pi-signed; do
+  h=pi-signed
     hstate=$(mktemp -d "${TMPDIR:-/tmp}/fm-launch-prompt-$h.XXXXXX") || fail "$h: could not create the isolated state dir"
     LABS+=("$hstate")
     "$EV" arm "$hstate" t1 >/dev/null || fail "$h: could not arm the scratch busy-state record"
     out=$(fm_busy_classify tmux w1 "$h" t1 "$hstate" "$(cat "$PI_TAIL_FILE")")
     [ "$out" = "unknown launch-prompt" ] \
       || fail "$h: the same real Pi trust-dialog capture classified '$out', expected 'unknown launch-prompt'"
-  done
   pass "pi, pi-signed: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate"
 else
   note "pi not installed - launch-prompt signature not checked"

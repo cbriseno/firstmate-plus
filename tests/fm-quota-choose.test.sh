@@ -702,7 +702,7 @@ lookup_err=$(bash -c '
   trap "" PIPE
   . "$1/fm-quota-axi-lib.sh"
   for _ in $(seq 200); do
-    for harness in claude codex grok cursor; do
+    for harness in claude codex cursor; do
       fm_quota_single_provider_for_harness "$harness" >/dev/null
     done
   done

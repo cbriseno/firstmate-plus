@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
 # Rendered-state helpers, sourced by fm-busy-lib.sh.
 
-# fm_busy_grok_tail_busy: the Grok-only temporary rendered-tail fallback.
-# Consumes the tail on stdin; 0 when Grok's verified busy signature matches.
-# FM_BUSY_REGEX still globally overrides the signature, mirroring the
-# historical operator escape hatch.
-fm_busy_grok_tail_busy() {
-  grep -v '^[[:space:]]*$' | tail -12 \
-    | grep -qiE "${FM_BUSY_REGEX:-${FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT:-Ctrl\\+c:cancel}}"
-}
-
 # --- launch-prompt signatures (fm_busy_launch_prompt_parked) ----------------
 #
 # Each function consumes a captured pane tail on stdin (the caller's whole

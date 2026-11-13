@@ -101,7 +101,7 @@ if [ -z "$HARNESS" ]; then
 fi
 
 case "$HARNESS" in
-  claude|codex|opencode|pi|grok|cursor) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
+  claude|codex|opencode|pi|cursor) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   pi-signed) SNIPPET="$DOC_DIR/pi.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
@@ -112,14 +112,12 @@ if [ "$HARNESS" = codex ] && "$SCRIPT_DIR/fm-codex-stop-autoarm.sh" --capable >/
   codex_native=1
 fi
 HOST_SNIPPET=
-grok_arm='bin/fm-watch-arm.sh'
 case "$HARNESS" in
-  claude|cursor|opencode|grok|codex)
+  claude|cursor|opencode|codex)
     # shellcheck source=bin/fm-supervision-engine-lib.sh
     . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
     if fm_supervision_host_enabled "$CONFIG" "$HARNESS"; then
       HOST_SNIPPET="$DOC_DIR/supervision-host.md"
-      grok_arm='bin/fm-supervision-host.sh park'
     fi
     ;;
 esac
@@ -157,7 +155,6 @@ render_snippet() {  # [snippet]
     line=${line//__FM_PI_TURNEND_EXT__/$pi_turnend_ext}
     line=${line//__FM_X_MODE_ENV_SH__/$x_mode_env_sh}
     line=${line//__FM_X_MODE_ENV__/$x_mode_env}
-    line=${line//__FM_GROK_ARM__/$grok_arm}
     printf '%s\n' "$line"
   done < "$snippet"
 }
@@ -197,9 +194,6 @@ repair_line() {
     opencode)
       printf '%s%s\n' "$prefix" 'repair missing watcher supervision by letting the OpenCode TUI plugin arm after idle; use bin/fm-watch-arm.sh only as a manual recovery probe if the plugin reports failure.'
       ;;
-    grok)
-      printf '%s%s%s%s\n' "$prefix" 'repair missing watcher supervision with ' "$grok_arm" ' as its own Grok tracked background task, never shell &.'
-      ;;
     cursor)
       printf '%s%s\n' "$prefix" 'watcher supervision is owned by the stop-hook park; inspect the hook registration and watcher startup path before ending the turn.'
       ;;
@@ -226,9 +220,6 @@ ordinary_wake_line() {
       ;;
     opencode)
       printf '%s\n' '- Ordinary wake: the OpenCode TUI plugin already owns watcher continuity; do not arm manually.'
-      ;;
-    grok)
-      printf '%s%s%s\n' '- Ordinary wake: re-arm exactly one ' "$grok_arm" ' Grok tracked background task as directed below.'
       ;;
     cursor)
       printf '%s\n' '- Ordinary wake: the stop-hook park (bin/fm-turnend-guard-cursor.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'
