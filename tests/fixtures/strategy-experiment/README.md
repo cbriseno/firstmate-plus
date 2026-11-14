@@ -30,13 +30,13 @@ La comprobación del vínculo de sesión no cuenta como corrida.
 | B, Deck, base anterior a P13 | `3f70a3187dba5e0fb38e46ec652585439ebb511f`, confirmar que sigue siendo anterior a P13 y que reproduce el contrato antes de congelar. |
 | C, fuente | `data/reportes-mac-20261114b/x/issues.md` y `x/attachments/`; copiar fuentes y adjuntos al fixture aislado, sin incluir `judge/c-reference.json`. |
 | Core S | Spec Kit 1.2.4, `43486672fe826d230d884815be7cc2026469a6ba`; verificar el pin y versión efectiva al preparar cada brazo. |
-| Contratos B | `input/b-board.json` congela un ejemplo semántico, no el formato de producción; P15a está en `ab7705fdc7ba1aeeb3cb32b35c2410e79684ae74`; conectar y fijar ejemplos reales de P12 y de resultado/revisión antes del ensayo. |
+| Contratos B | `input/b-board.json` congela el ejemplo semántico; `b-adapter.md` fija el contrato esperado y declara pendiente el adaptador de P12. P15a está en `ab7705fdc7ba1aeeb3cb32b35c2410e79684ae74`; fijar los ejemplos reales antes del ensayo. |
 | P02 / precio | Verificar vínculo real y tarifas oficiales o P08 antes del piloto, con moneda, fuente y fecha; nunca inferir el costo faltante como cero. |
 | Versiones de herramientas / carga / caché | Pendientes de medición inmediatamente antes de ejecutar. |
 | Relevo y capacidad | Misma política en todos los brazos; registrar parámetros y capacidad disponible. |
 | Orden y límites | Registrar secuencia rotada antes de ver resultados; piloto 2 h por corrida y dos reparaciones, calibrar después un límite común de 1,5–4 h por muestra. |
 | Presupuesto | Plan orientativo: 150–300 USD equivalentes a precio de lista y hasta 10 puntos semanales de Codex; recalibrar con el piloto y cuota observada sin reinicios ni créditos. |
-| Estado | **Preparado parcialmente: P12/P15a, tarifas y condiciones de ejecución aún no están congelados; no empezar el ensayo con este manifiesto.** |
+| Estado | **Preparación terminada con adaptador P12 pendiente:** tarifas y condiciones de ejecución también se fijan antes de ensayar; no empezar con este manifiesto sin completarlo. |
 
 ## Casos
 
@@ -47,7 +47,7 @@ Una declaración vigente, una actualización no cubierta y la llegada inversa de
 
 **B:** `input/b-board.json` describe una solicitud multitarea, tres proyectos plegados, un proyecto sin registrar, cinco tipos de estado y dos reportes.
 Los archivos `old.html` y `new.html` son informes locales autocontenidos.
-El contrato es semántico y deliberadamente independiente del wire format; el ejecutor debe traducirlo al fixture real de Deck usando los ejemplos de P12/P15a congelados antes de iniciar, sin alterar sus significados ni la aceptación.
+El contrato es semántico y deliberadamente independiente del wire format; `b-adapter.md` especifica la correspondencia pendiente con P12/P15a, que el ejecutor debe completar antes de iniciar.
 La base debe conservar las correcciones existentes, incluida la ventana automática de 24 h; fijar reloj del fixture a una hora compatible, sin reactivar revisiones históricas.
 Las confirmaciones de `judge/b-confirmation-*.json` se ejecutan solo después de la comparación principal; no mostrar esas variantes al participante antes de fijar los resultados de pantalla.
 

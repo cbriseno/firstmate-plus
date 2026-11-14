@@ -504,6 +504,22 @@
     {
       "path": "docs/public-export.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "tests/fixtures/strategy-experiment/README.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/fixtures/strategy-experiment/b-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/fixtures/strategy-experiment/judge/acceptance.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/fixtures/strategy-experiment/measurement-template.md",
+      "audience": "maintainer-verification"
     }
   ]
 }
