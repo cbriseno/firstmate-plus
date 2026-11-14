@@ -931,11 +931,16 @@ test_host_relaunch_preserves_scratch() {
   printf '\n%s\n' "$target" >> "$dir/home/data/host1/brief.md"
   sed -i.bak "s|^worktree=.*|worktree=$wt|; s|^project=.*|project=$wt|; s/^kind=.*/kind=host/" "$dir/home/state/host1.meta"
   printf '%s' "$wt" > "$dir/fake/cwd"
+  printf 'spawned_at=before-relaunch\nsessions_file=%s\n' "$dir/home/data/host1/sessions.jsonl" >> "$dir/home/state/host1.meta"
+  python3 "$ROOT/bin/fm_task_sessions.py" start "$dir/home/state" host1
   out=$(run_control "$dir" host1 relaunch --model sonnet --effort low --note 'continue host work') || fail "host relaunch failed: $out"
   [ "$(cat "$wt/keep")" = keep ] || fail 'host scratch was not preserved'
   [ "$(meta_field "$dir" host1 model)" = sonnet ] || fail 'host model was not updated'
   [ "$(meta_field "$dir" host1 effort)" = low ] || fail 'host effort was not updated'
-  pass 'host relaunch preserves scratch and changes model and effort'
+  jq -e -s 'length == 2 and .[0].status == "archived" and .[1].status == "active"
+    and all(.[]; .project == null) and .[1].model == "sonnet" and .[1].effort == "low"' \
+    "$dir/home/data/host1/sessions.jsonl" >/dev/null || fail 'host relaunch lost session lifecycle metadata'
+  pass 'host relaunch preserves scratch, session history and changes model and effort'
 }
 
 test_explicit_model_wins_over_the_recorded_one() {
@@ -1506,9 +1511,13 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
     printf '%s\n' "fm-$id" > "$dir/fake/windows"
     printf '%s' "$dir/wt" > "$dir/fake/cwd"
 
+    printf 'spawned_at=before-promotion\nsessions_file=%s\n' "$home/data/$id/sessions.jsonl" >> "$home/state/$id.meta"
+    python3 "$ROOT/bin/fm_task_sessions.py" start "$home/state" "$id"
+    cp "$home/data/$id/sessions.jsonl" "$dir/scout-sessions.jsonl"
     out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
       "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1) \
       || fail "$mode: scout promotion should succeed: $out"
+    cmp "$dir/scout-sessions.jsonl" "$home/data/$id/sessions.jsonl" || fail "$mode: promotion rewrote the current session"
     assert_grep 'This is a SCOUT task' "$brief" \
       "$mode: the reproduction fixture lost the original scout delivery text"
     # For local-only the current ship safety rule repeats the scout phrase (aa921774).
@@ -1522,6 +1531,9 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
     printf 'zsh' > "$dir/fake/command"
     out=$(run_spawn "$dir" "$id" --relaunch) \
       || fail "$mode: promoted scout relaunch should succeed: $out"
+    jq -e -s --arg project "$dir/proj" 'length == 2 and .[0].status == "archived"
+      and .[1].status == "active" and all(.[]; .project == $project)' \
+      "$home/data/$id/sessions.jsonl" >/dev/null || fail "$mode: promoted relaunch lost session project/history"
     launch="$home/data/$id/launch-brief.md"
     assert_grep "This task is now kind=ship with mode=$mode" "$launch" \
       "$mode: the replacement launch did not receive the promoted task identity"

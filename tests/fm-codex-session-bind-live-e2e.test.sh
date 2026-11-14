@@ -41,7 +41,7 @@ def wait(test, label):
     raise AssertionError(version + ": " + label)
 record = lab / "data/proof/sessions.jsonl"
 (state / "proof.meta").write_text("harness=codex\nmodel=gpt-6.1-sol\neffort=low\nspawned_at=2026-11-14T00:00:00Z\n"
-                                  + "busy_gen=" + gen + "\nsessions_file=" + str(record) + "\n")
+                                  + "busy_gen=" + gen + "\nspawn_gen=" + gen + "\nproject=" + str(workspace) + "\nsessions_file=" + str(record) + "\n")
 subprocess.run([sys.executable, str(root / "bin/fm_task_sessions.py"), "start", str(state), "proof"], check=True)
 assert json.loads(record.read_text())["session"] is None
 (lab / "codex/config.toml").write_text('[projects.' + json.dumps(str(workspace)) + ']\ntrust_level="trusted"\n')
@@ -57,6 +57,8 @@ try:
     wait(lambda: any(json.loads(r).get("session") for r in record.read_text().splitlines()), "session stayed null")
     rows = [json.loads(r) for r in record.read_text().splitlines()]
     assert len(rows) == 1, "binding duplicated the launch record"
+    assert rows[0]["project"] == str(workspace) and rows[0]["status"] == "active"
+    assert rows[0]["reason"] is None and rows[0]["launch"] == gen
     rollout = Path(rows[0]["session"])
     meta = json.loads(rollout.read_text().splitlines()[0])["payload"]
     assert meta["source"] == "cli" and meta["cwd"] == str(workspace)

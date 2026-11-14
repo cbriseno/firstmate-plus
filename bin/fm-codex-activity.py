@@ -50,7 +50,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fm_task_sessions import bind, metadata
+from fm_task_sessions import bind, metadata, unbound
 
 
 VERSION = "0.166.0"
@@ -323,8 +323,6 @@ def bind_open_session(state, task, gen, workspace, pid, alive=None, source="cli"
     # The exec helper follows its parent; the server launch supplies its owned
     # Popen's poll instead, so both paths stop when their exact engine exits.
     alive = alive or (lambda: os.getppid() == pid)
-    if not alive():
-        return False
     try:
         meta = metadata(state, task)
     except OSError:
@@ -337,11 +335,15 @@ def bind_open_session(state, task, gen, workspace, pid, alive=None, source="cli"
         # Session ownership is independent of the busy classifier's version pin.
         session = open_rollout(pid, codex_home, workspace, source, version=None)
         if not alive():
-            return False
+            break
         if session:
             bind(state, task, gen, session)
             return True
         time.sleep(BIND_POLL_SECONDS)
+    try:
+        unbound(state, task, gen, "transcript-timeout" if alive() else "engine-exited-before-bind")
+    except (OSError, ValueError, KeyError):
+        pass
     return False
 
 

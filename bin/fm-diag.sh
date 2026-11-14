@@ -32,6 +32,7 @@
 #   work.snapshot   caller ms lock_ms result tasks - one fm_work.py snapshot
 #   worker.procs    task harness procs zombies rss_mb - one worker's process
 #                   scope, sampled by the watcher every FM_DIAG_SAMPLE_SECS (300)
+#   session.link    task harness result reason - launch/bind outcome; no transcript paths
 # Value kinds: integers stay numbers; `task` is replaced by "live-" plus 16
 # hex of sha256(local salt + id), the same id kind fm_diagnostics uses (run
 # `fm-diag.sh id <task-id>` to find a task's id on this machine); every other
@@ -75,6 +76,7 @@ fm_diag_schema() {  # <event> -> FM_DIAG_FIELDS
     wake.ack) FM_DIAG_FIELDS='kind age_s' ;;
     work.snapshot) FM_DIAG_FIELDS='caller ms lock_ms result tasks' ;;
     worker.procs) FM_DIAG_FIELDS='task harness procs zombies rss_mb' ;;
+    session.link) FM_DIAG_FIELDS='task harness result reason' ;;
     *) return 1 ;;
   esac
 }

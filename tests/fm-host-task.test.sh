@@ -33,6 +33,8 @@ assert_contains "$OUT" 'kind=host' 'host kind recorded'
 [ "$(sed -n "s/^kind=//p" "$TASK_HOME/state/$TASK_ID.meta")" = host ] || fail 'host metadata kind missing'
 [ -z "$(sed -n "s/^mode=//p" "$TASK_HOME/state/$TASK_ID.meta")" ] || fail 'host has a delivery mode'
 [ -z "$(sed -n "s/^branch=//p" "$TASK_HOME/state/$TASK_ID.meta")" ] || fail 'host has a branch'
+jq -e '.project == null and .status == "active" and .reason == "awaiting-transcript"' \
+  "$TASK_HOME/data/$TASK_ID/sessions.jsonl" >/dev/null || fail 'host session invented a project'
 printf 'done [at=100]: host operation verified\n' >> "$TASK_HOME/state/$TASK_ID.status"
 OUT=$(FM_HOME="$TASK_HOME" HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" TMUX=fake,1,0 \
   FM_STATE_OVERRIDE="$TASK_HOME/state" FM_DATA_OVERRIDE="$TASK_HOME/data" \

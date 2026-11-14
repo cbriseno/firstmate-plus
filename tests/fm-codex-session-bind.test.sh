@@ -168,3 +168,55 @@ emit(primary)
 assert not marker.exists(), "old incarnation woke its replacement"
 PYCLI
 printf 'ok - CLI launch ignores ephemeral title and guardian callbacks; real completion wakes; stale generation stays silent\n'
+
+# The existing session CLI is also the lifecycle read surface for consumers.
+FM_SESSION_TOOL="${FM_TEST_SESSIONS_TOOL:-$ROOT/bin/fm_task_sessions.py}" \
+FM_SESSION_ROOT="$ROOT" FM_SESSION_LAB="$TMP_ROOT/lifecycle" FM_DIAGNOSTICS_HOME="$TMP_ROOT/diagnostics" python3 - <<'PYLIFECYCLE'
+import json, os, pathlib, subprocess, sys
+lab=pathlib.Path(os.environ['FM_SESSION_LAB']); state=lab/'state'; state.mkdir(parents=True)
+tool=os.environ['FM_SESSION_TOOL']; sessions=lab/'data/task/sessions.jsonl'
+def command(*args, payload=None):
+    return subprocess.check_output([sys.executable,tool,*args],input=payload,text=True)
+def launch(gen, project='/project/shared', task='task'):
+    target=lab/'data'/task/'sessions.jsonl'
+    (state/(task+'.meta')).write_text(f'harness=codex\nmodel=test-model\neffort=high\nspawned_at=same-second\nbusy_gen={gen}\nspawn_gen={gen}\nproject={project}\nsessions_file={target}\n')
+    command('start',str(state),task)
+def bind(gen, path, task='task'):
+    command('bind',str(state),task,gen,payload=json.dumps({'transcript_path':path}))
+def rows(task='task', *filters):
+    return [json.loads(x) for x in command('list',str(lab),'--task',task,*filters).splitlines()]
+launch('one'); bind('one','/transcript/one')
+a=rows()[0]
+assert (a['project'],a['status'],a['reason'])==('/project/shared','active',None), a
+launch('two'); bind('one','/transcript/stale')
+pending=rows()[-1]
+assert pending['session'] is None and pending['reason']=='awaiting-transcript'
+bind('two',None)
+assert rows()[-1]['reason']=='missing-transcript-path'
+subprocess.run([sys.executable,str(pathlib.Path(os.environ['FM_SESSION_ROOT'])/'bin/fm-codex-activity.py'),
+                'bind-session',str(state),'task','two',str(lab),'999999999'],check=True)
+assert rows()[-1]['reason']=='engine-exited-before-bind'
+bind('two','/transcript/two'); bind('two','/transcript/two')
+a,b=rows(); assert a['status']=='archived' and b['status']=='active'
+assert (a['session'],b['session'])==('/transcript/one','/transcript/two')
+# Same project permits independent active tasks; host has an explicit null project.
+launch('other',task='other'); launch('host',project='',task='host')
+assert rows('host')[0]['project'] is None
+active=[json.loads(x) for x in command('list',str(lab),'--project','/project/shared','--status','active').splitlines()]
+assert {x['task'] for x in active}=={'task','other'}, active
+# Historical rows are read honestly and never rewritten merely by querying.
+sessions.write_text(sessions.read_text()+json.dumps(dict(harness='claude',model=None,effort=None,started_at=None,session=None))+'\n')
+before=sessions.read_bytes(); legacy=rows()[-1]
+assert legacy['project'] is None and legacy['status']=='unknown' and legacy['reason']=='legacy-unrecorded'
+assert sessions.read_bytes()==before
+# Resuming an archived transcript in a new generation preserves both launches.
+launch('three'); bind('three','/transcript/one')
+assert len(rows())==4 and rows()[-1]['status']=='active'
+assert len(rows('task','--status','archived'))==2
+# Diagnostic fields are anonymized by the existing writer, without path disclosure.
+events=[json.loads(x) for x in (pathlib.Path(os.environ['FM_DIAGNOSTICS_HOME'])/'firstmate/events.jsonl').read_text().splitlines()]
+links=[x for x in events if x['e']=='session.link']
+assert {'stale-generation','missing-transcript-path','engine-exited-before-bind','transcript-linked'} <= {x['reason'] for x in links}, links
+assert all(x['task'].startswith('live-') and '/' not in json.dumps(x) for x in links)
+print('ok - sessions retain launch identity, project, active/archive state and binding diagnostics')
+PYLIFECYCLE

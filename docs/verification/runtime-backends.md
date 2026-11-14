@@ -21,6 +21,10 @@ Replaying the first 60 lines of real historical Claude and Codex transcripts thr
 Claude's historical brief can arrive in a tool result after an inbox doorbell, and its first transcript record can lack a timestamp.
 The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-busy-state.test.sh`.
 The common spawn path records launches before backend delivery for tmux and Herdr, independent of the harness command; session capture currently uses only Claude's existing hook and Codex's existing pin.
+On 2026-11-14, Linux with Python 3.11.2 and codex-cli 0.169.0 verified project attribution, active launch state and a null binding reason on the real transcript through `FM_CODEX_SESSION_BIND_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-session-bind-live-e2e.test.sh`.
+It reported `ok - codex-cli 0.169.0: real worker transcript bound; activity qualification unchanged`.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh tests/fm-host-task.test.sh tests/fm-control-relaunch.test.sh` refreshes task/project queries, same-second launch history, host attribution, promotion preservation, relaunch archival and anonymized binding diagnostics.
+The lifecycle record format and the distinction between an active chat and a running process belong to the session writer's header.
 Remote secondmate launch transport is outside worker capture.
 macOS was inspected but not executed; the writer and migration use Python's standard library, while automatic Codex capture retains its existing native Linux capability limit.
 
