@@ -11,7 +11,7 @@
 #      classifier, both refuse instead of acting blind.
 #   3. Exact-id scoping: a window label, an explicit endpoint, an unknown id,
 #      and a record bound to another task are all refused.
-#   4. Verb allowlist: no arbitrary text, no raw keys, no resume.
+#   4. Verb allowlist: no arbitrary text, no raw keys, parked-only resume.
 #   5. Lifecycle states: busy interrupts first, idle does not, already-stopped
 #      is idempotent success, and an agent that does not stop fails closed.
 #   6. Marker non-regression: a control command to a kind=secondmate task
@@ -136,6 +136,7 @@ case "${1:-}" in
     fi
     if [ -f "$D/pane" ]; then cat "$D/pane"; else printf '╭────╮\n│    │\n╰────╯\n'; fi
     exit 0 ;;
+  kill-window) : > "$D/windows"; exit 0 ;;
   list-windows)
     if [ -f "$D/windows" ]; then cat "$D/windows"; fi
     exit 0 ;;
@@ -513,16 +514,88 @@ test_verb_allowlist_is_closed() {
   pass "fm-control: the verb list is closed - no raw keys, arbitrary text, or clear verb"
 }
 
-test_resume_is_refused_with_its_reason() {
+test_resume_requires_parking() {
   local dir out rc
   dir=$(new_case resume)
   add_task "$dir" t1 claude
   out=$(run_control "$dir" t1 resume); rc=$?
-  expect_code 2 "$rc" "resume should be refused"
-  assert_contains "$out" "not deterministic across the verified adapters" \
-    "the refusal should explain why resume is excluded"
-  assert_contains "$out" "relaunch" "the refusal should point at the deterministic alternative"
-  pass "fm-control: resume is refused with the determinism reason and the alternative"
+  expect_code 1 "$rc" "ordinary resume requires a parked task"
+  assert_contains "$out" "not parked" "unparked tasks use ordinary recovery"
+  [ -z "$(literals "$dir")" ] || fail "resume refusal typed into a live endpoint"
+  pass "fm-control: resume refuses an unparked task"
+}
+
+test_park_declared_waits_preserves_work() {
+  local dir out declaration head
+  for declaration in 'done: ready in branch' 'needs-decision [key=choice]: choose' \
+    'captain-held: awaiting answer' 'paused: until 2099-01-01T00:00Z'; do
+    dir=$(new_case park)
+    add_task "$dir" t1 claude
+    printf '%s\n' "$declaration" > "$dir/home/state/t1.status"
+    printf 'unsaved change\n' > "$dir/wt-t1/pending"
+    head=$(git -C "$dir/wt-t1" rev-parse HEAD)
+    out=$(run_control "$dir" t1 park) || fail "$out"
+    assert_contains "$out" 'parked t1' 'declared wait closes its endpoint'
+    [ ! -s "$dir/fake/windows" ] || fail 'park left its window open'
+    [ "$(cat "$dir/wt-t1/pending")" = 'unsaved change' ] || fail 'park changed dirty work'
+    [ "$(git -C "$dir/wt-t1" rev-parse HEAD)" = "$head" ] || fail 'park moved HEAD'
+    grep -q '^park_phase=parked$' "$dir/home/state/t1.parked" || fail 'parking not recorded'
+    grep -qF "$declaration" "$dir/home/data/t1/park-note.md" || fail 'wait absent from progress note'
+    out=$(FM_HOME="$dir/home" bash "$ROOT/bin/fm-crew-state.sh" t1 --json)
+    assert_contains "$out" '"source":"parking"' 'parked has explicit provenance'
+  done
+  pass 'park: merge, decision, hold and dated pause preserve work and close only the endpoint'
+}
+
+test_park_refuses_active_or_undated_wait() {
+  local dir out declaration gen
+  for declaration in 'working: running tests' 'paused: waiting without a date'; do
+    dir=$(new_case park-refuse)
+    add_task "$dir" t1 claude
+    printf '%s\n' "$declaration" > "$dir/home/state/t1.status"
+    if out=$(run_control "$dir" t1 park); then fail 'park accepted an ineligible wait'; fi
+    [ -s "$dir/fake/windows" ] || fail 'refused park closed window'
+    [ ! -f "$dir/home/state/t1.parked" ] || fail 'refused park wrote parking record'
+  done
+  dir=$(new_case park-busy)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  printf 'needs-decision: operation still running\n' > "$dir/home/state/t1.status"
+  gen=$(bash "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state busy --source claude-hook)
+  printf 'busy_gen=%s\n' "$gen" >> "$dir/home/state/t1.meta"
+  if out=$(run_control "$dir" t1 park); then fail 'park stopped an active operation'; fi
+  [ -z "$(literals "$dir")" ] || fail 'park interrupted an active operation'
+  dir=$(new_case park-unread)
+  add_task "$dir" t1 claude
+  printf 'done: ready\n' > "$dir/home/state/t1.status"
+  mkdir "$dir/home/state/t1.inbox"
+  printf 'pending answer\n' > "$dir/home/state/t1.inbox/001.msg"
+  if out=$(run_control "$dir" t1 park); then fail 'park stranded an unread answer'; fi
+  [ -s "$dir/fake/windows" ] || fail 'park closed a worker with unread steering'
+  pass 'park: active work and undated pauses remain running'
+}
+
+test_resume_identity_comes_from_saved_launch() {
+  local dir
+  dir=$(new_case resume-identity)
+  python3 - "$ROOT" "$dir" <<'PYIDENTITY'
+import json, subprocess, sys
+from pathlib import Path
+root, base = map(Path, sys.argv[1:])
+state=base/'home/state'; sessions=base/'sessions.jsonl'; transcript=base/'chat.jsonl'
+identifier='11111111-2222-4333-8444-555555555555'
+for harness, header in [('codex', {'type':'session_meta','payload':{'id':identifier}}),
+                        ('claude', {'sessionId':identifier})]:
+    transcript.write_text(json.dumps(header)+'\n')
+    sessions.write_text(json.dumps({'launch':'old','harness':harness,'status':'archived','session':str(transcript)})+'\n'+json.dumps({'launch':'new','harness':harness,'status':'active','session':'/missing'})+'\n')
+    (state/'t1.parked').write_text(f'spawn_gen=old\nharness={harness}\nsessions_file={sessions}\n')
+    cmd=[sys.executable,str(root/'bin/fm_task_sessions.py'),'resume-id',str(state),'t1']
+    assert subprocess.check_output(cmd,text=True).strip()==identifier
+    transcript.unlink()
+    result=subprocess.run(cmd,text=True,capture_output=True)
+    assert result.returncode and not result.stdout and 'no readable' in result.stderr
+print('ok - native resume selects the saved launch, including after a failed replacement; missing transcript explains fallback')
+PYIDENTITY
 }
 
 test_relaunch_only_flags_are_rejected_on_other_verbs() {
@@ -955,7 +1028,10 @@ test_record_bound_to_another_task_is_refused
 test_remote_secondmate_is_refused_by_placement
 test_interrupt_and_exit_lock_before_task_state_resolution
 test_verb_allowlist_is_closed
-test_resume_is_refused_with_its_reason
+test_resume_requires_parking
+test_park_declared_waits_preserves_work
+test_park_refuses_active_or_undated_wait
+test_resume_identity_comes_from_saved_launch
 test_relaunch_only_flags_are_rejected_on_other_verbs
 test_worker_resource_cleanup
 test_worker_wrapper_reaps_orphans_while_running

@@ -37,12 +37,8 @@
 #      stopped. A verb whose postcondition cannot be proven on the recorded
 #      backend is refused rather than performed blind.
 #
-# `resume` is deliberately NOT a verb: it is not deterministic across the
-# verified adapters (docs/agent-control.md owns the per-adapter resume facts).
-# `relaunch` uses the brief on disk rather than a harness-private session as
-# its durable instruction. The relaunch-time exception is
-# fm_control_relaunch_resume_flag below: a reference the endpoint's runtime
-# bound as its status authority is returned to a replacement with that adapter.
+# park/resume save an idle worker and reopen its recorded chat; their mutable
+# mechanics live in fm-worker-parking-lib.sh. Relaunch always starts fresh.
 
 # The complete control-plane verb allowlist, one per line.
 fm_control_verbs() {
@@ -50,12 +46,14 @@ fm_control_verbs() {
 interrupt
 exit
 relaunch
+park
+resume
 EOF
 }
 
 fm_control_verb_allowed() {  # <verb>
   case "${1-}" in
-    interrupt|exit|relaunch) return 0 ;;
+    interrupt|exit|relaunch|park|resume) return 0 ;;
   esac
   return 1
 }
@@ -227,22 +225,33 @@ fm_control_absence_recheck_applies() {  # <backend> <raw-state>
 #     passes `--session <session>`, so the recheck starts and reads the session
 #     the RECORD names, through that session's own socket. The answer is about
 #     the task's endpoint and nothing else.
-#   tmux CANNOT. `list-windows -a` describes only the server the CURRENT
+#   Ordinary tmux records CANNOT. `list-windows -a` describes only the server the CURRENT
 #     process addresses (its TMUX_TMPDIR/socket), and a task's record does not
 #     carry the endpoint's socket identity - so a different but running server
 #     would answer "not anywhere" about a window it was never able to see.
-#     There is no read available here that closes that gap, so tmux always
-#     returns `unproven` and both verbs refuse. tmux is left exactly as
+#     Only deliberate parking saves a socket to close that gap; ordinary records
+#     return `unproven` and both verbs refuse. They are left exactly as
 #     deadlocked as it was before this change - no worse - but deliberately.
 #
 # Both control-plane callers share this one implementation so the proof cannot
 # drift into two answers for the same endpoint.
 fm_control_endpoint_absence_verdict() {  # <backend> <target> [meta]
-  local backend=${1-} target=${2-}
+  local backend=${1-} target=${2-} meta=${3-} socket
   fm_backend_source "$backend" \
     || { printf 'unproven\tbackend %s could not be loaded to prove anything about that endpoint' "'$backend'"; return 0; }
   case "$backend" in
     tmux)
+      # A deliberately parked task saved its socket before closing the window.
+      # Ordinary missing records still refuse: absence on another server proves nothing.
+      if [ -n "$meta" ] && [ -f "${meta%.meta}.parked" ] \
+        && [ "$(fm_meta_get "${meta%.meta}.parked" park_phase)" = parked ]; then
+        socket=$(fm_meta_get "${meta%.meta}.parked" park_tmux_socket)
+        if [ -n "$socket" ] && [ "$(tmux display-message -p '#{socket_path}' 2>/dev/null)" = "$socket" ] \
+          && [ "$(fm_backend_agent_state tmux "$target")" = missing ]; then
+          printf 'gone\t'
+          return 0
+        fi
+      fi
       printf 'unproven\ttmux absence cannot be proven from a task record: the record does not carry the endpoint'"'"'s socket identity, and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
       ;;
     herdr)

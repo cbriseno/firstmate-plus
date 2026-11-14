@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Opt-in real Codex/Claude park -> inbox response -> same-chat resume on Herdr.
+# Run with FM_WORKER_PARKING_LIVE=1 through bin/fm-heavy-run.sh.
+set -eu
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+fm_live_gate opt-in FM_WORKER_PARKING_LIVE herdr python3 jq
+TMP_ROOT=$(fm_test_tmproot fm-worker-parking-live)
+HERDR_LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
+LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
+HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name worker-parking)
+export FM_HOME
+export TMPDIR="$TMP_ROOT"
+FM_HOME="$TMP_ROOT/home"
+cleanup() {
+ local rc=$?
+ trap - EXIT
+ export PATH="${ORIGINAL_PATH:-$PATH}"
+ "$LAB_HOME_HELPER" teardown "$FM_HOME" || rc=1
+ "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || rc=1
+ fm_test_cleanup
+ exit "$rc"
+}
+trap cleanup EXIT
+# Let the one EXIT cleanup close the lab before tests/lib.sh removes fixtures.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+"$LAB_HOME_HELPER" create "$FM_HOME"
+"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"
+# All task-specific backend Herdr traffic passes through the guarded helper.
+ORIGINAL_PATH=$PATH
+export ORIGINAL_PATH HERDR_LAB_SESSION HERDR_LAB_HELPER
+mkdir "$FM_HOME/fakebin"
+cat > "$FM_HOME/fakebin/herdr" <<'WRAP'
+#!/usr/bin/env bash
+set -eu
+args=()
+while [ $# -gt 0 ]; do
+ case "$1" in
+ --session) [ "$2" = "$HERDR_LAB_SESSION" ] || exit 97; shift 2 ;;
+ --session=*) [ "${1#*=}" = "$HERDR_LAB_SESSION" ] || exit 97; shift ;;
+ *) args+=("$1"); shift ;;
+ esac
+done
+PATH=$ORIGINAL_PATH exec "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "${args[@]}"
+WRAP
+chmod +x "$FM_HOME/fakebin/herdr"
+export PATH="$FM_HOME/fakebin:$PATH"
+unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
+export HERDR_SESSION="$HERDR_LAB_SESSION" FM_BACKEND=herdr FM_SPAWN_NO_GUARD=1
+printf manual > "$FM_HOME/config/backlog-backend"
+printf auto > "$FM_HOME/config/claude-permission-mode"
+mkdir -p "$TMP_ROOT/allowed"
+checked=0
+for harness in codex claude; do
+ if ! command -v "$harness" >/dev/null; then printf 'skip: %s absent\n' "$harness"; continue; fi
+ checked=$((checked + 1))
+ "$harness" --version
+ id=pilot-$harness
+ bash "$ROOT/bin/fm-brief.sh" "$id" --host --path "$TMP_ROOT/allowed" >/dev/null
+ python3 - "$FM_HOME/data/$id/brief.md" <<'PY'
+import sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=p.read_text().replace('{TASK}', 'This is a tiny lifecycle pilot. Remember the word MARIGOLD. On every launch, first inspect the steering inbox. If there is a pending message, read it, reply with MARIGOLD and its requested token, and acknowledge it by moving it into handled. If no message exists, reply P03-READY and wait. Do not do other work or ask questions.').replace('{FIRSTMATE_SPEC}', 'No implementation; only one short reply and wait. Do not initialize a presentation. The enclosing test owns all status updates.');p.write_text(s)
+PY
+ if [ "$harness" = codex ]; then model=gpt-6.1-sol; else model=haiku; fi
+ bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
+ meta="$FM_HOME/state/$id.meta"
+ target=$(sed -n 's/^window=//p' "$meta" | tail -1)
+ pane=${target#*:}
+ printf 'pilot started %s pane=%s\n' "$harness" "$pane"
+ for n in $(seq 1 120); do
+  screen=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane read "$pane" --lines 60 --source recent-unwrapped 2>/dev/null || true)
+  # Codex's qualified normal-final callback survives a scrolled TUI viewport.
+  if { [ "$harness" = codex ] && [ -f "$FM_HOME/state/$id.turn-ended" ]; } \
+    || { [ "$harness" = claude ] && printf '%s' "$screen" | grep -q 'P03-READY'; }; then break; fi
+  if [ "$n" = 120 ]; then printf '%s\n' "$screen"; exit 1; fi
+  sleep 1
+ done
+ printf '%s\n' "$screen"
+ printf 'needs-decision [key=pilot] [at=%s]: waiting for pilot answer\n' "$(date +%s)" >> "$FM_HOME/state/$id.status"
+ bash "$ROOT/bin/fm-control.sh" "$id" park
+ bash "$ROOT/bin/fm-crew-state.sh" "$id" --json
+ original_session=$(python3 "$ROOT/bin/fm_task_sessions.py" resume-id "$FM_HOME/state" "$id" || true)
+ bash "$ROOT/bin/fm-send.sh" "$id" --resolve-key pilot 'What was the remembered word? Reply with it and P03-RESUMED. Read and acknowledge this inbox message.'
+ newtarget=$(sed -n 's/^window=//p' "$meta" | tail -1)
+ newpane=${newtarget#*:}
+ for n in $(seq 1 120); do
+  screen=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane read "$newpane" --lines 60 --source recent-unwrapped 2>/dev/null || true)
+  if printf '%s' "$screen" | grep -q 'MARIGOLD.*P03-RESUMED'; then break; fi
+  if [ "$n" = 120 ]; then printf '%s\n' "$screen"; exit 1; fi
+  sleep 1
+ done
+ printf '%s\n' "$screen"
+ python3 - "$FM_HOME/data/$id/sessions.jsonl" "$original_session" <<'CHECK'
+import json,sys
+from pathlib import Path
+rows=[json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+assert len(rows)==2 and rows[0]['status']=='archived' and rows[1]['status']=='active', rows
+if sys.argv[2]:
+    assert rows[0]['session'] and rows[0]['session']==rows[1]['session'], rows
+    print('same transcript preserved across park/resume: '+sys.argv[2])
+else:
+    status=(Path(sys.argv[1]).parents[2]/'state'/('pilot-'+rows[1]['harness']+'.status')).read_text()
+    assert 'chat=fresh-with-progress-note' in status and 'no readable native session identity' in status, status
+    print('explicit fresh-chat fallback: saved launch has no readable native session identity')
+CHECK
+ [ -f "$FM_HOME/state/$id.inbox/handled/001.msg" ] || fail 'resumed worker did not acknowledge its response'
+ printf 'PILOT PASSED %s continuation and acknowledged response\n' "$harness"
+ bash "$ROOT/bin/fm-control.sh" "$id" exit
+ # Teardown closes only the isolated named Herdr session, after the loop.
+done
+
+[ "$checked" -gt 0 ] || fail "no installed harness was checked"

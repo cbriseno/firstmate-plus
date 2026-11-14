@@ -424,3 +424,15 @@ The event format and installation boundary belong to [the fleet ledger contract]
 `FM_CODEX_ACTIVITY_LIVE=1 FM_CODEX_ACTIVITY_NOTIFY_ONLY=1 bash bin/fm-test-run.sh tests/fm-codex-activity-live-e2e.test.sh` also verified the captured production worker launch on 2026-11-09.
 It reported `ok - real Codex launch publishes normal completion with its bound generation` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=39341`.
 The unrestricted activity matrix reached normal completion, Escape and incarnation replacement, but its latest private HTTP-error setup produced no owner binding, so that failure route is not refreshed by this ledger verification.
+
+## Waiting-worker parking
+
+Verified 2026-11-14 on Linux with Codex CLI 0.169.0, Claude Code 2.1.325 and Herdr 0.9.5.
+`FM_WORKER_PARKING_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-worker-parking-live-e2e.test.sh` refreshes the credentialed, isolated proof for every installed verified harness.
+The run printed `PILOT PASSED codex continuation and acknowledged response` and `PILOT PASSED claude continuation and acknowledged response` and exited zero after guarded lab teardown.
+Codex reopened the same transcript; Claude's lab callbacks did not bind a transcript, so that case proved the explicit fresh-chat fallback and retained-note/inbox continuation, not native Claude resume.
+Both cases stopped the old agent, closed its pane, launched in the same task location and acknowledged the response in the existing inbox.
+The current semantic activity limits remain explicit: unknown activity or an unconfirmed launch seed requires Firstmate's verified safe point; an observed busy event refuses parking.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-send-inbox.test.sh tests/fm-herdr-lab.test.sh` refreshes the portable wait kinds, preserved work, pending response, supervision lease and lab recovery checks.
+The initial lab snapshot lost during a canceled fixture was not reconstructed; explicit helper recovery verified the current default unchanged across its subsequent teardown.
+No macOS execution is claimed by these results.

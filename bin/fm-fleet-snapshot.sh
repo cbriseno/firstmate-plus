@@ -685,6 +685,7 @@ prefetch_task_observations() {  # <meta> <id>
   snapshot_task_generation_is_current "$meta" "$id" || generation_current=0
   if [ "$generation_current" = 1 ]; then
     snapshot_capture_optional "$status_log" "$status_capture" || current_rc=1
+    snapshot_capture_optional "$STATE/$id.parked" "${meta%.meta}.parked" || current_rc=1
     status_home_appends_ranges "$status_log" > "$status_capture.ranges" || current_rc=1
     snapshot_mark_optional_present "$report_path" "$report_capture" || current_rc=1
   fi

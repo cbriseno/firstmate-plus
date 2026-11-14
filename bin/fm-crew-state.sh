@@ -245,6 +245,10 @@ emit() {  # <state> <source> [detail]
 # --- meta resolution --------------------------------------------------------
 
 [ -f "$META" ] || emit unknown none "no metadata for $ID"
+if [ -f "${META%.meta}.parked" ] \
+  && [ "$(fm_meta_get "${META%.meta}.parked" park_phase)" = parked ]; then
+  emit parked parking "$(fm_meta_get "${META%.meta}.parked" park_wait)"
+fi
 
 meta_value() {  # <key>
   grep "^$1=" "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true

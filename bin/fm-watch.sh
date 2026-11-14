@@ -939,6 +939,7 @@ recorded_windows() {
   local meta w seen=
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
+    [ ! -f "${meta%.meta}.parked" ] || continue
     w=$(fm_backend_target_of_meta "$meta")
     [ -n "$w" ] || continue
     case "$seen" in
@@ -3739,6 +3740,13 @@ while :; do
 
   login_expiry_tick
 
+  # Parked panes are absent by design; preserve the existing dated-pause
+  # recheck through fm-send, which resumes before ringing its inbox.
+  for parked in "$STATE"/*.parked; do
+    [ -f "$parked" ] || continue
+    task=${parked##*/}; task=${task%.parked}
+    paused_until_resume "$(fm_meta_get "$parked" window)" "$task" "$(fm_meta_get "$parked" park_wait)"
+  done
   spawn_deferred_tick || exit 1
 
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended

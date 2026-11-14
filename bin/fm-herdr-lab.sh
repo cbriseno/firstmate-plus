@@ -6,6 +6,7 @@
 #   fm-herdr-lab.sh name <label>
 #   fm-herdr-lab.sh prepare <session>
 #   fm-herdr-lab.sh provision <session>
+#   fm-herdr-lab.sh recover <session>
 #   fm-herdr-lab.sh run <session> <herdr arguments...>
 #   fm-herdr-lab.sh viewer start <session>
 #   fm-herdr-lab.sh viewer stop <session>
@@ -27,6 +28,10 @@
 # destructive call.
 # Provision records the running default session as a fleet-state tripwire and
 # teardown requires that record to be identical afterward.
+# recover is explicit operator recovery of an exact owned nondefault lab whose
+# tripwire was lost: it records the CURRENT default before subsequent teardown,
+# reports that the original snapshot is unavailable, and never replaces an
+# existing tripwire or performs lifecycle actions. Never call it automatically.
 # The viewer command attaches or detaches one real foreground Herdr client on
 # an owned lab session over a fixed 40-row by 120-column pty;
 # bin/fm-herdr-lab-viewer.py owns the pty mechanics.
@@ -122,6 +127,21 @@ fm_herdr_lab_prepare() { # <session>
     rm -f "$tripwire"
     return 1
   }
+}
+
+fm_herdr_lab_recover() { # <exact-owned-session>
+  local name=$1 tripwire snapshot
+  fm_herdr_lab_validate_name "$name" || return 1
+  fm_herdr_lab_refuse_if_default "$name" || return 1
+  tripwire=$(fm_herdr_lab_tripwire_path "$name")
+  [ ! -e "$tripwire" ] || {
+    fm_herdr_lab_error "tripwire exists for '$name'; recovery never replaces evidence"
+    return 1
+  }
+  snapshot=$(fm_herdr_lab_fleet_state "$name") || return 1
+  mkdir -p "$(fm_herdr_lab_state_dir)" || return 1
+  (set -C; printf '%s\n' "$snapshot" > "$tripwire") || return 1
+  fm_herdr_lab_error "recovered '$name': original tripwire unavailable; current default recorded for subsequent teardown only"
 }
 
 fm_herdr_lab_refuse_if_default() { # <session>
@@ -434,7 +454,12 @@ fm_herdr_lab_provision() { # <session>
   else
     fm_herdr_lab_prepare "$name" || return 1
   fi
-  fm_herdr_lab_raw "$name" server >/dev/null 2>&1 &
+  # Keep the actual launcher PID, so cancellation cannot kill only a waiting
+  # wrapper and leave the real launcher to create the session after teardown.
+  (
+    export HERDR_SESSION="$name"
+    exec herdr server --session "$name"
+  ) >/dev/null 2>&1 &
   server_pid=$!
   attempt=0
   max_attempts=300
@@ -542,7 +567,7 @@ fm_herdr_lab_name() { # <label>
 }
 
 fm_herdr_lab_usage() {
-  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d;s/^# \{0,1\}//'
 }
 
 fm_herdr_lab_main() {
@@ -559,6 +584,10 @@ fm_herdr_lab_main() {
     provision)
       [ "$#" -eq 2 ] || { fm_herdr_lab_usage >&2; return 2; }
       fm_herdr_lab_provision "$2"
+      ;;
+    recover)
+      [ "$#" -eq 2 ] || { fm_herdr_lab_usage >&2; return 2; }
+      fm_herdr_lab_recover "$2"
       ;;
     run)
       [ "$#" -ge 3 ] || { fm_herdr_lab_usage >&2; return 2; }

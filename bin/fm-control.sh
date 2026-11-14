@@ -4,9 +4,17 @@
 #
 # Usage: fm-control.sh <task-id> interrupt
 #        fm-control.sh <task-id> exit
+#        fm-control.sh <task-id> park
+#        fm-control.sh <task-id> resume
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>]
 #                                         (--note <text> | --note-file <path>)
+#
+# park requires a declared wait and an idle agent; saves metadata, progress and
+# wait in state/<id>.parked and data/<id>/park-note.md, then stops and closes
+# only its endpoint. resume reuses the native chat from sessions.jsonl when
+# readable, otherwise reports the reason and relaunches with that saved note.
+# Failed resume retains the parked record and all pending inbox messages.
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
@@ -42,7 +50,7 @@
 #              preserves did not survive; a pane that turns out to be there and
 #              idle is the ordinary `already-stopped`; one whose agent is back
 #              takes the ordinary interrupt-then-exit path. A tmux `missing`
-#              always REFUSES: a task record carries no socket identity for its
+#              ordinarily REFUSES: only deliberate parking saves its socket; a task record carries no socket identity for its
 #              endpoint, so this verb cannot tell a destroyed window from one on
 #              a tmux server it cannot address, and it will not claim a stop it
 #              cannot see.
@@ -87,13 +95,11 @@
 #
 # Teardown and discard are NOT verbs here and never will be. `exit` stops an
 # agent and preserves everything else; removing a worktree, killing an
-# endpoint, or discarding work stays with bin/fm-teardown.sh, which owns the
+# endpoint for cleanup, or discarding work stays with bin/fm-teardown.sh, which owns the
 # landed-work test.
 #
-# `resume` is not a verb: it is not deterministic across the verified adapters
-# (bin/fm-control-lib.sh's header owns that reasoning). `relaunch` covers the
-# same need for every adapter because the brief on disk, not a harness-private
-# session, is the durable instruction.
+# park/resume preserve waiting workers; relaunch starts a fresh conversation.
+# The parking implementation lives in bin/fm-worker-parking-lib.sh.
 #
 # Targeting is EXACT: only a bare task id with a state/<id>.meta record in
 # THIS home is accepted, and the record must pass the shared endpoint-identity
@@ -199,6 +205,9 @@ control_cleanup() {
      && declare -F relaunch_rollback >/dev/null 2>&1; then
     relaunch_rollback || true
   fi
+  if [ -n "${PARK_META_LOCK:-}" ]; then
+    fm_lock_release "$PARK_META_LOCK" || true
+  fi
   # Remove the dialog file while the lock is still held: once it is released,
   # the next lifecycle command for this task writes the same path.
   if [ -n "${FM_COMPOSER_DIALOG_SINK:-}" ]; then
@@ -223,11 +232,7 @@ shift 2
 
 if ! fm_control_verb_allowed "$VERB"; then
   {
-    if [ "$VERB" = resume ]; then
-      echo "error: 'resume' is not a control verb: resuming an exited agent is not deterministic across the verified adapters (Codex needs a session id printed at exit, and the other adapters have no verified pane-resume contract). Use 'relaunch', which carries the brief plus a progress note into a fresh agent on any adapter."
-    else
-      echo "error: '$VERB' is not a control verb"
-    fi
+    echo "error: '$VERB' is not a control verb"
     echo "allowed verbs:"
     fm_control_verbs | sed 's/^/  /'
   } >&2
@@ -314,8 +319,14 @@ ID=$RAW_ID
 fm_lease_guard "$ID" "lifecycle control (fm-control)"
 CONTROL_LOCK="$STATE/.control-$ID.lock"
 trap control_cleanup EXIT
-fm_lock_try_acquire "$CONTROL_LOCK" \
-  || die "another lifecycle action is already running for task $ID"
+if [ "$VERB" = resume ]; then
+  # A response can arrive during park's stop/close; let that action finish.
+  fm_lock_acquire_wait_max "$CONTROL_LOCK" 60 \
+    || die "another lifecycle action is still running for task $ID"
+else
+  fm_lock_try_acquire "$CONTROL_LOCK" \
+    || die "another lifecycle action is already running for task $ID"
+fi
 CONTROL_LOCK_HELD=1
 # do_exit runs in a command substitution. That subshell does not run this
 # EXIT trap, so the parent has to hold the path the trap removes. Set it
@@ -1052,7 +1063,7 @@ record_note() {
         echo
         echo "## Progress note ($stamp)"
         echo
-        echo "This task was relaunched. Continue from here; the local copy and every"
+        echo "Continue from this saved progress note; the local copy and every"
         echo "uncommitted change are exactly as the previous worker left them."
         echo
         inbox_q=$(printf '%s' "$STATE/$ID.inbox" | sed "s/'/'\\\\''/g")
@@ -1107,7 +1118,11 @@ do_relaunch() {
   journal_write noted "${CHECKPOINT_LINES[@]}" "$note_line"
 
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
-  exit_result=$(do_exit)
+  if [ "$VERB" = resume ] && [ "$(fm_meta_get "$STATE/$ID.parked" park_phase)" = parked ]; then
+    exit_result=parked
+  else
+    exit_result=$(do_exit)
+  fi
   journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
@@ -1115,7 +1130,7 @@ do_relaunch() {
   RELAUNCH_TX="${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).$RANDOM"
   journal_write launching "${CHECKPOINT_LINES[@]}" "$note_line" "relaunch_tx=$RELAUNCH_TX"
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS" --model "$TARGET_MODEL" --effort "$TARGET_EFFORT")
-  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+  if FM_CONTROL_RESUME_SESSION="${RESUME_SESSION:-}" FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
     # $T was resolved from the record before the launch. When the recorded
@@ -1151,6 +1166,9 @@ do_relaunch() {
   echo "relaunched $ID harness=$TARGET_HARNESS from=$PRIOR_RECORDED_HARNESS model=$TARGET_MODEL effort=$TARGET_EFFORT backend=$BACKEND endpoint=$T worktree=$WT"
 }
 
+# shellcheck source=bin/fm-worker-parking-lib.sh
+. "$SCRIPT_DIR/fm-worker-parking-lib.sh"
+
 # --- verbs ------------------------------------------------------------------
 
 case "$VERB" in
@@ -1177,4 +1195,6 @@ case "$VERB" in
   relaunch)
     do_relaunch
     ;;
+  park) do_park ;;
+  resume) do_resume ;;
 esac

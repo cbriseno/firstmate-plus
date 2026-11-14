@@ -1,7 +1,7 @@
 ---
 name: harness-adapters
 description: >-
-  Load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
+  Load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming a parked worker, or verifying a new harness adapter; also when a worker declares ready-for-merge, needs-decision, captain-held or a dated pause.
 user-invocable: false
 metadata:
   internal: true
@@ -30,7 +30,7 @@ On `unknown`, ask the captain instead of guessing.
 A current captain override beats detection, while a per-task override governs only that dispatch.
 For recovery and control, use the exact `harness=` in `state/<id>.meta`; never infer it from a model or provider.
 
-Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
+Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch|park|resume`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
 
@@ -63,6 +63,7 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "interrupt": {"default": ["references/common/control-and-recovery.md"]},
     "exit": {"default": ["references/common/control-and-recovery.md"]},
     "resume": {"default": ["references/common/control-and-recovery.md"]},
+    "park": {"default": ["references/common/control-and-recovery.md"]},
     "recovery": {
       "default": ["references/common/control-and-recovery.md"],
       "replacement-profile": ["references/common/control-and-recovery.md", "references/common/dispatch.md", "references/common/model-and-effort.md"],

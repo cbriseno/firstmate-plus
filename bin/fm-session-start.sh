@@ -886,7 +886,10 @@ for meta in "$STATE"/*.meta; do
 
   window=$(fm_meta_get "$meta" window)
   target=$(fm_backend_target_of_meta "$meta")
-  if [ -n "$window" ]; then
+  if [ -f "$STATE/$id.parked" ]; then
+    printf 'endpoint: parked (phase=%s; wait=%s)\n' \
+      "$(fm_meta_get "$STATE/$id.parked" park_phase)" "$(fm_meta_get "$STATE/$id.parked" park_wait)"
+  elif [ -n "$window" ]; then
     backend=$(fm_backend_of_meta "$meta")
     endpoint_rc=0
     fm_session_start_endpoint_read "$backend" "${target:-$window}" "fm-$id" || endpoint_rc=$?

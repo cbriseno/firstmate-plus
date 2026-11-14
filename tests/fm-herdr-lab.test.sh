@@ -46,6 +46,9 @@ case "$1 ${2:-}" in
     fi
     ;;
   "server --session")
+    while [ -n "${FM_FAKE_HERDR_SERVER_RELEASE:-}" ] && [ ! -f "$FM_FAKE_HERDR_SERVER_RELEASE" ]; do
+      "$FM_FAKE_HERDR_REAL_SLEEP" 0.1
+    done
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
       "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_DELAY"
     fi
@@ -89,6 +92,7 @@ run_with_fake() {
     FM_FAKE_HERDR_LOG="$FAKE_LOG" \
     FM_FAKE_HERDR_REAL_SLEEP="$REAL_SLEEP" \
     FM_FAKE_HERDR_SERVER_DELAY="${FM_FAKE_HERDR_SERVER_DELAY:-0}" \
+    FM_FAKE_HERDR_SERVER_RELEASE="${FM_FAKE_HERDR_SERVER_RELEASE:-}" \
     FM_FAKE_HERDR_FAST_POLL="${FM_FAKE_HERDR_FAST_POLL:-}" \
     FM_FAKE_HERDR_DELETE_FAIL="${FM_FAKE_HERDR_DELETE_FAIL:-}" \
     FM_FAKE_HERDR_TITLE_FAIL="${FM_FAKE_HERDR_TITLE_FAIL:-}" \
@@ -265,9 +269,12 @@ exec "$FM_FAKE_HERDR_REAL_SLEEP" "$@"
 SH
   chmod +x "$FAKEBIN/sleep"
   : > "$FAKE_LOG"
-  FM_FAKE_HERDR_FAST_POLL=1 FM_FAKE_HERDR_SERVER_DELAY=30 \
+  # Release only after the timeout: a slow host must not turn this into a
+  # successful provision merely by taking over 30 seconds to poll the fake.
+  FM_FAKE_HERDR_FAST_POLL=1 FM_FAKE_HERDR_SERVER_RELEASE="$TMP_ROOT/server-release" \
     run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
   expect_code 1 "$status" "timed-out provision must fail"
+  : > "$TMP_ROOT/server-release"
   assert_present "$TRIPWIRES/$name.fleet-state.json" \
     "timed-out provision must retain its tripwire until teardown"
   run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after timed-out provision failed"
@@ -534,7 +541,24 @@ test_viewer_launcher_refuses_unsafe_arguments() {
   pass "fm-herdr-lab: the viewer launcher refuses unsafe sessions and pidfiles"
 }
 
+test_explicit_recovery_of_lost_tripwire() {
+  local name="fm-lab-recover-$$" before status=0
+  run_with_fake fm_herdr_lab_provision "$name" || fail 'recovery fixture provision failed'
+  before=$(cat "$TRIPWIRES/$name.fleet-state.json")
+  if run_with_fake "$ROOT/bin/fm-herdr-lab.sh" recover "$name"; then fail 'recovery replaced existing evidence'; fi
+  [ "$(cat "$TRIPWIRES/$name.fleet-state.json")" = "$before" ] || fail 'recovery changed original tripwire'
+  rm "$TRIPWIRES/$name.fleet-state.json"
+  run_with_fake "$ROOT/bin/fm-herdr-lab.sh" recover "$name" || fail 'explicit recovery of owned lab failed'
+  [ "$(cat "$FAKE_STATE/$name")" = running ] || fail 'recovery changed the lab lifecycle'
+  run_with_fake fm_herdr_lab_teardown "$name" || fail 'guarded teardown after recovery failed'
+  run_with_fake "$ROOT/bin/fm-herdr-lab.sh" recover default >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" 'recovery must refuse default'
+  if run_with_fake "$ROOT/bin/fm-herdr-lab.sh" recover fm-lab-absent; then fail 'recovery adopted an absent session'; fi
+  pass 'explicit lost-tripwire recovery preserves existing evidence, refuses default/absent and permits guarded teardown'
+}
+
 test_refuses_unsafe_names
+test_explicit_recovery_of_lost_tripwire
 test_provision_run_and_guarded_teardown
 test_run_scopes_session_before_double_dash
 test_missing_tripwire_blocks_destruction

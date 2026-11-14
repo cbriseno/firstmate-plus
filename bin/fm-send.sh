@@ -873,6 +873,31 @@ else
       exit 1
     fi
     fm_lock_release "$INBOX_META_LOCK"
+    if [ -f "$STATE/$INBOX_TASK_ID.parked" ]; then
+      # Lifecycle control takes the same lease-command lock in its own process.
+      fm_lease_guard_release
+      if ! "$SCRIPT_DIR/fm-control.sh" "$INBOX_TASK_ID" resume >&2; then
+        echo "error: $INBOX_TASK_ID could not resume; response remains pending at $INBOX_RECORD; do not resend" >&2
+        exit 1
+      fi
+      fm_lease_guard "$INBOX_TASK_ID" "steer after parked-worker resume"
+      T=$(fm_backend_target_of_meta "$TARGET_META")
+      TARGET_BACKEND=$(fm_backend_of_meta "$TARGET_META")
+      TARGET_HARNESS=$(fm_meta_get "$TARGET_META" harness)
+      # A live process can still be drawing its first composer. Use the
+      # existing classifier before typing the first post-resume doorbell.
+      resume_composer=unknown
+      for _resume_poll in $(seq 1 30); do
+        resume_composer=$(fm_backend_composer_state "$TARGET_BACKEND" "$T" "$EXPECTED_LABEL" 2>/dev/null) || resume_composer=unknown
+        [ "$resume_composer" != empty ] || break
+        [ "$resume_composer" != pending ] || break
+        sleep 1
+      done
+      if [ "$resume_composer" != empty ]; then
+        echo "error: $INBOX_TASK_ID resumed but its composer is $resume_composer; response remains pending at $INBOX_RECORD; do not resend" >&2
+        exit 1
+      fi
+    fi
     # Enqueue IS durable delivery to the task's record: mark the pending
     # expectation delivered now, without resolving it - only a correlated
     # parent report acknowledges the request.

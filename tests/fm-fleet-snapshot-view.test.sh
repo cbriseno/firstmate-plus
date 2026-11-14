@@ -1152,6 +1152,20 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+test_parked_worker_survives_metadata_capture() {
+  local home fb out
+  home=$(make_home parked-worker)
+  fb=$(make_fakebin "$home")
+  write_fixture "$home"
+  printf 'park_phase=parked\npark_wait=needs-decision: awaiting response\n' > "$home/state/ship-task.parked"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" "$SNAPSHOT") || fail 'parked snapshot failed'
+  printf '%s' "$out" | jq -e '.tasks[] | select(.id == "ship-task")
+    | .current_state.state == "parked" and .current_state.source == "parking"' >/dev/null \
+    || fail 'captured metadata lost the parked worker state'
+  pass 'fleet snapshot carries parked state beside the captured task generation'
+}
+
+test_parked_worker_survives_metadata_capture
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory

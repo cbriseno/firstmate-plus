@@ -21,6 +21,11 @@ A directory trust dialog appears on the first run for a repository root: "Do you
 With the scoped operator approval required by `references/common/control-and-recovery.md`, accept the displayed directory-trust choice with Enter, then inspect for the separate hook-review dialog before verifying the instructions begin processing.
 The decision persists for the repository, so later worktrees of the same project skip it.
 
+## Parked chat resume
+
+The control plane resolves the parked launch’s exact UUID from its transcript and launches `codex resume UUID` with the existing worker settings and inbox.
+It never selects the last conversation by directory.
+
 ## Hook trust
 
 A second dialog, "Hooks need review - N hooks are new or changed", appears whenever the machine's `~/.codex/hooks.json` or a project's own `.codex/hooks.json` carries a hook Codex has not persisted trust for.

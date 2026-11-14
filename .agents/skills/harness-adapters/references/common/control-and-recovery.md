@@ -35,10 +35,16 @@ The tool reference records repeat, acknowledgement, and clearing behavior, while
 
 ## Resume and recovery
 
-Native resume availability and form belong solely to the selected tool reference.
-Use native resume only when both that reference and the recovery procedure call for it.
-Deterministic relaunch instead trusts instructions on disk, not a private session, and never needs a session id printed at exit.
-One relaunch-time exception is the runtime's own recorded session identity, used only to keep that runtime's status authority valid across the replacement - `../../../docs/agent-control.md` "Transactional relaunch" owns it.
+When a task worker declares ready-for-merge, needs-decision, captain-held, or a pause with an until date, Firstmate parks it as soon as the current operation has finished.
+An active test or validation is still an operation, even after a wait status was written; wait for its completion before parking.
+Use the control plane's park action immediately at that safe point, without an idle timer.
+Its executable owner refuses known busy activity and reports unknown activity explicitly; Firstmate must verify the operation-complete safe point in that case.
+It saves the launch, session reference, work location, progress and wait before closing the agent and pane.
+A failed stop or close is incomplete parking; retry park after resolving the named failure.
+A message sent through the existing inbox resumes a parked task before delivery; a failed resume retains that response pending and must not be resent.
+The existing dated-pause watcher recheck also uses this route.
+[Agent lifecycle control](../../../../../docs/agent-control.md) describes the lifecycle boundary; the command header owns exact mechanics.
+Relaunch starts a fresh chat with a progress note; resume reopens the parked chat when its native identity is available, otherwise reports the reason for a fresh-chat fallback.
 
 ## Manual context handoff
 

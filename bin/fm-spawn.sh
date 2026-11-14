@@ -2668,6 +2668,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # session from a seat that is not in it would silently relocate the task
     # onto another herdr server - an identity change, published as a
     # self-consistent but wrong record.
+    if [ "$BACKEND" = tmux ]; then
+      SES=${RELAUNCH_TARGET%%:*}
+      fm_backend_tmux_create_task "$SES" "$W" "$WT" >/dev/null || exit 1
+      T="$SES:$W"
+      WT_TARGET=$T
+    else
     HERDR_REBIND_SES=${RELAUNCH_TARGET%%:*}
     HERDR_CONTAINER_RAW=$(HERDR_PANE_ID="$RELAUNCH_LAUNCHER_PANE_ID" \
       fm_backend_herdr_container_ensure "$PROJ_ABS" launcher-home "$HERDR_REBIND_SES") || {
@@ -2708,6 +2714,7 @@ EOF
     T="$HERDR_SES:$HERDR_PANE_ID"
     SES=$HERDR_SES
     WT_TARGET=$T
+    fi
   fi
 else
   case "$BACKEND" in
@@ -3647,6 +3654,17 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
+# Only the control plane's parked-worker resume carries this UUID; never use
+# --last, which could select a different task's conversation.
+if [ -n "${FM_CONTROL_RESUME_SESSION:-}" ]; then
+  [ "$RELAUNCH" = 1 ] && [ -f "$STATE/$ID.parked" ] || { echo 'error: native resume requires a parked task' >&2; exit 1; }
+  case "$FM_CONTROL_RESUME_SESSION" in *[!0-9a-fA-F-]*|'') echo 'error: invalid resume session' >&2; exit 1 ;; esac
+  case "$HARNESS" in
+    codex) LAUNCH=${LAUNCH/codex /codex resume $FM_CONTROL_RESUME_SESSION } ;;
+    claude) LAUNCH=${LAUNCH/claude /claude --resume $FM_CONTROL_RESUME_SESSION } ;;
+    *) echo 'error: no native resume adapter' >&2; exit 1 ;;
+  esac
+fi
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 CODEX_ACTIVITY=

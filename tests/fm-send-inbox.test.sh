@@ -504,6 +504,21 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+test_parked_resume_failure_keeps_response_pending() {
+  local dir err
+  dir=$(setup_case parked-start-failure)
+  err="$dir/send.err"
+  printf 'park_phase=stopping\n' > "$dir/home/state/t1.parked"
+  if run_send "$dir" "$err" FM_SUPERVISION_ACTOR=main -- t1 'answer survives startup failure'; then
+    fail 'incomplete parking must refuse resume'
+  fi
+  assert_contains "$(cat "$err")" 'response remains pending' 'failure identifies the pending response'
+  assert_contains "$(cat "$dir/home/state/t1.inbox/001.msg")" 'answer survives startup failure' 'answer remains durable'
+  [ ! -s "$dir/send.log" ] || fail 'failed resume rang the absent pane'
+  [ -f "$dir/home/state/t1.parked" ] || fail 'failed resume discarded parking state'
+  pass 'fm-send: failed resume retains the response and never rings an absent endpoint'
+}
+
 test_text_steer_rides_inbox
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
@@ -520,3 +535,5 @@ test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
 test_empty_message_refused
+
+test_parked_resume_failure_keeps_response_pending

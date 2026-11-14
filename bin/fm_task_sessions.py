@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Durable launch records: harness, model, effort, started_at, session (transcript path).
 
+resume-id STATE ID resolves a parked launch to its native UUID or explains absence.
 start STATE ID appends metadata with session=null; bind STATE ID GEN reads a
 Claude UserPromptSubmit payload on stdin and fills its transcript_path.
 Codex calls bind() with its already validated rollout path. Unknown harnesses
@@ -45,6 +46,7 @@ import subprocess
 from pathlib import Path
 import re
 import sys
+import uuid
 
 
 def metadata(state, task):
@@ -139,6 +141,28 @@ def list_sessions(home, task=None, project=None, status=None):
             row.setdefault("reason", None if row.get("session") else "legacy-unrecorded")
             if (project is None or row["project"] == project) and (status is None or row["status"] == status):
                 print(json.dumps(dict(row, task=path.parent.name)))
+
+
+def resume_id(state, task):
+    """Resolve only the saved launch's native identity, never the cwd's last chat."""
+    parked = Path(state) / (task + ".parked")
+    meta = dict(line.split("=", 1) for line in parked.read_text().splitlines() if "=" in line)
+    try:
+        rows = [json.loads(line) for line in Path(meta["sessions_file"]).read_text().splitlines()]
+        row = next(row for row in reversed(rows) if row.get("launch") == meta.get("spawn_gen")
+                   and row.get("harness") == meta["harness"] and row.get("session"))
+        path = Path(row["session"])
+        with path.open() as transcript:
+            for _, line in zip(range(60), transcript):
+                entry = json.loads(line)
+                identity = (entry.get("payload", {}).get("id") if entry.get("type") == "session_meta"
+                            else entry.get("sessionId") if meta["harness"] == "claude" else None)
+                if identity:
+                    print(str(uuid.UUID(identity)))
+                    return
+    except (OSError, KeyError, ValueError, StopIteration):
+        pass
+    raise SystemExit("saved launch has no readable native session identity")
 
 
 def instant(value):
@@ -372,6 +396,8 @@ if __name__ == "__main__":
         list_sessions(**vars(parser.parse_args(sys.argv[2:])))
     elif sys.argv[1:2] == ["backfill"]:
         backfill_cli(sys.argv[2:])
+    elif len(sys.argv) == 4 and sys.argv[1] == "resume-id":
+        resume_id(*sys.argv[2:])
     elif len(sys.argv) == 4 and sys.argv[1] == "start":
         record(*sys.argv[2:])
     elif len(sys.argv) == 5 and sys.argv[1] == "bind":
