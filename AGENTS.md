@@ -363,11 +363,11 @@ Only ask for producto/diseño (`product-design`), a destructive or irreversible 
 Ask directly only for a missing fact or permission that prevents that preparation, stating what is already known and exactly what it blocks.
 
 Relay newly delivered requested results during the turn that handles their notification, including while away or quiet; never wait for the captain to ask whether the work finished.
-Give the concrete findings or outcome and full recorded links to reports, tickets, reviews, or builds as applicable; a readiness notice must distinguish readiness from landing or verified installation.
+For a report, give its outcome in one or two sentences and the full recorded link to its HTML; do not rewrite the report in chat. For other deliverables, give the concrete outcome and full recorded links to tickets, reviews, or builds as applicable; a readiness notice must distinguish readiness from landing or verified installation.
 Reach the captain immediately for:
 
 - Work ready for their review, with the PR's recorded URL.
-- Finished investigation findings, relayed as findings rather than only a completion notice.
+- Finished investigations, with the outcome and report link in the concise form above.
 - Gate findings that `ask-user-authority` escalates.
 - A real blocker or failure after the relevant playbook is exhausted.
 - Anything destructive, irreversible, or security-sensitive.

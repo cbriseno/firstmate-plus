@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report theme</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #202b35; background: #fff; }
+body { max-width: 68rem; margin: 0 auto; padding: 2rem 1.5rem; line-height: 1.6; }
+h1, h2, h3 { line-height: 1.25; }
+a { color: #145b91; }
+section, details { margin: 1.5rem 0; }
+.summary, .review { background: #f2f5f7; padding: 1rem; border-radius: .5rem; }
+table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+th, td { border: 1px solid #dce2e7; padding: .5rem; text-align: left; vertical-align: top; }
+pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<header><p>Illustrative example · two layouts, one theme</p><h1>A report that works offline</h1></header>
+<main>
+<section class="summary"><h2>Reading layout</h2><p><strong>Result:</strong> The example report opens without a network connection. It contains its own text and styles.</p></section>
+<section><h2>What it means</h2><p>The reader can see the result immediately and open the supporting evidence when needed.</p></section>
+<details><summary>Evidence and method</summary><p>This example is a single HTML file with inline styles. Actual reports should include the data behind their conclusions here.</p></details>
+<section class="review"><h2>Review layout</h2><p>Use the same theme to make a decision easy to review:</p><table><thead><tr><th>Choice</th><th>Effect</th></tr></thead><tbody><tr><td>Short report</td><td>Result first; details can be opened.</td></tr><tr><td>Comparison</td><td>Choices appear side by side for feedback.</td></tr></tbody></table><p>Which presentation makes this result easiest to understand?</p></section>
+</main>
+</body>
+</html>

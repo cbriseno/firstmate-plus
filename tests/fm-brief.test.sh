@@ -1169,6 +1169,7 @@ test_scout_and_secondmate_scaffold() {
     "scout diagnosis must leave reviewable and reproducible evidence"
   assert_no_grep 'report is the only thing that survives' "$brief" "scout brief denies recoverable backups"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_grep "report.html" "$brief" "scout brief must request an offline HTML report"
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
   assert_grep 'Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm' "$brief" "scout brief missing simplicity-rules reference"

@@ -788,7 +788,7 @@ $SHORT_INBOX
 Declared external-wait status: $PAUSED_VERB
 $WAIT_BLOCK
 # Definition of done
-Write findings to \`$DATA/$ID/report.md\` with what you did, findings, evidence, recommendations and unresolved work.
+Write findings to \`$DATA/$ID/report.md\` with what you did, findings, evidence, recommendations and unresolved work. Also deliver \`$DATA/$ID/report.html\` under the worker contract; retain the Markdown record for existing task integrations.
 For a diagnosis, follow diagnostic-reasoning and cite the always-on diagnostic logs; with local changes include the applied diff (including new files), commands to reproduce, and the result.
 $LAVISH_LINE
 Before reporting done, load \`captain-hold-lifecycle\` and pass its shared completion gate for the report and any visual review.

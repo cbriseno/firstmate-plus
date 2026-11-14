@@ -103,6 +103,10 @@ The filter masks credential-bearing lines, not arbitrary unlabeled secrets; pref
 
 For visual review boards, follow the [crew-hosted board contract](../../../docs/configuration.md#crew-hosted-lavish-review-boards), including creating or resuming without a browser launch and reusing the session.
 
+## Reports
+
+For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record. Include the results and data needed to read it offline, with detailed evidence in expandable sections where useful; use no CDN, external fonts, agent interface, or required service. Copy and adapt the inline theme in [report-theme.html](report-theme.html) for both plain reading and Lavish review; the layout may fit the content. Use natural, concise language and diagrams or interactions when helpful. Give firstmate the full report link and a one- or two-sentence outcome. Keep the existing result/review declaration current. Opening a report must not start Lavish; on-demand integration is a separate capability.
+
 ## Project memory
 
 A project's `AGENTS.md` or `CLAUDE.md` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.
