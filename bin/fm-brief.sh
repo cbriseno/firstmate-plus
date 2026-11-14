@@ -683,7 +683,9 @@ EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
 WORK_OWNERSHIP_LINE='If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
-Own the monitoring and follow-up for this task within its authorized scope; report concrete results with their full artifact links.'
+Own the monitoring and follow-up for this task within its authorized scope; report concrete results with their full artifact links.
+Before a long run or freezing its inputs, list required services and data areas and perform one small read from each using the documented access mode (including anonymous reads); report missing access before the full pass.
+Before saving or sharing captured logs, pipe them through python3 bin/fm-redact-log.py from the Firstmate code root; never save the raw token-bearing output or enable shell tracing around credentials.'
 
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm
@@ -756,7 +758,7 @@ fi
 
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
+  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: create or resume one board with lavish-axi --no-open <artifact.html>, give its URL once, reuse that session through feedback rounds, never launch its URL in a browser, and end it with lavish-axi end <artifact.html> when finished. Then arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi

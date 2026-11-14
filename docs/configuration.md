@@ -2198,7 +2198,9 @@ A long-polling external process is registered as a *source* through its adapter,
 
 **Open the Lavish artifact first**
 
-Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
+Before arming any Lavish source, create or resume its artifact with `lavish-axi --no-open <artifact.html>` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
+Give the board URL once and reuse the same artifact and session through feedback rounds without opening its URL in a browser.
+End the session with `lavish-axi end <artifact.html>` when its work is finished.
 
 **Discover unattended boards**
 

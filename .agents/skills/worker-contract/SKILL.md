@@ -94,6 +94,15 @@ Check the inbox when notified and at natural checkpoints, except while waiting i
 Follow the progress contract provided at launch.
 When firstmate requests a safe point, preserve work and record paused with its exact safe-point request key and numeric timestamp only after reaching it; resume only when explicitly instructed.
 
+## Access and captured logs
+
+Before a long run or freezing inputs, list the required services and data areas and make one small read from each using the documented access mode, including anonymous access when supported.
+Report missing access before starting the full pass; renew an expired service login rather than repeatedly retrying it.
+Before saving or sharing captured logs, pipe them through `python3 <firstmate-code-root>/bin/fm-redact-log.py`; never retain the raw token-bearing output or enable shell tracing around credentials.
+The filter masks credential-bearing lines, not arbitrary unlabeled secrets; prefer selecting only the nonsecret fields needed for evidence.
+
+For visual review boards, follow the [crew-hosted board contract](../../../docs/configuration.md#crew-hosted-lavish-review-boards), including creating or resuming without a browser launch and reusing the session.
+
 ## Project memory
 
 A project's `AGENTS.md` or `CLAUDE.md` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.

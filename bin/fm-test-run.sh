@@ -282,7 +282,7 @@ cpu_count() {
 # lands in `unclassified` and stays serial until someone proves it.
 family_for_basename() {
   case "$1" in
-    fm-public-export.test.sh|fm-notification-command.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
+    fm-public-export.test.sh|fm-notification-command.test.sh|fm-redact-log.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
     fm-brief.test.sh|fm-dod-lib.test.sh|\
     fm-cd-pretool-check.test.sh|\
@@ -1624,6 +1624,9 @@ families_for_changed_path() {
       ;;
     bin/fm-public-export.py|tests/fm-public-export-cases.py|docs/public-export-manifest.json)
       printf '%s\n' __script__:fm-public-export.test.sh
+      ;;
+    bin/fm-redact-log.py)
+      printf '%s\n' __script__:fm-redact-log.test.sh
       ;;
     bin/fm-notify.py|locales/*)
       printf '%s\n' __script__:fm-notification-command.test.sh

@@ -897,11 +897,13 @@ signal_turnend_panes_churned() {  # <file> ...
 login_expiry_notice() {  # <backend> <target> <label> <capture>
   local backend=$1 target=$2 label=$3 text=$4 provider action marker
   marker="$STATE/.login-expired-$(window_key "$backend-$target")"
-  text=$(printf '%s' "$text" | tr '\n\r' '  ')
+  text=$(printf '%s' "$text" | tr '\n\r' '  ' | tr '[:upper:]' '[:lower:]')
   case "$text" in
-    *'Login expired · Please run /login'*) provider=Claude; action='run /login in that session' ;;
-    *'Your access token could not be refreshed'*'Please '*'sign in again.'*)
+    *'login expired · please run /login'*) provider=Claude; action='run /login in that session' ;;
+    *'your access token could not be refreshed'*'please '*'sign in again.'*)
       provider=Codex; action='run codex logout, then codex login' ;;
+    *'refresh token'*'invalid'*|*'invalid'*'refresh token'*|*'refresh token'*'expired'*|*'invalid_grant'*|*'login expired'*)
+      provider=Connector; action='renew the affected service login in that session, then retry the required access check' ;;
     *) rm -f -- "$marker"; return 0 ;;
   esac
   [ ! -e "$marker" ] || return 0

@@ -66,6 +66,16 @@ bash -c '. "$1/bin/fm-watch.sh"; login_expiry_tick' _ "$ROOT"
 login_expiry_notice tmux auth:0 primary 'Authenticated successfully'
 login_expiry_tick
 [ "$(grep -c 'login expired:' "$FM_HOME/notices")" = 3 ]
+# Generic connector failures share the existing episode/delivery path without
+# copying the captured error (which may contain credentials) into the notice.
+for error in 'refresh token invalid: synthetic-private-value' 'invalid_grant: synthetic-private-value' 'Refresh token is INVALID: synthetic-private-value'; do
+  login_expiry_notice tmux connector service 'access restored'
+  login_expiry_notice tmux connector service "$error"
+  login_expiry_notice tmux connector service "$error"
+done
+[ "$(grep -c 'Connector login expired:' "$FM_HOME/notices")" = 3 ]
+grep -q 'renew the affected service login' "$FM_HOME/notices"
+if grep -q synthetic-private-value "$FM_HOME/notices"; then exit 1; fi
 # A rejected delivery remains retryable.
 rm -f -- "$STATE/.login-expired-tmux-auth_fm-worker"
 printf '["false"]\n' > "$FM_HOME/config/notification-command.json"

@@ -350,6 +350,13 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   local dir pid identity out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-fresh")
   : > "$dir/state/task1.meta"
+  # A healthy Stop must never ask the fleet owner for its potentially slow read.
+  cat > "$dir/bin/fm-tasks-axi.sh" <<'EOF'
+#!/usr/bin/env bash
+: > "$FM_HOME/snapshot-read"
+printf '{"schema":"fm-work-supervision.v1","tasks":[]}\n'
+EOF
+  chmod +x "$dir/bin/fm-tasks-axi.sh"
   sleep 60 &
   pid=$!
   identity=$(watcher_identity "$dir" "$pid") || {
@@ -364,6 +371,7 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   wait "$pid" 2>/dev/null || true
   expect_code 0 "$status" "hook must exit 0 with a live identity-matched watcher lock and fresh beacon"
   [ -z "$out" ] || fail "hook produced output despite a live fresh watcher lock: $out"
+  [ ! -e "$dir/snapshot-read" ] || fail "healthy Stop performed a fleet snapshot read"
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
 }
 
