@@ -25,7 +25,7 @@ spawned_at=2026-11-11T11:00:00Z
 busy_gen=$gen
 sessions_file=$data/$task/sessions.jsonl
 EOF
-printf '{"type":"session_meta","payload":{"id":"%s","cli_version":"0.166.0","source":"cli","cwd":"%s"}}\n' \
+printf '{"type":"session_meta","payload":{"id":"%s","cli_version":"0.169.0","source":"cli","cwd":"%s"}}\n' \
   "$session" "$workspace" > "$rollout"
 cat > "$fakebin/lsof" <<EOF
 #!/usr/bin/env bash

@@ -369,6 +369,11 @@ The ordinary CLI callback forwards a completion only for a persisted CLI thread 
 The callback uses filesystem metadata on Linux and macOS, independently of the Linux activity classifier's version qualification; macOS live execution remains unverified here.
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh tests/fm-busy-state.test.sh` refreshes the portable callback and existing native-server ownership regressions.
 
+Durable worker transcript binding was separately verified on 2026-11-14 on Linux with `codex-cli 0.169.0` in an isolated Herdr session.
+`FM_CODEX_SESSION_BIND_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-session-bind-live-e2e.test.sh` refreshes that credentialed proof.
+The verdict is `ok - codex-cli 0.169.0: real worker transcript bound; activity qualification unchanged`.
+The portable binding regression includes a newer CLI rollout; the real guard also requires that recording it leaves the newer runtime's activity verdict `unknown codex-unverified`.
+
 ## Shared publication boundary
 
 Historical machine-specific probe transcripts are not distributed.

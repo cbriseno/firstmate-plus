@@ -22,8 +22,9 @@ The private server uses source vscode. Its notify callback forwards the original
 program and payload only for a verified idle primary, never a guardian turn.
 The ordinary CLI callback forwards only a persisted CLI thread in this workspace;
 ephemeral title-generation turns have no such rollout and cannot end the worker.
-Notifications also accept a parent-owned primary rollout on a newer runtime;
-activity classification retains its qualified version. The native executable,
+Notifications also accept a parent-owned primary rollout on a newer runtime.
+Durable session discovery likewise does not require activity qualification.
+For activity classification, the native executable,
 boot/start identity, workspace, CLI version, session ID,
 and generation must all agree before and after the read. No descriptor, partial
 JSON, conflicting lifecycle, unsupported version, or unreadable evidence means
@@ -333,7 +334,8 @@ def bind_open_session(state, task, gen, workspace, pid, alive=None, source="cli"
     codex_home = str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve())
     deadline = time.monotonic() + BIND_SECONDS
     while time.monotonic() < deadline and alive():
-        session = open_rollout(pid, codex_home, workspace, source)
+        # Session ownership is independent of the busy classifier's version pin.
+        session = open_rollout(pid, codex_home, workspace, source, version=None)
         if not alive():
             return False
         if session:
