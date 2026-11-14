@@ -49,6 +49,8 @@
 # for a later capture. Records are appended before the offset is saved, so an
 # interrupted capture repeats records rather than losing them. Without any
 # grown log, capture returns after one size listing and sources nothing.
+# Each captured line carries the existing canonical reporting-prefix fingerprint;
+# display truncation and capture time never determine checkpoint coverage.
 # appended captures only that task, so a worker's status line is recorded as
 # soon as the worker writes it; the byte offset keeps the per-poll capture from
 # recording it again. Its arguments name the home, because a worker has no
@@ -169,8 +171,8 @@ append() {
 }
 
 # The status-line grammar belongs to bin/fm-classify-lib.sh; this only projects it.
-append_status() { # <task> <status-line>
-  local task=$1 line=$2 verb key text declared_at
+append_status() { # <task> <status-line> <canonical-prefix-token>
+  local task=$1 line=$2 token=$3 verb key text declared_at
   status_line_verb "$line" verb
   case "$verb" in [a-z]*) case "$verb" in *[!a-z-]*) verb='' ;; esac ;; *) verb='' ;; esac
   key=$(_fm_decision_key "$line" 2>/dev/null) || key=''
@@ -178,12 +180,12 @@ append_status() { # <task> <status-line>
   text=${line#*:}
   declared_at=$(status_line_at_epoch "$line") || declared_at=null
   append task.status "$task" \
-    "{state: (\$state | n), key: (\$key | n), text: \$text[0:$TEXT_MAX_CHARS], declared_at: \$declared_at}" \
-    --arg state "$verb" --arg key "$key" --arg text "$text" --argjson declared_at "$declared_at"
+    "{state: (\$state | n), key: (\$key | n), text: \$text[0:$TEXT_MAX_CHARS], declared_at: \$declared_at, status_token: \$token}" \
+    --arg state "$verb" --arg key "$key" --arg text "$text" --argjson declared_at "$declared_at" --arg token "$token"
 }
 
 capture_task() { # <task>; caller holds the lock
-  local task=$1 log offset data complete tail line saved
+  local task=$1 log offset data complete tail line saved boundaries entry token
   log="$STATE/$task.status"
   saved=$(offset_path "$task")
   [ -f "$log" ] && [ ! -L "$log" ] || return 0
@@ -198,10 +200,29 @@ capture_task() { # <task>; caller holds the lock
   tail=${data##*$'\n'}
   complete=${data%"$tail"}
   [ -n "$complete" ] || return 0
-  while IFS= read -r line; do
+  # Preserve exact canonical source lines, including text beyond the display cap.
+  # The existing byte offset selects the suffix; tokens identify reporting prefixes.
+  boundaries=$(python3 - "$SCRIPT_DIR" "$log" "$offset" "${#complete}" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from fm_progress import status_boundaries
+offset, length = int(sys.argv[3]), int(sys.argv[4])
+with Path(sys.argv[2]).open('rb') as stream:
+    source = stream.read(offset + length).decode('utf-8')
+position = 0
+for raw, (line, token) in zip(source.splitlines(keepends=True), status_boundaries(source)):
+    position += len(raw.encode('utf-8'))
+    if position > offset:
+        print(token + '\t' + line)
+PY
+) || return 1
+  while IFS= read -r entry; do
+    token=${entry%%$'\t'*}
+    line=${entry#*$'\t'}
     [ -n "${line//[[:space:]]/}" ] || continue
-    append_status "$task" "$line" || return 1
-  done <<< "${complete%$'\n'}"
+    append_status "$task" "$line" "$token" || return 1
+  done <<< "$boundaries"
   offset=$((offset + ${#complete}))
   printf '%s\n' "$offset" > "$saved.tmp" && mv -f "$saved.tmp" "$saved"
 }

@@ -169,6 +169,83 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert model.apply(event)
     assert model.capacity()['agents_running'] == 0
     assert Projection(json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))).capacity()['agents_running'] == 0
+
+    # A checkpoint covers exact canonical prefixes, regardless of capture order.
+    # Use the real writers: presentation publication deliberately precedes capture.
+    (home / 'state/activity.meta').write_text('kind=scout\n')
+    checkpoint_base = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
+    run('fm-fleet-ledger.sh', 'capture')  # Cleanup retired the old capture offset.
+    status = home / 'state/activity.status'
+    with status.open('a') as stream:
+        stream.write('working [key=precise] [at=1792921939]:  unicode é, tabs\tand "quotes"  \n')
+        stream.write('working [at=1792921939]: ' + 'long ' * 420 + 'different ending\n')
+    draft = home / 'data/checkpoint-input.json'
+    draft.write_text(json.dumps(dict(phase='investigation', progress=dict(steps=[
+        dict(label='Observe', state='done'), dict(label='Fix', state='active'), dict(label='Verify', state='todo')]))))
+    offset = len((home / 'state/fleet-ledger.jsonl').read_text().splitlines())
+    receipt = json.loads(run('fm-tasks-axi.sh', 'presentation', 'activity', '--presentation-file', str(draft)))
+    assert receipt['ok'] and receipt['lifecycle']['evidence']['current']
+    run('fm-fleet-ledger.sh', 'capture')
+    captured = [json.loads(s) for s in (home / 'state/fleet-ledger.jsonl').read_text().splitlines()[offset:]]
+    publication = next(e for e in captured if e['event'] == 'task.presentation')
+    covered = [e for e in captured if e['event'] == 'task.status']
+    assert len(covered) == 2
+    projections = []
+    for events in ([publication] + covered, covered + [publication]):
+        projection = Projection(checkpoint_base)
+        for event in events: assert projection.apply(event)
+        result = projection.value['tasks'][0]
+        assert result['progress_evidence']['current'], result['progress_evidence']
+        assert result['progress']['done'] == 1 and result['progress']['total'] == 3
+        assert result['phase'] == 'investigation'
+        projections.append(projection)
+    projection = projections[0]
+    assert projection.value['tasks'][0]['progress'] == projections[1].value['tasks'][0]['progress']
+    assert projection.apply(covered[0])  # An older prefix replay remains covered.
+    assert projection.value['tasks'][0]['progress_evidence']['current']
+    assert projection.value['tasks'][0]['progress_evidence']['status_boundary']['reason'] == 'covered-status'
+    with status.open('a') as stream:
+        stream.write('resolved [at=1792921940] [key=precise]: no new reporting boundary\n')
+    run('fm-fleet-ledger.sh', 'capture')
+    resolved_event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert projection.apply(resolved_event)
+    assert projection.value['tasks'][0]['progress_evidence']['current']
+    assert projection.value['tasks'][0]['progress_evidence']['status_boundary']['reason'] == 'non-reporting-status'
+    with status.open('a') as stream:
+        # Same second and the same displayed 2000 characters, different boundary.
+        stream.write('working [at=1792921939]: ' + 'long ' * 420 + 'new ending\n')
+    run('fm-fleet-ledger.sh', 'capture')
+    newer = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert projection.apply(newer)
+    result = projection.value['tasks'][0]
+    canonical = next(t for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks'] if t['key'] == 'task:activity')
+    assert result['progress'] is None and canonical['progress'] is None
+    assert result['progress_evidence']['reasons'] == canonical['progress_evidence']['reasons'] == ['status-checkpoint-required']
+    assert result['declared_progress']['done'] == 1
+    assert projection.apply(publication)
+    assert not projection.value['tasks'][0]['progress_evidence']['current'], 'old checkpoint revived newer status'
+    for event in (covered[-1], resolved_event):
+        assert projection.apply(event)
+        assert not projection.value['tasks'][0]['progress_evidence']['current'], 'old replay revived stale evidence'
+    refreshed = json.loads(run('fm-tasks-axi.sh', 'presentation', 'activity', '--presentation-file', str(draft)))
+    assert refreshed['ok'] and refreshed['lifecycle']['evidence']['current']
+    refresh_event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert projection.apply(refresh_event)
+    assert projection.value['tasks'][0]['progress_evidence']['current'], 'fresh checkpoint must cover the new boundary'
+    # Existing non-status invalidity also survives a covered status.
+    invalid = copy.deepcopy(publication)
+    invalid['value']['lifecycle']['evidence'].update(current=False, freshness='stale', reasons=['code-head-changed'])
+    other = Projection(checkpoint_base)
+    assert other.apply(invalid) and other.apply(covered[-1])
+    assert other.value['tasks'][0]['progress_evidence']['reasons'] == ['code-head-changed']
+    # Legacy statuses have no exact boundary proof; reporting stays conservative.
+    projection = Projection(checkpoint_base)
+    assert projection.apply(publication)
+    assert projection.apply(dict(event='task.status', task='activity', ts=1792921950, state='resolved', text='legacy'))
+    assert projection.value['tasks'][0]['progress_evidence']['current']
+    assert projection.apply(dict(event='task.status', task='activity', ts=1792921951, state='working', text='legacy'))
+    assert not projection.value['tasks'][0]['progress_evidence']['current']
+    print('ok - checkpoint/status in both orders, exact prefixes, duplicate, resolved, newer, stale and legacy boundaries')
 print('ok - lifecycle counts, duplicate launch/close, recovery, bootstrap activity, turn end, old sequence, generation mismatch and snapshot release')
 with tempfile.TemporaryDirectory(prefix='prueba-worker-death-') as directory:
     home = pathlib.Path(directory)

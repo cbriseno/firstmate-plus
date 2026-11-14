@@ -16,6 +16,7 @@ from fm_work import Owner, digest, time_value, latest, read_text, fresh_run_step
 import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
 from fm_task_usage import read_usage
+from fm_progress import reporting_status, status_boundaries
 
 
 TELEMETRY_EVENTS = frozenset(('task.usage', 'agent.activity', 'agent.retired', 'agent.liveness'))
@@ -146,6 +147,8 @@ class Projection(Owner):
         self.rev = base['snapshot']['rev']
         self.facts.setdefault('changed', {})
         self.facts.setdefault('observed', {})
+        self.status_tokens = {task: {token for line, token in status_boundaries(status) if reporting_status(line)}
+                              for task, status in self.status.items()}
 
     @property
     def value(self):
@@ -196,7 +199,14 @@ class Projection(Owner):
                 # Missing publications are explicitly unknown, never inferred.
                 self.presentations.setdefault(task, copy.deepcopy(self.empty_presentation))
         elif name in ('task.presentation', 'task.review'):
-            self.presentations[task] = value
+            self.presentations[task] = copy.deepcopy(value)
+            evidence = self.presentations[task]['lifecycle']['evidence']
+            received = self.status_tokens.get(task, set())
+            uncovered = received - set(evidence.get('covered_status_tokens', []))
+            evidence['status_boundary'] = dict(covered=evidence.get('status_token'), received=sorted(received),
+                reason='status-checkpoint-required' if uncovered else 'covered-status' if received else 'no-received-status')
+            if uncovered:
+                self.invalidate_progress(evidence)
         elif name == 'task.usage':
             self.facts['usage'][task] = value
         elif name == 'work.aliases':
@@ -213,6 +223,10 @@ class Projection(Owner):
             receipt = value.get('receipt')
             self.facts['receipts'][task] = receipt if receipt and receipt.get('valid', True) else None
         elif name == 'task.status':
+            token = event.get('status_token')
+            reporting = reporting_status((event.get('state') or '') + ':')
+            if reporting and token is not None:
+                self.status_tokens.setdefault(task, set()).add(token)
             if not observation:
                 for observed in self.observation.get('tasks', []):
                     if observed.get('id') == task:
@@ -221,7 +235,11 @@ class Projection(Owner):
             if task in self.presentations:
                 self.presentations[task] = copy.deepcopy(self.presentations[task])
                 evidence = self.presentations[task]['lifecycle']['evidence']
-                evidence.update(current=False, freshness='unknown', reasons=['source-changed'])
+                covered = token is not None and token in evidence.get('covered_status_tokens', [])
+                reason = 'non-reporting-status' if not reporting else 'covered-status' if covered else 'status-checkpoint-required'
+                evidence['status_boundary'] = dict(covered=evidence.get('status_token'), received=[token] if token else [], reason=reason)
+                if reporting and not covered:
+                    self.invalidate_progress(evidence)
             declared = event.get('declared_at')
             stamp = ' [at=' + str(declared) + ']' if type(declared) is int and 0 <= declared <= 999999999999 else ''
             self.status[task] = self.status.get(task, '') + '\n' + (event.get('state') or '') + stamp + ' [key=' + str(event.get('key') or '') + ']: ' + event.get('text', '')
@@ -307,3 +325,8 @@ class Projection(Owner):
         previous = {t['key'][5:]: t for t in self.value['tasks']}
         self.value = self.snapshot(facts=self.facts, previous=previous, affected=affected)
         return True
+
+    @staticmethod
+    def invalidate_progress(evidence):
+        evidence.update(current=False, freshness='stale', reasons=list(dict.fromkeys(
+            evidence.get('reasons', []) + ['status-checkpoint-required'])))

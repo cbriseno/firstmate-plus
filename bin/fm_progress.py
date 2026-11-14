@@ -78,6 +78,23 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def reporting_status(line):
+    return re.match(r'^(working|paused|done|failed|blocked|needs-decision)(?:\s+\[[^\]\n]+\])*:', line)
+
+
+def status_boundaries(status):
+    """Extend the canonical JSON-list fingerprint without rehashing old lines."""
+    prefix = hashlib.sha256(b'[')
+    token, seen = fingerprint([]), False
+    for line in status.splitlines():
+        if reporting_status(line):
+            prefix.update(((', ' if seen else '') + json.dumps(line, sort_keys=True)).encode())
+            boundary = prefix.copy()
+            boundary.update(b']')
+            token, seen = boundary.hexdigest(), True
+        yield line, token
+
+
 def validate_record(record):
     if not isinstance(record, dict) or set(record) - {
             'reported_at', 'status_token', 'context', 'head', 'gates', 'replan_reason'}:
@@ -107,8 +124,7 @@ def sources(home, task_id, read):
     status = optional('state/' + task_id + '.status', 1024 * 1024)
     # Only reporting boundaries, never keywords in their prose. Decisions and
     # notes do not demand that an unchanged semantic plan advance.
-    events = [line for line in status.splitlines() if re.match(
-        r'^(working|paused|done|failed|blocked|needs-decision)(?:\s+\[[^\]\n]+\])*:', line)]
+    events = [line for line in status.splitlines() if reporting_status(line)]
     token = fingerprint(events)
     context = {key: meta.get(key) for key in ('kind', 'mode')}
     return meta, events, token, context
@@ -262,7 +278,9 @@ def reconcile(home, task_id, fields, record, read, verify=True):
     return dict(progress=steps, phase=phase, gates=facts,
                 evidence=dict(freshness=freshness, current=freshness == 'current', reasons=reasons,
                               reported_at=record.get('reported_at'), source='task.progress.checkpoint',
-                              applicable_gates=sorted(applicable))), (meta, token, context, head)
+                              applicable_gates=sorted(applicable), status_token=record.get('status_token'),
+                              covered_status_tokens=([fingerprint([])] + [t for _, t in status_boundaries('\n'.join(events))]
+                                  if token == record.get('status_token') else []))), (meta, token, context, head)
 
 
 def checkpoint(home, task_id, fields, old_fields, old_record, read, stamp, replan=None):
