@@ -40,5 +40,27 @@ Use native resume only when both that reference and the recovery procedure call 
 Deterministic relaunch instead trusts instructions on disk, not a private session, and never needs a session id printed at exit.
 One relaunch-time exception is the runtime's own recorded session identity, used only to keep that runtime's status authority valid across the replacement - `../../../docs/agent-control.md` "Transactional relaunch" owns it.
 
+## Manual context handoff
+
+Use the installed `relay` skill for a primary handoff; its algorithm belongs to that extension.
+For a worker, use the existing relaunch verb rather than opening another agent beside it.
+This procedure does not enable an automatic threshold or change the dispatch profile.
+
+1. Have the worker finish its current operation and stop starting new actions.
+   It writes a progress note with the objective, completed work, worktree and branch, evidence, remaining work, exact steering inbox, and any external action already performed that must not be repeated.
+   It reports the note's path through its existing task status route and waits for the replacement.
+2. From the owning home, run `bin/fm-control.sh <task-id> relaunch --note-file <progress-note>`.
+   Omit profile overrides to retain the recorded harness, model and effort.
+   The control plane owns stopping the old process, preserving work and delivering the note; its header owns the flags and failure recovery.
+3. Verify the successor reads the note and pending inbox messages, acknowledges handled messages, and completes one small remaining operation without repeating a completed action.
+   A successful launch alone does not establish continuity.
+   Refresh the task's progress checkpoint after the handoff, under the launch brief's progress contract.
+4. Inspect the task and project session history through `bin/fm_task_sessions.py`'s list interface.
+   Verify the prior launch is archived and the replacement is active with the intended profile and a new transcript, or report a missing binding with its recorded reason.
+   Report the completed handoff through the existing status route so firstmate follows the active session.
+
+If the replacement fails to start, report the handoff as incomplete with the preserved work and note paths and the control plane's concrete process verdict.
+Inspect that verdict before retrying; never create an additional worker to compensate for an unconfirmed launch.
+
 `../stuck-crewmate-recovery/SKILL.md` owns worker recovery and `../secondmate-provisioning/SKILL.md` owns secondmate recovery; both preserve recorded work.
 The router's recovery scenarios select the additional common references for replacement profiles and secondmates.

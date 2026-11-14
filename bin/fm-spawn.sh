@@ -3715,7 +3715,7 @@ case "$LAUNCH" in
   if [ "$KIND" = host ]; then
     for host_path in "${HOST_DECLARED[@]}"; do
       [ -d "$host_path" ] || host_path=$(dirname "$host_path")
-      CLAUDE_ADD_DIRS="$CLAUDE_ADD_DIRS --add-dir $(shell_quote "$host_path")"
+      CLAUDE_ADD_DIRS="$CLAUDE_ADD_DIRS --add-dir $(shell_quote "$host_path") "
     done
   fi
   LAUNCH=${LAUNCH//__CLAUDEADDDIRS__/$CLAUDE_ADD_DIRS}

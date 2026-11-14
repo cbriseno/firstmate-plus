@@ -31,6 +31,18 @@ The lifecycle record format and the distinction between an active chat and a run
 Remote secondmate launch transport is outside worker capture.
 macOS was inspected but not executed; the writer and migration use Python's standard library, while automatic Codex capture retains its existing native Linux capability limit.
 
+### Manual context handoff
+
+The procedure belongs to the harness adapter's [control and recovery reference](../../.agents/skills/harness-adapters/references/common/control-and-recovery.md#manual-context-handoff).
+On 2026-11-14, Linux with Herdr 0.9.5, codex-cli 0.169.0 and Claude Code 2.1.325 exercised `FM_HOME="$LAB_HOME" bash bin/fm-control.sh "$ID" relaunch --note-file "$NOTE"` in disposable named Herdr sessions.
+Codex used `gpt-6.1-terra`/`low`; Claude used `haiku`/`low` in host scratch.
+Both successors preserved a completed local action, consumed and acknowledged a message queued before relaunch, and retained their profiles with distinct archived/active bound transcripts.
+The pilots reported `PASS codex pending inbox continued once; same profile; archived/active transcripts` and the corresponding `PASS claude` result.
+The existing primary relay primitive also closed the old pane and loaded a prepared stow handoff in a new session of each harness; the Claude fixture needed a follow-up instruction to execute its preserved pending operation.
+The Claude host pilot exposed a missing argument separator that joined the last directory grant to `--settings`; adding the separator restored hook delivery and transcript binding in the repeated live pilot.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh tests/fm-control-relaunch.test.sh` refreshes executable argument delivery and transactional failure coverage without submitting model prompts.
+macOS was not executed in these pilots; the fix changes only a Bash argument separator and adds no dependency or automatic relay trigger.
+
 ## Worker temporary processes
 
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.

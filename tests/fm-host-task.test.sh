@@ -43,6 +43,27 @@ OUT=$(FM_HOME="$TASK_HOME" HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" TMU
 [ ! -e "$TASK_HOME/data/$TASK_ID/work" ] || fail 'teardown left host scratch'
 [ "$(cat "$TARGET")" = preserve ] || fail 'teardown changed host target'
 pass 'first host assignment launches and tears down without a project or commit'
+
+# Run the emitted Claude command: a host grant must not swallow --settings.
+run_brief claude-host --host --path "$TARGET" >/dev/null
+python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace('{TASK}','Check Claude host launch.').replace('{FIRSTMATE_SPEC}','Preserve hooks.'))
+PY
+export FM_HOST_ARGV="$TMP_ROOT/claude-argv.json"
+cat > "$FAKEBIN/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf '2.1.325\n'; exit 0; fi
+python3 -c 'import json,sys;json.dump(sys.argv[2:],open(sys.argv[1],"w"))' "$FM_HOST_ARGV" "$@"
+SH
+chmod +x "$FAKEBIN/claude"
+OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/claude-host/work" "$FAKEBIN" claude-host --host --harness claude --backend tmux) || fail "Claude host spawn failed: $OUT"
+LAUNCH=$(cat "$FM_FAKE_LAUNCH_LOG")
+(cd "$TASK_HOME/data/claude-host/work" && HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" /bin/sh -c "$LAUNCH") || fail 'Claude host command failed'
+jq -e --arg settings "$TASK_HOME/state/claude-host.claude-settings.json" \
+  'index("--settings") as $i | $i != null and .[$i+1] == $settings' \
+  "$FM_HOST_ARGV" >/dev/null || fail 'Claude host launch lost its hook settings argument'
+pass 'Claude host launch delivers hook settings as a separate argument'
 for target in relative/path "$ROOT/AGENTS.md" "$TASK_HOME/projects/new/file"; do
   if run_brief "bad-$RANDOM" --host --path "$target" >/dev/null 2>&1; then fail "unsafe host path accepted: $target"; fi
 done
