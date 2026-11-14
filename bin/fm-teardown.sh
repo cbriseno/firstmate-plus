@@ -3931,7 +3931,13 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 # --keep-running leaves it, and the launch namespace below, to the running agent.
-[ -n "$TASK_TMP" ] && [ "$KEEP_RUNNING" != 1 ] && rm -rf "$TASK_TMP"
+if [ -n "$TASK_TMP" ] && [ "$KEEP_RUNNING" != 1 ]; then
+  # find defaults to physical traversal; make only real files/directories writable.
+  if [ -d "$TASK_TMP" ] && [ ! -L "$TASK_TMP" ]; then
+    find "$TASK_TMP" \( -type d -o -type f \) -exec chmod u+w {} +
+  fi
+  rm -rf "$TASK_TMP"
+fi
 # Retire only this Firstmate home's launch namespace. Its never-reused per-spawn
 # files leave the equal task-id namespace of every other home untouched.
 teardown_launch_home_token() {

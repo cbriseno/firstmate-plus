@@ -31,6 +31,7 @@ TMP_ROOT=
 
 cleanup() {
   if [ -n "${TMP_ROOT:-}" ]; then
+    find "$TMP_ROOT" \( -type d -o -type f \) -exec chmod u+w {} + 2>/dev/null || true
     rm -rf "$TMP_ROOT"
   fi
 }
@@ -139,8 +140,14 @@ META
 test_teardown_removes_tasktmp_dir() {
   local id=td-rm-z2
   local task_tmp="$TMP_ROOT/fm-$id"
+  local external="$TMP_ROOT/external"
   mkdir -p "$task_tmp/gotmp"
   printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
+  mkdir -p "$external"
+  printf 'outside\n' > "$external/marker"
+  chmod 444 "$task_tmp/gotmp/build-artifact" "$external/marker"
+  ln -s "$external" "$task_tmp/gotmp/outside"
+  chmod 555 "$external" "$task_tmp/gotmp" "$task_tmp"
   local fake
   fake=$(make_fake_root "$id" "$task_tmp")
   # Sanity: dir + contents exist before teardown.
@@ -150,7 +157,9 @@ test_teardown_removes_tasktmp_dir() {
     || fail "teardown exited non-zero with a valid tasktmp: $(cat "$fake/teardown.out")"
   [ ! -e "$task_tmp" ] \
     || fail "teardown did not remove the tasktmp dir ($task_tmp still exists)"
-  pass "fm-teardown removes the dir pointed to by tasktmp= in meta"
+  [ ! -w "$external/marker" ] \
+    || fail "teardown followed a tasktmp symlink and changed permissions outside it"
+  pass "fm-teardown makes read-only tasktmp contents removable without following symlinks"
 }
 
 test_teardown_skips_gracefully_without_tasktmp() {
