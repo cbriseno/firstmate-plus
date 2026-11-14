@@ -1,5 +1,15 @@
 # Runtime backend verification
 
+## Large Treehouse acquisitions
+
+The acquisition wait and isolation contract belongs to the header of `bin/fm-spawn.sh`.
+Verified 2026-11-14 on Linux with Treehouse v3.1.5, Herdr 0.9.5 and tmux 3.3a in private disposable sessions.
+`bash bin/fm-spawn.sh "$ID" "$LAB_REPO" --mode local-only --yolo on --backend "$BACKEND" 'sleep 120'` acquired fresh copies of a generated 250,000-file repository with a disposable 70-second Git post-checkout hook.
+Herdr completed in 111 seconds and tmux in 134 seconds; both printed progress beyond 60 polls, then `spawned`, and the native terminal cwd matched the recorded isolated worktree.
+The portable regression command is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-spawn-worktree-settle.test.sh`.
+It covers preparation beyond the initial window, the subshell handoff's confirming read, late acquisition failure, stale cwd reads and refusal of the primary checkout.
+macOS was inspected but not executed; the tmux probe reuses its existing portable foreground-process reader and the Herdr probe uses `pane process-info`.
+
 
 ## Worker session bindings
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regression test for the fm-spawn.sh treehouse-get worktree-detection settle
-# loop (bin/fm-spawn.sh, the `for _ in $(seq 1 60)` loop after `treehouse get`).
+# loop after `treehouse get` in bin/fm-spawn.sh.
 #
 # On some tmux/WSL setups a brand-new window's pane_current_path transiently
 # reports a stale, unrelated-but-real path on the very first poll, before the
@@ -52,6 +52,7 @@ case "$*" in
     fi
     exit 0
     ;;
+  *"#{pane_tty}"*) printf '/dev/n18-preparing\n'; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -210,6 +211,55 @@ test_transient_primary_checkout_is_not_accepted() {
   pass "a transient primary-checkout pane read is not accepted as the worktree"
 }
 
+# A real large acquisition exceeded the old window while Treehouse and Git
+# remained in the terminal's foreground group. Model that same primary-path
+# transient beyond 60 polls, then let the copy finish normally.
+test_large_acquisition_outlives_the_initial_window() {
+  local rec id out status preparing_ps
+  id=settle-large-acquisition-z6
+  rec=$(make_primary_case settle-large-acquisition "$id" 65)
+  read_settle_record "$rec"
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+  cat > "$FAKEBIN_DIR/ps" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -t ] && [ "${2:-}" = n18-preparing ]; then
+  if [ "$(cat "$FM_FAKE_PANE_COUNTFILE")" -le 65 ]; then
+    printf '123 123 123 /usr/local/bin/treehouse\n'
+  else
+    printf '123 123 123 /bin/bash\n'
+  fi
+  exit 0
+fi
+exec /bin/ps "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/ps"
+  preparing_ps="$FAKEBIN_DIR/ps"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "a live Treehouse acquisition must outlast the old deadline"$'\n'"$out"
+  assert_contains "$out" "waiting for Treehouse to enter the isolated worktree (60 polls)" \
+    "slow acquisition did not report progress past the initial window"
+  assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
+    "slow acquisition did not record the completed isolated copy"
+  pass "a live Treehouse acquisition can finish beyond 60 polls"
+
+  # The same slow preparation can exit unsuccessfully. Its disappearance must
+  # end the extended wait, without accepting the primary or publishing a task.
+  id=settle-late-failure-z7
+  rec=$(make_primary_case settle-late-failure "$id" 100000)
+  read_settle_record "$rec"
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+  cp "$preparing_ps" "$FAKEBIN_DIR/ps"
+  out=$(run_settle_spawn "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn accepted a failed slow acquisition"$'\n'"$out"
+  assert_contains "$out" "after 66 polls and no foreground Treehouse was observed" \
+    "spawn did not stop when the slow acquisition exited"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "failed slow acquisition published metadata"
+  pass "a slow acquisition that exits ends the extended wait without launching"
+}
+
 # A pane that never leaves the primary checkout must still fail at the deadline
 # rather than waiting forever or recording the primary.
 test_primary_checkout_that_never_settles_fails_at_the_deadline() {
@@ -257,6 +307,7 @@ test_unborn_head_project_is_refused_at_once() {
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
 test_transient_primary_checkout_is_not_accepted
+test_large_acquisition_outlives_the_initial_window
 test_primary_checkout_that_never_settles_fails_at_the_deadline
 test_unborn_head_project_is_refused_at_once
 

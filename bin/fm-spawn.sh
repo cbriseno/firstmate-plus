@@ -249,6 +249,10 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   The initial 60 polls extend while Treehouse is in the task terminal's
+#   foreground process group, allowing large acquisitions to finish without a
+#   fixed copy deadline. Progress prints every 15 polls with an endpoint hint.
+#   A stalled Treehouse still needs operator inspection or interruption.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -2928,6 +2932,23 @@ spawn_current_path() { # <target>
   herdr) fm_backend_herdr_current_path "$1" ;;
   esac
 }
+# Treehouse stays in the foreground group while Git prepares the copy. Its
+# presence extends acquisition, but never substitutes for the isolation check.
+spawn_treehouse_running() { # <target>
+  local names name
+  case "$BACKEND" in
+  tmux) names=$(fm_backend_tmux_foreground_comms "$1") ;;
+  herdr)
+    fm_backend_herdr_parse_target "$1" || return 1
+    names=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+      | jq -r '.result.process_info.foreground_processes[]?.name // empty' 2>/dev/null) || return 1
+    ;;
+  esac
+  while IFS= read -r name; do
+    [ "${name##*/}" != treehouse ] || return 0
+  done <<< "$names"
+  return 1
+}
 spawn_send_literal() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
@@ -3037,16 +3058,16 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   # read of the project itself or of the repository primary checkout is treated
   # as the transient it is and the wait continues, instead of being adopted and
   # then refused by the guard.
-  # A candidate the screen rejects is never adopted, so a host where the pane
-  # never reaches an isolated worktree spends the whole window before refusing.
-  # That wait is deliberate - telling a transient apart from a terminal
-  # misconfiguration would need machinery this path does not want - so the
-  # refusal has to be self-explaining instead: carry the last path seen and the
-  # reason it was rejected, and report both at the deadline.
+  # A large checkout can outlast the initial window. Keep waiting while the
+  # actual foreground Treehouse process is present, rather than guessing a
+  # larger deadline from repository size. Once it is absent, refuse with the
+  # last rejected path and reason instead of waiting indefinitely on a shell.
   candidate=""
   last_seen=""
   last_reason="the pane reported no path"
-  for _ in $(seq 1 60); do
+  waited=0
+  while :; do
+    previous_candidate=$candidate
     p=$(spawn_current_path "$WT_TARGET" || true)
     [ -z "$p" ] || last_seen="$p"
     if [ -n "$p" ] && spawn_worktree_isolated "$p"; then
@@ -3061,10 +3082,19 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
       candidate=""
       [ -z "$p" ] || last_reason=$SPAWN_WT_REASON
     fi
+    waited=$((waited + 1))
+    if [ "$waited" -ge 60 ] && ! spawn_treehouse_running "$WT_TARGET"; then
+      # The subshell can take the foreground just as its isolated cwd first
+      # appears. Give that new candidate its existing second-read check.
+      [ -n "$candidate" ] && [ -z "$previous_candidate" ] || break
+    fi
+    if [ $((waited % 15)) -eq 0 ]; then
+      echo "task $ID: waiting for Treehouse to enter the isolated worktree ($waited polls); $(spawn_endpoint_hint)" >&2
+    fi
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); $(spawn_endpoint_hint)" >&2
+    echo "error: treehouse get did not enter an isolated worktree after $waited polls and no foreground Treehouse was observed (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); $(spawn_endpoint_hint)" >&2
     exit 1
   fi
 
