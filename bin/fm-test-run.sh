@@ -282,7 +282,7 @@ cpu_count() {
 # lands in `unclassified` and stays serial until someone proves it.
 family_for_basename() {
   case "$1" in
-    fm-public-export.test.sh|fm-notification-command.test.sh|fm-redact-log.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
+    fm-public-export.test.sh|fm-notification-command.test.sh|fm-redact-log.test.sh|fm-usage-recovery.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
     fm-brief.test.sh|fm-dod-lib.test.sh|\
     fm-cd-pretool-check.test.sh|\

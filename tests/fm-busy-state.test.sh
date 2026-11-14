@@ -704,7 +704,13 @@ write(claude/'other-home.jsonl',[dict(type='user',message=dict(content=contract(
 write(claude/'loose-path.jsonl',[dict(type='user',message=dict(content=str(home/'state/wrong.inbox')))])
 write(claude/'late.jsonl',[dict(type='system')]*60+[dict(type='user',message=dict(content=contract('late')))])
 command=[sys.executable,str(root/'bin/fm_task_sessions.py'),'backfill',str(home),str(claude.parent),str(base/'codex')]
-subprocess.run(command,check=True)
+review=json.loads(subprocess.check_output(command,text=True))
+assert not (home/'data/old/sessions.jsonl').exists()
+for task in review['tasks']:
+    for candidate in task['candidates']: candidate['decision']='accept'
+review_path=base/'review.json'; review_path.write_text(json.dumps(review))
+command += ['--apply',str(review_path),'--backup',str(base/'before.json')]
+subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
 sessions=home/'data/old/sessions.jsonl'; first=sessions.read_text()
 rows=[json.loads(line) for line in first.splitlines()]
 assert [(r['harness'],r['model'],r['effort']) for r in rows]==[('claude','claude-test','high'),('codex','codex-test','low')], rows

@@ -14,12 +14,32 @@ list HOME [--task ID | --project PATH] [--status active|archived|unknown] reads
 sessions.jsonl directly, including concurrent tasks in one project. Legacy rows
 read as project=null/status=unknown and an absent path as legacy-unrecorded.
 Binding attempts emit anonymized session.link events through fm-diag.sh.
-backfill HOME [CLAUDE_PROJECTS CODEX_SESSIONS] is an explicit, repeatable one-off
-scan of the first 60 transcript lines for the exact home-scoped worker contract.
-Missing historical model/effort stays null. No pricing or usage calculation.
+backfill HOME [CLAUDE_PROJECTS CODEX_SESSIONS] prints a read-only local review.
+It reads the first 60 transcript records, task session starts, state/*.meta and
+creation receipts. Exact home inbox or recorded cwd/task-id matches are explicit;
+a start within 300 seconds is only inferred (multiple candidates are ambiguous).
+No timestamp-only attribution is applied automatically. Missing fields stay null.
+
+Manual recovery (Python 3.9/stdlib, Linux/macOS, no services or new dependencies):
+  1. backfill HOME [roots] > review.json             # no task writes
+  2. Edit each candidate decision to accept/reject. For inferred/ambiguous joins,
+     add corroboration naming independent evidence checked in local originals
+     (worktree, dispatch/brief, task content); time proximity alone is not enough.
+  3. backfill HOME [roots] --apply review.json --backup before.json
+     Applies only accepted candidates still found in originals, saves the exact
+     previous sessions/usage bytes (including absence), refreshes usage and rereads.
+     Repeating unchanged accepted rows is a no-op. Stop active task writers first.
+  4. backfill HOME --restore before.json            # restores both old files
+Use --tasks ID [ID ...] to restrict the diagnostic to the affected task ids.
+Review/output contains local paths and model/effort, never transcript text.
+Keep review and backup local; return only task counts and missing-reason counts.
+Cost is an estimate at list price, not billing. Unique sessions differ from
+per-model session counters; missing usage/price is unknown, never zero spend.
 """
 
 import argparse
+import base64
+import datetime as dt
 import json
 import subprocess
 from pathlib import Path
@@ -121,33 +141,222 @@ def list_sessions(home, task=None, project=None, status=None):
                 print(json.dumps(dict(row, task=path.parent.name)))
 
 
-def backfill(home, claude, codex):
-    home = Path(home).resolve()
-    contract = re.compile(r"Your steering inbox is `" + re.escape(str(home / "state")) +
-                          r"/([A-Za-z0-9._-]+)\.inbox`; this exact path belongs to your current task")
-    for harness, paths in (("claude", Path(claude).glob("*/*.jsonl")),
-                           ("codex", Path(codex).rglob("rollout-*.jsonl"))):
-        for path in paths:
-            rows = []
-            with path.open(encoding="utf-8", errors="replace") as handle:
-                for _ in range(60):
-                    try:
-                        rows.append(json.loads(handle.readline()))
-                    except ValueError:
-                        continue
-            matches = contract.findall("".join(json.dumps(row, ensure_ascii=False) for row in rows))
-            if len(set(matches)) != 1:
+def instant(value):
+    try:
+        if isinstance(value, (float, int)) or str(value).isdigit():
+            return float(value)
+        stamp = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return stamp.timestamp() if stamp.tzinfo else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def task_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
+        raise ValueError("invalid task id")
+    return value
+
+
+def session_rows(folder):
+    path = folder / "sessions.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    if any(not isinstance(r, dict) or r.get("harness") not in ("codex", "claude")
+           or not isinstance(r.get("session"), (str, type(None))) for r in rows):
+        raise ValueError("invalid session records")
+    return rows
+
+
+def diagnose(home, claude, codex, selected=None):
+    from fm_delivery import task_creation
+    from fm_task_usage import calculate
+    contract = re.compile(r"Your steering inbox is `([^`]+)/state/([A-Za-z0-9._-]+)\.inbox`; this exact path belongs to your current task")
+    tasks = set(selected or [p.name for p in (home / "data").glob("*") if p.is_dir() and not p.is_symlink()])
+    tasks.update([] if selected else [p.stem for p in (home / "state").glob("*.meta")])
+    info, transcripts, errors = {}, [], []
+    for task in sorted(tasks):
+        task_id(task)
+        folder = home / "data" / task
+        try:
+            starts = session_rows(folder)
+            meta = metadata(home / "state", task) if (home / "state" / (task + ".meta")).exists() else {}
+            creation = task_creation(home / "data", dict(id=task))
+            anchors = [("session-start", s.get("started_at")) for s in starts]
+            anchors += [("recorded-start", meta.get("spawned_at")), ("creation-receipt", (creation or {}).get("value"))]
+            info[task] = dict(starts=starts, meta=meta, anchors=[(k, instant(v)) for k, v in anchors if instant(v) is not None])
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            errors.append(dict(task=task, reason="unreadable-task-record", error=type(exc).__name__))
+    for harness, root, paths in (("claude", Path(claude), Path(claude).glob("*/*.jsonl")),
+                                  ("codex", Path(codex), Path(codex).rglob("rollout-*.jsonl"))):
+        if not root.is_dir():
+            errors.append(dict(harness=harness, reason="missing-transcript-root"))
+        for path in sorted(paths):
+            try:
+                with path.open(encoding="utf-8", errors="replace") as handle:
+                    rows = []
+                    for _, line in zip(range(60), handle):
+                        try:
+                            row = json.loads(line)
+                            if isinstance(row, dict):
+                                rows.append(row)
+                        except ValueError:
+                            continue
+            except OSError:
+                errors.append(dict(harness=harness, reason="unreadable-transcript", session=str(path)))
                 continue
+            matches = set(contract.findall("".join(json.dumps(r, ensure_ascii=False) for r in rows)))
+            own = {t for h, t in matches if h == str(home)}
+            # A contract for another task/home contradicts a temporal guess.
+            if matches and (len(matches) != 1 or not own):
+                continue
+            cwd = next((r.get("cwd") or (r.get("payload") or {}).get("cwd") for r in rows
+                        if r.get("cwd") or (r.get("payload") or {}).get("cwd")), None)
+            explicit = own or {t for t, v in info.items() if cwd and
+                (cwd == v["meta"].get("worktree") or t in Path(cwd).parts)}
+            if own and not selected:
+                for task in own:
+                    info.setdefault(task, dict(starts=[], meta={}, anchors=[]))
             model = effort = None
             for row in rows:
-                params = row.get("params", {}) if harness == "claude" else row.get("payload", {})
+                params = (row.get("params") if harness == "claude" else row.get("payload")) or {}
                 if row.get("type") in ("api-request", "turn_context"):
                     model = model or params.get("model")
-                    effort = effort or params.get("effort") or params.get("output_config", {}).get("effort")
+                    effort = effort or params.get("effort") or params.get("reasoning_effort") or (params.get("output_config") or {}).get("effort")
                 if row.get("type") == "assistant":
-                    model = model or row.get("message", {}).get("model")
-            save(home / "data" / matches[0] / "sessions.jsonl", dict(harness=harness,
-                 model=model, effort=effort, started_at=next((r["timestamp"] for r in rows if r.get("timestamp")), None), session=str(path.resolve())))
+                    model = model or (row.get("message") or {}).get("model")
+            session = dict(harness=harness, model=model, effort=effort,
+                started_at=next((r["timestamp"] for r in rows if r.get("timestamp")), None), session=str(path.resolve()))
+            transcripts.append((session, explicit, "worker-contract" if own else "cwd-task-id"))
+    results = []
+    for task, value in info.items():
+        candidates = []
+        for session, explicit, method in transcripts:
+            evidence = []
+            if explicit:
+                if task not in explicit or len(explicit) != 1:
+                    continue
+                confidence = "explicit"
+                evidence = [method]
+            else:
+                stamp = instant(session["started_at"])
+                evidence = [k for k, v in value["anchors"] if stamp is not None and abs(v - stamp) <= 300]
+                if not evidence:
+                    continue
+                confidence = "inferred"
+            candidates.append(dict(session=session, confidence=confidence, evidence=evidence,
+                                   decision="pending", corroboration="",
+                missing_fields=[k for k in ("model", "effort", "started_at") if session[k] is None],
+                proposed_usage=calculate(home / "data" / task, [session])))
+        inferred = [c for c in candidates if c["confidence"] == "inferred"]
+        if len(inferred) > 1:
+            for candidate in inferred:
+                candidate["confidence"] = "ambiguous"
+        reason = None if candidates else "no-nearby-transcript" if value["anchors"] else "no-recorded-anchor-or-explicit-link"
+        # Preview is local and read-only. Unaccepted candidates are not charged.
+        usage = calculate(home / "data" / task, value["starts"])
+        results.append(dict(task_id=task, confidence="explicit" if any(c["confidence"] == "explicit" for c in candidates)
+            else "ambiguous" if len(inferred) > 1 else "inferred" if inferred else "unknown",
+            missing_reason=reason, candidates=candidates, current_usage=usage))
+    return dict(home=str(home), basis="estimate at list price, not a bill", tasks=results, errors=errors)
+
+
+def recover(home, review, backup, live):
+    from fm_task_usage import refresh, read_usage
+    if review.get("home") != str(home):
+        raise ValueError("review belongs to another home")
+    current = {t["task_id"]: t for t in live["tasks"]}
+    changes, before, owners = {}, {}, {}
+    for task in review["tasks"]:
+        name = task_id(task["task_id"])
+        folder = home / "data" / name
+        rows = session_rows(folder)
+        changed = False
+        for candidate in task["candidates"]:
+            if candidate.get("decision") != "accept":
+                continue
+            matching = next((c for c in current.get(name, {}).get("candidates", [])
+                if c["session"] == candidate["session"]), None)
+            if matching is None:
+                raise ValueError("accepted candidate is no longer found: " + name)
+            if matching["confidence"] != "explicit" and not candidate.get("corroboration", "").strip():
+                raise ValueError("independent corroboration required: " + name)
+            row = dict(matching["session"], recovery=dict(confidence=matching["confidence"],
+                evidence=matching["evidence"], corroboration=candidate.get("corroboration", "")))
+            owner = owners.setdefault(row["session"], name)
+            if owner != name:
+                raise ValueError("same transcript accepted for multiple tasks")
+            if any(r.get("session") == row["session"] for r in rows):
+                continue
+            stamp = instant(row["started_at"])
+            placeholders = [r for r in rows if r.get("session") is None and r.get("harness") == row["harness"]
+                and stamp is not None and instant(r.get("started_at")) is not None
+                and abs(instant(r["started_at"]) - stamp) <= 300]
+            if len(placeholders) == 1:
+                placeholder = placeholders[0]
+                rows.remove(placeholder)
+                row = dict(placeholder, session=row["session"], reason=None,
+                    model=row.get("model") or placeholder.get("model"),
+                    effort=row.get("effort") or placeholder.get("effort"), recovery=row["recovery"])
+            rows.append(row)
+            changed = True
+        if changed:
+            changes[name] = rows
+            before[name] = {file: base64.b64encode((folder / file).read_bytes()).decode("ascii")
+                if (folder / file).exists() else None for file in ("sessions.jsonl", "usage.json")}
+    if not changes:
+        return dict(applied=[], usage={})
+    # The backup is the required manual 'conserve the before' step, before writes.
+    with Path(backup).open("x") as stream:
+        json.dump(dict(home=str(home), tasks=before), stream)
+    for name, rows in changes.items():
+        folder = home / "data" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "sessions.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        # Recompute while retaining P08's pinned price snapshot and provenance.
+        refresh(folder, force=True)
+    return dict(applied=list(changes), backup=str(backup),
+                usage={name: read_usage(home / "data" / name / "usage.json") for name in changes})
+
+
+def restore(home, backup):
+    from fm_delivery import fleet_event
+    from fm_task_usage import read_usage
+    value = json.loads(Path(backup).read_text())
+    if value.get("home") != str(home):
+        raise ValueError("backup belongs to another home")
+    for name, files in value["tasks"].items():
+        folder = home / "data" / task_id(name)
+        for file in ("sessions.jsonl", "usage.json"):
+            if files[file] is None:
+                (folder / file).unlink(missing_ok=True)
+            else:
+                (folder / file).write_bytes(base64.b64decode(files[file]))
+        fleet_event(home, "task.usage", name, read_usage(folder / "usage.json"))
+    return dict(restored=list(value["tasks"]))
+
+
+def backfill_cli(args):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("home", type=Path)
+    parser.add_argument("roots", nargs="*")
+    parser.add_argument("--tasks", nargs="+")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--apply", type=Path)
+    action.add_argument("--restore", type=Path)
+    parser.add_argument("--backup", type=Path)
+    opts = parser.parse_args(args)
+    home = opts.home.resolve()
+    roots = opts.roots or [str(Path.home() / ".claude/projects"), str(Path.home() / ".codex/sessions")]
+    if len(roots) != 2 or (opts.apply and not opts.backup):
+        parser.error("provide both transcript roots; --apply requires --backup")
+    if opts.restore:
+        result = restore(home, opts.restore)
+    else:
+        review = json.loads(opts.apply.read_text()) if opts.apply else None
+        selected = [t["task_id"] for t in review["tasks"]] if review else opts.tasks
+        result = diagnose(home, *roots, selected)
+        if review:
+            result = recover(home, review, opts.backup, result)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
@@ -161,9 +370,8 @@ if __name__ == "__main__":
         group.add_argument("--project")
         parser.add_argument("--status", choices=("active", "archived", "unknown"))
         list_sessions(**vars(parser.parse_args(sys.argv[2:])))
-    elif len(sys.argv) in (3, 5) and sys.argv[1] == "backfill":
-        roots = sys.argv[3:] or [str(Path.home() / ".claude/projects"), str(Path.home() / ".codex/sessions")]
-        backfill(sys.argv[2], *roots)
+    elif sys.argv[1:2] == ["backfill"]:
+        backfill_cli(sys.argv[2:])
     elif len(sys.argv) == 4 and sys.argv[1] == "start":
         record(*sys.argv[2:])
     elif len(sys.argv) == 5 and sys.argv[1] == "bind":

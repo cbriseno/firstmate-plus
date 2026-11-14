@@ -20,6 +20,9 @@ On 2026-11-09, Linux with Python 3.11.2, codex-cli 0.166.0 and Claude Code 2.1.3
 Replaying the first 60 lines of real historical Claude and Codex transcripts through the migration recovered both sessions; a second invocation left the files unchanged.
 Claude's historical brief can arrive in a tool result after an inbox doorbell, and its first transcript record can lack a timestamp.
 The portable regression entry point is `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-busy-state.test.sh`.
+The historical client recovery interface now defaults to a read-only review; its apply and exact restore procedure is owned by `python3 bin/fm_task_sessions.py --help`.
+On 2026-11-14, Linux with Python 3.11.2 ran `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-usage-recovery.test.sh` and reported `ok - synthetic client dry/review/apply/re-read/restore; explicit, inferred, ambiguous, rejected, unknown; unique sessions`.
+This is synthetic client proof, without Mac originals or execution on macOS; unknown model costs remain unknown and no historical client data was installed.
 The common spawn path records launches before backend delivery for tmux and Herdr, independent of the harness command; session capture currently uses only Claude's existing hook and Codex's existing pin.
 On 2026-11-14, Linux with Python 3.11.2 and codex-cli 0.169.0 verified project attribution, active launch state and a null binding reason on the real transcript through `FM_CODEX_SESSION_BIND_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-session-bind-live-e2e.test.sh`.
 It reported `ok - codex-cli 0.169.0: real worker transcript bound; activity qualification unchanged`.

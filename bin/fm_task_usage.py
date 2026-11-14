@@ -179,12 +179,14 @@ def session_paths(session):
     return []
 
 
-def refresh(folder):
+def calculate(folder, sessions=None, force=False):
     folder = Path(folder)
     source = folder / 'sessions.jsonl'
-    if not source.exists():
-        return
-    sessions = list(records(source))
+    cacheable = sessions is None and not force
+    if sessions is None:
+        if not source.exists():
+            return None
+        sessions = list(records(source))
     inputs, unknown, seen = [], [], set()
     for session in sessions:
         if not session.get('session'):
@@ -207,9 +209,9 @@ def refresh(folder):
              for p in [source] + [p for _, paths in inputs for p in paths]}
     target = folder / 'usage.json'
     previous = read_usage(target)
-    if (previous.get('sizes') == sizes and previous.get('pricing') and
+    if (cacheable and previous.get('sizes') == sizes and previous.get('pricing') and
             read(target, {}).get('pricing_stale') == pricing_warning(previous['pricing'])):
-        return
+        return previous
     pricing = previous.get('pricing') or read(PRICE_FILE, {})
     rows, estimated = {}, False
     for session, paths in inputs:
@@ -230,12 +232,23 @@ def refresh(folder):
             row['price_unknown'].extend(x for x in value.get('price_unknown', []) if x not in row['price_unknown'])
             row['breakdown'].extend(value['breakdown'])
     result = dict(by=list(rows.values()), unknown=unknown, estimated=estimated, sizes=sizes,
+                  unique_sessions=sum(bool(paths) and all(p.exists() for p in paths) for _, paths in inputs),
                   pricing=pricing, pricing_stale=pricing_warning(pricing),
                   usd_basis='estimación a precio de lista')
     if previous and not previous.get('pricing'):
         result['previous_unversioned'] = {k: previous.get(k) for k in ('by', 'unknown', 'estimated')}
     elif previous.get('previous_unversioned'):
         result['previous_unversioned'] = previous['previous_unversioned']
+    return result
+
+
+def refresh(folder, force=False):
+    folder = Path(folder)
+    target = folder / 'usage.json'
+    # Backfill previews without writes; forced apply retains pinned prices.
+    result = calculate(folder, force=force)
+    if result is None or read(target) == result:
+        return
     with tempfile.NamedTemporaryFile(mode='w', dir=folder, delete=False) as stream:
         json.dump(result, stream)
     Path(stream.name).replace(target)
