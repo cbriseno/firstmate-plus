@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """refresh TASK_DIR writes usage.json from sessions.jsonl; unchanged source sizes
 reuse the cache. Watcher slow checks, Claude turn ends and teardown refresh; snapshots only aggregate
-cached files. Claude closing totals identify incomplete message data; Codex
+cached files. Per-session records carry the transcript identity, launch metadata,
+price snapshot, and model/effort breakdown; request aggregation deduplicates
+(harness, session_id) across tasks. Legacy caches without identities remain
+aggregated but are marked unknown until refreshed. Claude closing totals identify incomplete message data; Codex
 includes all rollouts sharing session_meta.session_id.
 Missing sessions/prices stay unknown. USD is API list-price equivalent, not a bill.
 Pricing is a pinned API list-price estimate, not a bill. The versioned price file
@@ -46,7 +49,13 @@ def read_usage(path):
         return {}
     if any(not isinstance(reason, str) for reason in unknown):
         return {}
-    for value in values:
+    details = usage.get('sessions', [])
+    if not isinstance(details, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get('session_id'), str)
+            or item.get('harness') not in ('codex', 'claude')
+            or not isinstance(item.get('by'), list) for item in details):
+        return {}
+    for value in values + [row for item in details for row in item['by']]:
         if not isinstance(value, dict):
             return {}
         if any(not isinstance(value.get(k), (str, type(None)))
@@ -62,6 +71,9 @@ def read_usage(path):
             return {}
     if isinstance(usage.get('pricing'), dict):
         usage['pricing_stale'] = pricing_warning(usage['pricing'])
+    for item in details:
+        if isinstance(item.get('pricing'), dict):
+            item['pricing_stale'] = pricing_warning(item['pricing'])
     return usage
 
 
@@ -188,17 +200,17 @@ def calculate(folder, sessions=None, force=False):
             return None
         sessions = list(records(source))
     inputs, unknown, seen = [], [], set()
-    for session in sessions:
+    for session in sorted(sessions, key=lambda s: s.get('status') != 'active'):
         if not session.get('session'):
             unknown.append('no-session')
             continue
-        if session['session'] in seen:
+        if str(Path(session['session']).resolve()) in seen:
             continue
         try:
             paths = session_paths(session)
-            if paths and all(str(p) in seen for p in paths):
+            if paths and all(str(p.resolve()) in seen for p in paths):
                 continue
-            seen.update(str(p) for p in paths)
+            seen.update(str(p.resolve()) for p in paths)
             inputs.append((session, paths))
             if not paths:
                 unknown.append('unsupported-harness')
@@ -209,11 +221,11 @@ def calculate(folder, sessions=None, force=False):
              for p in [source] + [p for _, paths in inputs for p in paths]}
     target = folder / 'usage.json'
     previous = read_usage(target)
-    if (cacheable and previous.get('sizes') == sizes and previous.get('pricing') and
+    if (cacheable and 'sessions' in previous and previous.get('sizes') == sizes and previous.get('pricing') and
             read(target, {}).get('pricing_stale') == pricing_warning(previous['pricing'])):
         return previous
     pricing = previous.get('pricing') or read(PRICE_FILE, {})
-    rows, estimated = {}, False
+    rows, estimated, details = {}, False, []
     for session, paths in inputs:
         if not paths or any(sizes[str(p)] is None for p in paths):
             if paths:
@@ -221,6 +233,18 @@ def calculate(folder, sessions=None, force=False):
             continue
         values, estimate, incomplete = (claude if session['harness'] == 'claude' else codex)(paths, session, pricing)
         estimated |= estimate
+        for value in values:
+            value['sessions'] = 1
+        # Codex rollout siblings share the session_meta id; Claude's main
+        # transcript path is its stable identity, including across relaunches.
+        sid = (next(records(paths[0]), {}).get('payload', {}).get('session_id')
+               if session['harness'] == 'codex' else None)
+        identity = str(sid) if sid else str(Path(session['session']).resolve())
+        details.append(dict(session_id=identity, session=session['session'],
+                            harness=session['harness'], model=session.get('model'),
+                            effort=session.get('effort'), status=session.get('status', 'unknown'),
+                            by=values, pricing=pricing, pricing_stale=pricing_warning(pricing),
+                            estimated=estimate, unknown=['incomplete-usage'] if incomplete or not values else []))
         if incomplete or not values:
             unknown.append('incomplete-usage')
         for value in values:
@@ -231,7 +255,7 @@ def calculate(folder, sessions=None, force=False):
             row['usd_known'] &= value['usd_known']
             row['price_unknown'].extend(x for x in value.get('price_unknown', []) if x not in row['price_unknown'])
             row['breakdown'].extend(value['breakdown'])
-    result = dict(by=list(rows.values()), unknown=unknown, estimated=estimated, sizes=sizes,
+    result = dict(by=list(rows.values()), sessions=details, unknown=unknown, estimated=estimated, sizes=sizes,
                   unique_sessions=sum(bool(paths) and all(p.exists() for p in paths) for _, paths in inputs),
                   pricing=pricing, pricing_stale=pricing_warning(pricing),
                   usd_basis='estimación a precio de lista')
@@ -257,7 +281,7 @@ def refresh(folder, force=False):
 
 
 def aggregate(data, tasks, backlog, usages=None):
-    rows, counts, unknown, prices = {}, Counter(), [], []
+    rows, counts, unknown, prices, sessions, seen = {}, Counter(), [], [], [], set()
     for task in tasks:
         task_id = task['key'][5:]
         usage = usages.get(task_id, {}) if usages is not None else read_usage(Path(data) / task_id / 'usage.json')
@@ -272,6 +296,18 @@ def aggregate(data, tasks, backlog, usages=None):
         counts[state] += 1
         if state not in ('no_agent', 'not_started') and (reason or state == 'unknown'):
             unknown.append(dict(task=task_id, title=task['title'], reason=reason or 'no-session'))
+        session_values = usage.get('sessions')
+        if isinstance(session_values, list):
+            values = []
+            for session in session_values:
+                identity = (session.get('harness'), session.get('session_id'))
+                if not identity[1] or identity in seen:
+                    continue
+                seen.add(identity)
+                sessions.append(dict(session, task=task_id))
+                values.extend(session.get('by', []))
+        elif values:
+            unknown.append(dict(task=task_id, title=task['title'], reason='session-identity-unavailable'))
         for value in values:
             row = bucket(rows, value['harness'], value['model'], value['effort'])
             for field in ('usd', 'tokens', 'output_tokens', 'sessions'):
@@ -285,7 +321,7 @@ def aggregate(data, tasks, backlog, usages=None):
         usd_complete=not unknown and all(r['usd_known'] for r in values),
         tokens=sum(r['tokens'] for r in values), output_tokens=sum(r['output_tokens'] for r in values),
         tasks=dict(counts), by=values, unknown=unknown, excludes=['coordinator'],
-        pricing=prices, price_label='estimación a precio de lista')
+        pricing=prices, sessions=sessions, price_label='estimación a precio de lista')
     for row in values:
         row['usd'] = round(row['usd'], 2)
     return result

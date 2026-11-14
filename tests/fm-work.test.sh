@@ -137,12 +137,21 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
             dict(type='turn_context',payload=dict(model='gpt-6.1-sol',effort='high')),
             dict(type='token_usage_record',payload=dict(usage=dict(input_tokens=100,cached_input_tokens=80,output_tokens=10)))]
         write_lines(codex_path,codex_rows)
-        write_lines(folder/'sessions.jsonl',[dict(harness=h,model=None,effort='low',session=str(p)) for h,p in [('claude',claude_path),('codex',codex_path)]])
+        write_lines(folder/'sessions.jsonl',[dict(harness=h,model=None,effort='low',status='archived',session=str(p)) for h,p in [('claude',claude_path),('codex',codex_path)]])
         refresh = ['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(folder)]
         (folder/'usage.json').write_text('[{"legacy": true}]')
         subprocess.run(refresh,check=True)
         cache = folder/'usage.json'
         measured = json.loads(cache.read_text())
+        sessions = measured['sessions']
+        check(len(sessions)==2 and {s['harness'] for s in sessions}=={'claude','codex'}
+              and all(s['session_id'] and s['by'] and s['pricing']['version'] for s in sessions),
+              'cache exposes session identities, detail and pinned prices')
+        (uh/'data/queued/usage.json').write_text(json.dumps(measured))
+        projected = ucli('work','snapshot')['requests'][0]['usage']
+        check(len(projected['sessions'])==2 and projected['tokens']==sum(r['tokens'] for r in measured['by']),
+              'request projection deduplicates sessions shared by tasks')
+        (uh/'data/queued/usage.json').unlink()
         haiku = next(r for r in measured['by'] if r['harness']=='claude')
         check(measured.get('pricing', {}).get('version') and all('breakdown' in r for r in measured['by']), 'usage records versioned rates and token breakdown')
         check(haiku['tokens']==100003 and abs(haiku['usd']-.0500055)<1e-9 and measured['estimated'], 'deduplication and Haiku long-prompt estimate')
@@ -193,9 +202,12 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         subprocess.run(refresh,check=True)
         check(abs(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='claude')['usd']-.0500055)<1e-9 and json.loads(cache.read_text())['estimated'], 'closing cost-state does not replace reproducible list-price estimate')
         with (folder/'sessions.jsonl').open('a') as stream:
-            stream.write(json.dumps(dict(harness='codex',model=None,effort='high',session=str(codex_path.parent/'rollout-child.jsonl')))+'\n')
+            stream.write(json.dumps(dict(harness='codex',model=None,effort='high',status='active',session=str(codex_path.parent/'rollout-child.jsonl')))+'\n')
         subprocess.run(refresh,check=True)
-        check(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='codex')['tokens']==220, 'separately bound child thread is not counted twice')
+        child_cache = json.loads(cache.read_text())
+        check(next(r for r in child_cache['by'] if r['harness']=='codex')['tokens']==220, 'separately bound child thread is not counted twice')
+        check([s['status'] for s in child_cache['sessions'] if s['harness']=='codex']==['active'],
+              'active and archived sibling rollout bindings expose one session')
         unknown_rows = copy.deepcopy(codex_rows); unknown_rows[1]['payload']['model'] = 'unpriced-model'
         write_lines(codex_path.parent/'rollout-child.jsonl',unknown_rows)
         subprocess.run(refresh,check=True)
