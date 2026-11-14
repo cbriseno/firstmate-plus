@@ -3327,6 +3327,28 @@ spawn_deferred_tick() {
   return 0
 }
 
+# Cheap disk probe only; the dispatched worker owns du and cleanup.
+cleanup_tick() {
+  local now total free floor reason last marker
+  [ -f "${FM_DATA_OVERRIDE:-$FM_HOME/data}/backlog.md" ] || return 0
+  now=$(date +%s)
+  [ "$((now - ${CLEANUP_PROBED_AT:-0}))" -ge 60 ] || return 0
+  CLEANUP_PROBED_AT=$now
+  [ -f "$STATE/.cleanup-weekly" ] || printf '%s\n' "$now" > "$STATE/.cleanup-weekly" || return 1
+  read -r total free < <(df -Pk "$FM_HOME" 2>/dev/null | awk 'NR==2{print $2, $4}')
+  [[ "$total" =~ ^[0-9]+$ && "$free" =~ ^[0-9]+$ ]] || return 0
+  floor=$(awk '$1=="min-disk-gb" && $2+0>5 {print $2}' "$CONFIG/lane-capacity" 2>/dev/null)
+  reason=$(awk -v t="$total" -v f="$free" -v g="${floor:-5}" 'BEGIN{if(f<t*.15 || f<g*3*1048576) print "low-disk"; else print "weekly"}')
+  marker="$STATE/.cleanup-$reason"
+  last=$(cat "$marker" 2>/dev/null || true)
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  [ "$((now - last))" -ge "$([ "$reason" = low-disk ] && echo 3600 || echo 604800)" ] || return 0
+  reason="check: disk cleanup ($reason): $free KiB free of $total; dispatch a cleanup worker to run fm-cleanup.sh --dry-run then --apply for safe candidates; report other disk use to the user"
+  fm_wake_append check disk-cleanup "$reason" || return 1
+  printf '%s\n' "$now" > "$marker" || return 1
+  wake "$reason"
+}
+
 # Surface a dated future hold once after its date, including across watcher restarts.
 future_hold_tick() {
   local rows id until marker reason data=${FM_DATA_OVERRIDE:-$FM_HOME/data}
@@ -3712,6 +3734,8 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  cleanup_tick || exit 1
 
   login_expiry_tick
 
