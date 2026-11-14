@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
 """refresh TASK_DIR writes usage.json from sessions.jsonl; unchanged source sizes
 reuse the cache. Watcher slow checks, Claude turn ends and teardown refresh; snapshots only aggregate
-cached files. Claude's final cost-state supersedes message estimates (otherwise
-estimated=true); Codex includes all rollouts sharing session_meta.session_id.
+cached files. Claude closing totals identify incomplete message data; Codex
+includes all rollouts sharing session_meta.session_id.
 Missing sessions/prices stay unknown. USD is API list-price equivalent, not a bill.
-Prices below: USD/million input, cached input, output, cache writes 5m/1h.
-Verified 2026-11-09, standard short-context rates:
-https://platform.claude.com/docs/en/about-claude/pricing
-https://developers.openai.com/api/docs/pricing
+Pricing is a pinned API list-price estimate, not a bill. The versioned price file
+is fm_task_prices.json; retain old snapshots in usage.json. FM_PRICE_MAX_AGE_DAYS
+sets the stale warning threshold (default 30 days). Standard API pricing is
+assumed; other service tiers and undisclosed cache retention are unknown.
 """
 from collections import Counter
+from datetime import date
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import tempfile
 
-PRICES = {
-    'claude-fable-5-1': (10, .25, 50, 12.5, 20),
-    'claude-opus-5-5': (4, .2, 20, 5, 8),
-    'claude-sonnet-5-5': (2, .1, 10, 2.5, 4),
-    'claude-haiku-5-5': (.1, .01, .5, .125, .2),
-    'gpt-6.1-sol': (2, .1, 10), 'gpt-6.1-terra': (1, .05, 5),
-    'gpt-6-luna': (.1, .01, .5), 'gpt-6-astra': (10, 1, 50),
-}
+PRICE_FILE = Path(__file__).with_name('fm_task_prices.json')
+CATEGORIES = ('input', 'cache_read', 'output', 'cache_write_5m', 'cache_write_1h')
+
+
+def pricing_warning(pricing):
+    try:
+        limit = max(0, int(os.environ.get('FM_PRICE_MAX_AGE_DAYS', '30')))
+        return (date.today() - date.fromisoformat(pricing['verified'])).days > limit
+    except (ValueError, KeyError, TypeError):
+        return True
 
 
 def read(path, default=None):
@@ -56,6 +60,8 @@ def read_usage(path):
                (isinstance(value[k], float) and not math.isfinite(value[k])) or value[k] < 0
                for k in ('usd', 'tokens', 'output_tokens', 'sessions')):
             return {}
+    if isinstance(usage.get('pricing'), dict):
+        usage['pricing_stale'] = pricing_warning(usage['pricing'])
     return usage
 
 
@@ -71,19 +77,35 @@ def records(path):
 def bucket(rows, harness, model, effort):
     key = (harness, model, effort)
     return rows.setdefault(key, dict(harness=harness, model=model, effort=effort,
-        usd=0., tokens=0, output_tokens=0, sessions=0, usd_known=True))
+        usd=0., tokens=0, output_tokens=0, sessions=0, usd_known=True, breakdown=[], price_unknown=[]))
 
 
-def charge(row, amounts, multiplier=1):
-    prices = PRICES.get(row['model'])
+def charge(row, amounts, pricing, tier='standard', multipliers=None):
+    rates = pricing.get('models', {}).get(row['model'])
+    if not isinstance(rates, list) or len(rates) < len(amounts):
+        rates = None
     row['tokens'] += sum(amounts)
     row['output_tokens'] += amounts[2]
-    row['usd_known'] &= prices is not None
-    row['usd'] += sum(a * p * multiplier for a, p in zip(amounts, prices or ())) / 1e6
+    row['usd_known'] &= rates is not None
+    if rates is None and 'missing-price' not in row['price_unknown']:
+        row['price_unknown'].append('missing-price')
+    factors = multipliers or [1] * len(amounts)
+    if rates is not None:
+        rates = [p * f for p, f in zip(rates, factors)]
+    entry = next((x for x in row['breakdown'] if x['tier'] == tier), None)
+    if entry is None:
+        entry = dict(tier=tier, tokens=dict.fromkeys(CATEGORIES, 0), rates_per_million=dict(zip(CATEGORIES, rates or [])), usd=0.)
+        row['breakdown'].append(entry)
+    for name, amount in zip(CATEGORIES, amounts):
+        entry['tokens'][name] += amount
+    if rates is not None:
+        cost = sum(a * p for a, p in zip(amounts, rates)) / 1e6
+        row['usd'] += cost
+        entry['usd'] += cost
 
 
-def claude(paths, session):
-    rows, seen, efforts, final = {}, set(), {}, None
+def claude(paths, session, pricing):
+    rows, seen, final = {}, set(), None
     for path in paths:
         effort = session.get('effort')
         for event in records(path):
@@ -101,28 +123,26 @@ def claude(paths, session):
                 if path == paths[0]:
                     final = None  # A resumed session has outgrown its closing total.
                 model = message.get('model') or session.get('model')
-                efforts[model] = effort
                 creation = usage.get('cache_creation') or {}
                 w1 = creation.get('ephemeral_1h_input_tokens', 0)
                 amounts = [usage.get('input_tokens', 0), usage.get('cache_read_input_tokens', 0),
                     usage.get('output_tokens', 0), creation.get('ephemeral_5m_input_tokens', usage.get('cache_creation_input_tokens', 0) - w1), w1]
-                charge(bucket(rows, 'claude', model, effort), amounts,
-                       5 if model == 'claude-haiku-5-5' and sum(amounts) - amounts[2] > 100000 else 1)
+                long = model == 'claude-haiku-5-5' and sum(amounts) - amounts[2] > 100000
+                charge(bucket(rows, 'claude', model, effort), amounts, pricing,
+                       'prompt > 100000' if long else 'standard', [5] * 5 if long else None)
+    # Closing summaries may contain usage without per-request tier or cache TTL.
+    # Do not invent a reproducible allocation from their costUSD.
+    incomplete = bool(final and final.get('hasUnknownModelCost'))
     if final:
         for model, usage in final.get('modelUsage', {}).items():
             matches = [r for r in rows.values() if r['model'] == model]
-            row = bucket(rows, 'claude', model, efforts.get(model, session.get('effort')))
-            # Keep observed effort splits; assign closing/background differences
-            # to the last observed effort for that model.
-            row['usd'] += usage['costUSD'] - sum(r['usd'] for r in matches)
-            row['output_tokens'] += usage['outputTokens'] - sum(r['output_tokens'] for r in matches)
-            row['tokens'] += sum(usage.get(k, 0) for k in ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens')) - sum(r['tokens'] for r in matches)
-            for row in [r for r in rows.values() if r['model'] == model]:
-                row['usd_known'] = True
-    return list(rows.values()), final is None, bool(final and final.get('hasUnknownModelCost'))
+            recorded = sum(usage.get(k, 0) for k in ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+            if recorded != sum(r['tokens'] for r in matches):
+                incomplete = True
+    return list(rows.values()), True, incomplete
 
 
-def codex(paths, session):
+def codex(paths, session, pricing):
     rows = {}
     for path in paths:
         model, effort = session.get('model'), session.get('effort')
@@ -134,8 +154,16 @@ def codex(paths, session):
             elif event.get('type') == 'token_usage_record':
                 usage = payload.get('usage') or {}
                 cached = usage.get('cached_input_tokens', 0)
-                charge(bucket(rows, 'codex', model, effort),
-                       [usage.get('input_tokens', 0) - cached, cached, usage.get('output_tokens', 0)])
+                writes = usage.get('cache_write_input_tokens', 0)
+                inputs = usage.get('input_tokens', 0)
+                row = bucket(rows, 'codex', model, effort)
+                long = inputs > 272000
+                charge(row, [inputs - cached, cached, usage.get('output_tokens', 0)], pricing,
+                       'prompt > 272000' if long else 'standard', [2, 2, 1.5] if long else None)
+                if writes:  # Retention and overlap with input are not identified.
+                    row['usd_known'] = False
+                    if 'cache-write-retention-unknown' not in row['price_unknown']:
+                        row['price_unknown'].append('cache-write-retention-unknown')
     return list(rows.values()), False, False
 
 
@@ -178,15 +206,18 @@ def refresh(folder):
     sizes = {str(p): p.stat().st_size if p.exists() else None
              for p in [source] + [p for _, paths in inputs for p in paths]}
     target = folder / 'usage.json'
-    if read_usage(target).get('sizes') == sizes:
+    previous = read_usage(target)
+    if (previous.get('sizes') == sizes and previous.get('pricing') and
+            read(target, {}).get('pricing_stale') == pricing_warning(previous['pricing'])):
         return
+    pricing = previous.get('pricing') or read(PRICE_FILE, {})
     rows, estimated = {}, False
     for session, paths in inputs:
         if not paths or any(sizes[str(p)] is None for p in paths):
             if paths:
                 unknown.append('missing-session')
             continue
-        values, estimate, incomplete = (claude if session['harness'] == 'claude' else codex)(paths, session)
+        values, estimate, incomplete = (claude if session['harness'] == 'claude' else codex)(paths, session, pricing)
         estimated |= estimate
         if incomplete or not values:
             unknown.append('incomplete-usage')
@@ -196,7 +227,15 @@ def refresh(folder):
                 row[field] += value[field]
             row['sessions'] += 1
             row['usd_known'] &= value['usd_known']
-    result = dict(by=list(rows.values()), unknown=unknown, estimated=estimated, sizes=sizes)
+            row['price_unknown'].extend(x for x in value.get('price_unknown', []) if x not in row['price_unknown'])
+            row['breakdown'].extend(value['breakdown'])
+    result = dict(by=list(rows.values()), unknown=unknown, estimated=estimated, sizes=sizes,
+                  pricing=pricing, pricing_stale=pricing_warning(pricing),
+                  usd_basis='estimación a precio de lista')
+    if previous and not previous.get('pricing'):
+        result['previous_unversioned'] = {k: previous.get(k) for k in ('by', 'unknown', 'estimated')}
+    elif previous.get('previous_unversioned'):
+        result['previous_unversioned'] = previous['previous_unversioned']
     with tempfile.NamedTemporaryFile(mode='w', dir=folder, delete=False) as stream:
         json.dump(result, stream)
     Path(stream.name).replace(target)
@@ -205,11 +244,14 @@ def refresh(folder):
 
 
 def aggregate(data, tasks, backlog, usages=None):
-    rows, counts, unknown = {}, Counter(), []
+    rows, counts, unknown, prices = {}, Counter(), [], []
     for task in tasks:
         task_id = task['key'][5:]
         usage = usages.get(task_id, {}) if usages is not None else read_usage(Path(data) / task_id / 'usage.json')
         values = usage.get('by', [])
+        pricing = usage.get('pricing')
+        if values:
+            prices.append(dict(task=task_id, pricing=pricing, stale=pricing_warning(pricing) if pricing else None))
         reason = next(iter(usage.get('unknown') or []), None)
         state = ('no_agent' if backlog[task_id].get('kind') == 'captain' else 'not_started'
                  if task['backlog_state'] == 'queued' else 'unknown') if not values else (
@@ -222,11 +264,15 @@ def aggregate(data, tasks, backlog, usages=None):
             for field in ('usd', 'tokens', 'output_tokens', 'sessions'):
                 row[field] += value[field]
             row['usd_known'] &= value['usd_known']
+            row['price_unknown'].extend(x for x in value.get('price_unknown', []) if x not in row['price_unknown'])
+            row['breakdown'].extend(dict(part, pricing_version=pricing.get('version') if pricing else None, task=task_id)
+                                    for part in value.get('breakdown', []))
     values = sorted(rows.values(), key=lambda r: -r['usd'])
     result = dict(usd=round(sum(r['usd'] for r in values), 2), usd_basis='api-list-price',
         usd_complete=not unknown and all(r['usd_known'] for r in values),
         tokens=sum(r['tokens'] for r in values), output_tokens=sum(r['output_tokens'] for r in values),
-        tasks=dict(counts), by=values, unknown=unknown, excludes=['coordinator'])
+        tasks=dict(counts), by=values, unknown=unknown, excludes=['coordinator'],
+        pricing=prices, price_label='estimación a precio de lista')
     for row in values:
         row['usd'] = round(row['usd'], 2)
     return result

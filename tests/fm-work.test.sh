@@ -144,7 +144,44 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         cache = folder/'usage.json'
         measured = json.loads(cache.read_text())
         haiku = next(r for r in measured['by'] if r['harness']=='claude')
+        check(measured.get('pricing', {}).get('version') and all('breakdown' in r for r in measured['by']), 'usage records versioned rates and token breakdown')
         check(haiku['tokens']==100003 and abs(haiku['usd']-.0500055)<1e-9 and measured['estimated'], 'deduplication and Haiku long-prompt estimate')
+        codex = next(r for r in measured['by'] if r['harness']=='codex')
+        part = codex['breakdown'][0]
+        check(part['tokens']['input']==20 and part['tokens']['cache_read']==80 and part['tokens']['output']==10
+              and abs(codex['usd']-.000148)<1e-10, 'cached input is not priced twice')
+        long_folder=uh/'data/long'; long_folder.mkdir()
+        long_path=uh/'long.jsonl'
+        long_rows=copy.deepcopy(codex_rows); long_rows[0]['payload']['session_id']='long-unique'; long_rows[-1]['payload']['usage'].update(input_tokens=272001,cached_input_tokens=1,output_tokens=10)
+        write_lines(long_path,long_rows)
+        write_lines(long_folder/'sessions.jsonl',[dict(harness='codex',session=str(long_path),effort='high')])
+        subprocess.run(['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(long_folder)],check=True)
+        long_row=json.loads((long_folder/'usage.json').read_text())['by'][0]
+        check(long_row['breakdown'][0]['tier']=='prompt > 272000' and abs(long_row['usd']-(272000*4+1*.2+10*15)/1e6)<1e-10,
+              'Codex long-prompt prices use the per-request tier')
+        check(measured['pricing']['currency']=='USD' and measured['pricing']['sources']['codex'].startswith('https://')
+              and measured['pricing']['verified'] and measured['usd_basis']=='estimación a precio de lista', 'price provenance and label')
+        # Exercise both Claude cache-write TTLs through the real refresh interface.
+        cache_fixture = uh/'cache-ttl.jsonl'
+        write_lines(cache_fixture,[dict(type='assistant',message=dict(id='ttl',model='claude-opus-5-5',
+            usage=dict(input_tokens=10,cache_read_input_tokens=20,output_tokens=30,
+                       cache_creation=dict(ephemeral_5m_input_tokens=40,ephemeral_1h_input_tokens=50))))])
+        ttl_folder = uh/'data/ttl'; ttl_folder.mkdir()
+        write_lines(ttl_folder/'sessions.jsonl',[dict(harness='claude',session=str(cache_fixture),effort='high')])
+        subprocess.run(['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(ttl_folder)],check=True)
+        ttl = json.loads((ttl_folder/'usage.json').read_text())
+        detail = ttl['by'][0]['breakdown'][0]
+        check(detail['tokens']['cache_write_5m']==40 and detail['tokens']['cache_write_1h']==50
+              and abs(ttl['by'][0]['usd']-(10*4+20*.2+30*20+40*5+50*8)/1e6)<1e-10,
+              'Claude cache TTLs are priced separately')
+        saved_rates=ttl['pricing']; saved_rates['version']='frozen-fixture'; saved_rates['verified']='2000-01-01'; saved_rates['models']['claude-opus-5-5'][0]=40
+        (ttl_folder/'usage.json').write_text(json.dumps(ttl))
+        with cache_fixture.open('a') as stream: stream.write('\n')
+        subprocess.run(['python3','-B',str(root/'bin/fm_task_usage.py'),'refresh',str(ttl_folder)],check=True)
+        pinned=json.loads((ttl_folder/'usage.json').read_text())
+        check(pinned['pricing']['version']=='frozen-fixture' and pinned['by'][0]['breakdown'][0]['rates_per_million']['input']==40,
+              'refresh retains the price snapshot originally used')
+        check(pinned['pricing_stale'] and pinned['by'][0]['usd_known'], 'old prices warn without blocking the estimate')
         stamp = cache.stat().st_mtime_ns
         subprocess.run(refresh,check=True)
         check(cache.stat().st_mtime_ns==stamp, 'unchanged sizes preserve cache')
@@ -154,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         with claude_path.open('a') as stream:
             stream.write(json.dumps(dict(type='cost-state',modelUsage={'claude-haiku-5-5':dict(costUSD=.77,inputTokens=100001,outputTokens=2)}))+'\n')
         subprocess.run(refresh,check=True)
-        check(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='claude')['usd']==.77 and not json.loads(cache.read_text())['estimated'], 'closing cost-state supersedes estimate')
+        check(abs(next(r for r in json.loads(cache.read_text())['by'] if r['harness']=='claude')['usd']-.0500055)<1e-9 and json.loads(cache.read_text())['estimated'], 'closing cost-state does not replace reproducible list-price estimate')
         with (folder/'sessions.jsonl').open('a') as stream:
             stream.write(json.dumps(dict(harness='codex',model=None,effort='high',session=str(codex_path.parent/'rollout-child.jsonl')))+'\n')
         subprocess.run(refresh,check=True)
