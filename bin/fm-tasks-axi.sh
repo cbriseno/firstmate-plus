@@ -352,6 +352,10 @@
 # created={value,precision,source} projects a valid original instant or
 # receipt, otherwise the unchanged backlog date/unknown. Group priority/pause
 # metadata first materialized for an existing project is not a creation event.
+# Task updated and request updated_at track meaningful work, excluding usage,
+# activity and liveness telemetry. Task observed tracks event observation time
+# separately. Equal request timestamps sort by key. Bootstrap recovers these
+# dates from the existing ledger; replay never moves them backwards.
 # Request snapshots expose updated_at and default to recent activity; --order manual
 # is the work order: placed requests keep structure.order, unplaced ones enter by
 # priority, sigue follows it, and yields names the running task lowest in it that

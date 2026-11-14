@@ -312,3 +312,94 @@ echo '{"lanes":{"count":0},"cap":{"target":3,"status":"ok"},"verdict":{"reasons"
     assert snapshot['crew']['agents_cap'] == 3
 print('ok - 730-task snapshot overlaps observation and capacity without losing either')
 PY
+
+# Recency is meaningful work time; usage and liveness still refresh independently.
+python3 - <<'PY'
+import copy, json, os, pathlib, subprocess, sys, tempfile, time
+root = pathlib.Path(os.environ['ROOT'])
+sys.path.insert(0, str(root / 'bin'))
+from fm_work_projection import Projection
+with tempfile.TemporaryDirectory(prefix='fm-work-recency-') as directory:
+    home = pathlib.Path(directory)
+    for part in ('data', 'state', 'config'): (home / part).mkdir()
+    (home / '.tasks.toml').write_text('backend="markdown"\n[markdown]\npath="data/backlog.md"\n')
+    (home / 'data/backlog.md').write_text('## In flight\n\n## Queued\n' + ''.join(
+        f'- [ ] {i} - Task {i} (repo: sample) (since 2026-01-01)\n' for i in ('c', 'b', 'a')) + '\n## Done\n')
+    (home / 'config/fleet-ledger').touch()
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'TASKS_AXI_'))}
+    env.update(FM_HOME=str(home), FM_LIVE='0')
+    def cli(*args):
+        return json.loads(subprocess.check_output(['bash', str(root / 'bin/fm-tasks-axi.sh'), *args], env=env, text=True))
+    for task in ('a', 'b', 'c'):
+        source = home / 'declaration.json'
+        source.write_text(json.dumps(dict(request=dict(id=task, label=task, project='sample'))))
+        result = cli('presentation', task, '--presentation-file', str(source))
+        assert result['ok'] and result['state'] == 'published', result
+    base = cli('work', 'bootstrap')
+    model = Projection(base)
+    model.request_sort = 'recent'
+    def task_rows(): return {t['key']:t for t in model.value['tasks']}
+    def recent(): return [r['id'] for r in model.value['requests']]
+    def replay(event):
+        assert model.apply(event), event
+        with (home / 'state/fleet-ledger.jsonl').open('a') as stream:
+            stream.write(json.dumps(dict(event, home=str(home))) + '\n')
+        if event['event'] == 'task.status':
+            with (home / 'state' / (event['task'] + '.status')).open('a') as stream:
+                stream.write(f"{event['state']} [at={event['declared_at']}]: {event['text']}\n")
+    stamp = int(time.time()) + 1000
+    # Same meaningful date for all three requests, opposite row insertion order.
+    for task in ('c', 'b', 'a'):
+        value = copy.deepcopy(base['presentations'][task])
+        replay(dict(event='task.presentation', task=task, ts=stamp, value=value))
+    assert recent() == ['a', 'b', 'c'], recent()
+    before = {k:v['updated'] for k,v in task_rows().items()}
+    for index, task in enumerate(('c', 'b', 'a')):
+        usage = dict(by=[dict(harness='codex', model='fixture', effort='high', usd=index+1,
+                             tokens=(index+1)*100, output_tokens=10, sessions=1, usd_known=True)])
+        replay(dict(event='task.usage', task=task, ts=stamp+10+index, value=usage))
+        assert model.facts['usage'][task] == usage
+        assert next(r for r in model.value['requests'] if r['id'] == task)['usage']['tokens'] == (index+1)*100
+    for index, state in enumerate(('alive', 'dead', 'alive')):
+        value = dict(state=state, source='worker.process', verdict='fixture')
+        replay(dict(event='agent.liveness', task='c', ts=stamp+20+index, value=value))
+        assert task_rows()['task:c']['worker_liveness'] is None  # queued, presence is not running
+        assert model.workers['c']['state'] == state
+    replay(dict(event='agent.activity', task='c', ts=stamp+30,
+                value=dict(gen='g', seq=1, state='idle', native_activity=dict(state='idle'))))
+    replay(dict(event='agent.retired', task='c', ts=stamp+31, value=dict(gen='g')))
+    assert recent() == ['a', 'b', 'c'], recent()
+    assert {k:v['updated'] for k,v in task_rows().items()} == before
+    assert task_rows()['task:c']['observed']['value'] > before['task:c']['value']
+    # Substantive edit and new delivery move the request, with their event reason.
+    row = copy.deepcopy(base['rows']['c']); row['title'] = 'Changed task'
+    replay(dict(event='task.changed', task='c', ts=stamp+40, value=dict(task=row)))
+    assert recent()[0] == 'c' and task_rows()['task:c']['title'] == 'Changed task'
+    assert task_rows()['task:c']['updated']['source'] == 'fleet.entity:task.changed'
+    value = copy.deepcopy(base['presentations']['b'])
+    value['presentation']['summary'] = 'New result'
+    replay(dict(event='task.presentation', task='b', ts=stamp+50, value=value))
+    assert recent() == ['b', 'c', 'a'], recent()
+    # Delayed telemetry and older substantive events cannot masquerade as a new delivery.
+    replay(dict(event='task.usage', task='a', ts=stamp+500, value={}))
+    replay(dict(event='task.usage', task='b', ts=stamp+1, value={}))
+    replay(dict(event='task.review', task='b', ts=stamp+2, value=value))
+    assert recent() == ['b', 'c', 'a'], recent()
+    expected = {k:v['updated'] for k,v in task_rows().items()}
+    recovered = cli('work', 'bootstrap')
+    assert {t['key']:t['updated'] for t in recovered['snapshot']['tasks']} == expected
+    restored = Projection(recovered)
+    assert {t['key']:t['updated'] for t in restored.value['tasks']} == expected
+    # Date of a status is its original declaration, never its late capture time.
+    replay(dict(event='task.status', task='a', ts=stamp+900, declared_at=stamp-1,
+                state='working', text='Earlier work'))
+    assert recent() == ['b', 'c', 'a'], recent()
+    replay(dict(event='task.status', task='a', ts=stamp+901, declared_at=stamp+60,
+                state='needs-decision', text='New decision'))
+    assert recent() == ['a', 'b', 'c'], recent()
+    recovered = cli('work', 'bootstrap')['snapshot']
+    for row in recovered['tasks']:
+        assert row['updated'] == task_rows()[row['key']]['updated']
+        assert row['observed'] == task_rows()[row['key']]['observed']
+print('ok - meaningful recency, three usage events, liveness, stable ties, late telemetry, delivery, decision and bootstrap recovery')
+PY

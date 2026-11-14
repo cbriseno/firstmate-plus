@@ -683,8 +683,9 @@ class Owner:
             hold_stamp = re.search(r'^Captain hold set:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
             hold_set = hold_stamp[1] if hold_stamp else None
             stamps = control_times + [time_value(evidence.get('observed_at'), 'presentation'), time_value(hold_set, 'captain_hold'), time_value(row.get('closed'), 'backlog.closed')]
-            if facts is not None and task_id in facts.get('changed', {}):
-                stamps.append(facts['changed'][task_id])
+            changed = facts.get('changed', {}) if facts is not None else getattr(self, 'event_changed', {})
+            observed_times = facts.get('observed', {}) if facts is not None else getattr(self, 'event_observed', {})
+            stamps.append(changed.get(task_id))
             for stamp in re.findall(r'\[at=(\d+)\]', self.status[task_id]):
                 try:
                     stamps.append(time_value(dt.datetime.fromtimestamp(int(stamp), dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'status'))
@@ -725,6 +726,7 @@ class Owner:
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],
                 closure=p.get('closure'), delivery_available=False if p.get('closure') else None, request=p.get('request'), outcome=None if p.get('closure') else p.get('outcome'), outcome_occurrence=authored.get('outcome_occurrence'),
                 created=(facts['created'].get(task_id) if facts is not None else task_creation(self.data, row)) or time_value(row.get('created'), 'backlog.created'), updated=latest(stamps),
+                observed=latest(stamps + [observed_times.get(task_id)]),
                 completed=time_value(receipt['value'], 'completion') if receipt else time_value(row.get('closed'), 'backlog.closed') if row['state'] == 'done' else None,
                 rev=self.rev))
         requests = {}

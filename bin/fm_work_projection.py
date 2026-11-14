@@ -12,10 +12,18 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from fm_work import Owner, digest, time_value, read_text, fresh_run_step, start_work_observation, work_observation
+from fm_work import Owner, digest, time_value, latest, read_text, fresh_run_step, start_work_observation, work_observation
 import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
 from fm_task_usage import read_usage
+
+
+TELEMETRY_EVENTS = frozenset(('task.usage', 'agent.activity', 'agent.retired', 'agent.liveness'))
+
+
+def event_time(event):
+    return time_value(dt.datetime.fromtimestamp(event['ts'], dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                      'fleet.entity:' + event['event'])
 
 
 def position(home):
@@ -36,6 +44,7 @@ def bootstrap(owner, observation=None):
     except subprocess.TimeoutExpired:
         crew = dict(agents_running=None, agents_cap=None, reason='unconfirmed')
     launches, workers, roles = {}, {}, {}
+    owner.event_changed, owner.event_observed = {}, {}
     enabled = (owner.home / 'config/fleet-ledger').exists()
     if enabled and owner.ledger_start[2]:
         with (owner.home / 'state/fleet-ledger.jsonl').open('rb') as stream:
@@ -44,6 +53,14 @@ def bootstrap(owner, observation=None):
                 if event.get('home', str(owner.home)) != str(owner.home):
                     continue
                 task, name = event.get('task'), event.get('event')
+                if task in owner.rows and (name in TELEMETRY_EVENTS or name in (
+                        'task.changed', 'task.presentation', 'task.review', 'task.completion',
+                        'task.dispatched', 'task.cleaned_up', 'call.opened', 'call.resolved', 'call.application',
+                        'work.structure', 'work.control', 'work.aliases', 'task.status')):
+                    stamp = event_time(event)
+                    owner.event_observed[task] = latest([owner.event_observed.get(task), stamp])
+                    if name != 'task.status' and name not in TELEMETRY_EVENTS:
+                        owner.event_changed[task] = latest([owner.event_changed.get(task), stamp])
                 if name == 'task.dispatched':
                     launches.setdefault(task, True)
                     roles[task] = event.get('kind')
@@ -67,7 +84,8 @@ def bootstrap(owner, observation=None):
     facts = dict(calls={t['key'][5:]: t['question']['call'] for t in snapshot['tasks']},
         receipts={i: completion_receipt(owner.home, r) for i,r in owner.rows.items()},
         created={t['key'][5:]: t['created'] for t in snapshot['tasks']},
-        usage={i: read_usage(owner.data / i / 'usage.json') for i in owner.rows})
+        usage={i: read_usage(owner.data / i / 'usage.json') for i in owner.rows},
+        changed=owner.event_changed, observed=owner.event_observed)
     activity = {}
     for task, row in owner.rows.items():
         if row['state'] != 'in_flight':
@@ -126,7 +144,8 @@ class Projection(Owner):
             call=dict(call=t['question']['call'], hold_set=t['question']['asked']['value']), state='open')
             for t in base['snapshot']['tasks'] if t['question']['open'] and t['question']['call']}
         self.rev = base['snapshot']['rev']
-        self.facts['changed'] = {}
+        self.facts.setdefault('changed', {})
+        self.facts.setdefault('observed', {})
 
     @property
     def value(self):
@@ -269,8 +288,11 @@ class Projection(Owner):
             if value.get('answer'):
                 self.captain_answers[task] = value['answer']
                 affected.add(value['answer']['origin'])
-        if task in self.rows and name != 'task.status':
-            self.facts['changed'][task] = time_value(dt.datetime.fromtimestamp(event['ts'], dt.timezone.utc).isoformat(), 'fleet.entity')
+        if task in self.rows:
+            stamp = event_time(event)
+            self.facts['observed'][task] = latest([self.facts['observed'].get(task), stamp])
+            if name != 'task.status' and name not in TELEMETRY_EVENTS:
+                self.facts['changed'][task] = latest([self.facts['changed'].get(task), stamp])
         self.answers_by_origin = {}
         for answer in self.captain_answers.values():
             self.answers_by_origin.setdefault(answer['origin'], []).append(answer)
