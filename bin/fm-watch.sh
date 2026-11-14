@@ -2882,13 +2882,44 @@ procevent_surface_after_output() {
 }
 
 procevent_surface_queued() {
-  local key reason captured="" stranded="" unstarted="" unattended=""
+  local key reason captured="" stranded="" unstarted="" unattended="" marker id seq result adapter line
   PROCEVENT_SURFACED=
+  # Task-owned results need the same backstop even when they never had a
+  # primary wake. Use the existing queue and seen marker for deduplication.
+  while IFS= read -r result; do
+    [ "$(age_of "$result")" -ge 300 ] || continue
+    id=$(fm_procevent_result_source_id "$result")
+    seq=$(fm_procevent_result_sequence "$result")
+    fm_procevent_source_id_valid "$id" || continue
+    adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+    line=$(fm_procevent_event_line "$adapter" "$id" "$seq") || continue
+    key="procevent:$id:$seq"
+    marker=$(procevent_surfaced_marker "$key")
+    [ ! -e "$marker" ] || [ "$(age_of "$marker")" -ge 300 ] || continue
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+    if [ ! -e "${result%.result}.handled" ] \
+      && ! fm_wake_queued_keys_locked check | grep -Fxq -- "$key"; then
+      fm_wake_append_locked check "$key" "check: $line" || true
+    fi
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  done < <(fm_procevent_pending "$STATE")
   [ -s "$FM_WAKE_QUEUE" ] || return 0
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
   while IFS= read -r key; do
     case "$key" in procevent:*) ;; *) continue ;; esac
-    [ -e "$(procevent_surfaced_marker "$key")" ] && continue
+    marker=$(procevent_surfaced_marker "$key")
+    if [ -e "$marker" ]; then
+      # A delivered wake is not proof that its result was handled. Retry only
+      # actual pending results, at most once per five minutes per result.
+      id=${key#procevent:}
+      seq=${id##*:}
+      id=${id%:*}
+      case "$seq" in ''|*[!0-9]*) continue ;; esac
+      fm_procevent_source_id_valid "$id" || continue
+      result="$STATE/procevent-inbox/$id.$seq.result"
+      [ -f "$result" ] && [ ! -e "${result%.result}.handled" ] || continue
+      [ "$(age_of "$marker")" -ge 300 ] || continue
+    fi
     PROCEVENT_SURFACED="$PROCEVENT_SURFACED $key"
     # A stranded source or one whose launch never proved itself is the opposite
     # of a captured result: nothing is collecting for it. Headlining either as

@@ -979,6 +979,14 @@ if fm_pf_relay_active "$FM_HOME" \
   fi
 fi
 
+# Pending board feedback is durable independently of a session or relay.
+PENDING_LAVISH=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" pending-lavish) || PENDING_LAVISH=
+if [ -n "$PENDING_LAVISH" ]; then
+  subsection "Unhandled board results"
+  printf '%s\n' "$PENDING_LAVISH"
+  printf 'Read each result with bin/fm-procevent-lavish.sh read; check its owner and handle it before acknowledging it.\n'
+fi
+
 # --- 7. network checks ------------------------------------------------------
 # Deliberately here and not later: these lines are actionable (a stuck clone, a
 # secondmate that could not be relaunched, broken GitHub auth), and the section

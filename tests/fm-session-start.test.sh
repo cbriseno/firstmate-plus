@@ -1054,6 +1054,26 @@ EOF
   pass "digest sections are ordered safety-preamble first, live fleet state before curated memory"
 }
 
+test_pending_board_results_reach_successor_digest() {
+  local rec root home fakebin out
+  rec=$(new_world pending-board)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  mkdir -p "$home/state/procevent-inbox"
+  printf 'feedback\n' > "$home/state/procevent-inbox/board.1.result"
+  printf 'lavish\n' > "$home/state/procevent-inbox/board.1.adapter"
+  printf 'feedback\n' > "$home/state/procevent-inbox/board.2.result"
+  printf 'lavish\n' > "$home/state/procevent-inbox/board.2.adapter"
+  : > "$home/state/procevent-inbox/board.2.handled"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "$home/state/procevent-inbox/board.1.result" "digest omitted pending board"
+  assert_not_contains "$out" "$home/state/procevent-inbox/board.2.result" "digest listed handled board"
+  pass "successor digest lists only unhandled board results"
+}
+
 # The contract has to survive tail truncation and stay honest once it precedes
 # the sections it governs, so it carries the truncated-stage escape itself.
 test_read_once_contract_is_stated_once_before_its_subject() {
@@ -2602,6 +2622,8 @@ EOF
 
 
 case "${FM_SESSION_START_CASE:-}" in
+  pending-board) test_pending_board_results_reach_successor_digest; exit 0 ;;
+  context-digest) test_context_digest_absent_empty_present; exit 0 ;;
   fleet-ledger)
     test_fleet_ledger_enabled_on_locked_start
     test_lock_refusal_read_only_path
@@ -2623,6 +2645,7 @@ test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock
 test_session_lock_concurrent_single_winner
 test_output_ordering_diagnostics_lead
+test_pending_board_results_reach_successor_digest
 test_read_once_contract_is_stated_once_before_its_subject
 test_herdr_backend_diagnostics_follow_real_session_start
 test_deferred_relaunch_is_always_reported

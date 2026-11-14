@@ -11,6 +11,7 @@
 #   fm-procevent.sh ensure-listening <source-id>
 #   fm-procevent.sh reconcile
 #   fm-procevent.sh classify <result-file>
+#   fm-procevent.sh pending-lavish
 #   fm-procevent.sh handled <source-id> <sequence>
 #   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
 #   fm-procevent.sh sweep-home [--preflight]
@@ -19,6 +20,9 @@
 #   fm-procevent.sh extension-bind <bind|receive-transfer-bind> <binding-arguments...>
 #   fm-procevent.sh extension-process-event <process-event-arguments...>
 #   fm-procevent.sh list
+#
+# pending-lavish lists the paths of unhandled Lavish captures, including
+# task-owned rounds, without changing their ownership or acknowledgement.
 #
 # register   Record a built-in source: its adapter, its canonical id, and the
 #            exact argv to execute. argv is stored one argument per line and
@@ -813,7 +817,7 @@ cmd_register_extension() {
 # publication, so a result stays eligible for re-announcement across restarts
 # and drains until `fm_procevent_mark_handled` records it.
 publish_result() {  # <result-file>
-  local result=$1 id seq adapter line status=1 owner_task='' message='' record=''
+  local result=$1 id seq adapter line status=1 owner_task='' closed_candidate='' message='' record=''
   local ring_backend ring_target ring_meta inbox_dir handled_dir pre_existing existing new_record
   id=$(fm_procevent_result_source_id "$result")
   seq=$(fm_procevent_result_sequence "$result")
@@ -822,8 +826,41 @@ publish_result() {  # <result-file>
   [ -n "$adapter" ] || return 1
   line=$(fm_procevent_event_line "$adapter" "$id" "$seq") || return 1
   owner_task=$(fm_procevent_result_owner_task "$result" 2>/dev/null || true)
+  closed_candidate=$owner_task
+  # Older primary-owned captures have no owner sidecar. A board under a
+  # completed task's data directory still identifies that task in its source.
+  if [ "$adapter" = lavish ] && [ -z "$owner_task" ]; then
+    closed_candidate=$(
+      read_argv "$id" || exit 0
+      [ "${#ARGV[@]}" -ge 3 ] && [ "${ARGV[1]}" = poll ] || exit 0
+      case "${ARGV[2]}" in
+        "$FM_HOME"/data/*/*) path=${ARGV[2]#"$FM_HOME"/data/}; printf '%s\n' "${path%%/*}" ;;
+      esac
+    )
+  fi
   fm_procevent_source_lock_acquire "$id" || return 1
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
+    if [ "$adapter" = lavish ] && [ -n "$closed_candidate" ] \
+      && fm_pr_task_id_valid "$closed_candidate" && [ ! -e "$STATE/$closed_candidate.meta" ] \
+      && ! adapter_result_is_silent "$adapter" "$result" \
+      && python3 - "$FM_HOME/data/$closed_candidate/completion.json" "$FM_HOME" "$closed_candidate" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        receipt = json.load(f)
+    assert receipt.get('schema') == 'fm-delivery-completion.v1'
+    assert receipt.get('home') == sys.argv[2] and receipt.get('id') == sys.argv[3]
+    assert receipt.get('valid') is True
+except (OSError, ValueError, AssertionError):
+    sys.exit(1)
+PY
+    then
+      {
+        printf 'Lavish feedback from closed task %s. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$closed_candidate" "$id" "$seq"
+        "$SCRIPT_DIR/fm-procevent-lavish.sh" read "$result"
+      } | FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-inbox.sh" note --request-id "lavish:$id:$seq" - >/dev/null || true
+      owner_task=
+    fi
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
         message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it."
@@ -900,6 +937,16 @@ EOF
   fi
   fm_procevent_source_lock_release "$id"
   return "$status"
+}
+
+# Read-only handoff inventory: capture remains pending until explicitly handled.
+cmd_pending_lavish() {
+  local result adapter
+  while IFS= read -r result; do
+    adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+    [ "$adapter" = lavish ] || continue
+    printf '%s\n' "$result"
+  done < <(fm_procevent_pending "$STATE")
 }
 
 publish_pending() {  # [result-file-to-skip]
@@ -2589,6 +2636,7 @@ case "${1-}" in
   reconcile)          shift; cmd_reconcile_bounded "$@" ;;
   _reconcile)         shift; cmd_reconcile "$@" ;;
   classify)           shift; cmd_classify "$@" ;;
+  pending-lavish)     shift; cmd_pending_lavish "$@" ;;
   handled)            shift; cmd_handled "$@" ;;
   retire)             shift; cmd_retire "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;

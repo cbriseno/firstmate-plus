@@ -246,6 +246,40 @@ assert_contains "$out" "published=0 started=0" "reconcile is a no-op with nothin
 [ -z "$(ls -A "$IDLE/state" 2>/dev/null)" ] || fail "an unconfigured home generated state: $(ls -A "$IDLE/state")"
 pass "no configured source means no generated state and no process"
 
+# A captured board round outlives its worker. Reconciliation must deliver its
+# actual words to firstmate exactly once while preserving the result until handled.
+HCLOSED="$TMP_ROOT/closed-feedback"; new_home "$HCLOSED"
+mkdir -p "$HCLOSED/state/procevent-inbox" "$HCLOSED/data/closed-worker"
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","closed board words","","message",""\n' > "$HCLOSED/state/procevent-inbox/closed-board.1.result"
+printf 'lavish\n' > "$HCLOSED/state/procevent-inbox/closed-board.1.adapter"
+printf 'closed-worker\n' > "$HCLOSED/state/procevent-inbox/closed-board.1.owner-task"
+printf '{"schema":"fm-delivery-completion.v1","home":"%s","id":"closed-worker","valid":true}\n' "$HCLOSED" > "$HCLOSED/data/closed-worker/completion.json"
+pe "$HCLOSED" reconcile >/dev/null || fail "closed board reconciliation failed"
+FM_HOME="$HCLOSED" "$ROOT/bin/fm-inbox.sh" list | grep -F 'closed board words' >/dev/null \
+  || fail "closed board words did not reach the captain inbox"
+pe "$HCLOSED" reconcile >/dev/null || fail "closed board reconciliation replay failed"
+note_count=$(find "$HCLOSED/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')
+[ "$note_count" = 1 ] || fail "closed board replay created $note_count notes"
+pe "$HCLOSED" pending-lavish | grep -F 'closed-board.1.result' >/dev/null \
+  || fail "handoff inventory omitted pending board"
+pe "$HCLOSED" handled closed-board 1 >/dev/null || fail "closed board acknowledgement failed"
+[ -z "$(pe "$HCLOSED" pending-lavish)" ] || fail "handled board remained in handoff inventory"
+pass "closed board feedback reaches firstmate once and remains visible through handoff until handled"
+
+if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
+  HALIVE="$TMP_ROOT/live-feedback"; new_home "$HALIVE"
+  mkdir -p "$HALIVE/state/procevent-inbox"
+  cp "$HCLOSED/state/procevent-inbox/closed-board.1.result" "$HALIVE/state/procevent-inbox/live-board.1.result"
+  printf 'lavish\n' > "$HALIVE/state/procevent-inbox/live-board.1.adapter"
+  printf 'live-worker\n' > "$HALIVE/state/procevent-inbox/live-board.1.owner-task"
+  new_task_endpoint "$HALIVE" live-worker
+  pe "$HALIVE" reconcile >/dev/null || fail "live owner reconciliation failed"
+  [ -f "$HALIVE/state/live-worker.inbox/001.msg" ] || fail "live owner did not receive feedback"
+  [ ! -d "$HALIVE/state/inbox" ] || fail "live owner feedback reached captain inbox"
+  pass "live owner retains its board feedback"
+  exit 0
+fi
+
 sup=$(PATH="${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" bash -c \
   '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2" && echo yes || echo no' _ "$ROOT" "$IDLE/state")
 assert_contains "$sup" no "an unconfigured home does not need supervision"

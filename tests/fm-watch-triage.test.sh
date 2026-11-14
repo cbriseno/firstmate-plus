@@ -4746,6 +4746,25 @@ test_procevent_marker_keys_are_injective() {
   pass "complete process-event queue keys map to distinct seen markers"
 }
 
+test_procevent_pending_result_reminds_after_interval() {
+  local dir state out pid marker
+  dir=$(make_case procevent-reminder); state="$dir/state"; out="$dir/watch.out"
+  mkdir -p "$state/procevent-inbox"
+  printf 'session:\n  status: feedback\n' > "$state/procevent-inbox/delivery-src.1.result"
+  printf 'lavish\n' > "$state/procevent-inbox/delivery-src.1.adapter"
+  printf 'worker-closed\n' > "$state/procevent-inbox/delivery-src.1.owner-task"
+  touch -t 202001010000 "$state/procevent-inbox/delivery-src.1.result"
+  marker="$state/.seen-procevent-$(printf '%s' 'procevent:delivery-src:1' | od -An -tx1 | tr -d ' \n')"
+  [ ! -s "$state/.wake-queue" ] || fail "reminder fixture unexpectedly has a queued wake"
+  procevent_watch_bg "$dir" "$out"; pid=$!
+  wait_for_exit "$pid" 100 || fail "old unhandled result did not wake the watcher"
+  grep -F 'process-event result captured: procevent:delivery-src:1' "$out" >/dev/null \
+    || fail "reminder did not identify the pending result: $(cat "$out")"
+  [ "$(FM_STATE_OVERRIDE="$state" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_path_age "$2"' _ "$ROOT" "$marker")" -lt 60 ] \
+    || fail "reminder did not reset its deduplication interval"
+  pass "unhandled process-event results wake again after the reminder interval"
+}
+
 # The reason line is the headline firstmate reads before the payload. Every
 # procevent:* key used to surface as "process-event result captured", which
 # presents a source that is collecting NOTHING as a healthy capture - the exact
@@ -5609,6 +5628,13 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
 fi
 
 test_due_future_hold_wakes_once
+case "${FM_WATCH_TRIAGE_CASE:-}" in
+  procevent-reminder) test_procevent_pending_result_reminds_after_interval; exit 0 ;;
+  unknown-alive) test_unknown_alive_stale_is_bounded_after_its_first_alarm; exit 0 ;;
+  '') ;;
+  *) fail 'unknown focused watch-triage case' ;;
+esac
+
 test_status_span_actionable_classifier
 test_status_span_survives_a_later_routine_append
 test_status_span_respects_decision_closure
@@ -5721,6 +5747,7 @@ test_triage_log_size_cap_accepts_spaced_wc_counts
 test_procevent_captured_result_surfaces_proactively
 test_procevent_unacknowledged_result_redrains_until_handled
 test_procevent_marker_keys_are_injective
+test_procevent_pending_result_reminds_after_interval
 test_procevent_headlines_classify_queue_keys
 test_procevent_launch_failed_episodes_are_each_delivered
 test_procevent_surface_serializes_with_drain
