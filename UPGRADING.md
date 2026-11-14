@@ -5,6 +5,12 @@ The primary checks these notes at locked session startup and after `/updatefirst
 A manual `git pull` is covered by the next session start; run `FM_HOME=/absolute/home bash bin/fm-upgrade.sh check` to check immediately.
 The command's header and help own detection, per-home records and application.
 
+## Client instructions for the next package
+
+Before reporting an error, check the installed version and the received package changelog. Do not report an already reported error whose fix was pulled; if it persists after updating, include the version, a fresh reproduction, and a link to the prior report.
+
+On each machine, the client primary reviews with the user which extensions to integrate and activate: context handoff, Lavish (record installed and compared versions), and local tools such as Diffity. Record what is installed, active, or pending and verify a small use of each selected integration. Do not assume the package activates everything or that another machine’s preferences apply.
+
 ## Manual procedure
 
 1. Read each dated entry below and compare its id with the home's applied ids.

@@ -106,5 +106,5 @@ This touches only the firstmate repo and its own worktrees, never anything under
   Its crewmates keep running in their own endpoints, and every durable record - backlog, held captain calls, unread status, unhandled instructions - is re-presented to the replacement at startup.
   A restart refused before it is attempted leaves that mate on the re-read path; once a relaunch is attempted, any failed or ambiguous result is reported as unknown rather than attributed to either incarnation.
 
-The updater also checks [upgrade notes](../../../UPGRADING.md) for this home.
+The updater also checks [upgrade notes](../../../UPGRADING.md) for this home; follow its client instructions on previously fixed reports and per-machine integrations.
 Handle `UPDATE_ACTIONS:` through [session-start recovery](../session-start-recovery/SKILL.md); secondmates check their own home at restart, and a manual pull is covered at the next locked session start.

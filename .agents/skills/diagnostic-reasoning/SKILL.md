@@ -11,7 +11,9 @@ metadata:
 
 Use this procedure before scoping a reported bug and before acting on a diagnostic report.
 This skill is the single owner of Firstmate's bug-diagnosis reasoning procedure.
-The subordinate performs this procedure and returns its result and concise evidence summary; firstmate uses that summary to scope or route work under `AGENTS.md` section 1.
+The subordinate performs this procedure and returns its result and concise evidence summary; firstmate uses that summary to scope or route work under `AGENTS.md` section 1. Before a diagnostic result, firstmate does not offer its own causal explanation; it delegates the diagnosis. Relay the result separating what is proven, hypotheses, and what remains unknown.
+
+Before reporting a recurring Firstmate error, follow the version and changelog check in [client upgrade instructions](../../../UPGRADING.md#client-instructions-for-the-next-package).
 
 ## Read the diagnostic logs first
 

@@ -679,6 +679,7 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 
 ## Firstmate spec
 {FIRSTMATE_SPEC}
+For complex work, list the independent deliverables and how they integrate in this spec before dispatch.
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
