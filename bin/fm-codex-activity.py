@@ -20,6 +20,8 @@ the bound process's open primary rollout and matching writer-lock are read;
 extra open rollouts are accepted only for its explicit native guardian children.
 The private server uses source vscode. Its notify callback forwards the original
 program and payload only for a verified idle primary, never a guardian turn.
+The ordinary CLI callback forwards only a persisted CLI thread in this workspace;
+ephemeral title-generation turns have no such rollout and cannot end the worker.
 Notifications also accept a parent-owned primary rollout on a newer runtime;
 activity classification retains its qualified version. The native executable,
 boot/start identity, workspace, CLI version, session ID,
@@ -127,7 +129,7 @@ def launch_with_skill_root(state, task, gen, workspace, command, root):
             with (Path(folder) / "server.log").open("w") as log:
                 try:
                     options = []
-                    arguments = iter(command[1:])
+                    arguments = iter(wrap_notify(state, task, gen, workspace, command, "notify")[1:])
                     for arg in arguments:
                         if arg in ("-c", "--config"):
                             value = next(arguments)
@@ -135,13 +137,7 @@ def launch_with_skill_root(state, task, gen, workspace, command, root):
                             value = arg.removeprefix("--config=")
                         else:
                             continue
-                        if value.partition("=")[0].strip() == "notify":
-                            original = decode(value.partition("=")[2])
-                            callback = [sys.executable, str(Path(__file__).resolve()), "notify", str(state), task,
-                                        gen, str(Path(workspace).resolve()), json.dumps(original)]
-                            options.extend(["-c", "notify=" + json.dumps(callback)])
-                        else:
-                            options.extend(["-c", value])
+                        options.extend(["-c", value])
                     diagnostic["phase"] = "start"
                     server = subprocess.Popen([command[0], "app-server", *options, "--listen", remote],
                                               cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
@@ -181,6 +177,47 @@ def launch_with_skill_root(state, task, gen, workspace, command, root):
                 except subprocess.TimeoutExpired:
                     server.kill()
                     server.wait()
+
+
+def wrap_notify(state, task, gen, workspace, command, mode):
+    result = [command[0]]
+    arguments = iter(command[1:])
+    for arg in arguments:
+        if arg in ("-c", "--config"):
+            value = next(arguments)
+        elif arg.startswith("--config="):
+            value = arg.removeprefix("--config=")
+        else:
+            result.append(arg)
+            continue
+        if value.partition("=")[0].strip() == "notify":
+            callback = [sys.executable, str(Path(__file__).resolve()), mode, str(state), task,
+                        gen, str(Path(workspace).resolve()), json.dumps(decode(value.partition("=")[2]))]
+            value = "notify=" + json.dumps(callback)
+        result.extend(["-c", value])
+    return result
+
+
+def cli_notify(state, task, gen, workspace, program, payload):
+    """Title generation is ephemeral; only the worker's persisted CLI can end it."""
+    try:
+        data = decode(payload)
+        session = data.get("thread-id", "")
+        if (data.get("type") != "agent-turn-complete" or not re.fullmatch(UUID, session)
+                or generation(state, task) != gen):
+            return
+        home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        paths = list((home / "sessions").glob("*/*/*/rollout-*-" + session + ".jsonl"))
+        if len(paths) != 1:
+            return
+        with paths[0].open("rb") as handle:
+            header = decode(handle.readline(LIMIT + 1))
+        meta = header["payload"]
+        if (header.get("type") == "session_meta" and meta.get("id") == session
+                and meta.get("source") == "cli" and meta.get("cwd") == workspace):
+            subprocess.run([*decode(program), payload], check=False)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        print("warning: Codex completion could not be attributed to its worker", file=sys.stderr)
 
 
 def native_notify(state, task, gen, workspace, program, payload):
@@ -224,6 +261,7 @@ def launch(state, task, gen, workspace, command):
         status = launch_with_skill_root(state, task, gen, workspace, command, root)
         if status is not None:
             raise SystemExit(status)
+    command = wrap_notify(state, task, gen, workspace, command, "notify-cli")
     if shutil.which("lsof"):
         try:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "bind-session",
@@ -455,6 +493,9 @@ def main():
         return
     if sys.argv[1:2] == ["notify"] and len(sys.argv) == 8:
         native_notify(Path(sys.argv[2]), *sys.argv[3:])
+        return
+    if sys.argv[1:2] == ["notify-cli"] and len(sys.argv) == 8:
+        cli_notify(Path(sys.argv[2]), *sys.argv[3:])
         return
     if len(sys.argv) < 4:
         raise SystemExit("usage: fm-codex-activity.py --help")

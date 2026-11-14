@@ -107,3 +107,64 @@ with rollout.open("rb"):
     assert not delivered.exists(), "old generation completion was forwarded"
 PYNOTIFY
 printf 'ok - newer native primary notification forwards; guardian and stale callbacks do not; activity stays unqualified\n'
+
+# Exercise the actual launcher and callback without relying on lsof or /proc. The captured
+# title callback has a different, ephemeral thread; a persisted guardian is also
+# auxiliary. Neither may touch the watcher marker or change its ledger record.
+cat > "$fakebin/codex" <<'PYCLI'
+#!/usr/bin/env python3
+import json, os, subprocess, sys
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.169.0")
+    raise SystemExit(0)
+args = iter(sys.argv[1:])
+for arg in args:
+    if arg in ("-c", "--config"):
+        value = next(args)
+        if value.startswith("notify="):
+            callback = json.loads(value.partition("=")[2])
+for event in json.loads(os.environ["FM_TEST_CALLBACKS"]):
+    subprocess.run([*callback, json.dumps(event)], check=True)
+PYCLI
+chmod +x "$fakebin/codex"
+PATH="$fakebin:$PATH" CODEX_HOME="$codex_home" python3 - \
+  "$ROOT/bin/fm-codex-activity.py" "$ROOT/bin/fm-busy-event.sh" "$state" "$workspace" "$rollout" "$fakebin/codex" <<'PYCLI'
+import json, os
+from pathlib import Path
+import shlex, subprocess, sys
+activity, writer, state, workspace, rollout, codex = sys.argv[1:]
+state, rollout = Path(state), Path(rollout)
+task = "notify-proof"
+gen = subprocess.check_output(["bash", writer, "arm", str(state), task], text=True).strip()
+marker = state / (task + ".turn-ended")
+record = state / (task + ".busy-state")
+program = ["bash", "-c", shlex.join(["bash", writer, "apply", str(state), task, "idle", "--gen", gen,
+                                   "--source", "codex-notify", "--event", "turn-complete", "--turn-ended"])]
+primary = json.loads(rollout.read_text().splitlines()[0])["payload"]["id"]
+# This persisted fixture deliberately uses a newer version, as notify ownership
+# is independent of the separate Linux activity classifier's version pin.
+header = {"type": "session_meta", "payload": {"id": primary, "cli_version": "0.169.0",
+          "source": "cli", "cwd": workspace}}
+rollout.write_text(json.dumps(header) + "\n")
+title = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+guardian = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+guardian_path = rollout.with_name("rollout-test-" + guardian + ".jsonl")
+guardian_path.write_text(json.dumps({"type": "session_meta", "payload": {
+    "id": guardian, "source": {"subagent": {"other": "guardian"}}, "cwd": workspace}}) + "\n")
+def emit(thread):
+    env = dict(os.environ, FM_TEST_CALLBACKS=json.dumps([{"type": "agent-turn-complete", "thread-id": thread}]))
+    subprocess.run([sys.executable, activity, "launch", str(state), task, gen, workspace, codex,
+                    "--config=notify=" + json.dumps(program), "real work"], env=env, check=True)
+for auxiliary in (title, guardian):
+    emit(auxiliary)
+    assert not marker.exists(), "auxiliary callback woke the watcher"
+    assert "state=busy" in record.read_text(), "auxiliary callback settled the worker"
+emit(primary)
+assert marker.exists(), "real worker completion did not wake the watcher"
+assert "state=idle" in record.read_text(), "real worker completion did not settle the ledger"
+marker.unlink()
+subprocess.run(["bash", writer, "arm", str(state), task], check=True, stdout=subprocess.DEVNULL)
+emit(primary)
+assert not marker.exists(), "old incarnation woke its replacement"
+PYCLI
+printf 'ok - CLI launch ignores ephemeral title and guardian callbacks; real completion wakes; stale generation stays silent\n'

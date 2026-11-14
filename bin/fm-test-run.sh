@@ -365,7 +365,7 @@ family_for_basename() {
     \
     fm-herdr-version-floor-live-e2e.test.sh|\
     \
-    fm-worker-account-live-e2e.test.sh|fm-codex-activity-live-e2e.test.sh|\
+    fm-worker-account-live-e2e.test.sh|fm-codex-activity-live-e2e.test.sh|fm-codex-title-notify-live-e2e.test.sh|\
     \
     \
     \

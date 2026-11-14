@@ -351,8 +351,13 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ## Codex worker activity
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
+Verified 2026-11-14 on Linux with `codex-cli 0.169.0` in an isolated Herdr session.
+`FM_CODEX_TITLE_NOTIFY_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-title-notify-live-e2e.test.sh` refreshes the credentialed title/worker notification proof.
+The verdict is `ok - codex-cli 0.169.0: title ignored while worker busy; real completion wakes once`.
+Codex emits an early `agent-turn-complete` for an ephemeral conversation-title thread while the worker's first turn remains open.
+The ordinary CLI callback forwards a completion only for a persisted CLI thread in the launch workspace and current generation, preserving both the watcher marker and ledger event for the real worker completion.
+The callback uses filesystem metadata on Linux and macOS, independently of the Linux activity classifier's version qualification; macOS live execution remains unverified here.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh tests/fm-busy-state.test.sh` refreshes the portable callback and existing native-server ownership regressions.
 
 ## Shared publication boundary
 
