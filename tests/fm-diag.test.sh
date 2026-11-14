@@ -93,7 +93,32 @@ test_wake_ack_records_attention_latency() {
   pass "a wake acknowledgement records each consumed row's kind and wait"
 }
 
+test_export_resalts_and_filters() {
+  local out="$TMP_ROOT/export.zip" second="$TMP_ROOT/export2.zip"
+  : > "$LOG"
+  "$DIAG" emit worker.procs task=private-task procs=3
+  printf '%s\n' '{"t":"2026-01-01T00:00:00+00:00","c":"firstmate","e":"worker.procs","task":"live-0123456789abcdef","extra":"private"}' 'bad json' >> "$LOG"
+  "$DIAG" export "$out" || fail "export failed"
+  "$DIAG" export "$second" || fail "second export failed"
+  if ! python3 - "$out" "$second" <<'PYTEST'
+import json, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as a, zipfile.ZipFile(sys.argv[2]) as b:
+    rows = [json.loads(line) for line in a.read('events.jsonl').splitlines()]
+    other = [json.loads(line) for line in b.read('events.jsonl').splitlines()]
+    manifest = json.loads(a.read('manifest.json'))
+    assert len(rows) == 2 and rows[0]['procs'] == 3
+    assert rows[0]['task'].startswith('t-') and rows[0]['task'] != other[0]['task']
+    assert 'extra' not in rows[1] and 'private-task' not in str(rows)
+    assert manifest['component'] == 'firstmate' and manifest['installed_version']
+PYTEST
+  then fail "export contents invalid"; fi
+  "$DIAG" export "$out" >/dev/null 2>&1 && fail "export replaced an existing file"
+  pass "export filters records, re-salts task ids and preserves existing files"
+}
+
 test_emit_keeps_only_schema_tokens
 test_hook_timing_keeps_exit_status
 test_worker_sample_counts_unreaped_zombies
 test_wake_ack_records_attention_latency
+
+test_export_resalts_and_filters

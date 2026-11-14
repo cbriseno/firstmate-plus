@@ -3,6 +3,7 @@
 #
 # Usage: bin/fm-diag.sh path              print the log directory
 #        bin/fm-diag.sh emit EVENT K=V...  append one event (for non-bash callers)
+#        bin/fm-diag.sh export OUTPUT.zip  export anonymized events
 #        bin/fm-diag.sh id TEXT           print the local anonymized id of TEXT
 # Sourced by bash callers for fm_diag_emit, fm_diag_hook_begin and
 # fm_diag_hook_end. Sourcing has no side effects.
@@ -201,6 +202,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     path) fm_diag_dir; printf '%s\n' "$FM_DIAG_DIR" ;;
     emit) [ "$#" -ge 2 ] || exit 2; shift; fm_diag_emit "$@" ;;
+    export) [ "$#" -eq 2 ] || exit 2; fm_diag_dir; python3 "$(dirname "${BASH_SOURCE[0]}")/fm-diag-export.py" "$FM_DIAG_DIR" "$2" ;;
     id) [ "$#" -eq 2 ] || exit 2; fm_diag_id "$2" ;;
     *) sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
