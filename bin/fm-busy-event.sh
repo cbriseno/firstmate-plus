@@ -153,19 +153,26 @@ lock_release() { rmdir "$LOCK" 2>/dev/null || true; }
 write_record() {  # <gen> <seq>
   local tmp
   tmp="$REC.tmp.$$"
+  RECORD_TS=$(date +%s)
   printf 'v1 gen=%s seq=%s state=%s source=%s event=%s ts=%s\n' \
-    "$1" "$2" "$NEW_STATE" "$SOURCE" "$EVENT" "$(date +%s)" > "$tmp" || return 1
+    "$1" "$2" "$NEW_STATE" "$SOURCE" "$EVENT" "$RECORD_TS" > "$tmp" || return 1
   mv -f "$tmp" "$REC"
 }
 
 # Publish only after this writer accepts the incarnation, under its existing lock.
 publish_activity() { # <event> <seq>
-  local home=${FM_HOME:-${STATE%/*}} config
+  local home=${FM_HOME:-${STATE%/*}} config native
   config=${FM_CONFIG_OVERRIDE:-$home/config}
   [ -e "$config/fleet-ledger" ] || return 0
+  native=$(
+    export FM_HOME="$home"
+    # shellcheck source=bin/fm-backend.sh
+    . "$SCRIPT_DIR/fm-backend.sh"
+    fm_busy_native_activity "$STATE/$ID.meta" "$ID" "$STATE"
+  ) || return 1
   jq -cn --arg gen "$GEN" --argjson seq "$2" --arg state "$NEW_STATE" \
-    --arg source "$SOURCE" --arg event "$EVENT" \
-    '{gen:$gen,seq:$seq,state:$state,source:$source,event:$event}' | \
+    --arg source "$SOURCE" --arg event "$EVENT" --argjson ts "${RECORD_TS:-$(date +%s)}" --argjson native "$native" \
+    '{gen:$gen,seq:$seq,state:$state,source:$source,event:$event,ts:$ts,native_activity:$native}' | \
     FM_HOME="$home" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$config" \
       bash "$SCRIPT_DIR/fm-fleet-ledger.sh" entity "$1" "$ID"
 }

@@ -35,7 +35,7 @@ def bootstrap(owner, observation=None):
         crew = owner.capacity()
     except subprocess.TimeoutExpired:
         crew = dict(agents_running=None, agents_cap=None, reason='unconfirmed')
-    launches, workers = {}, {}
+    launches, workers, roles = {}, {}, {}
     enabled = (owner.home / 'config/fleet-ledger').exists()
     if enabled and owner.ledger_start[2]:
         with (owner.home / 'state/fleet-ledger.jsonl').open('rb') as stream:
@@ -46,12 +46,19 @@ def bootstrap(owner, observation=None):
                 task, name = event.get('task'), event.get('event')
                 if name == 'task.dispatched':
                     launches.setdefault(task, True)
+                    roles[task] = event.get('kind')
                 elif name == 'task.cleaned_up':
                     launches[task] = False
                     workers[task] = dict(state='dead', source='events', verdict=name)
                 elif name == 'agent.liveness':
                     workers[task] = event['value']
                     launches[task] = event['value']['state'] == 'alive'
+    for task, kind in roles.items():
+        observed = next((o for o in owner.observation.get('tasks', []) if o.get('id') == task), None)
+        if observed is None:
+            observed = dict(id=task)
+            owner.observation.setdefault('tasks', []).append(observed)
+        observed.setdefault('kind', kind)
     owner._workers.update(workers)
     crew = lifecycle_capacity(crew, launches, enabled)
     owner.capacity = lambda: crew
@@ -72,7 +79,9 @@ def bootstrap(owner, observation=None):
             continue
         match = re.fullmatch(r'v1 gen=(\S+) seq=(\d+) state=(busy|idle|unknown) source=(\S+) event=(\S+) ts=(\d+)', record)
         if match and match[1] == gen:
-            activity[task] = dict(gen=gen, seq=int(match[2]), state=match[3], source=match[4], event=match[5])
+            native = next((o.get('native_activity') for o in owner.observation.get('tasks', []) if o.get('id') == task), None)
+            activity[task] = dict(gen=gen, seq=int(match[2]), state=match[3], source=match[4], event=match[5],
+                                  ts=int(match[6]), native_activity=native)
     return dict(schema='fm-work-bootstrap.v1', home=str(owner.home),
         position=owner.ledger_start, enabled=(owner.home / 'config/fleet-ledger').exists(),
         rows=owner.rows, presentations=owner.presentations, projects=owner.projects,
@@ -104,6 +113,7 @@ class Projection(Owner):
         self.launches = copy.deepcopy(base.get('launches', {}))
         self.ledger_enabled = base['enabled']
         self.observation = copy.deepcopy(base.get('observation', dict(main_inventory=base['snapshot'].get('main_inventory'), tasks=[])))
+        self.task_roles = {o['id']: o.get('kind') for o in self.observation.get('tasks', [])}
         self.include_runtime = False
         self.request_sort = 'manual'
         self.value = base['snapshot']
@@ -204,6 +214,11 @@ class Projection(Owner):
                 if prior.get('gen') == value.get('gen') and prior.get('seq', 0) > value.get('seq', 0):
                     return False
                 self.activity[task] = value
+                observed = next((o for o in self.observation.get('tasks', []) if o.get('id') == task), None)
+                if observed is None:
+                    observed = dict(id=task)
+                    self.observation.setdefault('tasks', []).append(observed)
+                observed['native_activity'] = value.get('native_activity')
                 if value.get('state') != 'idle':
                     for observed in self.observation.get('tasks', []):
                         if observed.get('id') == task:
@@ -217,6 +232,12 @@ class Projection(Owner):
                 if value['state'] == 'dead':
                     self.activity.pop(task, None)
             elif name == 'task.dispatched':
+                self.task_roles[task] = event.get('kind')
+                observed = next((o for o in self.observation.get('tasks', []) if o.get('id') == task), None)
+                if observed is None:
+                    observed = dict(id=task)
+                    self.observation.setdefault('tasks', []).append(observed)
+                observed['kind'] = event.get('kind')
                 # Spawn can append dispatch after the child already exited.
                 self.launches.setdefault(task, True)
                 if self.workers.get(task, {}).get('source') != 'worker.process':
@@ -224,6 +245,11 @@ class Projection(Owner):
             else:
                 self.workers[task] = dict(state='dead', source='events', verdict=name)
                 self.launches[task] = False
+                self.activity.pop(task, None)
+            if name in ('agent.retired', 'agent.liveness', 'task.cleaned_up') and task not in self.activity:
+                for observed in self.observation.get('tasks', []):
+                    if observed.get('id') == task:
+                        observed['native_activity'] = None
         elif name == 'home.configuration':
             # Configuration publishes limits, not observed occupied lanes.
             cap = str(value.get('lane_capacity') or '').strip()

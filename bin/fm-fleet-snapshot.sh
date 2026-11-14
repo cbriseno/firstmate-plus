@@ -67,8 +67,9 @@
 #     captain-hold decisions_open and queued rows.
 #   execution on task/linked backlog rows is the exact recorded crew, harness,
 #     backend target, remote host and generation. assignment_state=registered
-#     proves registration only, never native liveness. native_activity remains
-#     explicitly unknown. run_step is optional attributed validation evidence
+#     proves registration only, never native liveness. native_activity carries
+#     the shared classifier's observation when available, otherwise unknown.
+#     run_step is optional attributed validation evidence
 #     from fm-crew-state.sh --json, with that owner's source/time/expiry.
 #   tasks[]: one row per task metadata record captured at snapshot start, sorted
 #     by id. A record removed before capture is omitted. If a captured task's
@@ -964,7 +965,7 @@ task_json_lines() {
           host:($remote_host | if . == "" then null else . end),
           spawn_gen:($spawn_gen | if . == "" then null else . end),
           assignment_state:"registered",source:"task.meta",observed_at:$observed_at},
-        native_activity:{state:"unknown",verified:false,observed_at:null,source:null,identity:null},
+        native_activity:($current_state.native_activity // {state:"unknown",verified:false,observed_at:null,source:null,identity:null}),
         run_step:($current_state.run_step // null),
         remote:(if $remote_host == "" then null else {host:$remote_host,root:$remote_root} end),
         paths:{
@@ -2097,7 +2098,7 @@ printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
 if [ "$OUTPUT_MODE" = work-observation ]; then
   main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" || exit 1
   jq -n --slurpfile inventory "$MAIN_INVENTORY_JSON_FILE" --slurpfile tasks "$TASKS_JSON_FILE" \
-    '{main_inventory:$inventory[0], tasks:[$tasks[0][] | {id,wait_until,run_step}]}'
+    '{main_inventory:$inventory[0], tasks:[$tasks[0][] | {id,kind,wait_until,run_step,native_activity}]}'
   exit $?
 fi
 # Link registration independently of backlog ownership/phase. Queued or held

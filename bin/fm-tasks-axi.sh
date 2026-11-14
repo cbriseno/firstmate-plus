@@ -14,6 +14,12 @@
 # stores it verbatim as a link, which lifecycle transitions record relative to
 # that same root.
 # Adding without --repo warns once and remains valid for projectless host work.
+# Creation also warns about unregistered projects and captain rows without a
+# captain hold; neither warning blocks the legitimate add-then-hold sequence.
+# work snapshot tasks expose question.filing_required for those open rows.
+# execution_context is host only for recorded kind=host, project for a declared
+# repo, otherwise unknown. Native observations use fm-busy-lib.sh's classifier;
+# bootstrap/live activity.ts retains the busy record's Unix seconds.
 # New add/create/public-followup tasks receive their own presentation.request
 # from the backlog title and repo (or Proyecto sin registrar). Pass
 # --request-from <task-id> to reuse that task's declared request for another

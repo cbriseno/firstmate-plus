@@ -2684,6 +2684,13 @@ Enter to confirm . Esc to cancel'
   assert_not_contains "$out" "state: working" "a launch parked on its trust dialog must never read working"
   assert_contains "$out" "state: unknown" "a parked launch reads unknown, not busy or idle"
   assert_contains "$out" "launch-prompt" "the unknown verdict names the launch-prompt backstop as its source"
+  # A launch without any prompt is still only submission, not native activity.
+  FM_FAKE_BUSY_TEXT=''
+  out=$(PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" feat-lp --json)
+  printf '%s' "$out" | jq -e '.state == "unknown" and .native_activity.state == "unknown" and .native_activity.source == "launch-unconfirmed" and (.native_activity.verified | not)' >/dev/null || fail "launch confirmed activity: $out"
+  "$ROOT/bin/fm-busy-event.sh" apply "$d/state" feat-lp busy --current-gen --source claude-hook --event UserPromptSubmit
+  out=$(PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" feat-lp --json)
+  printf '%s' "$out" | jq -e '.state == "working" and .native_activity.state == "busy" and .native_activity.source == "claude-hook" and .native_activity.verified' >/dev/null || fail "native hook omitted: $out"
   pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
 }
 

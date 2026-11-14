@@ -708,6 +708,8 @@ class Owner:
             project, subproject = self.display_membership(task_id)
             observed = observations.get(task_id, {})
             tasks.append(dict(wait_until=observed.get('wait_until'), run_step=fresh_run_step(observed.get('run_step')), runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
+                execution_context='host' if (observed.get('kind') or getattr(self, 'task_roles', {}).get(task_id)) == 'host' else 'project' if row.get('repo') else 'unknown',
+                native_activity=observed.get('native_activity'),
                 alias=self.aliases.alias('task:' + task_id), kind='task', parent=subproject or project,
                 project=project, subproject=subproject, repository_project='project:' + row['repo'] if row.get('repo') else None,
                 title=p.get('card_title') or row['title'], reason=(task_pause or hold or inherited or {}).get('reason'), state=state,
@@ -715,7 +717,9 @@ class Owner:
                     state='stopping' if state == 'stopping' else 'paused' if state in ('paused_own', 'paused_inherited') and running else 'set_aside' if state in ('paused_own', 'paused_inherited') else 'none',
                     paused_by='task:' + task_id if task_pause or (hold and hold.get('kind') == 'parked') else (inherited or {}).get('from')),
                 blocked_by=blocks, frees=dict(direct=[], chain_count=0), root_blocker=next((b['ref'] for b in blocks if b['open']), None),
-                question=dict(origin_task='task:' + origin[1] if origin else None, open=bool(hold and hold.get('kind') == 'captain' and row['state'] != 'done'), call=call, answer=self.captain_answers.get(task_id), asked=time_value(hold_set, 'captain_hold')),
+                question=dict(origin_task='task:' + origin[1] if origin else None, open=bool(hold and hold.get('kind') == 'captain' and row['state'] != 'done'),
+                    filing_required=bool(row.get('kind') == 'captain' and row['state'] != 'done' and (not hold or hold.get('kind') != 'captain')),
+                    call=call, answer=self.captain_answers.get(task_id), asked=time_value(hold_set, 'captain_hold')),
                 recorded_answers=self.answers_by_origin.get(task_id, []),
                 progress=None if p.get('closure') else progress, declared_progress=None if p.get('closure') else declared_progress, progress_evidence=lifecycle['evidence'],
                 phase=lifecycle['phase'], verified_gates=lifecycle['gates'],

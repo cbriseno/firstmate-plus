@@ -25,13 +25,14 @@
 # heartbeat:
 #
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
-# Optional `<id> --json` returns the same state/source/detail/raw plus run_step.
+# Optional `<id> --json` returns the same state/source/detail/raw plus run_step
+# and native_activity from fm-busy-lib.sh when reconciliation reaches the pane.
 # run_step is null unless the existing run attribution proves a full validation
 # record. It retains phase (validation or ci), raw run state, id and source,
 # head and outcome from that attributed run, observed_at (this read, not the
 # run event), and a 60-second observation TTL.
 # Consumers expire it rather than treating a cached read as continuing activity.
-# Neither form establishes native model execution. The default line is unchanged.
+# A run-step or status declaration alone establishes no native activity.
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
@@ -198,6 +199,7 @@ ID=${1:-}
 case "${2:-}" in ''|--json) ;; *) echo 'usage: fm-crew-state.sh <id> [--json]' >&2; exit 2 ;; esac
 OUTPUT_FORMAT=${2:-text}
 RUN_STEP_JSON=null
+NATIVE_ACTIVITY_JSON=null
 
 # Fleet snapshot composition supplies its captured metadata path here so every
 # state read resolves the same task generation selected by that snapshot.
@@ -232,8 +234,8 @@ emit() {  # <state> <source> [detail]
   [ -n "${3:-}" ] && line="$line${SEP}$3"
   if [ "$OUTPUT_FORMAT" = --json ]; then
     jq -cn --arg state "$1" --arg source "$2" --arg detail "${3:-}" --arg raw "$line" \
-      --argjson run_step "$RUN_STEP_JSON" \
-      '{state:$state,source:$source,detail:$detail,raw:$raw,run_step:$run_step}'
+      --argjson run_step "$RUN_STEP_JSON" --argjson native_activity "$NATIVE_ACTIVITY_JSON" \
+      '{state:$state,source:$source,detail:$detail,raw:$raw,run_step:$run_step,native_activity:$native_activity}'
   else
     printf '%s\n' "$line"
   fi
@@ -250,7 +252,6 @@ meta_value() {  # <key>
 
 WT=$(meta_value worktree)
 KIND=$(meta_value kind)
-HARNESS=$(meta_value harness)
 REMOTE_HOST=$(meta_value remote_host)
 [ -n "$KIND" ] || KIND=ship
 
@@ -352,8 +353,8 @@ pane_readable() {  # <target>
     *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }
-# crew_busy_verdict: the crew's semantic busy state from the one contract
-# owner (bin/fm-busy-lib.sh), as "<busy|idle|unknown> <source>". A converted
+# crew_busy_verdict: the crew's native observation JSON from the one contract
+# owner (bin/fm-busy-lib.sh). A converted
 # adapter answers from its own lifecycle record; Grok answers from its
 # isolated rendered-tail fallback; a herdr crew's native `busy` is accepted
 # when no record exists, but its native `idle` is NOT, because agent.get
@@ -367,7 +368,7 @@ pane_readable() {  # <target>
 crew_busy_verdict() {  # <target>
   local tail40
   tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
-  fm_busy_classify "$TASK_BACKEND" "$1" "$HARNESS" "$ID" "$STATE" "$tail40"
+  fm_busy_native_activity "$META" "$ID" "$STATE" "$tail40"
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
@@ -1383,7 +1384,8 @@ fi
 # verdict permits the status-log fallback below. Missing, malformed, stale, or
 # unverified semantic state remains unknown.
 if [ "$KIND" != secondmate ]; then
-  BUSY_VERDICT=$(crew_busy_verdict "$BACKEND_TARGET")
+  NATIVE_ACTIVITY_JSON=$(crew_busy_verdict "$BACKEND_TARGET")
+  BUSY_VERDICT=$(printf '%s' "$NATIVE_ACTIVITY_JSON" | jq -r '.state + " " + .source')
   case "${BUSY_VERDICT%% *}" in
     busy) emit working pane "harness busy (${BUSY_VERDICT#* })" ;;
     idle) ;;

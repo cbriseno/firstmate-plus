@@ -23,6 +23,57 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     gen = run(*writer, 'arm', str(home / 'state'), 'activity', '--source', 'claude-hook', '--event', 'UserPromptSubmit').strip()
     base = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
     assert base['activity']['activity']['state'] == 'busy', base['activity']
+    record_ts = int((home / 'state/activity.busy-state').read_text().split('ts=')[1])
+    assert base['activity']['activity']['ts'] == record_ts
+    first_event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+    assert first_event['value']['ts'] == record_ts
+    assert base['activity']['activity']['native_activity'] is None  # no declared worker
+    assert first_event['value']['native_activity']['state'] == 'unknown'
+
+    # Both producer interfaces use the same declared harness and native verdict.
+    (home / 'state/activity.meta').write_text('kind=host\nharness=claude\nbackend=tmux\nwindow=missing\n')
+    run(*writer, 'apply', str(home / 'state'), 'activity', 'busy', '--gen', gen,
+        '--source', 'claude-hook', '--event', 'UserPromptSubmit')
+    published = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])['value']
+    refreshed = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
+    assert published['native_activity']['state'] == 'busy' and published['native_activity']['verified']
+    assert published['native_activity']['source'] == 'claude-hook'
+    assert refreshed['activity']['activity']['native_activity']['state'] == 'unknown'  # endpoint not confirmed
+    assert refreshed['activity']['activity']['native_activity'] == refreshed['snapshot']['tasks'][0]['native_activity']
+    assert refreshed['snapshot']['tasks'][0]['execution_context'] == 'host'
+    old_record = (home / 'state/activity.busy-state').read_text()
+    (home / 'state/activity.busy-state').write_text(old_record.rsplit('ts=', 1)[0] + 'ts=946684800\n')
+    assert json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))['activity']['activity']['ts'] == 946684800
+    (home / 'state/activity.busy-state').write_text(old_record)
+    # Codex keeps its existing bound rollout requirement; another hook is not proof.
+    (home / 'state/activity.meta').write_text('kind=host\nharness=codex\nbackend=tmux\nwindow=missing\n')
+    run(*writer, 'apply', str(home / 'state'), 'activity', 'busy', '--gen', gen,
+        '--source', 'claude-hook', '--event', 'UserPromptSubmit')
+    unsupported = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])['value']['native_activity']
+    assert unsupported['state'] == 'unknown' and unsupported['source'] == 'codex-unverified'
+    # Explicit context never comes from a missing repo or a living endpoint.
+    (home / 'state/activity.meta').unlink()
+    (home / 'data/projects.md').write_text('- firstmate [local-only] - Test project\n')
+    for task_id, options, warning in [('unresolved', ['--repo', 'typo'], 'unregistered project'),
+                                       ('decision', ['--repo=firstmate', '--kind', 'captain'], 'fm-captain-hold.sh hold'),
+                                       ('projectless', [], 'no --repo'),
+                                       ('registered', ['--repo', 'firstmate'], None)]:
+        result = subprocess.run(['bash', str(root / 'bin/fm-tasks-axi.sh'), 'add', task_id, task_id, *options],
+                                env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        assert (warning in result.stderr) if warning else not result.stderr, result.stderr
+    rows = {t['key']:t for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks']}
+    assert rows['task:decision']['question']['filing_required']
+    assert not rows['task:decision']['question']['open'] and rows['task:decision']['question']['call'] is None
+    assert rows['task:projectless']['execution_context'] == 'unknown'
+    assert rows['task:registered']['execution_context'] == 'project'
+    assert rows['task:unresolved']['repository_project'] == 'project:typo'
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design',
+        '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
+    filed = next(t['question'] for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks'] if t['key'] == 'task:decision')
+    assert filed['open'] and not filed['filing_required'] and filed['call'] is not None
+    # Keep the remaining lifecycle fixture focused on its original row.
+    (home / 'data/backlog.md').write_text('# Tasks\n\n## In flight\n\n- [ ] activity - Turn activity (repo: firstmate)\n\n## Queued\n\n## Done\n')
     # Real snapshot reports the orphan instead of inventing a worker.
     assert base['snapshot']['main_inventory']['valid'] is False
     # Direct users of the bootstrap function receive the same observed facts.
@@ -68,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
                             state='working', text='legacy', declared_at='invalid'))
     assert '[at=' not in model.status['activity'].splitlines()[-1]
     assert model.capacity()['agents_running'] is None
-    run('fm-fleet-ledger.sh', 'dispatched', 'activity', 'ship', 'firstmate', 'codex', '')
+    run('fm-fleet-ledger.sh', 'dispatched', 'activity', 'host', '', 'codex', '')
     event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
     assert model.apply(event)
     assert model.capacity()['agents_running'] == 1
@@ -76,13 +127,19 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert model.capacity()['agents_running'] == 1
     restarted = Projection(json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap')))
     assert restarted.capacity()['agents_running'] == 1
+    assert restarted.value['tasks'][0]['execution_context'] == 'host'
+    assert model.value['tasks'][0]['execution_context'] == 'host'
     assert restarted.capacity()['source'] == 'fleet-ledger'
     run(*writer, 'apply', str(home / 'state'), 'activity', 'idle', '--gen', gen, '--source', 'claude-hook', '--event', 'Stop')
     event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
     assert model.apply(event)
     assert model.activity['activity']['state'] == 'idle'
+    assert model.activity['activity']['ts'] == event['value']['ts']
+    assert model.value['tasks'][0]['native_activity'] == event['value']['native_activity']
     assert model.capacity()['agents_running'] == 1  # Turn end keeps the worker.
     assert model.value['tasks'][0]['backlog_state'] == 'in_flight'
+    assert model.apply(observation_event)  # a later runtime sample does not forget dispatch context
+    assert model.value['tasks'][0]['execution_context'] == 'host'
     assert not model.apply(dict(event, value=dict(event['value'], seq=1, state='busy')))
     # Replacing a presentation must release the previous task snapshot without
     # waiting for a cyclic collection that pauses the event reader.
@@ -107,6 +164,8 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
     assert model.apply(event)
     assert model.capacity()['agents_running'] == 0
+    assert model.value['tasks'][0]['native_activity'] is None
+    assert 'activity' not in model.activity
     assert model.apply(event)
     assert model.capacity()['agents_running'] == 0
     assert Projection(json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))).capacity()['agents_running'] == 0

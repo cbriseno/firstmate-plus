@@ -260,7 +260,7 @@ fm_busy_record_read() {  # <state-dir> <id>
 # at the fm-spawn seed keeps reading busy fm-spawn, unchanged.
 fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
   local backend=$1 target=$2 harness=$3 id=$4 state=$5 tail40=${6-}
-  local out rc r_state r_source native log
+  local out rc r_state r_source native
   case "$harness" in
     codex*)
       if command -v python3 >/dev/null 2>&1; then
@@ -344,6 +344,24 @@ fm_busy_classify_meta() {  # <meta-file> <id> <state-dir> [tail40]
     return 0
   fi
   fm_busy_classify "$backend" "$target" "$harness" "$id" "$state" "$tail40"
+}
+
+# Native observation shared by crew-state and work bootstrap/events. The raw
+# busy record remains separate: a submitted launch is not observed execution.
+# observed_at dates this classification, never the underlying activity event.
+fm_busy_native_activity() {  # <meta-file> <id> <state-dir> [tail40]
+  local verdict source gen
+  verdict=$(fm_busy_classify_meta "$@")
+  source=${verdict#* }
+  verdict=${verdict%% *}
+  if [ "$source" = fm-spawn ]; then
+    verdict=unknown source=launch-unconfirmed
+  fi
+  gen=$(fm_busy_current_gen "$3" "$2" 2>/dev/null || true)
+  jq -cn --arg state "$verdict" --arg source "$source" --arg gen "$gen" \
+    --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{state:$state,source:$source,verified:($state == "busy" or $state == "idle"),
+      observed_at:$observed_at,identity:(if $gen == "" then null else $gen end)}'
 }
 
 # fm_busy_is_busy: boolean view for callers that only gate on provable

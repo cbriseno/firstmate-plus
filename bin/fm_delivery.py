@@ -226,10 +226,17 @@ def create_task(arguments):
             shown = subprocess.run(['tasks-axi', 'show', task_id, '--full'],
                                    capture_output=True, text=True, check=True)
             row = {}
-            for key, value in re.findall(r'^  (id|title|repo): (.*)$', shown.stdout, re.M):
+            for key, value in re.findall(r'^  (id|title|repo|kind|hold_kind): (.*)$', shown.stdout, re.M):
                 row[key] = json.loads(value) if value.startswith('"') else value
             if row.get('id') != task_id or not row.get('title'):
                 raise ValueError('created task needs its full backlog title')
+            repo = row.get('repo')
+            registry = data / 'projects.md'
+            projects = set(re.findall(r'^- ([A-Za-z0-9_.-]+) \[', registry.read_text() if registry.exists() else '', re.M))
+            if repo not in (None, '-') and repo not in projects:
+                print('warning: unregistered project ' + repo + '; verify the task repo against data/projects.md', file=sys.stderr)
+            if row.get('kind') == 'captain' and row.get('hold_kind') != 'captain':
+                print('warning: captain task has no captain hold; file the real question and options with fm-captain-hold.sh hold', file=sys.stderr)
             if request is None:
                 request = dict(id=task_id if len(task_id) <= 80 else str(uuid.uuid4()),
                                label=' '.join(row['title'].split())[:80],
