@@ -1,0 +1,99 @@
+{
+  "cursor": "fixture-b-1",
+  "projects": [
+    {
+      "id": "atlas",
+      "registered": true,
+      "folded": true
+    },
+    {
+      "id": "boreal",
+      "registered": true,
+      "folded": true
+    },
+    {
+      "id": "cedar",
+      "registered": true,
+      "folded": true
+    },
+    {
+      "id": "unregistered",
+      "registered": false,
+      "label": "Proyecto sin registrar"
+    }
+  ],
+  "requests": [
+    {
+      "id": "request-1",
+      "project": "atlas",
+      "tasks": [
+        "ready",
+        "dependency",
+        "capacity",
+        "answer",
+        "parked"
+      ]
+    },
+    {
+      "id": "request-2",
+      "project": "unregistered",
+      "tasks": [
+        "review-old",
+        "review-new"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "ready",
+      "state": "ready",
+      "reason": "Lista para iniciar"
+    },
+    {
+      "id": "dependency",
+      "state": "dependency",
+      "reason": "Espera datos de otra tarea"
+    },
+    {
+      "id": "capacity",
+      "state": "capacity",
+      "reason": "No hay ranura disponible"
+    },
+    {
+      "id": "answer",
+      "state": "answer",
+      "reason": "Espera una respuesta"
+    },
+    {
+      "id": "parked",
+      "state": "parked",
+      "reason": "Estacionada hasta la revisión"
+    },
+    {
+      "id": "review-old",
+      "state": "review",
+      "delivered_at": "2026-01-01T10:00:00Z",
+      "report": "old.html",
+      "outcome": "Informe anterior"
+    },
+    {
+      "id": "review-new",
+      "state": "review",
+      "delivered_at": "2026-01-01T11:00:00Z",
+      "report": "new.html",
+      "outcome": "Informe reciente"
+    }
+  ],
+  "attention": {
+    "questions": [
+      "answer"
+    ],
+    "actions": [],
+    "reports": [
+      "review-old",
+      "review-new"
+    ],
+    "approvals": []
+  },
+  "clock": "2026-01-01T12:00:00Z"
+}

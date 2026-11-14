@@ -1,0 +1,1 @@
+{"variation":"wait-and-resume", "project":"atlas", "request":"request-3", "tasks":[{"id":"wait-1","state":"parked","reason":"Espera revisión","sessions":[{"id":"session-a","status":"archived"},{"id":"session-b","status":"active"}]},{"id":"wait-2","state":"dependency","reason":"Espera la retoma"}]}

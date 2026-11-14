@@ -1,0 +1,8 @@
+{
+  "task": "sample-task",
+  "status_lines": ["working [key=precise] [at=1792921939]: texto de ejemplo", "working [at=1792921939]: una segunda actualización"],
+  "presentation": {"phase":"investigation", "progress":{"steps":[{"label":"Observar","state":"done"},{"label":"Corregir","state":"active"},{"label":"Verificar","state":"todo"}]}},
+  "orders": ["presentation-then-covered-status", "covered-status-then-presentation"],
+  "delayed_capture_seconds": 11,
+  "later_uncovered_status": "working [at=1792921951]: nueva actualización"
+}
