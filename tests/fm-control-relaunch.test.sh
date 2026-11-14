@@ -919,6 +919,25 @@ test_exclude_tools_refusals_happen_before_the_agent_stops() {
   pass "fm-control relaunch: exclusion-list refusals happen before the running agent stops"
 }
 
+test_host_relaunch_preserves_scratch() {
+  local dir out wt target
+  dir=$(new_case host-relaunch host1)
+  add_ship_task "$dir" host1 claude
+  wt="$dir/home/data/host1/work"
+  target="$dir/host-target"
+  mkdir -p "$wt" "$dir/home/config" "$dir/home/projects"
+  printf 'keep\n' > "$wt/keep"
+  printf '%s\n' "$target" > "$dir/home/data/host1/host-paths"
+  printf '\n%s\n' "$target" >> "$dir/home/data/host1/brief.md"
+  sed -i.bak "s|^worktree=.*|worktree=$wt|; s|^project=.*|project=$wt|; s/^kind=.*/kind=host/" "$dir/home/state/host1.meta"
+  printf '%s' "$wt" > "$dir/fake/cwd"
+  out=$(run_control "$dir" host1 relaunch --model sonnet --effort low --note 'continue host work') || fail "host relaunch failed: $out"
+  [ "$(cat "$wt/keep")" = keep ] || fail 'host scratch was not preserved'
+  [ "$(meta_field "$dir" host1 model)" = sonnet ] || fail 'host model was not updated'
+  [ "$(meta_field "$dir" host1 effort)" = low ] || fail 'host effort was not updated'
+  pass 'host relaunch preserves scratch and changes model and effort'
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -2801,6 +2820,7 @@ test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_exclude_tools_refusals_happen_before_the_agent_stops
+test_host_relaunch_preserves_scratch
 test_explicit_model_wins_over_the_recorded_one
 test_control_relaunch_explicitly_resets_profile
 test_relaunch_onto_an_unverified_harness_is_refused

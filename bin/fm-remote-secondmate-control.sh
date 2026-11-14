@@ -305,6 +305,7 @@ cmd_send() {
     die "steering-inbox record could not be written under $CONTROL_STATE/$id.inbox"
   fi
   fm_lock_release "$meta_lock"
+  printf "sent %s %s\n" "$id" "${rec##*/}"
   case "$rec" in
     */handled/*)
       # The dedup landed on a record the worker already acknowledged: the

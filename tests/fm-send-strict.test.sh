@@ -92,14 +92,21 @@ setup_home() {  # <name> -> echoes home dir
   printf '%s\n' "$home"
 }
 
+test_help_without_home() {
+  local out
+  out=$(env -u FM_HOME "$SEND" --help) || fail "help requires no home"
+  assert_contains "$out" "Usage: fm-send.sh" "help must show usage"
+}
+
 test_exact_lane_id_send_still_works() {
   local dir fb home err log rc got
   dir="$TMP_ROOT/exact"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); home=$(setup_home exact); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
   fm_write_meta "$home/state/mpf-lane-m8.meta" "window=sess:fm-mpf-lane-m8" "kind=ship"
 
-  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" mpf-lane-m8 "lost dispatch" >/dev/null 2>"$err"; rc=$?
+  got=$(PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" mpf-lane-m8 "lost dispatch" 2>"$err"); rc=$?
+  assert_contains "$got" "sent mpf-lane-m8 001.msg" "send must identify the durable record"
   expect_code 0 "$rc" "exact task id send should succeed when metadata exists"
   got=$(cat "$log")
   assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=1 arg=: Firstmate instruction waiting" \
@@ -232,6 +239,7 @@ test_key_send_exit_status_follows_delivery() {
   pass "fm-send --key: exit status follows delivery, and an undelivered key never reports success"
 }
 
+test_help_without_home
 test_exact_lane_id_send_still_works
 test_key_send_exit_status_follows_delivery
 test_unset_fm_home_fails
