@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Opt-in real Codex/Claude park -> inbox response -> same-chat resume on Herdr.
+# Opt-in real Codex/Claude park -> policy choice -> original chat or takeover.
 # Run with FM_WORKER_PARKING_LIVE=1 through bin/fm-heavy-run.sh.
 set -eu
 # shellcheck source=tests/lib.sh
@@ -49,15 +49,40 @@ chmod +x "$FM_HOME/fakebin/herdr"
 export PATH="$FM_HOME/fakebin:$PATH"
 unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 export HERDR_SESSION="$HERDR_LAB_SESSION" FM_BACKEND=herdr FM_SPAWN_NO_GUARD=1
+fm_test_tasks_toml "$FM_HOME/.tasks.toml"
 printf manual > "$FM_HOME/config/backlog-backend"
 printf auto > "$FM_HOME/config/claude-permission-mode"
 mkdir -p "$TMP_ROOT/allowed"
+# A resumed Codex viewport can stay scrolled above its new activity. Prefer
+# assistant transcript text to avoid mistaking a pinned screen for no response.
+resumed_reply_seen() {
+ python3 - "$FM_HOME/data/$id/sessions.jsonl" <<'REPLY'
+import json,sys
+from pathlib import Path
+try:
+    rows=[json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+    session=rows[-1].get('session')
+    if not session: raise ValueError('transcript not yet bound')
+    for line in Path(session).read_text().splitlines():
+        row=json.loads(line); payload=row.get('payload',{})
+        if row.get('type')=='response_item' and payload.get('role')=='assistant':
+            content=payload.get('content',[])
+        elif row.get('type')=='assistant':
+            content=row.get('message',{}).get('content',[])
+        else: continue
+        if any('MARIGOLD P03-RESUMED' in part.get('text','') for part in content):
+            sys.exit(0)
+except (OSError,ValueError,IndexError): pass
+sys.exit(1)
+REPLY
+}
 checked=0
 for harness in codex claude; do
  if ! command -v "$harness" >/dev/null; then printf 'skip: %s absent\n' "$harness"; continue; fi
  checked=$((checked + 1))
  "$harness" --version
  id=pilot-$harness
+ (cd "$FM_HOME" && tasks-axi add "$id" "Resume pilot $harness" --kind ship --repo sample --start) >/dev/null
  bash "$ROOT/bin/fm-brief.sh" "$id" --host --path "$TMP_ROOT/allowed" >/dev/null
  python3 - "$FM_HOME/data/$id/brief.md" <<'PY'
 import sys
@@ -79,26 +104,43 @@ PY
   sleep 1
  done
  printf '%s\n' "$screen"
- printf 'needs-decision [key=pilot] [at=%s]: waiting for pilot answer\n' "$(date +%s)" >> "$FM_HOME/state/$id.status"
+ printf 'needs-decision [at=%s]: waiting for pilot answer\n' "$(date +%s)" >> "$FM_HOME/state/$id.status"
  bash "$ROOT/bin/fm-control.sh" "$id" park
  bash "$ROOT/bin/fm-crew-state.sh" "$id" --json
  original_session=$(python3 "$ROOT/bin/fm_task_sessions.py" resume-id "$FM_HOME/state" "$id" || true)
- bash "$ROOT/bin/fm-send.sh" "$id" --resolve-key pilot 'What was the remembered word? Reply with it and P03-RESUMED. Read and acknowledge this inbox message.'
+ printf claude > "$FM_HOME/config/crew-harness"
+ if [ "$harness" = claude ]; then printf codex > "$FM_HOME/config/crew-harness"; fi
+ if bash "$ROOT/bin/fm-send.sh" "$id" 'What was the remembered word? Reply with it and P03-RESUMED. Read and acknowledge this inbox message.'; then
+  fail 'policy change resumed without captain choice'
+ fi
+ jq -e '.call | .recommended == "current" and (.options | length == 2)' "$FM_HOME/data/$id/captain-call.json" >/dev/null
+ [ -f "$FM_HOME/state/$id.parked" ] || fail 'policy choice lost saved launch'
+ [ -f "$FM_HOME/state/$id.inbox/001.msg" ] || fail 'policy choice lost pending message'
+ selected=$harness
+ if [ "$harness" = claude ]; then selected=codex; fi
+ printf 'Pilot answer: continue with %s.\n' "$selected" > "$TMP_ROOT/decision.txt"
+ bash "$ROOT/bin/fm-captain-hold.sh" answer "$id" --decision-file "$TMP_ROOT/decision.txt" --release-in-flight
+ if [ "$selected" = codex ]; then model=gpt-6.1-sol; else model=haiku; fi
+ bash "$ROOT/bin/fm-control.sh" "$id" resume --harness "$selected" --model "$model" --effort low
  newtarget=$(sed -n 's/^window=//p' "$meta" | tail -1)
  newpane=${newtarget#*:}
  for n in $(seq 1 120); do
   screen=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane read "$newpane" --lines 60 --source recent-unwrapped 2>/dev/null || true)
-  if printf '%s' "$screen" | grep -q 'MARIGOLD.*P03-RESUMED'; then break; fi
+  if printf '%s' "$screen" | grep -q 'MARIGOLD.*P03-RESUMED' || resumed_reply_seen; then break; fi
   if [ "$n" = 120 ]; then printf '%s\n' "$screen"; exit 1; fi
   sleep 1
  done
  printf '%s\n' "$screen"
- python3 - "$FM_HOME/data/$id/sessions.jsonl" "$original_session" <<'CHECK'
+ python3 - "$FM_HOME/data/$id/sessions.jsonl" "$original_session" "$selected" "$harness" <<'CHECK'
 import json,sys
 from pathlib import Path
 rows=[json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
 assert len(rows)==2 and rows[0]['status']=='archived' and rows[1]['status']=='active', rows
-if sys.argv[2]:
+assert rows[1]['harness']==sys.argv[3], rows
+if sys.argv[3]!=sys.argv[4]:
+    assert rows[0]['session'] != rows[1]['session'], rows
+    print('takeover preserved progress and switched harness: '+sys.argv[4]+' -> '+sys.argv[3])
+elif sys.argv[2]:
     assert rows[0]['session'] and rows[0]['session']==rows[1]['session'], rows
     print('same transcript preserved across park/resume: '+sys.argv[2])
 else:

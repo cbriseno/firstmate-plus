@@ -65,6 +65,10 @@ The watcher retains dated-pause rechecks while excluding intentionally absent pa
 A tmux resume requires the same live socket saved before parking; an ordinary missing tmux record still refuses recovery across an unknown socket.
 Relaunch remains the fresh-chat operation for ordinary recovery.
 
+A parked worker's automatic resume checks current usage policy. A changed harness opens a captain hold with two choices: continue the original worker or take over using the current harness (recommended). The parked record and pending message remain; no agent launches before the choice. A uniform dispatch harness takes precedence over `crew-harness`; mixed dispatch profiles require Firstmate to select the applicable rule/profile instead of guessing.
+
+After recording the answer through `fm-captain-hold.sh answer --release-in-flight`, Firstmate calls `fm-control.sh <id> resume --harness <chosen> [--model <model>] [--effort <effort>]`. The explicit profile applies that answer: the original harness can reopen its native chat, while another harness starts fresh with the saved note. Do not resend the pending inbox message. A direct `relaunch` remains a deliberate fresh-chat recovery operation.
+
 ## Transactional relaunch
 
 `relaunch` and parked-worker resume share the launch transaction, which runs as a transaction with a journal at `state/<id>.control-relaunch`, the prior record preserved beside it, and a ship or scout's prior instructions preserved when a progress note is appended.

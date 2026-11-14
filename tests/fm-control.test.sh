@@ -575,6 +575,32 @@ test_park_refuses_active_or_undated_wait() {
   pass 'park: active work and undated pauses remain running'
 }
 
+# The automatic inbox path must stop before a launch when usage policy changed.
+test_resume_changed_policy_opens_choice() {
+  local dir out
+  dir=$(new_case resume-policy)
+  add_task "$dir" t1 codex
+  printf 'done [at=1]: ready for merge\n' > "$dir/home/state/t1.status"
+  run_control "$dir" t1 park >/dev/null || fail 'could not park policy fixture'
+  mkdir -p "$dir/home/config"
+  fm_test_tasks_toml "$dir/home/.tasks.toml"
+  (cd "$dir/home" && tasks-axi add t1 'Resume waiting work' --kind ship --repo sample --start) >/dev/null || fail 'could not register fixture'
+  printf claude > "$dir/home/config/crew-harness"
+  if out=$(run_control "$dir" t1 resume); then fail 'changed policy resumed without a choice'; fi
+  jq -e '.call | .recommended == "current" and ([.options[].id] | sort == ["current","original"])' \
+    "$dir/home/data/t1/captain-call.json" >/dev/null || fail "missing harness choice: $out"
+  [ -f "$dir/home/state/t1.parked" ] || fail 'choice removed parked continuation'
+  [ -z "$(literals "$dir")" ] || fail 'choice launched or typed before an answer'
+  # Dispatch overrides the static pin; a mixed policy needs Firstmate judgment.
+  printf '{"rules":[{"when":"all","use":{"harness":"codex"}}]}' > "$dir/home/config/crew-dispatch.json"
+  out=$(FM_HOME="$dir/home" SCRIPT_DIR="$ROOT/bin" bash -c '. "$SCRIPT_DIR/fm-worker-parking-lib.sh"; die() { echo "$*" >&2; exit 1; }; resume_policy_harness') || fail "$out"
+  [ "$out" = codex ] || fail 'dispatch was ignored in favor of static harness'
+  printf '{"rules":[{"when":"all","use":[{"harness":"codex"},{"harness":"claude"}]}]}' > "$dir/home/config/crew-dispatch.json"
+  out=$(run_control "$dir" t1 resume) || true
+  assert_contains "$out" 'resolve the current dispatch profile' 'mixed policy silently guessed a harness'
+  pass 'resume: changed usage policy opens a recommended choice before launch; dispatch remains authoritative'
+}
+
 test_resume_identity_comes_from_saved_launch() {
   local dir
   dir=$(new_case resume-identity)
@@ -610,8 +636,8 @@ test_relaunch_only_flags_are_rejected_on_other_verbs() {
   alive_as "$dir" claude
   out=$(run_control "$dir" t1 exit --harness codex); rc=$?
   expect_code 1 "$rc" "--harness should not apply to exit"
-  assert_contains "$out" "apply to 'relaunch' only" "the refusal should scope the flags"
-  pass "fm-control: profile and note flags belong to relaunch only"
+  assert_contains "$out" "apply to 'relaunch' or 'resume'" "the refusal should scope the flags"
+  pass "fm-control: profile flags belong to relaunch/resume and refuse on exit"
 }
 
 # --- 5. lifecycle states ----------------------------------------------------
@@ -1037,6 +1063,7 @@ test_resume_requires_parking
 test_park_declared_waits_preserves_work
 test_park_refuses_active_or_undated_wait
 test_resume_identity_comes_from_saved_launch
+test_resume_changed_policy_opens_choice
 test_relaunch_only_flags_are_rejected_on_other_verbs
 test_worker_resource_cleanup
 test_worker_wrapper_reaps_orphans_while_running

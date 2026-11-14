@@ -86,6 +86,47 @@ do_park() {
   echo "parked $ID backend=$BACKEND worktree=$WT"
 }
 
+# Natural-language dispatch selection belongs to Firstmate. A policy whose
+# profiles all use one adapter is unambiguous without selecting a rule/model.
+resume_policy_harness() {
+  local config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+  if [ -f "$config/crew-dispatch.json" ]; then
+    jq -er '
+      [((.rules // [])[] | .use), (.default // empty)] | flatten |
+      if length == 0 or any(.[]; type != "object" or (.harness | type) != "string")
+      then error("invalid dispatch profiles") else map(.harness) | unique end |
+      if length == 1 then .[0] else error("resolve the current dispatch profile") end
+    ' "$config/crew-dispatch.json" \
+      || die 'resolve the current dispatch profile before resume; do not fall back to crew-harness'
+  else
+    "$SCRIPT_DIR/fm-harness.sh" crew
+  fi
+}
+
+resume_check_policy() {
+  local policy
+  # An explicit profile is Firstmate applying the captain's recorded choice.
+  [ "$HARNESS_SET" = 0 ] || return 0
+  policy=$(resume_policy_harness) || return 1
+  fm_control_harness_supported "$policy" || die "unverified current usage policy: $policy"
+  [ "$policy" != "$HARNESS" ] || return 0
+  # hold owns this same lifecycle lock. Nothing is launched after releasing it.
+  rm -f "$FM_COMPOSER_DIALOG_SINK"
+  FM_COMPOSER_DIALOG_SINK=
+  CONTROL_LOCK_HELD=0
+  fm_lock_release "$CONTROL_LOCK"
+  fm_lease_guard_release
+  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --category product-design \
+    --reason "El worker guardado usa $HARNESS y la política actual usa $policy" \
+    --question 'Cambió el arnés de la política de uso. ¿Cómo quieres retomar este trabajo?' \
+    --option "original=Continuar con el worker original|Retomar el chat guardado en $HARNESS cuando sea posible." \
+    --option "current=Relevo con el arnés actual|Continuar en $policy con el avance guardado." \
+    --recommended current \
+    --context 'El trabajo y el mensaje pendiente se conservan. No se relanzará ningún agente hasta que elijas.' \
+    || return 1
+  die 'waiting for captain harness choice; record the answer, then resume with --harness and the selected profile; pending messages must not be resent'
+}
+
 do_resume() {
   local saved="$STATE/$ID.parked" reason=native-session
   [ -f "$saved" ] || die "task $ID is not parked; use relaunch for ordinary recovery"
@@ -94,8 +135,12 @@ do_resume() {
     missing|dead) ;;
     *) die 'parked endpoint is not confirmed agent-free; refusing duplicate worker' ;;
   esac
+  resume_check_policy || return 1
   RESUME_SESSION=
-  if RESUME_SESSION=$(python3 "$SCRIPT_DIR/fm_task_sessions.py" resume-id "$STATE" "$ID" 2>"$STATE/$ID.resume-reason"); then
+  if [ "$HARNESS_SET" = 1 ] && [ "$NEW_HARNESS" != "$HARNESS" ]; then
+    reason="captain-selected harness takeover: $HARNESS -> $NEW_HARNESS"
+    echo "resume-fallback $ID: $reason; starting fresh with saved progress note" >&2
+  elif RESUME_SESSION=$(python3 "$SCRIPT_DIR/fm_task_sessions.py" resume-id "$STATE" "$ID" 2>"$STATE/$ID.resume-reason"); then
     echo "resume $ID chat=$RESUME_SESSION" >&2
   else
     reason=$(cat "$STATE/$ID.resume-reason")

@@ -5,7 +5,7 @@
 # Usage: fm-control.sh <task-id> interrupt
 #        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> park
-#        fm-control.sh <task-id> resume
+#        fm-control.sh <task-id> resume [--harness <chosen>] [--model <name>] [--effort <level>]
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>]
 #                                         (--note <text> | --note-file <path>)
@@ -14,6 +14,10 @@
 # wait in state/<id>.parked and data/<id>/park-note.md, then stops and closes
 # only its endpoint. resume reuses the native chat from sessions.jsonl when
 # readable, otherwise reports the reason and relaunches with that saved note.
+# A changed usage-policy harness opens a captain hold before automatic resume.
+# After recording the answer, Firstmate passes its chosen profile explicitly.
+# Same-harness choices reuse the chat; a takeover uses the saved progress note.
+# Mixed dispatch profiles require Firstmate to resolve the policy and choice.
 # Failed resume retains the parked record and all pending inbox messages.
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -290,10 +294,11 @@ if [ -n "$control_want_value" ]; then
   die "--$control_want_value requires a value"
 fi
 
-if [ "$VERB" != relaunch ]; then
+if [ "$VERB" != relaunch ] && [ "$VERB" != resume ]; then
   [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, and --note apply to 'relaunch' only"
+    || die "--harness, --model and --effort apply to 'relaunch' or 'resume'; --note applies to 'relaunch' only"
 fi
+[ "$VERB" != resume ] || [ "$NOTE_SET" = 0 ] || die "resume uses the saved progress note"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
