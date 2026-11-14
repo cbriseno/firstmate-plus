@@ -682,6 +682,9 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
+WORK_OWNERSHIP_LINE='If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
+Own the monitoring and follow-up for this task within its authorized scope; report concrete results with their full artifact links.'
+
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm
 For Firstmate shell checks, including reviews, use bin/fm-lint.sh [paths...] instead of raw shellcheck; its header owns host serialization and memory protection.'
@@ -714,6 +717,7 @@ if [ "$KIND" = host ]; then
   cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
 Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
+$WORK_OWNERSHIP_LINE
 
 $TASK_SECTION
 
@@ -759,6 +763,7 @@ fi
 cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
 Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
+$WORK_OWNERSHIP_LINE
 Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION
@@ -817,6 +822,7 @@ DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CO
 cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
 Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
+$WORK_OWNERSHIP_LINE
 Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
 
 $TASK_SECTION

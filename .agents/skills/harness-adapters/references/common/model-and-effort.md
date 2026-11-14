@@ -8,6 +8,21 @@ Add `references/common/dispatch.md` for configured profile precedence.
 `../../../bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, and `--effort` values selected at intake; scripts never parse natural-language dispatch rules.
 The tool reference records verified flags, accepted values, omission behavior, and discovery.
 
+Choose the required reasoning class at every dispatch, including host tasks and replacement workers, before ranking quota candidates.
+Use the matrix below when no explicit captain choice or applicable configured profile fixes an axis.
+Select concrete models from the chosen harness's current authoritative catalog, never from a permanent model-name list.
+
+| Work | Model class | Effort fallback |
+| --- | --- | --- |
+| Simple lookup or mechanical edit with a known path | Smallest capable available model | low |
+| Bounded implementation, report, or analysis with several interacting steps | Balanced model capable of the whole task | medium to high |
+| Ambiguous design or diagnosis, critical/high-risk work, or large cross-source analysis | Strongest available reasoning model | high to xhigh |
+
+Judge difficulty from uncertainty, scale, reader needs, and consequences, not whether the output is code; a large spreadsheet edit or nontechnical synthesis can need the strongest class.
+If a configured choice cannot meet the required class, report the mismatch rather than silently downgrading the task or replacing an explicit choice.
+Record the selected concrete model, effort, class, and short fit rationale in the dispatch note; `fm-spawn.sh` records the concrete axes in task metadata.
+For profile arrays, `quota-array-dispatch` owns selection among candidates that meet this class.
+
 Effort precedence is a per-task captain instruction, then applicable dispatch profile or secondmate pin, then the fallback below.
 Never replace either higher-precedence value.
 Use the fallback only when neither specifies effort.

@@ -1755,6 +1755,23 @@ test_ship_brief_is_short_and_actionable() {
   pass "ship brief is short and preserves task and delivery facts"
 }
 
+test_workers_flag_independent_work_and_own_monitoring() {
+  local kind brief
+  for kind in ship scout host; do
+    case "$kind" in
+      ship) FM_HOME="$BRIEF_HOME" bash "$ROOT/bin/fm-brief.sh" split-ship example --mode local-only >/dev/null ;;
+      scout) FM_HOME="$BRIEF_HOME" bash "$ROOT/bin/fm-brief.sh" split-scout example --scout >/dev/null ;;
+      host) FM_HOME="$BRIEF_HOME" bash "$ROOT/bin/fm-brief.sh" split-host --host --path "$TMP_ROOT/target" >/dev/null ;;
+    esac || fail "$kind scaffold failed"
+    brief=$(cat "$BRIEF_HOME/data/split-$kind/brief.md")
+    assert_contains "$brief" 'If independent pieces can run in parallel, report the proposed split to firstmate' "$kind must flag independent pieces"
+    assert_contains "$brief" 'do not delegate them yourself' "$kind must retain worker authority boundaries"
+    assert_contains "$brief" 'Own the monitoring and follow-up for this task' "$kind must own its monitoring"
+  done
+  pass "worker briefs flag parallel pieces and retain monitoring ownership"
+}
+
+test_workers_flag_independent_work_and_own_monitoring
 test_ship_brief_is_short_and_actionable
 test_script_parses
 test_no_heredoc_in_command_substitution

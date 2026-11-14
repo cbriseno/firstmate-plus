@@ -51,6 +51,10 @@ Compare the final explanation against the proven path and show why the proposed 
 
 ## Scope and act on the result
 
+Attribute the failure from evidence before proposing a project change: Firstmate's behavior, machine-local runtime configuration or installed tools/integrations, or still unknown.
+When the prerequisite is local, name the affected runtime, what is missing, and the smallest local preparation; a tool available to the primary alone does not authorize it to do the worker's task.
+For example, if the GitHub MCP is configured in Claude but absent from Codex, report "The GitHub MCP is configured only in Claude; Codex needs that local integration" rather than filing a Firstmate bug.
+If Firstmate fails with the required setup present, retain that reproduction as evidence of a Firstmate defect; missing setup alone does not rule out a separate product defect.
 A diagnosis brief should ask for the diagnostic-log summary, the reproduction, trigger/mask/symptom separation, divergent and proven path comparison, relevant history, smallest counterfactual, and disconfirming evidence in the report.
 A diagnostic report should distinguish observed facts from hypotheses and state any unresolved uncertainty that could change the recommended scope.
 Before accepting "not reproduced", require a brief coverage matrix for relevant runtime/device variants, environment, time or zone, account/data state, and trigger path.

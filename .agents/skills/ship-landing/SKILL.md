@@ -16,12 +16,15 @@ A `forge=external` task reports `done [at=<epoch>]: review <url> uploaded for re
 A direct-PR worker pushes that commit to its PR branch, and a local-only worker commits it on its ship branch.
 A no-mistakes worker re-validates it with /no-mistakes so the pipeline stays the one publisher; it never pushes from its copy.
 In no-mistakes mode the earlier `done [at=<epoch>]: {summary}` is the pipeline handoff and is not gated.
-Tell the captain the PR's full `https://...` URL copied from the worker's ready line, the resolved checks-green crew-state line, or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
+Relay readiness under `AGENTS.md` section 9 with a concise outcome summary, the PR's full `https://...` URL copied from the ready line, resolved checks-green crew-state line, or `pr=` metadata (the branch for local-only work), and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 
 Tear down a ship task only after landing is confirmed.
+Once its required verification and installation are complete and the result is relayed, perform guarded cleanup in the same handling turn rather than keeping a finished agent idle.
+If cleanup must wait for a decision, monitoring, or a real remaining operation, record that reason and its owner; an automatic ready signal alone is not permission to discard work or stop active validation.
+For a completed host task, relay the operation and verification results and perform ordinary teardown in that same turn; branch landing does not apply.
 Before cleanup, check that the card's summary says in one or two plain sentences, in the captain's language, what changed for the captain, and rewrite it with `bin/fm-tasks-axi.sh presentation <id> --summary` when it does not.
 Retain delivery gate facts with `presentation <id> --reconcile` and settle any progress reconciliation notice under that owner's checkpoint contract before retiring the live status/meta; installed acceptance remains separate.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
