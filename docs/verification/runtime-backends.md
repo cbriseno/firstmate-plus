@@ -430,7 +430,8 @@ The unrestricted activity matrix reached normal completion, Escape and incarnati
 Verified 2026-11-14 on Linux with Codex CLI 0.169.0, Claude Code 2.1.325 and Herdr 0.9.5.
 `FM_WORKER_PARKING_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-worker-parking-live-e2e.test.sh` refreshes the credentialed, isolated proof for every installed verified harness.
 The run printed `PILOT PASSED codex continuation and acknowledged response` and `PILOT PASSED claude continuation and acknowledged response` and exited zero after guarded lab teardown.
-Codex reopened the same transcript; Claude's lab callbacks did not bind a transcript, so that case proved the explicit fresh-chat fallback and retained-note/inbox continuation, not native Claude resume.
+On the current base, both Codex and Claude reopened their exact transcript and acknowledged the response.
+Before the rebase's host argument-spacing fix, the Claude fixture also exercised the explicit missing-session fallback and retained-note continuation.
 Both cases stopped the old agent, closed its pane, launched in the same task location and acknowledged the response in the existing inbox.
 The current semantic activity limits remain explicit: unknown activity or an unconfirmed launch seed requires Firstmate's verified safe point; an observed busy event refuses parking.
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-send-inbox.test.sh tests/fm-herdr-lab.test.sh` refreshes the portable wait kinds, preserved work, pending response, supervision lease and lab recovery checks.

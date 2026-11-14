@@ -147,9 +147,12 @@ def resume_id(state, task):
     """Resolve only the saved launch's native identity, never the cwd's last chat."""
     parked = Path(state) / (task + ".parked")
     meta = dict(line.split("=", 1) for line in parked.read_text().splitlines() if "=" in line)
+    launch = meta.get("spawn_gen")
+    if not launch:
+        raise SystemExit("saved launch has no recorded generation")
     try:
         rows = [json.loads(line) for line in Path(meta["sessions_file"]).read_text().splitlines()]
-        row = next(row for row in reversed(rows) if row.get("launch") == meta.get("spawn_gen")
+        row = next(row for row in reversed(rows) if row.get("launch") == launch
                    and row.get("harness") == meta["harness"] and row.get("session"))
         path = Path(row["session"])
         with path.open() as transcript:

@@ -594,6 +594,11 @@ for harness, header in [('codex', {'type':'session_meta','payload':{'id':identif
     transcript.unlink()
     result=subprocess.run(cmd,text=True,capture_output=True)
     assert result.returncode and not result.stdout and 'no readable' in result.stderr
+transcript.write_text(json.dumps({'sessionId':identifier})+'\n')
+sessions.write_text(json.dumps({'harness':'claude','session':str(transcript),'status':'unknown'})+'\n')
+(state/'t1.parked').write_text(f'harness=claude\nsessions_file={sessions}\n')
+result=subprocess.run(cmd,text=True,capture_output=True)
+assert result.returncode and not result.stdout and 'generation' in result.stderr
 print('ok - native resume selects the saved launch, including after a failed replacement; missing transcript explains fallback')
 PYIDENTITY
 }
