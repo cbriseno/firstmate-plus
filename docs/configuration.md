@@ -2200,6 +2200,9 @@ A long-polling external process is registered as a *source* through its adapter,
 
 Before arming any Lavish source, create or resume its artifact with `lavish-axi --no-open <artifact.html>` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
 Give the board URL once and reuse the same artifact and session through feedback rounds without opening its URL in a browser.
+After changing an artifact, verify the new content is visible in the review page when possible; a successful HTTP response or listener alone does not prove the page repainted.
+If the visible update cannot be verified, tell the reviewer to refresh the existing tab manually.
+For changes to sibling assets, enable Lavish's documented root live-reload opt-in in the artifact.
 End the session with `lavish-axi end <artifact.html>` when its work is finished.
 
 **Discover unattended boards**
