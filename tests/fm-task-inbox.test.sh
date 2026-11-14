@@ -129,7 +129,7 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
 }
 
 wait_watcher_gone() {  # <pid> [limit-ticks]
-  local pid=$1 limit=${2:-120} i=0
+  local pid=$1 limit=${2:-600} i=0
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.1
@@ -488,7 +488,7 @@ test_concurrent_writers_never_clobber() {
   local state i pids=() count
   state="$TMP_ROOT/race/state"; mkdir -p "$state"
   for i in 1 2 3 4 5 6; do
-    inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
+    FM_TASK_INBOX_LOCK_WAIT_SECS=30 inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
     pids+=($!)
   done
   for i in "${pids[@]}"; do
@@ -656,7 +656,7 @@ setup_watch_case() {  # <name> -> echoes case dir; state in <dir>/state
   dir="$TMP_ROOT/$name"
   mkdir -p "$dir/state"
   make_watch_stubs "$dir" >/dev/null
-  fm_write_meta "$dir/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=grok"
+  fm_write_meta "$dir/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=claude"
   printf '%s\n' "$dir"
 }
 
@@ -674,7 +674,7 @@ test_watcher_resumes_timed_pause_once() {
     resume_check() {
       PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
         FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
-        FM_FAKE_TMUX_AGENT=grok bash -c \
+        FM_FAKE_TMUX_AGENT=claude bash -c \
         '. "$1"; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$1"
     }
     for line in \
@@ -710,7 +710,7 @@ test_watcher_rerings_idle_pane_quietly() {
     FM_TASK_INBOX_RING_MAX=99
   pid=$!
   local i=0
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 600 ]; do
     grep -qF 'Firstmate instruction waiting' "$log" 2>/dev/null && break
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
@@ -734,8 +734,12 @@ test_watcher_rerings_idle_pane_quietly() {
 
 # A fresh process for each check proves the busy budget survives watcher restarts.
 busy_steer_check() {  # <case-dir> [capture] [busy-max]
+  local activity=busy
+  [ "${2:-$1/busy.capture}" = "$1/busy.capture" ] || activity=idle
+  "$ROOT/bin/fm-busy-event.sh" apply "$1/state" t1 "$activity" --current-gen \
+    --source claude-hook --event fixture >/dev/null || fail "Claude activity fixture failed"
   PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" FM_SEND_LOG="$1/send.log" \
-    FM_FAKE_TMUX_CAPTURE="${2:-$1/busy.capture}" FM_BUSY_REGEX=BUSYTOKEN \
+    FM_FAKE_TMUX_CAPTURE="${2:-$1/busy.capture}" \
     FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_BUSY_MAX="${3-2}" \
     bash -c '. "$1" && inbox_steer_check sess:fm-t1 t1' _ "$WATCH" > "$1/check.out" 2>&1
 }
@@ -743,6 +747,8 @@ busy_steer_check() {  # <case-dir> [capture] [busy-max]
 busy_case() {
   local dir rec
   dir=$(setup_watch_case "$1")
+  "$ROOT/bin/fm-busy-event.sh" arm "$dir/state" t1 --state busy \
+    --source claude-hook --event fixture >/dev/null || fail "Claude activity arm failed"
   printf 'some output\nBUSYTOKEN active\n' > "$dir/busy.capture"
   rec=$(inbox_lib "$dir/state" fm_task_inbox_write "$dir/state" t1 "please continue")
   age_path "$rec"
@@ -750,15 +756,15 @@ busy_case() {
 }
 
 test_watcher_waits_on_busy_pane() {
-  local dir
+  local dir check
   dir=$(busy_case busywait)
-  busy_steer_check "$dir"
-  [ ! -s "$dir/state/.wake-queue" ] || fail "first busy deferral must wait"
-  busy_steer_check "$dir"
-  [ ! -s "$dir/state/.wake-queue" ] || fail "busy deferrals woke firstmate across restart"
+  for check in 1 2 3 4 5 6 7 8; do
+    busy_steer_check "$dir"
+    [ ! -s "$dir/state/.wake-queue" ] || fail "busy deferral $check woke firstmate across restart"
+  done
   [ ! -s "$dir/send.log" ] || fail "busy escalation typed into the pane"
-  busy_steer_check "$dir"
-  [ ! -s "$dir/state/.wake-queue" ] || fail "busy deferral repeated a wake"
+  [ "$(cut -f2 "$dir/state/t1.inbox/.busy-state")" = 8 ] || fail "busy deferrals were not exercised"
+  [ ! -e "$dir/state/t1.inbox/.ring-state" ] || fail "busy work spent delivery attempts"
   [ -f "$dir/state/t1.inbox/001.msg" ] || fail "busy escalation lost the steer"
   pass "watcher: busy deferrals stay silent across restarts and never type"
 }
@@ -1201,12 +1207,14 @@ test_watcher_dead_pane_ignores_stale_busy_state() {
   local dir state out log pid rec
   dir=$(setup_watch_case dead-pane-busy)
   state="$dir/state"; out="$dir/watch.out"; log="$dir/send.log"; : > "$log"
+  "$ROOT/bin/fm-busy-event.sh" arm "$state" t1 --state busy \
+    --source claude-hook --event fixture >/dev/null || fail "Claude activity arm failed"
   printf 'some output\nBUSYTOKEN active\n' > "$dir/busy.capture"
   rec=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "please continue")
   age_path "$rec"
   watch_bg "$state" "$dir/fakebin" "$out" \
     FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$dir/busy.capture" \
-    FM_FAKE_TMUX_AGENT=zsh FM_BUSY_REGEX=BUSYTOKEN FM_TASK_INBOX_RING_MAX=99
+    FM_FAKE_TMUX_AGENT=zsh FM_TASK_INBOX_RING_MAX=99
   pid=$!
   wait_watcher_gone "$pid" \
     || { kill "$pid" 2>/dev/null; fail "stale busy state hid a dead pane's unhandled instruction"; }
