@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # PR health monitor behavior through its registered check and the watcher.
+# FM_PR_HEALTH_TEST_WATCHER=1 selects only watcher delivery/deduplication.
 #
 # Cases drive the registered check against a fake forge, with ownership from
 # real task records, task copies and durable contributions.
@@ -8,6 +9,9 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-pr-health)
+# Watcher cases see no operator boards or machine-wide process-event claims.
+export LAVISH_AXI_STATE_DIR="$TMP_ROOT/lavish-state"
+export FM_PROCEVENT_CLAIM_ROOT="$TMP_ROOT/procevent-claims"
 HEAD_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 HEAD_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 BASE_1=1111111111111111111111111111111111111111
@@ -19,6 +23,8 @@ new_home() { # name -> home with the monitor flag on
   mkdir -p "$home/data" "$home/state" "$home/config" "$home/fakebin" "$home/forge" "$home/root/bin"
   printf '# Backlog\n\n## Queued\n' > "$home/data/backlog.md"
   : > "$home/config/pr-health-monitor"
+  # The disk reminder has already been observed; this case targets PR wakes.
+  date +%s > "$home/state/.cleanup-low-disk"
   printf '#!/bin/sh\nexit 0\n' > "$home/root/bin/fm-guard.sh"
   printf '#!/bin/sh\nexit 1\n' > "$home/fakebin/tmux"
   printf '#!/bin/sh\nexit 0\n' > "$home/fakebin/no-mistakes"
@@ -33,9 +39,9 @@ model() {
   local n=$1 attempt
   if [ -f "$FORGE/barrier-count" ]; then
     : > "$FORGE/arrived-$n"
-    for attempt in $(seq 1 100); do
+    for attempt in $(seq 1 600); do
       [ "$(find "$FORGE" -name 'arrived-*' | wc -l)" -ge "$(cat "$FORGE/barrier-count")" ] && break
-      sleep 0.02
+      sleep 0.1
     done
     [ "$(find "$FORGE" -name 'arrived-*' | wc -l)" -ge "$(cat "$FORGE/barrier-count")" ] || exit 1
   fi
@@ -88,9 +94,9 @@ branch=
 while [ "$#" -gt 0 ]; do [ "$1" = --head ] && branch=$2; shift; done
 if [ -f "$FORGE/branch-barrier-count" ]; then
   : > "$FORGE/branch-arrived-$(printf '%s' "$branch" | tr '/' '_')"
-  for attempt in $(seq 1 100); do
+  for attempt in $(seq 1 600); do
     [ "$(find "$FORGE" -name 'branch-arrived-*' | wc -l)" -ge "$(cat "$FORGE/branch-barrier-count")" ] && break
-    sleep 0.02
+    sleep 0.1
   done
   [ "$(find "$FORGE" -name 'branch-arrived-*' | wc -l)" -ge "$(cat "$FORGE/branch-barrier-count")" ] || exit 1
 fi
@@ -522,15 +528,33 @@ test_watcher_surfaces_one_wake() {
   [ -f "$home/state/contributions.check.sh" ] || fail 'arm did not arm the contribution observer for enrolled PRs'
   rc=0
   with_home "$home" env FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 15 > "$home/watcher.out" 2> "$home/watcher.err" || rc=$?
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 60 > "$home/watcher.out" 2> "$home/watcher.err" || rc=$?
   [ "$rc" -eq 0 ] || fail "the watcher did not surface the conflict: $(cat "$home/watcher.err")"
   rows=$(awk -F '\t' -v key="$home/state/pr-health.check.sh" '$3 == "check" && $4 == key && $5 ~ /pull\/8 conflicts with its base/ { n++ } END { print n + 0 }' \
     "$home/state/.wake-queue")
   [ "$rows" = 1 ] || fail "one conflict queued $rows wakes: $(cat "$home/state/.wake-queue")"
+  # Deliver a control result only after the unchanged monitor completes
+  # silently. A fixed quiet window could expire before its first check ran.
+  cat > "$home/state/pr-health.check.sh" <<SH
+#!/usr/bin/env bash
+output=\$(bash "$ROOT/bin/fm-pr-health.sh" poll) || exit 1
+if [ -n "\$output" ]; then
+  printf '%s\n' "\$output"
+else
+  printf '%s\n' repeat-round-complete
+fi
+SH
+  with_home "$home" "$ROOT/bin/fm-check-register.sh" pr-health >/dev/null \
+    || fail "the repeat monitor check could not be registered"
   rc=0
   with_home "$home" env FM_WATCH_HANDLING_SUCCESSOR=1 FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 3 > "$home/watcher-repeat.out" 2> "$home/watcher-repeat.err" || rc=$?
-  [ "$rc" -eq 124 ] || fail "an unchanged conflict woke the watcher again: $(cat "$home/watcher-repeat.out")"
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 180 > "$home/watcher-repeat.out" 2> "$home/watcher-repeat.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the repeat check did not finish: $(cat "$home/watcher-repeat.err")"
+  grep -Fx "check: $home/state/pr-health.check.sh: repeat-round-complete" "$home/watcher-repeat.out" >/dev/null \
+    || fail "an unchanged conflict woke the watcher again: $(cat "$home/watcher-repeat.out")"
+  rows=$(awk -F '\t' '$3 == "check" && $5 ~ /pull\/8 conflicts with its base/ { n++ } END { print n + 0 }' \
+    "$home/state/.wake-queue")
+  [ "$rows" = 1 ] || fail "a completed repeat round duplicated the conflict wake"
   pass 'the watcher turns one conflict into one durable wake'
 }
 
@@ -596,11 +620,18 @@ test_all_owned_pr_reads_start_in_one_wave() {
   printf '4\n' > "$home/forge/branch-barrier-count"
   printf '8\n' > "$home/forge/barrier-count"
   arm "$home"
-  out=$(pass_once "$home")
+  # This case proves fan-out, not the read deadline; allow the two fixture
+  # barriers to observe every branch and PR on a loaded host.
+  out=$(FM_CHECK_TIMEOUT=180 pass_once "$home")
   [ "$(printf '%s\n' "$out" | grep -c 'conflicts with its base')" = 8 ] \
     || fail "every owned PR must start before a slow read completes: $out"
   pass 'all owned PR reads start in one wave without rotating a backlog'
 }
+
+if [ "${FM_PR_HEALTH_TEST_WATCHER:-0}" = 1 ]; then
+  test_watcher_surfaces_one_wake
+  exit $?
+fi
 
 failures=0
 for test_name in test_unknown_then_dirty_wakes_once test_dirty_again_at_same_commits_is_silent \

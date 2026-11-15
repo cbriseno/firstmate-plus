@@ -109,7 +109,7 @@ exclusion_reason() {
     fm-spawn-dispatch-profile.test.sh|fm-spawn-worktree-settle.test.sh|fm-trace-context-spawn.test.sh)
       printf '%s\n' 'real isolated git worktrees plus spawn settle loops; gray zone until dedicated proof'
       ;;
-    fm-pr-check-security.test.sh)
+    fm-pr-check-security*.test.sh)
       printf '%s\n' 'watcher lock / migration / poll security surface; intentional shared-lock class'
       ;;
     fm-teardown.test.sh)
@@ -191,6 +191,15 @@ fm-spawn-dispatch-profile.test.sh
 fm-spawn-worktree-settle.test.sh
 fm-trace-context-spawn.test.sh
 fm-pr-check-security.test.sh
+fm-pr-check-security-providers.test.sh
+fm-pr-check-security-registration.test.sh
+fm-pr-check-security-retirement.test.sh
+fm-pr-check-security-authority.test.sh
+fm-pr-check-security-recovery.test.sh
+fm-pr-check-security-artifacts.test.sh
+fm-pr-check-security-devices.test.sh
+fm-pr-check-security-inputs.test.sh
+fm-pr-check-security-cleanup.test.sh
 fm-teardown.test.sh
 fm-watcher-lock.test.sh
 fm-wake-queue.test.sh

@@ -21,7 +21,7 @@ GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
 
 The live evidence here reads two changes on a private Gerrit server, so a reader outside that network cannot rerun these commands against the same data.
 The server is named below as `review.example` and its project as `group/apps/console`, the placeholders the fixtures use; every other byte is the tool's own output.
-What these transcripts establish is a property of Gerrit's own record shape rather than of any one server, and the hermetic regression in `tests/fm-pr-check-security.test.sh` pins every one of them with no server at all, so the reproducible check is that suite rather than these transcripts.
+What these transcripts establish is a property of Gerrit's own record shape rather than of any one server, and the hermetic regressions in `tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers.test.sh` pin every one of them with no server at all, so the reproducible check is that suite rather than these transcripts.
 Change 4200 is merged, and change 4201 was open and blocked on review when this was collected.
 
 ## Status is read explicitly, because submittability is a different question
@@ -113,7 +113,7 @@ The server permitting self-approval is what makes this a policy boundary rather 
 
 ## What the hermetic regression pins
 
-`tests/fm-pr-check-security.test.sh` covers, with no server:
+`tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers.test.sh` cover, with no server:
 
 - The canonical change URL parses into the provider-tagged identity with its whole nested project path, and an adversarial URL matrix is refused.
 - Only an exact `MERGED` status wakes the watch, and a fully submittable open change does not.

@@ -263,7 +263,7 @@ test_unrecognized_state_skips_busy_conversion() {
 }
 
 test_claude_busy_signature_uses_real_capture_shapes() {
-  local dir fakebin composer
+  local dir fakebin composer retired capture
   dir="$TMP_ROOT/claude-signature"
   fakebin=$(make_submit_mock "$dir")
   composer="$dir/composer"
@@ -306,8 +306,6 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pane_busy cross grok && fail "Grok must ignore Claude's legacy interrupt footer"
   printf 'esc to interrupt\n' > "$composer"
   pane_busy own codex || fail "Codex's escape footer should be busy"
-  printf 'esc interrupt\n' > "$composer"
-  pane_busy own opencode || fail "OpenCode's interrupt footer should be busy"
 
   # No harness keeps the historical combined-pattern compatibility fallback.
   printf 'Working...\n' > "$composer"
@@ -323,14 +321,18 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   printf 'Ctrl+c:cancel\n' > "$composer"
   pane_busy unknown unknown && fail "idle An unknown adapter must ignore Grok's cancel footer"
 
-  # Older Claude Code and the existing Pi and Grok signatures remain unchanged.
+  # Older Claude Code retains its verified signature.
   printf 'esc to interrupt\n' > "$composer"
   pane_busy old-claude claude || fail "older Claude escape footer should be busy"
-  printf 'Working...\n' > "$composer"
-  pane_busy pi pi || fail "Pi Working footer should be busy"
-  pane_busy pi-signed pi-signed || fail "pi-signed should share Pi's exact Working footer"
-  printf 'Ctrl+c:cancel\n' > "$composer"
-  pane_busy grok grok || fail "Grok cancel footer should be busy"
+
+  # Retired adapters no longer carry a delivery signature, even for their old
+  # positive capture. The harness-less compatibility union remains above.
+  for retired in opencode pi pi-signed grok; do
+    for capture in 'esc interrupt' 'Working...' 'Ctrl+c:cancel'; do
+      printf '%s\n' "$capture" > "$composer"
+      pane_busy retired "$retired" && fail "retired $retired must not classify a busy footer"
+    done
+  done
   pass "fm_pane_is_busy: Claude spinner is scoped, multi-frame, and backward-compatible"
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-crew-state.sh - the deterministic crew-current-state
 # helper.
+# FM_CREW_STATE_TEST_ENDPOINTS=1 selects the repaired husk and no-timeout cases.
 #
 # The status file (state/<id>.status) is a best-effort append-only EVENT LOG, so
 # `tail -1` of it reports the last event, not the current state. fm-crew-state
@@ -308,7 +309,7 @@ SH
 make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
   local dir=$1 tb="$1/notimeoutbin" tool real
   mkdir -p "$tb"
-  for tool in bash git grep sed head cut tail dirname perl; do
+  for tool in bash git grep sed head cut tail dirname perl date jq; do
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
     ln -s "$real" "$tb/$tool"
@@ -1825,84 +1826,95 @@ test_cancelled_delivery_and_skipped_rebase() {
 }
 
 test_terminal_green_delivery_disposition() {
-  local route provider disposition failures=0
+  local route provider disposition pid route_failures failures=0
+  local pids=()
+  # Routes use disjoint fixture paths; run their full matrices concurrently.
+  # Every provider/disposition pair still runs through the public helper.
   for route in failed-outcome failed-status cancelled-outcome cancelled-status; do
-    for provider in github gitlab gerrit; do
-      for disposition in open merged closed unreadable skipped no-identity; do
-        (
-          reset_fakes
-          local d out url expected
-          d=$(new_case "disposition-$route-$provider-$disposition")
-          make_repo_on_branch "$d/wt" fm/disposition
-          make_fakebin "$d" >/dev/null
-          fm_write_meta "$d/state/delivery.meta" "window=fm:fm-delivery" "worktree=$d/wt" "kind=ship"
-          FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/disposition)"
-          case "$route" in
-            cancelled-*) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled} ;;
-          esac
-          case "$route" in
-            *-status) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^outcome:/d') ;;
-          esac
-          case "$provider" in
-            github) url=https://github.com/o/r/pull/203 ;;
-            gitlab) url=https://gitlab.com/o/r/-/merge_requests/203 ;;
-            gerrit) url=https://review.example.com/c/r/+/203 ;;
-          esac
-          FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//https:\/\/github.com\/o\/r\/pull\/203/$url}
-          FM_FAKE_PR_STATE=OPEN
-          FM_FAKE_PR_MERGED=false
-          FM_FAKE_PR_STATE_AXI=open
-          FM_FAKE_GLAB_STATE=opened
-          FM_FAKE_GERRIT_STATUS=NEW
-          case "$disposition" in
-            no-identity) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^[[:space:]]*pr:/d') ;;
-            merged)
-              FM_FAKE_PR_STATE=MERGED
-              FM_FAKE_PR_MERGED=true
-              FM_FAKE_PR_STATE_AXI=merged
-              FM_FAKE_GLAB_STATE=merged
-              FM_FAKE_GERRIT_STATUS=MERGED ;;
-            closed)
-              FM_FAKE_PR_STATE=CLOSED
-              FM_FAKE_PR_STATE_AXI=closed
-              FM_FAKE_GLAB_STATE=closed
-              FM_FAKE_GERRIT_STATUS=ABANDONED ;;
-            unreadable)
-              FM_FAKE_PR_READ_FAIL=1
-              FM_FAKE_GLAB_READ_FAIL=1
-              FM_FAKE_GERRIT_READ_FAIL=1 ;;
-          esac
-          FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
-          if [ "$disposition" = skipped ]; then
-            out=$(FM_CREW_STATE_NO_FORGE=1 FM_HOME="$d" run_crew_state "$d" delivery)
-          else
-            out=$(FM_HOME="$d" run_crew_state "$d" delivery)
-          fi
-          case "$disposition" in
-            open|merged)
-              assert_contains "$out" "state: done" "$route/$provider/$disposition: delivered work: $out"
-              if [ "$disposition" = open ]; then
-                assert_contains "$out" "held for merge" "open delivery awaits merge"
-              else
-                assert_contains "$out" "PR merged" "merged delivery has current evidence"
-                assert_not_contains "$out" "held for merge" "merged delivery is no longer held"
-              fi ;;
-            *)
-              expected=failed
-              case "$route" in
-                cancelled-*) expected=unknown
-                  assert_contains "$out" "run cancelled: no verdict" "cancellation retains no verdict" ;;
-              esac
-              assert_contains "$out" "state: $expected" "$route/$provider/$disposition: no unsupported delivery: $out"
-              assert_not_contains "$out" "held for merge" "unproven open delivery cannot await merge"
-              assert_not_contains "$out" "PR merged" "unproven merge cannot be claimed" ;;
-          esac
-          pass "$route/$provider/$disposition: terminal delivery uses current disposition"
-        ) || failures=$((failures + 1))
+    (
+      route_failures=0
+      for provider in github gitlab gerrit; do
+        for disposition in open merged closed unreadable skipped no-identity; do
+          (
+            reset_fakes
+            local d out url expected
+            d=$(new_case "disposition-$route-$provider-$disposition")
+            make_repo_on_branch "$d/wt" fm/disposition
+            make_fakebin "$d" >/dev/null
+            fm_write_meta "$d/state/delivery.meta" "window=fm:fm-delivery" "worktree=$d/wt" "kind=ship"
+            FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/disposition)"
+            case "$route" in
+              cancelled-*) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled} ;;
+            esac
+            case "$route" in
+              *-status) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^outcome:/d') ;;
+            esac
+            case "$provider" in
+              github) url=https://github.com/o/r/pull/203 ;;
+              gitlab) url=https://gitlab.com/o/r/-/merge_requests/203 ;;
+              gerrit) url=https://review.example.com/c/r/+/203 ;;
+            esac
+            FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//https:\/\/github.com\/o\/r\/pull\/203/$url}
+            FM_FAKE_PR_STATE=OPEN
+            FM_FAKE_PR_MERGED=false
+            FM_FAKE_PR_STATE_AXI=open
+            FM_FAKE_GLAB_STATE=opened
+            FM_FAKE_GERRIT_STATUS=NEW
+            case "$disposition" in
+              no-identity) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^[[:space:]]*pr:/d') ;;
+              merged)
+                FM_FAKE_PR_STATE=MERGED
+                FM_FAKE_PR_MERGED=true
+                FM_FAKE_PR_STATE_AXI=merged
+                FM_FAKE_GLAB_STATE=merged
+                FM_FAKE_GERRIT_STATUS=MERGED ;;
+              closed)
+                FM_FAKE_PR_STATE=CLOSED
+                FM_FAKE_PR_STATE_AXI=closed
+                FM_FAKE_GLAB_STATE=closed
+                FM_FAKE_GERRIT_STATUS=ABANDONED ;;
+              unreadable)
+                FM_FAKE_PR_READ_FAIL=1
+                FM_FAKE_GLAB_READ_FAIL=1
+                FM_FAKE_GERRIT_READ_FAIL=1 ;;
+            esac
+            FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+            if [ "$disposition" = skipped ]; then
+              out=$(FM_CREW_STATE_NO_FORGE=1 FM_HOME="$d" run_crew_state "$d" delivery)
+            else
+              out=$(FM_HOME="$d" run_crew_state "$d" delivery)
+            fi
+            case "$disposition" in
+              open|merged)
+                assert_contains "$out" "state: done" "$route/$provider/$disposition: delivered work: $out"
+                if [ "$disposition" = open ]; then
+                  assert_contains "$out" "held for merge" "open delivery awaits merge"
+                else
+                  assert_contains "$out" "PR merged" "merged delivery has current evidence"
+                  assert_not_contains "$out" "held for merge" "merged delivery is no longer held"
+                fi ;;
+              *)
+                expected=failed
+                case "$route" in
+                  cancelled-*) expected=unknown
+                    assert_contains "$out" "run cancelled: no verdict" "cancellation retains no verdict" ;;
+                esac
+                assert_contains "$out" "state: $expected" "$route/$provider/$disposition: no unsupported delivery: $out"
+                assert_not_contains "$out" "held for merge" "unproven open delivery cannot await merge"
+                assert_not_contains "$out" "PR merged" "unproven merge cannot be claimed" ;;
+            esac
+            pass "$route/$provider/$disposition: terminal delivery uses current disposition"
+          ) || route_failures=$((route_failures + 1))
+        done
       done
-    done
+    [ "$route_failures" -eq 0 ]
+    ) &
+    pids+=("$!")
   done
-  [ "$failures" -eq 0 ] || fail "$failures terminal delivery disposition regressions"
+  for pid in "${pids[@]}"; do
+    wait "$pid" || failures=$((failures + 1))
+  done
+  [ "$failures" -eq 0 ] || fail "$failures terminal delivery disposition route groups failed"
 }
 
 # Cancellation carries no verdict without the positive delivery safeguard.
@@ -2865,12 +2877,19 @@ test_no_run_herdr_husk_dead_still_reads_gone() {
   # and the scrollback read fails besides.
   FM_FAKE_HERDR_READ_FAIL=1
   FM_FAKE_HERDR_HUSK=1
+  FM_FAKE_HERDR_PROCESS=shell
   local out; out=$(run_crew_state "$d" feat-herdr-husk)
   assert_contains "$out" "state: unknown" "a husk pane has no live current state"
   assert_contains "$out" "backend target gone" "a husk pane keeps its gone-class death evidence"
   assert_contains "$out" "agent gone, pane shell remains" "the husk verdict names what actually died"
   assert_not_contains "$out" "backend unreachable" "a husk pane is not an unreachable backend"
-  pass "a husk pane (agent gone) still reads gone for reclaim"
+  # Missing registration alone is not death: the same fixture with a live
+  # process must refuse the gone classification even when scrollback fails.
+  FM_FAKE_HERDR_PROCESS=agent
+  out=$(run_crew_state "$d" feat-herdr-husk)
+  assert_not_contains "$out" "backend target gone" "an unregistered live process is not a reclaimable husk"
+  assert_not_contains "$out" "backend unreachable" "the live process read still answers"
+  pass "only a shell-only husk reads gone; an unregistered live process stays protected"
 }
 
 # Regression (2026-07 herdr false-surface incident, now solved semantically):
@@ -5790,6 +5809,12 @@ test_captured_completed_history() {
   done
   pass 'captured completed status yields to synthetic subsequent development'
 }
+
+if [ "${FM_CREW_STATE_TEST_ENDPOINTS:-0}" = 1 ]; then
+  test_no_run_herdr_husk_dead_still_reads_gone
+  test_no_timeout_uses_perl_bound
+  exit $?
+fi
 
 test_captured_axi_status_shapes
 test_captured_inventory_replay

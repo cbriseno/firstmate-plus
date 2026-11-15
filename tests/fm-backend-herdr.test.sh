@@ -559,13 +559,12 @@ test_stale_registration_ignores_status_and_reads_the_process() {
 
 test_registered_agent_with_a_live_foreground_process_stays_alive() {
   local out
-  # The real Pi shape on Herdr 0.9.0: the kernel name is the interpreter and
-  # only argv0 says pi.
-  out=$(stale_registration_case live-pi idle \
-    '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi","argv":["pi"],"cmdline":"pi"}]}}}')
+  # An interpreter-backed supported harness: only argv0 names Codex.
+  out=$(stale_registration_case live-codex idle \
+    '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"codex","argv":["codex"],"cmdline":"codex"}]}}}')
   [ "$out" = "live alive refused" ] \
-    || fail "a registered agent whose foreground process is Pi must stay live/alive, got '$out'"
-  pass "herdr stale registration: a registered agent with a live Pi foreground process still reads alive"
+    || fail "a registered agent whose foreground process is Codex must stay live/alive, got '$out'"
+  pass "herdr stale registration: a registered agent with a live Codex foreground process still reads alive"
 }
 
 # --- the bound agent session reference (relaunch session continuity) --------
@@ -695,16 +694,16 @@ test_registered_agent_with_an_agent_descendant_outside_the_foreground_stays_aliv
   local lab standin sleep_bin shell_pid out shell_verdict
   sleep_bin=$(command -v sleep) || fail "sleep not found"
   lab="$TMP_ROOT/stale-reg-descendant-bin"; mkdir -p "$lab"
-  # A symlink to a real long-running stand-in so the kernel records `pi` as the
+  # A symlink to a real long-running stand-in so the kernel records `codex` as the
   # executable identity (tests/lib.sh fm_agent_standin owns why not host sleep).
   standin=$(fm_agent_standin "$TMP_ROOT/standin") || {
     echo "skip: no long-running stand-in survives a rename, so the agent-named descendant case cannot run"
     return 0
   }
-  ln -sf "$standin" "$lab/pi"
+  ln -sf "$standin" "$lab/codex"
   # A real shell whose child is that agent-named process, while the canned
   # foreground view shows only the shell (a suspended or backgrounded agent).
-  sh -c "'$lab/pi' 300; :" &
+  sh -c "'$lab/codex' 300; :" &
   shell_pid=$!
   sleep 0.3
   out=$(stale_registration_case descendant idle "$(shell_only_process_info "$shell_pid")")
@@ -754,8 +753,8 @@ test_agent_descendant_under_a_spaced_install_path_stays_alive() {
   # `/Library/Application Support/...` shape), so a field-split read of the
   # process table sees only a fragment of the name.
   lab="$TMP_ROOT/stale-reg-spaced-bin/Application Support/Some Dir"; mkdir -p "$lab"
-  ln -sf "$standin" "$lab/pi"
-  sh -c "'$lab/pi' 300; :" &
+  ln -sf "$standin" "$lab/codex"
+  sh -c "'$lab/codex' 300; :" &
   shell_pid=$!
   sleep 0.3
   out=$(stale_registration_case spaced-descendant idle "$(shell_only_process_info "$shell_pid")")
@@ -832,18 +831,18 @@ test_busy_state_never_reports_a_shell_only_pane_busy() {
     || fail "a working record over a shell-only pane must not read busy, got '$out'"
   assert_contains "$(cat "$log")" $'pane\x1fprocess-info' "busy_state did not verify the working record at process level"
 
-  # The control: the same working record with a live Pi foreground reads busy.
+  # The control: the same working record with a live Codex foreground reads busy.
   dir="$TMP_ROOT/busy-live"; mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
-  printf '{"result":{"agent":{"agent":"pi","agent_status":"working"}}}\n' > "$resp/1.out"
-  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi","argv":["pi"],"cmdline":"pi"}]}}}\n' > "$resp/2.out"
+  printf '{"result":{"agent":{"agent":"codex","agent_status":"working"}}}\n' > "$resp/1.out"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"codex","argv":["codex"],"cmdline":"codex"}]}}}\n' > "$resp/2.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state fmtest:w1:p2' "$ROOT")
-  [ "$out" = busy ] || fail "a working record with a live Pi foreground must read busy, got '$out'"
+  [ "$out" = busy ] || fail "a working record with a live Codex foreground must read busy, got '$out'"
 
   # An idle record needs no process read: idle is never trusted as busy anyway.
   dir="$TMP_ROOT/busy-idle"; mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
-  printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' > "$resp/1.out"
+  printf '{"result":{"agent":{"agent":"codex","agent_status":"idle"}}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state fmtest:w1:p2' "$ROOT")
@@ -1311,8 +1310,8 @@ test_create_task_refuses_duplicate_label_when_agent_live() {
   printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/3.out"
   # 4: agent get -> a genuinely registered, live agent (idle, not just working)
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
-  # 5: pane process-info -> a live Pi process backs that registration (#4115)
-  printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi"}]}}}' > "$resp/5.out"
+  # 5: pane process-info -> a live Codex process backs that registration (#4115)
+  printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"codex"}]}}}' > "$resp/5.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-dup1 /tmp/proj' "$ROOT" 2>&1 )
@@ -1334,8 +1333,8 @@ test_create_task_refuses_when_any_duplicate_label_is_live() {
   printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"},{"pane_id":"w1:p3","tab_id":"w1:t3"}]}}\n' > "$resp/5.out"
   printf '{"result":{"pane":{"pane_id":"w1:p3"}}}\n' > "$resp/6.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/7.out"
-  # 8: pane process-info -> a live Pi process backs that registration (#4115)
-  printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p3","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi"}]}}}' > "$resp/8.out"
+  # 8: pane process-info -> a live Codex process backs that registration (#4115)
+  printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p3","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"codex"}]}}}' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mixed1 /tmp/proj' "$ROOT" 2>&1 )
@@ -2648,7 +2647,7 @@ test_projection_close_busy_pane_falls_back_to_plain_close() {
   cp "$resp/1.out" "$resp/6.out"
   sleep 300 & bgpid=$!
   # The pane still has a foreground agent, so the idle-shell proof refuses.
-  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"zsh","argv0":"zsh"},{"pid":99999,"name":"pi","argv0":"pi"}]}}}\n' "$bgpid" "$bgpid" "$bgpid" > "$resp/7.out"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"zsh","argv0":"zsh"},{"pid":99999,"name":"codex","argv0":"codex"}]}}}\n' "$bgpid" "$bgpid" "$bgpid" > "$resp/7.out"
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/11.out"
@@ -3736,7 +3735,7 @@ test_projection_recovery_is_read_only_and_refuses_live_duplicate_risk() {
   printf '{"result":{"pane":{"pane_id":"w1:p1"}}}\n' > "$resp/3.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   # 5: process-info -> a live harness backs the registration (issue #4115)
-  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi"}]}}}\n' > "$resp/5.out"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"codex"}]}}}\n' > "$resp/5.out"
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_recovery_allows_flat fmtest "$1" task-p3' "$ROOT" "$journal" 2>&1)
   status=$?
@@ -4603,56 +4602,39 @@ test_send_text_submit_idle_native_pending_plus_rendered_busy_is_queued() {
   pass "fm_backend_herdr_send_text_submit: idle native baseline uses a rendered busy footer to confirm a queued Enter"
 }
 
-# --- the never-idle-native-state harness (real cursor on herdr) --------------
-# Measured live on cursor-agent 2026.08.11-e8db854 under herdr: `agent get`
-# reports a cursor pane `blocked` in EVERY state - idle, mid-turn, and after -
-# so the idle-baseline native path is structurally unreachable and every typed
-# send lands in the composer branch. Cursor's mid-turn composer row renders its own
-# `Add a follow-up` placeholder beside a right-aligned `ctrl+c to stop`, so the
-# content verdict is `pending` on a composer holding no user text, and every
-# typed steer reported delivery unconfirmed on a message that had actually landed.
-# The bytes below are the real captures from that pane.
-
-# The idle capture: no busy token anywhere, which is the pre-Enter baseline.
-herdr_cursor_idle_plain() {
-  printf '%b' ' ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up\n ▀▀▀▀▀▀▀▀▀▀\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/.treehouse/curhd-ae68cd/1/curhd · 39418af\n'
+# --- a native state that never transitions: supported rendered fallback ------
+# Synthetic Claude screens keep the shared delivery transition covered without
+# requiring the removed Cursor adapter or its old busy signature.
+herdr_footer_idle_plain() {
+  printf '  ❯\n'
 }
 
-# The mid-turn capture, plain: the spinner verb rotates, the `ctrl+c to stop`
-# token does not, which is why the token is what the matcher keys on.
-herdr_cursor_midturn_plain() {
-  printf '%b' ' ⠘⠆ Running  59 tokens\n ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up                   ctrl+c to stop\n ▀▀▀▀▀▀▀▀▀▀\n  1 task\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/.treehouse/curhd-ae68cd/1/curhd · 39418af\n'
+herdr_footer_busy_plain() {
+  printf '  ❯ hello captain\nesc to interrupt\n'
 }
 
-# The same mid-turn rows as herdr renders them with styling: the glyph and the
-# placeholder tail are dim, the cell under the parked terminal cursor is
-# reverse video, and the busy token trails on the SAME row.
-herdr_cursor_midturn_ansi() {
-  printf '%b' ' \033[0m\033[38;2;21;21;21m▄▄▄▄▄▄▄▄▄▄\033[0m\r\n \033[0m\033[48;2;21;21;21m \033[0m\033[2m\033[48;2;21;21;21m→ \033[0m\033[7m\033[48;2;21;21;21mA\033[0m\033[2m\033[48;2;21;21;21mdd a follow-up\033[0m\033[48;2;21;21;21m                   \033[0m\033[2m\033[48;2;21;21;21mctrl+c to stop\033[0m\033[48;2;21;21;21m \033[0m\r\n \033[0m\033[38;2;21;21;21m▀▀▀▀▀▀▀▀▀▀\033[0m\r\n  \033[0m\033[38;5;4m1 task\033[0m\r\n  \033[0m\033[2mCursor Grok 4.5 High\033[0m \033[0m\033[2m·\033[0m \033[0m\033[2m7%%\033[0m           \033[0m\033[38;5;5mRun Everything\033[0m\r\n  \033[0m\033[2m~/.treehouse/curhd-ae68cd/1/curhd · 39418af\033[0m\r\n'
+herdr_footer_busy_ansi() {
+  printf '  \033[1m❯\033[0m hello captain\nesc to interrupt\n'
 }
 
-# Non-vacuity anchor for the two submit tests below: the real mid-turn capture
-# genuinely reads `pending`, so the confirmation those tests assert can only be
-# coming from the rendered-footer transition and never from a softened composer
-# verdict. The composer verdict is deliberately NOT relaxed - a right-aligned
-# status token on the composer row is content the shared classifier must keep
-# treating as content for every other caller.
-test_composer_state_cursor_midturn_row_reads_pending() {
+# Pending text remains pending as composer content; only the supported busy
+# footer transition may confirm the two submit cases below.
+test_composer_state_busy_footer_keeps_pending_text() {
   local dir log resp fb out
-  dir="$TMP_ROOT/composer-cursor-midturn"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  herdr_cursor_midturn_ansi > "$resp/1.out"
+  dir="$TMP_ROOT/composer-busy-footer"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  herdr_footer_busy_ansi > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
-  [ "$out" = pending ] || fail "cursor's mid-turn composer row carries a busy token and must stay 'pending' as composer CONTENT, got '$out'"
-  pass "fm_backend_herdr_composer_state: cursor's mid-turn placeholder-plus-busy-token row reads pending (why delivery needs a separate signal)"
+  [ "$out" = pending ] || fail "typed composer content with a busy footer must stay 'pending' as composer CONTENT, got '$out'"
+  pass "fm_backend_herdr_composer_state: typed text with a busy footer reads pending (why delivery needs a separate signal)"
 }
 
-test_rendered_busy_state_reads_the_cursor_busy_token() {
+test_rendered_busy_state_reads_supported_footer() {
   local dir log resp fb idle_out busy_out fail_out
   dir="$TMP_ROOT/rendered-busy"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  herdr_cursor_idle_plain > "$resp/1.out"
-  herdr_cursor_midturn_plain > "$resp/2.out"
+  herdr_footer_idle_plain > "$resp/1.out"
+  herdr_footer_busy_plain > "$resp/2.out"
   printf '1\n' > "$resp/3.exit"
   fb=$(make_herdr_fakebin "$dir")
   idle_out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -4661,29 +4643,29 @@ test_rendered_busy_state_reads_the_cursor_busy_token() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_rendered_busy_state default:w1:p2' "$ROOT" )
   fail_out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_rendered_busy_state default:w1:p2' "$ROOT" )
-  [ "$idle_out" = idle ] || fail "an idle cursor pane renders no busy token and must read idle, got '$idle_out'"
-  [ "$busy_out" = busy ] || fail "a mid-turn cursor pane renders 'ctrl+c to stop' and must read busy, got '$busy_out'"
+  [ "$idle_out" = idle ] || fail "an idle pane renders no busy token and must read idle, got '$idle_out'"
+  [ "$busy_out" = busy ] || fail "a mid-turn Claude pane renders 'esc to interrupt' and must read busy, got '$busy_out'"
   [ "$fail_out" = unknown ] || fail "an unreadable pane must read unknown, never idle, got '$fail_out'"
   pass "fm_backend_herdr_rendered_busy_state: busy/idle/unknown from the rendered footer, with an unreadable pane never reading idle"
 }
 
 test_send_text_submit_confirms_never_idle_native_state_via_footer_transition() {
   local dir log resp fb out enter_count
-  dir="$TMP_ROOT/submit-cursor-footer-transition"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  dir="$TMP_ROOT/submit-footer-transition"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # 1: send-text
-  # 2: agent get - cursor is `blocked` even while idle, so the native
+  # 2: agent get - native status is `blocked` even while idle, so the native
   #    idle-baseline path is unreachable and the composer branch runs
   # 3: pane read - rendered footer baseline: no busy token, so the pane was NOT
   #    mid-turn before our Enter
   # 4: send-keys enter
-  # 5: pane read - composer content mid-turn: placeholder plus busy token
+  # 5: pane read - typed composer content mid-turn
   # 6: pane read - rendered footer now busy: an idle-to-busy transition ACROSS
   #    our Enter, which is the submission proof
   printf '{"result":{"agent":{"agent_status":"blocked"}}}\n' > "$resp/2.out"
-  herdr_cursor_idle_plain > "$resp/3.out"
-  herdr_cursor_midturn_ansi > "$resp/5.out"
-  herdr_cursor_midturn_plain > "$resp/6.out"
-  herdr_submit_identity_prefix "$resp" grok
+  herdr_footer_idle_plain > "$resp/3.out"
+  herdr_footer_busy_ansi > "$resp/5.out"
+  herdr_footer_busy_plain > "$resp/6.out"
+  herdr_submit_claude_prefix "$resp" "hello captain"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.01 0.01' "$ROOT" )
@@ -4695,15 +4677,15 @@ test_send_text_submit_confirms_never_idle_native_state_via_footer_transition() {
 
 test_send_text_submit_never_idle_native_state_keeps_pending_without_a_transition() {
   local dir log resp fb out
-  dir="$TMP_ROOT/submit-cursor-no-transition"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  dir="$TMP_ROOT/submit-footer-no-transition"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # The pane was ALREADY mid-turn before our Enter, so its busy footer is not
   # evidence about OUR message: the verdict must stay pending rather than
   # borrowing someone else's turn as proof of our delivery.
   printf '{"result":{"agent":{"agent_status":"blocked"}}}\n' > "$resp/2.out"
-  herdr_cursor_midturn_plain > "$resp/3.out"
-  herdr_cursor_midturn_ansi > "$resp/5.out"
-  herdr_cursor_midturn_ansi > "$resp/7.out"
-  herdr_submit_identity_prefix "$resp" grok
+  herdr_footer_busy_plain > "$resp/3.out"
+  herdr_footer_busy_ansi > "$resp/5.out"
+  herdr_footer_busy_ansi > "$resp/7.out"
+  herdr_submit_claude_prefix "$resp" "hello captain"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
@@ -6022,8 +6004,8 @@ test_send_text_submit_preexisting_working_does_not_confirm_failed_enter
 test_send_text_submit_idle_baseline_does_not_confirm_failed_enter
 test_send_text_submit_idle_native_empty_composer_confirms_delivery
 test_send_text_submit_idle_native_pending_plus_rendered_busy_is_queued
-test_composer_state_cursor_midturn_row_reads_pending
-test_rendered_busy_state_reads_the_cursor_busy_token
+test_composer_state_busy_footer_keeps_pending_text
+test_rendered_busy_state_reads_supported_footer
 test_send_text_submit_confirms_never_idle_native_state_via_footer_transition
 test_send_text_submit_never_idle_native_state_keeps_pending_without_a_transition
 test_send_text_submit_confirms_despite_codex_idle_tip_composer

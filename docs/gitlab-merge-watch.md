@@ -44,7 +44,7 @@ That is deliberate: the host-agnostic property is a property of the stored recor
 GitLab runs mostly on self-hosted instances, so a merge request can live under any host.
 A GitLab project also sits under at least one group at no fixed depth, so no owner-and-repository pair can address one the way it can on GitHub.
 The stored record therefore carries `provider`, `url`, `host`, `path`, and `number`, and every consumer rebuilds the URL from those parts and refuses any record that does not reconstruct the stored URL exactly.
-`tests/fm-pr-check-security.test.sh` proves the host-agnostic path through a non-default-host sidecar and verifies that `glab` receives the reconstructed project URL.
+`tests/fm-pr-check-security-providers.test.sh` proves the host-agnostic path through a non-default-host sidecar and verifies that `glab` receives the reconstructed project URL.
 
 ## How plain glab is invoked, and why
 
