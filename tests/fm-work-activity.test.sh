@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap and incremental activity through the real owner and busy writer.
+# Bootstrap and activity through the real owner and busy writer.
+# Covers bin/fm_work_projection.py and bin/fm_work_state.py through public events.
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
