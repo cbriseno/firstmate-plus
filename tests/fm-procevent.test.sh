@@ -246,6 +246,45 @@ chmod +x "$TMP_ROOT/legacy-version/lavish-axi"
 export PATH="$TMP_ROOT/legacy-version:$PATH"
 
 if [ -z "${FM_PROCEVENT_CASE:-}" ] || [ "${FM_PROCEVENT_CASE:-}" = listener-handoff ]; then
+  # An overloaded runner can miss arm's confirmation window before claiming.
+  # Delay only our detached child; the same normal child must later recover.
+  LATE="$TMP_ROOT/late-arm"; export LATE
+  mkdir -p "$LATE/bin"; new_home "$LATE/home"
+  fm_test_track_procevent_home "$LATE/home"
+  REAL_BASH=$(command -v bash); export REAL_BASH
+  cat > "$LATE/bin/bash" <<'SH'
+#!/bin/sh
+if [ "${2-}" = _start ]; then
+  echo delayed > "$LATE/delayed"
+  while [ ! -e "$LATE/release" ]; do sleep 0.05; done
+fi
+exec "$REAL_BASH" "$@"
+SH
+  cat > "$LATE/bin/lavish-axi" <<'SH'
+#!/bin/sh
+[ "$1" != --version ] || { echo 0.1.97; exit 0; }
+echo listening > "$LATE/listening"
+while [ ! -e "$LATE/end" ]; do sleep 0.05; done
+printf 'session:\n  status: ended\n'
+SH
+  chmod +x "$LATE/bin/bash" "$LATE/bin/lavish-axi"
+  late_art="$LATE/board.html"; printf '<h1>late start</h1>\n' > "$late_art"
+  lavish_session "$late_art"
+  late_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$late_art")
+  if PATH="$LATE/bin:$PATH" FM_HOME="$LATE/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+    "$ROOT/bin/fm-procevent-lavish.sh" arm "$late_art" > "$LATE/arm.out" 2>&1; then
+    fail "unconfirmed listener was reported ready"
+  fi
+  wait_for "$LATE/delayed" || fail "the detached runner was not delayed"
+  [ -f "$LATE/home/state/procevent/$late_id.source" ] \
+    || fail "a confirmation timeout retired the source instead of preserving recovery"
+  assert_not_contains "$(cat "$LATE/arm.out")" 'armed:' "unconfirmed arm printed ready"
+  touch "$LATE/release"
+  wait_for "$LATE/listening" 600 || fail "the normal detached runner did not recover"
+  assert_contains "$(pe "$LATE/home" list)" 'live' "recovered listener did not own its source"
+  pe "$LATE/home" retire "$late_id" >/dev/null || fail "late-start listener cleanup failed"
+  pass "a confirmation timeout preserves registration and the detached listener recovers"
+
   for owner in fm-config-board-20261114 macb-p16-20261114; do
     HANDOFF="$TMP_ROOT/handoff-$owner"; export HANDOFF
     mkdir -p "$HANDOFF/bin"; new_home "$HANDOFF/home"
@@ -257,7 +296,7 @@ set -eu
 [ "$1" != --version ] || { echo 0.1.97; exit 0; }
 n=$(cat "$HANDOFF/$1-count" 2>/dev/null || echo 0); n=$((n + 1))
 echo "$n" > "$HANDOFF/$1-count"
-if [ "$n" = 1 ] || [ -e "$HANDOFF/always-fail" ]; then
+if [ "$n" = 1 ] || [ -e "$HANDOFF/always-fail" ] || { [ "$1" = poll ] && [ "$n" -le 14 ]; }; then
   printf 'error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port %s` to inspect server startup\n' "$LAVISH_AXI_PORT"
   exit 1
 fi
@@ -267,7 +306,7 @@ if [ "$1" = reply ]; then
 fi
 : > "$HANDOFF/poll$n"
 while [ ! -e "$HANDOFF/release$n" ]; do sleep 0.05; done
-if [ "$n" = 4 ]; then
+if [ "$n" = 17 ]; then
   printf 'session:\n  status: ended\n  session_ended: true\n'
 else
   printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","round %s","","message",""\n' "$n"
@@ -279,23 +318,23 @@ SH
     handoff_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$handoff_art")
     printf 'reply before listening\n' > "$HANDOFF/reply"
     PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
-      "$ROOT/bin/fm-procevent-lavish.sh" arm "$handoff_art" --for "$owner" \
+      FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=60 "$ROOT/bin/fm-procevent-lavish.sh" arm "$handoff_art" --for "$owner" \
       --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "$owner arm failed"
     [ "$(cat "$HANDOFF/reply-count")" = 2 ] || fail "startup reply was not retried"
     [ "$(wc -l < "$HANDOFF/replies" | tr -d ' ')" = 1 ] || fail "reply duplicated"
     # Empty ready markers are intentional; wait_for requires nonempty files.
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll2" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll2" ] || fail "startup poll was not retried"
-    touch "$HANDOFF/release2"
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll15" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll15" ] || fail "startup poll was not retried"
+    touch "$HANDOFF/release15"
     wait_for "$HANDOFF/home/state/$owner.inbox/001.msg" 200 || fail "first feedback missing"
     printf 'done: report ready\n' > "$HANDOFF/home/state/$owner.status"
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll3" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll3" ] || fail "$owner stopped listening between turns"
-    touch "$HANDOFF/release3"
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll16" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll16" ] || fail "$owner stopped listening between turns"
+    touch "$HANDOFF/release16"
     wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.result" 200 || fail "second feedback missing"
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll4" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll4" ] || fail "$owner done stopped listening"
-    FM_HOME="$HANDOFF/home" "$ROOT/bin/fm-inbox.sh" list | grep -F 'round 3' >/dev/null \
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll17" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll17" ] || fail "$owner done stopped listening"
+    FM_HOME="$HANDOFF/home" "$ROOT/bin/fm-inbox.sh" list | grep -F 'round 16' >/dev/null \
       || fail "done-owner feedback did not reach the primary"
     assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" "listening acknowledged feedback"
     PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
@@ -303,7 +342,7 @@ SH
       --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "reply while listening failed"
     [ -f "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" ] || fail "oldest round not acknowledged"
     assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.handled" "reply acknowledged unread newer feedback"
-    touch "$HANDOFF/release4"
+    touch "$HANDOFF/release17"
     wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.3.result" 200 || fail "terminal feedback missing"
     if pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null 2>&1; then
       fail "terminal acknowledgement orphaned an earlier unhandled capture"
@@ -312,26 +351,20 @@ SH
     pe "$HANDOFF/home" handled "$handoff_id" 2 >/dev/null || fail "second acknowledgement failed"
     pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null || fail "terminal acknowledgement failed"
     assert_absent "$HANDOFF/home/state/procevent/$handoff_id.source" "terminal source remained armed"
-    [ "$(cat "$HANDOFF/poll-count")" = 4 ] || fail "terminal board was polled again"
-    pass "$owner keeps listening after feedback and done; reply acknowledges only its oldest round"
+    [ "$(cat "$HANDOFF/poll-count")" = 17 ] || fail "terminal board was polled again"
+    pass "$owner recovers beyond thirteen startup failures, keeps listening after feedback and done"
   done
   touch "$HANDOFF/always-fail"
-  for operation in reply poll; do
-    printf '0\n' > "$HANDOFF/$operation-count"
-    if [ "$operation" = reply ]; then
-      retry_args=(deliver-reply poll "$handoff_art" --agent-reply-file "$HANDOFF/reply")
-    else
-      retry_args=(poll "$handoff_art")
-    fi
-    if PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
-      "$ROOT/bin/fm-procevent-lavish.sh" "${retry_args[@]}" > "$HANDOFF/exhausted-$operation" 2>&1; then
-      fail "$operation reported success after persistent startup failures"
-    fi
-    [ "$(cat "$HANDOFF/$operation-count")" = 13 ] || fail "$operation retries were not bounded"
-    assert_contains "$(cat "$HANDOFF/exhausted-$operation")" 'server did not start' "exhausted failure disappeared"
-    [ -s "$HANDOFF/reply" ] || fail "failed retry consumed the original reply"
-  done
-  pass "persistent startup errors surface after thirteen attempts and preserve the reply"
+  printf '0\n' > "$HANDOFF/reply-count"
+  if PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
+    "$ROOT/bin/fm-procevent-lavish.sh" deliver-reply poll "$handoff_art" \
+    --agent-reply-file "$HANDOFF/reply" > "$HANDOFF/exhausted-reply" 2>&1; then
+    fail "reply reported success after persistent startup failures"
+  fi
+  [ "$(cat "$HANDOFF/reply-count")" = 13 ] || fail "reply retries were not bounded"
+  assert_contains "$(cat "$HANDOFF/exhausted-reply")" 'server did not start' "exhausted failure disappeared"
+  [ -s "$HANDOFF/reply" ] || fail "failed retry consumed the original reply"
+  pass "persistent reply errors surface after thirteen attempts and preserve the reply"
   [ "${FM_PROCEVENT_CASE:-}" != listener-handoff ] || exit 0
 fi
 
@@ -1785,32 +1818,32 @@ PATH="$LAVISH_SCRIPTED_BIN:$PATH" LAVISH_COUNT="$GONE_COUNT" LAVISH_SCRIPT=feedb
   || fail "a listener whose artifact vanished consumed its staged reply anyway"
 pass "a listener whose artifact vanished leaves the staged reply for the next one"
 
-# Exhaustion is news: after the bounded retries the same exact response is
-# captured and announced normally rather than being swallowed forever.
+# A transient interruption outlasting the old retry bound must still recover
+# without becoming a captured error round that leaves the board unattended.
 HEXH="$TMP_ROOT/hexh"; new_home "$HEXH"
 EXH_ART="$TMP_ROOT/exhaust-board.html"
 printf '<h1>exhaust</h1>\n' > "$EXH_ART"
 lavish_session "$EXH_ART"
 exh_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$EXH_ART")
 fm_test_track_procevent_home "$HEXH"
-LAVISH_COUNT="$TMP_ROOT/exhaust-count"; LAVISH_SCRIPT="interrupt"
+LAVISH_COUNT="$TMP_ROOT/exhaust-count"; LAVISH_SCRIPT="$(printf 'interrupt %.0s' {1..14})feedback"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$EXH_ART" >/dev/null
 wait_capture "$HEXH" "$exh_id" 200 \
-  || fail "exhaustion produced no captured result"
-[ "$(cat "$LAVISH_COUNT")" = 13 ] \
-  || fail "the retry bound polled $(cat "$LAVISH_COUNT") times, not the first poll plus 12 bounded retries"
+  || fail "recovery produced no captured feedback"
+[ "$(cat "$LAVISH_COUNT")" = 15 ] \
+  || fail "the listener polled $(cat "$LAVISH_COUNT") times, not fourteen interruptions plus the recovered poll"
 [ "$(count_results "$HEXH" "$exh_id")" = 1 ] \
-  || fail "exhaustion produced $(count_results "$HEXH" "$exh_id") captured results instead of one"
+  || fail "recovery produced $(count_results "$HEXH" "$exh_id") captured results instead of one"
 wait_for "$HEXH/state/.wake-queue" \
-  || fail "the interruption that survives the bound produced no wake"
+  || fail "feedback after recovery produced no wake"
 assert_contains "$(wake_payloads "$HEXH")" "procevent lavish $exh_id 1" \
-  "the interruption that survives the bound is announced normally"
-assert_grep 'poll response was interrupted' "$(first_result "$HEXH" "$exh_id")" \
-  "the announced result is the exact interruption the server returned"
+  "feedback after recovery is announced normally"
+assert_grep 'ship it' "$(first_result "$HEXH" "$exh_id")" \
+  "the announced result is the feedback received after recovery"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$EXH_ART" >/dev/null
-pass "an interruption that outlives the bounded retries is captured and announced"
+pass "an interruption that outlives the old bound recovers without a captured error"
 
 # A different SERVER_ERROR is a genuine error, never a retry: no fail-open drift
 # from the one exact transient response this adapter owns.
@@ -4901,8 +4934,8 @@ PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
 pass "arm waits out a delayed listener start before reporting ready"
 
 # A claim path that is a directory can never be owned, so the runner dies before
-# the listener command. Arm must not print ready, and it must remove the
-# registration it just published.
+# the listener command. Arm must not print ready, and it must preserve the
+# registration so reconciliation can recover when the obstruction clears.
 arm_blocked_claim() {  # <dir> <confirm-seconds>
   local dir=$1 secs=$2 art id began rc elapsed
   mkdir -p "$dir/bin" "$dir/home/state"

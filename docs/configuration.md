@@ -2220,12 +2220,11 @@ Its header owns the exact commands and private episode mechanics; `tests/fm-lavi
 
 **Retry interrupted Lavish polls**
 
-That adapter, and only that adapter, retries the exact transient response a cut-short listener returns while its marks remain available (`error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`), up to 12 times with poll starts at least 5 seconds apart, so an internal retry never reaches the runner as a captured result.
+The Lavish adapter keeps polling through the exact transient interruption and server-startup failures until the server recovers, so a slow server cannot turn an internal retry into a captured round that stops the listener.
 This start-to-start governor is a no-op after a normally blocking poll but caps an immediately returning poll under the shipped defaults independently of the owner lease and registration launch pacing.
 
-Real feedback, ended and missing sessions, other errors, and that same interruption still standing once the bound is spent are all captured and announced normally; `FM_LAVISH_POLL_RETRY_DELAY` is a bounded 1 to 60 second test override for the interval only, and the runner itself stays adapter-agnostic.
-The adapter also retries the exact `Lavish Editor server did not start` / `SERVER_ERROR` response with its matching port-specific startup help, using the same bound and cadence for polls and synchronous replies.
-Other startup failures remain errors; an exhausted reply retry preserves the original reply file and leaves the round unacknowledged.
+Real feedback, ended and missing sessions, and other errors are captured and announced normally; the runner itself stays adapter-agnostic.
+The adapter's header owns the exact retry signatures, cadence, test override, and bounded synchronous-reply attempts; an exhausted reply retry preserves the original reply file and leaves the round unacknowledged.
 
 An already-armed Lavish source keeps its registered listener command until it is retired and armed again, so retire the source, then arm it again to adopt this retry policy.
 
@@ -2238,7 +2237,7 @@ After opening the artifact as required above, the worker arms it with `bin/fm-pr
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.
 
-- The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`, and a failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
+- The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`; a failed confirmation preserves the registration for normal reconciliation instead of treating a slow start as a terminal source.
 - An earlier registration's listener that releases the board inside the confirm window lets the new registration start, and `arm` then reports `armed` as usual.
 - When a live listener from an earlier registration of the same board still holds it when the window ends, `arm` exits zero with `still-listening` instead of `armed`, because that earlier listener keeps serving the board; a continuing task listener adopts the registration after its next capture when the listener command is unchanged, while other commands require retiring and arming again.
 - The arm is refused unless that task id has valid, identity-matching endpoint metadata, because a board whose owner has no endpoint would collect feedback nobody can be told about.

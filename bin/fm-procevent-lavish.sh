@@ -127,7 +127,7 @@
 # after the server confirms acceptance. Older compatible versions retain the
 # legacy poll-with-reply path, without the synchronous handoff guarantee.
 #
-# BOUNDED QUIET RETRY, owned here and nowhere else. A live listener can be cut
+# QUIET RETRY, owned here and nowhere else. A live listener can be cut
 # short by the server with exactly this two-line response while the session's
 # marks remain available:
 #
@@ -136,17 +136,18 @@
 #
 # The exact three-line startup failure (`Lavish Editor server did not start`,
 # `code: SERVER_ERROR`, and its port-specific `help[1]` server command) is
-# retried by poll and synchronous reply with this same bound and cadence.
-# Reply files are consumed only after acceptance.
+# retried by poll and synchronous reply at the same cadence. Poll keeps waiting
+# through these transient failures until the server recovers; synchronous reply
+# retains its bounded attempts and consumes reply files only after acceptance.
 #
 # That is an internal retry, not news, so registering the raw poll made the
 # generic runner capture it and wake the whole fleet. `poll` therefore re-runs
-# the published poll up to POLL_RETRY_LIMIT times for that exact response, with
+# the published poll for those exact responses, with
 # attempt starts at least POLL_RETRY_DELAY_DEFAULT seconds apart. The match is exact and
-# deliberately narrow: real feedback, ended and missing sessions, any other
-# SERVER_ERROR, and the same interruption still standing after the bound is
-# spent are all printed straight through and captured normally. The retry is a
-# Lavish fact, so the generic runner in bin/fm-procevent.sh stays
+# deliberately narrow: real feedback, ended and missing sessions and any other
+# SERVER_ERROR are all printed straight through and captured normally. A slow
+# server must not turn an internal retry into a captured round that stops the
+# listener. The retry is a Lavish fact, so the generic runner stays
 # adapter-agnostic and learns nothing about it.
 #
 # LOSS LIMITATION, stated plainly. The published poll destructively clears
@@ -227,7 +228,7 @@ post_lavish_reply() {  # <artifact> <reply-file>
     if output=$(lavish-axi reply "$1" --agent-reply-file "$2" 2>&1); then
       return 0
     fi
-    if lavish_startup_error "$output" && [ "$attempt" -lt "$POLL_RETRY_LIMIT" ]; then
+    if lavish_startup_error "$output" && [ "$attempt" -lt "$REPLY_RETRY_LIMIT" ]; then
       attempt=$((attempt + 1))
       poll_iteration_floor_wait "$started" "$delay" || return 1
       continue
@@ -255,7 +256,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
+  local artifact='' task='' reply_file='' id real listening
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -297,8 +298,8 @@ cmd_arm() {
       -- "${listener[@]}" || exit 1
   fi
   # Registration is not a running listener. Readiness is the process-event
-  # owner's evidence for this generation; a miss retires a source that never
-  # started so arm does not leave it registered.
+  # owner's evidence for this generation. A confirmation timeout is not a
+  # terminal result: preserve registration so normal reconciliation can retry.
   listening=0
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" ensure-listening "$id" || listening=$?
   if [ "$listening" -eq 3 ]; then
@@ -309,12 +310,7 @@ cmd_arm() {
     exit 0
   fi
   if [ "$listening" -ne 0 ]; then
-    owner=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null \
-      | awk -v id="$id" '$1 == id { print $3; exit }')
-    case "$owner" in
-      live|orphaned|task:*/listening|task:*/round-open) ;;
-      *) FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$id" >/dev/null 2>&1 || true ;;
-    esac
+    printf 'registered: %s (listener not confirmed; reconciliation will retry)\n' "$id" >&2
     exit 1
   fi
   printf 'armed: %s\n' "$id"
@@ -336,11 +332,11 @@ cmd_retire() {
   "$SCRIPT_DIR/fm-procevent.sh" retire "$id"
 }
 
-# The bounded quiet retry described in the header. The bound is a constant
+# The synchronous reply retry described in the header. The bound is a constant
 # because it is a property of the transient response, not an operator choice;
 # only the delay takes an override, so a test can exercise the real bound
 # without waiting it out.
-POLL_RETRY_LIMIT=12
+REPLY_RETRY_LIMIT=12
 POLL_RETRY_DELAY_DEFAULT=5
 POLL_RETRY_DELAY_MIN=1
 POLL_RETRY_DELAY_MAX=60
@@ -434,7 +430,7 @@ poll_iteration_floor_wait() {
 }
 
 cmd_poll() {
-  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started
+  local artifact=${1-} delay response cleanup_command rc filter_rc iteration_started
   local pipeline_status reply_file=''
   local reply_text='' reply_pending=0
   [ -n "$artifact" ] || usage
@@ -490,14 +486,8 @@ cmd_poll() {
     case "$filter_rc" in
       0) break ;;
       10)
-        if [ "$attempt" -lt "$POLL_RETRY_LIMIT" ]; then
-          attempt=$((attempt + 1))
-          poll_iteration_floor_wait "$iteration_started" "$delay" \
-            || die "cannot enforce the poll rate governor"
-        else
-          cat -- "$response"
-          break
-        fi
+        poll_iteration_floor_wait "$iteration_started" "$delay" \
+          || die "cannot enforce the poll rate governor"
         ;;
       *) die "cannot classify the poll response" ;;
     esac
