@@ -2324,7 +2324,8 @@ test_unbound_source_closes_no_hold() {
   printf '<h1>Unbound</h1>\n' > "$artifact"
   fm_fake_exit0 "$home/fakebin" lavish-axi
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the unbound source id"
-  run_lavish "$home" arm "$artifact" >/dev/null || fail "could not arm the unbound review"
+  run_procevent "$home" register lavish "$sid" -- "$home/fakebin/lavish-axi" >/dev/null \
+    || fail "could not register the unbound review"
 
   result="$home/state/procevent-inbox/$sid.1.result"
   mkdir -p "$home/state/procevent-inbox"
@@ -4011,7 +4012,7 @@ test_merge_entrypoints_refuse_a_reused_task_incarnation() {
 test_merge_entrypoints_serialize_forced_teardown_before_task_reads() {
   local home id pr repo wt ready release merge_pid teardown_rc merge_rc real_grep
   local local_home local_id local_repo local_wt local_ready local_release local_pid
-  local local_teardown_rc local_merge_rc real_git before after i
+  local local_teardown_rc local_merge_rc real_git before after
 
   home=$(make_home teardown-race-pr-entrypoint)
   configure_merged_github "$home"
@@ -4053,16 +4054,13 @@ SH
     FM_TEST_RACE_RELEASE="$release" run_pr_merge "$home" "$id" "$pr" \
     > "$home/race-pr.out" 2> "$home/race-pr.err" &
   merge_pid=$!
-  i=0
-  while [ "$i" -lt 500 ]; do
-    [ -e "$ready" ] && break
-    kill -0 "$merge_pid" 2>/dev/null || break
-    sleep 0.01
-    i=$((i + 1))
+  while [ ! -e "$ready" ] && kill -0 "$merge_pid" 2>/dev/null; do
+    sleep 0.5
   done
   if [ ! -e "$ready" ]; then
     : > "$release"
     wait "$merge_pid" 2>/dev/null || true
+    cat "$home/race-pr.err" >&2
     fail "the PR merge did not reach the post-metadata synchronization point"
   fi
   set +e
@@ -4136,16 +4134,13 @@ SH
     "$ROOT/bin/fm-merge-local.sh" "$local_id" \
     > "$local_home/race-local.out" 2> "$local_home/race-local.err" &
   local_pid=$!
-  i=0
-  while [ "$i" -lt 500 ]; do
-    [ -e "$local_ready" ] && break
-    kill -0 "$local_pid" 2>/dev/null || break
-    sleep 0.01
-    i=$((i + 1))
+  while [ ! -e "$local_ready" ] && kill -0 "$local_pid" 2>/dev/null; do
+    sleep 0.5
   done
   if [ ! -e "$local_ready" ]; then
     : > "$local_release"
     wait "$local_pid" 2>/dev/null || true
+    cat "$local_home/race-local.err" >&2
     fail "the local merge did not reach the post-validation synchronization point"
   fi
   set +e
@@ -4472,8 +4467,11 @@ test_complete_refuses_an_entry_held_for_another_origin() {
 
 test_hold_origins_precede_backend_holds() {
   local home phase timing failure id shown origin until_args=()
-  for phase in new active released; do
-    for timing in plain dated; do
+  local phases=(new active released) timings=(plain dated)
+  [ -z "${FM_HOLD_ORIGIN_PHASE:-}" ] || phases=("$FM_HOLD_ORIGIN_PHASE")
+  [ -z "${FM_HOLD_ORIGIN_TIMING:-}" ] || timings=("$FM_HOLD_ORIGIN_TIMING")
+  for phase in "${phases[@]}"; do
+    for timing in "${timings[@]}"; do
       home=$(make_home "origin-failure-$phase-$timing")
       id=sample-call
       for origin in origin-a origin-b; do
@@ -4821,11 +4819,13 @@ test_hold_reason_round_trips_awkward_characters() {
 
   expected_reason=$'  Pick route (north); say "yes" or \'no\' - 100% sure %28x%29, café\t\\slash\r\nSecond line\n\n'
   quoted_reason=$(jq -cn --arg value "$expected_reason" '$value')
-  for mode in tool manual fallback; do
+  local modes=(tool manual fallback)
+  [ -z "${FM_CAPTAIN_HOLD_REASON_MODE:-}" ] || modes=("$FM_CAPTAIN_HOLD_REASON_MODE")
+  for mode in "${modes[@]}"; do
     case "$mode" in
       manual) printf 'manual\n' > "$home/config/backlog-backend" ;;
       fallback)
-        rm "$home/config/backlog-backend"
+        rm -f "$home/config/backlog-backend"
         cat > "$home/fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = list ]; then
@@ -4839,7 +4839,7 @@ SH
     esac
     start=$(PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" FM_HOME="$home" \
       FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
-      FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-session-start.sh" 2>&1 || true)
+      FM_BOOTSTRAP_NETWORK=skip FM_SESSION_START_TIMEOUT=600 "$ROOT/bin/fm-session-start.sh" 2>&1 || true)
     assert_contains "$start" "$quoted_reason" "startup $mode changed the encoded reason"
     assert_contains "$start" 'Investigate literal %28' "startup $mode changed the title"
     assert_contains "$start" "$legacy" "startup $mode changed the legacy reason"
@@ -4852,7 +4852,7 @@ SH
         "startup changed unrelated error text"
     fi
   done
-  rm "$home/fakebin/tasks-axi"
+  rm -f "$home/fakebin/tasks-axi"
   out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     "$ROOT/bin/fm-afk-return.sh" check 2>&1 || true)
@@ -6170,90 +6170,208 @@ if [ "${1:-}" = --intake-cas ] || [ "${FM_CAPTAIN_HOLD_TEST_INTAKE_CAS:-}" = 1 ]
   exit 0
 fi
 
-test_moot_retirement_waits_for_all_work_and_preserves_evidence
-test_moot_retirement_keeps_standalone_answers_and_unverified_origins
-test_session_reconcile_sweeps_moot_calls_without_worker_records
-test_moot_origin_proof_never_falls_back_from_current_work_to_an_old_archive
-test_moot_retirement_recovers_close_failures_and_refuses_unreadable_graphs
-test_teardown_sweeps_moot_calls_with_archived_origins
-test_explicit_action_persists_until_authoritative_completion
-test_expected_identity_intakes
-test_expected_identity_secondmate
-test_expected_identity_waits_for_control_lock
-test_expected_identity_backend_failures
-test_hold_reason_round_trips_awkward_characters
-test_structured_call_fields_reach_the_snapshots
-test_structured_call_answer_by_option_id
-test_structured_call_follows_its_hold_lifecycle
-test_hold_requires_real_choices_or_a_recorded_escape
-test_independent_calls_from_one_origin_each_keep_their_card
-test_work_item_blocked_by_several_calls_waits_for_every_answer
-test_structured_call_reaches_parent_bearings_from_a_secondmate
-test_hold_origins_precede_backend_holds
-test_historical_self_inventory_has_workable_repair
-test_inventory_compares_backend_identities
-test_origin_is_never_its_own_inventory_entry
-test_complete_refuses_an_entry_held_for_another_origin
-test_uninventoried_report_decision_refuses_completion
-test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
-test_retained_body_keeps_its_utf8_bytes
-test_completion_gate_attests_and_transfers
-test_expected_identity_corrections
-test_free_answer_attachments_and_correction
-test_saved_answer_waits_for_application_without_reasking
-test_answer_records_and_closes
-test_release_frees_held_work
-test_undeclared_close_releases_in_flight_work
-test_hold_stamp_precedes_hold_visibility
-test_interrupted_answer_preserves_hold_age
-test_deferral_leaves_captains_call_until_due
-test_out_of_band_close_is_recordable
-test_visual_review_uses_shared_completion_owner
-test_none_inventory_and_resolved_prose_do_not_create_holds
-test_terminal_single_owner_status_decision_does_not_block_empty_inventory
-test_secondmate_hold_stays_in_authoritative_home
-test_secondmate_home_publishes_holds_and_answers
-test_secondmate_reconcile_publishes_before_request_retirement
-test_bound_channel_answers_close_at_answer_time
-test_reconcile_requests_wake_the_owner_and_retry
-test_reconcile_retry_after_public_ack
-test_reconcile_never_closes_through_the_keyed_answer_intake
-test_normal_answers_retire_pending_reconcile_requests
-test_reconcile_closes_with_evidence_or_keeps_the_call_open
-test_reconcile_outcomes_retry_partial_failures_once
-test_unbound_source_closes_no_hold
-test_legacy_identities_keep_working
-test_board_answer_reaches_the_keyed_answer_intake
-test_chat_channel_feeds_the_same_keyed_answer_intake
-test_origin_slug_validation_precedes_path_construction
-test_status_resolution_over_an_open_hold_is_signalled
-test_legitimate_holds_produce_no_divergence_signal
-test_teardown_never_closes_a_captain_held_task
-test_retained_row_artifacts_survive_captain_answers
-test_interrupted_cleanup_keeps_the_captain_call_recoverable
-test_answer_before_cleanup_replay_preserves_the_retained_report
-test_answer_before_cleanup_replay_notes_a_retained_gerrit_change
-test_unusable_pending_close_record_names_its_reason
-test_relocated_report_does_not_wedge_an_answer_before_replay
-test_teardown_retains_captain_calls_in_a_relocated_backlog
-test_teardown_retains_a_gerrit_captain_call_with_its_change_url
-test_merge_approval_releases_before_zero_done_retention
-test_pr_merge_entrypoint_refuses_a_captain_held_task
-test_local_merge_entrypoint_refuses_a_captain_held_task
-test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
-test_local_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
-test_merge_entrypoints_validate_identity_and_state_before_locking
-test_merge_entrypoints_refuse_a_reused_task_incarnation
-test_merge_entrypoints_serialize_forced_teardown_before_task_reads
-test_released_merge_passes_the_entrypoint_and_lands
-test_teardown_refuses_a_ship_when_the_captain_hold_cannot_be_read
-test_verify_resolves_a_hold_migrated_to_beads_notes
-test_verify_resolves_a_hold_migrated_under_the_configured_prefix
-test_marker_noted_row_wins_over_a_prefix_namesake
-test_complete_accepts_a_migrated_inventory_on_beads
-test_verify_names_the_unresolvable_legacy_id_once
-test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
-test_captain_hold_mutations_address_the_beads_backend
-test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
-test_archived_answered_hold_still_satisfies_the_gate
-test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
+# Each part keeps the full lifecycle coverage below the per-script time bound.
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 0 ]; then
+  test_moot_retirement_waits_for_all_work_and_preserves_evidence
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 1 ]; then
+  test_moot_retirement_keeps_standalone_answers_and_unverified_origins
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 2 ]; then
+  test_session_reconcile_sweeps_moot_calls_without_worker_records
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 3 ]; then
+  test_moot_origin_proof_never_falls_back_from_current_work_to_an_old_archive
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 4 ]; then
+  test_moot_retirement_recovers_close_failures_and_refuses_unreadable_graphs
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 5 ]; then
+  test_teardown_sweeps_moot_calls_with_archived_origins
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 6 ]; then
+  test_explicit_action_persists_until_authoritative_completion
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 7 ]; then
+  test_expected_identity_intakes
+  test_expected_identity_secondmate
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 27 ]; then
+  test_expected_identity_waits_for_control_lock
+  test_expected_identity_backend_failures
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 28 ]; then
+  test_structured_call_fields_reach_the_snapshots
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 24 ]; then
+  FM_CAPTAIN_HOLD_REASON_MODE=tool test_hold_reason_round_trips_awkward_characters
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 25 ]; then
+  FM_CAPTAIN_HOLD_REASON_MODE=manual test_hold_reason_round_trips_awkward_characters
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 26 ]; then
+  FM_CAPTAIN_HOLD_REASON_MODE=fallback test_hold_reason_round_trips_awkward_characters
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 8 ]; then
+  test_structured_call_answer_by_option_id
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 32 ]; then
+  test_structured_call_follows_its_hold_lifecycle
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 33 ]; then
+  test_hold_requires_real_choices_or_a_recorded_escape
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 29 ]; then
+  test_independent_calls_from_one_origin_each_keep_their_card
+  test_work_item_blocked_by_several_calls_waits_for_every_answer
+  test_structured_call_reaches_parent_bearings_from_a_secondmate
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 9 ]; then
+  FM_HOLD_ORIGIN_PHASE=new FM_HOLD_ORIGIN_TIMING=plain test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 43 ]; then
+  FM_HOLD_ORIGIN_PHASE=new FM_HOLD_ORIGIN_TIMING=dated test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 44 ]; then
+  FM_HOLD_ORIGIN_PHASE=active FM_HOLD_ORIGIN_TIMING=plain test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 45 ]; then
+  FM_HOLD_ORIGIN_PHASE=active FM_HOLD_ORIGIN_TIMING=dated test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 46 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=plain test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 47 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=dated test_hold_origins_precede_backend_holds
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 30 ]; then
+  test_historical_self_inventory_has_workable_repair
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 40 ]; then
+  test_inventory_compares_backend_identities
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 21 ]; then
+  test_origin_is_never_its_own_inventory_entry
+  test_complete_refuses_an_entry_held_for_another_origin
+  test_uninventoried_report_decision_refuses_completion
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 10 ]; then
+  test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 34 ]; then
+  test_retained_body_keeps_its_utf8_bytes
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 35 ]; then
+  test_completion_gate_attests_and_transfers
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 31 ]; then
+  test_expected_identity_corrections
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 41 ]; then
+  test_free_answer_attachments_and_correction
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 42 ]; then
+  test_saved_answer_waits_for_application_without_reasking
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 11 ]; then
+  test_answer_records_and_closes
+  test_release_frees_held_work
+  test_undeclared_close_releases_in_flight_work
+  test_hold_stamp_precedes_hold_visibility
+  test_interrupted_answer_preserves_hold_age
+  test_deferral_leaves_captains_call_until_due
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 12 ]; then
+  test_out_of_band_close_is_recordable
+  test_visual_review_uses_shared_completion_owner
+  test_none_inventory_and_resolved_prose_do_not_create_holds
+  test_terminal_single_owner_status_decision_does_not_block_empty_inventory
+  test_secondmate_hold_stays_in_authoritative_home
+  test_secondmate_home_publishes_holds_and_answers
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 13 ]; then
+  test_secondmate_reconcile_publishes_before_request_retirement
+  test_bound_channel_answers_close_at_answer_time
+  test_reconcile_requests_wake_the_owner_and_retry
+  test_reconcile_retry_after_public_ack
+  test_reconcile_never_closes_through_the_keyed_answer_intake
+  test_normal_answers_retire_pending_reconcile_requests
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 14 ]; then
+  test_reconcile_closes_with_evidence_or_keeps_the_call_open
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 48 ]; then
+  test_reconcile_outcomes_retry_partial_failures_once
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 49 ]; then
+  test_unbound_source_closes_no_hold
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 22 ]; then
+  test_legacy_identities_keep_working
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 36 ]; then
+  test_board_answer_reaches_the_keyed_answer_intake
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 37 ]; then
+  test_chat_channel_feeds_the_same_keyed_answer_intake
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 15 ]; then
+  test_origin_slug_validation_precedes_path_construction
+  test_status_resolution_over_an_open_hold_is_signalled
+  test_legitimate_holds_produce_no_divergence_signal
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 23 ]; then
+  test_teardown_never_closes_a_captain_held_task
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 38 ]; then
+  test_retained_row_artifacts_survive_captain_answers
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 39 ]; then
+  test_interrupted_cleanup_keeps_the_captain_call_recoverable
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 16 ]; then
+  test_answer_before_cleanup_replay_preserves_the_retained_report
+  test_answer_before_cleanup_replay_notes_a_retained_gerrit_change
+  test_unusable_pending_close_record_names_its_reason
+  test_relocated_report_does_not_wedge_an_answer_before_replay
+  test_teardown_retains_captain_calls_in_a_relocated_backlog
+  test_teardown_retains_a_gerrit_captain_call_with_its_change_url
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 17 ]; then
+  test_merge_approval_releases_before_zero_done_retention
+  test_pr_merge_entrypoint_refuses_a_captain_held_task
+  test_local_merge_entrypoint_refuses_a_captain_held_task
+  test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
+  test_local_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
+  test_merge_entrypoints_validate_identity_and_state_before_locking
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 18 ]; then
+  test_merge_entrypoints_refuse_a_reused_task_incarnation
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 50 ]; then
+  test_merge_entrypoints_serialize_forced_teardown_before_task_reads
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 51 ]; then
+  test_released_merge_passes_the_entrypoint_and_lands
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 52 ]; then
+  test_teardown_refuses_a_ship_when_the_captain_hold_cannot_be_read
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 53 ]; then
+  test_verify_resolves_a_hold_migrated_to_beads_notes
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 54 ]; then
+  test_verify_resolves_a_hold_migrated_under_the_configured_prefix
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 19 ]; then
+  test_marker_noted_row_wins_over_a_prefix_namesake
+  test_complete_accepts_a_migrated_inventory_on_beads
+  test_verify_names_the_unresolvable_legacy_id_once
+  test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
+  test_captain_hold_mutations_address_the_beads_backend
+  test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 20 ]; then
+  test_archived_answered_hold_still_satisfies_the_gate
+  test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
+fi

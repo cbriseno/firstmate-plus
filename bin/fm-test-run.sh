@@ -290,7 +290,7 @@ family_for_basename() {
     fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
-    fm-crew-state*.test.sh|fm-captain-hold-lifecycle.test.sh|\
+    fm-crew-state*.test.sh|fm-captain-hold-lifecycle.test.sh|fm-captain-hold-lifecycle-part*.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
@@ -400,7 +400,7 @@ family_for_basename() {
       printf '%s\n' backend-dispatch
       ;;
     fm-check-unregister.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security*.test.sh|\
-    fm-pr-health.test.sh|fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
+    fm-pr-health.test.sh|fm-pr-merge.test.sh|fm-pr-merge-part*.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
       ;;
@@ -1360,6 +1360,16 @@ families_for_unmapped_bin() {
 families_for_changed_path() {
   local path=$1 fixture_ref
   case "$path" in
+    tests/fm-captain-hold-lifecycle*.test.sh)
+      for test_part in tests/fm-captain-hold-lifecycle*.test.sh; do
+        [ -f "$test_part" ] && printf '%s\n' "__script__:$(basename "$test_part")"
+      done
+      ;;
+    tests/fm-pr-merge*.test.sh)
+      for test_part in tests/fm-pr-merge*.test.sh; do
+        [ -f "$test_part" ] && printf '%s\n' "__script__:$(basename "$test_part")"
+      done
+      ;;
     tests/fm-backend-herdr-eventwait.test.py)
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch

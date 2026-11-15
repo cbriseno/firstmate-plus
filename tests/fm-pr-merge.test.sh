@@ -2922,72 +2922,94 @@ test_secondmate_without_parent_binding_is_loud() {
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 0 ]; then
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
 test_pr_metadata_is_recorded_before_the_forge_call
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 1 ]; then
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
 test_github_mergeable_unknown_retries_then_succeeds
 test_github_mergeable_unknown_exhausts_bound_and_reports_pending
 test_github_mergeable_unknown_retry_rechecks_checks
 test_github_mergeable_conflicting_is_not_retried
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 2 ]; then
 test_github_unreadable_outcome_keeps_pr_bookkeeping
 test_github_refusal_quotes_the_forge_output
 test_github_unreadable_outcome_refusal_quotes_the_forge_output
 test_github_accepted_queue_flags_do_not_echo_back_the_same_command
 test_github_mismatched_queue_flags_still_name_the_retry
 test_github_unrecognised_queue_method_still_names_the_queue
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 3 ]; then
 test_github_unreadable_queue_rules_are_not_reported_as_no_queue
 test_github_plan_gated_403_reads_as_no_queue
 test_github_no_queue_rule_says_nothing_about_a_queue
 test_github_unmerged_fallback_cannot_replace_queue_aware_read
 test_github_auto_merge_without_queue_refuses_legibly
 test_github_failed_merge_never_claims_armed_auto_merge
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 4 ]; then
 test_github_failed_merge_with_queue_flags_never_claims_acceptance
 test_github_failed_gh_read_falls_back_to_gh_axi
 test_github_failed_merge_names_an_observed_landed_state
 test_github_without_gh_still_uses_gh_axi_merge
 test_github_without_gh_failed_read_keeps_bookkeeping
 test_github_merged_outcome_is_verified
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 5 ]; then
 test_github_verified_merge_requires_poll_recording
 test_github_queued_outcome_is_verified
 test_github_queue_required_refusal_names_retry_flags
 test_extra_merge_args_forwarded
 test_missing_meta_refuses_before_merge
 test_malformed_url_refuses_before_merge
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 6 ]; then
 test_rejects_unsafe_url_segments_before_recording
 test_repo_override_args_refuse_before_recording
 test_bundled_repo_override_args_refuse_before_recording
 test_explicit_merge_method_not_overridden
 test_method_equals_merge_method_not_overridden
 test_parses_pr_url_for_gh_axi
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 7 ]; then
 test_github_still_forwards_sha_arg
 test_gitlab_url_resolves_and_merges
 test_gitlab_host_comes_from_the_url
 test_gitlab_imposes_no_merge_method
 test_gitlab_extra_args_forwarded
 test_gitlab_merge_failure_propagates
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 8 ]; then
 test_gitlab_each_condition_refuses_independently
 test_gitlab_reports_every_failing_condition
 test_gitlab_stale_recorded_head_is_reported
 test_gitlab_unreadable_state_refuses
 test_gitlab_invalid_head_refuses
 test_gitlab_missing_tool_refuses_before_recording
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 9 ]; then
 test_forgejo_url_resolves_and_merges
 test_forgejo_login_resolves_from_the_host
 test_forgejo_refuses_when_login_is_ambiguous
 test_forgejo_each_condition_refuses_independently
 test_forgejo_unconfigured_ci_refuses_as_none
 test_forgejo_combined_status_reads_every_page
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 10 ]; then
 test_forgejo_stale_recorded_head_is_reported
 test_forgejo_invalid_head_refuses
 test_forgejo_missing_tool_refuses_before_recording
 test_forgejo_rejected_merge_is_never_trusted_by_exit_status
 test_forgejo_transient_confirm_read_failure_still_persists_authority
 test_forgejo_merge_method_and_extra_args
+fi
 
 # The merge gate asks whether the task is still held for the captain. A home
 # that carries no backlog records no captain calls at all, so nothing can be
@@ -4036,7 +4058,9 @@ run_required_case() {
 test_required_producer_identity() {
   local case_dir head kind variant expected app
   head=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1
-  for kind in classic ruleset; do
+  local kinds=(classic ruleset)
+  [ -z "${FM_PR_PRODUCER_KIND:-}" ] || kinds=("$FM_PR_PRODUCER_KIND")
+  for kind in "${kinds[@]}"; do
     for variant in wrong correct unreadable malformed stale waived; do
       case_dir=$(make_case "required-producer-$kind-$variant")
       add_gh_mocks "$case_dir" "$head"
@@ -4562,61 +4586,87 @@ test_allow_no_pipeline_is_attended_only_and_gitlab_only() {
   pass "fm-pr-merge --allow-no-pipeline is attended-only, takes no value, and applies only to GitLab"
 }
 
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 11 ]; then
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
 test_gitlab_merge_reports_upward
 test_queued_gitlab_merge_leaves_the_poll_armed
 test_failed_merge_reports_nothing
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 12 ]; then
 test_gitlab_refusal_reports_nothing
 test_main_home_merge_leaves_a_durable_wake
 test_queued_github_merge_leaves_the_poll_armed
 test_distinct_merged_prs_keep_distinct_wakes
 test_uncommitted_marker_retry_is_never_silent
 test_secondmate_without_parent_binding_is_loud
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 13 ]; then
 test_absent_backlog_still_merges
 test_unreadable_backlog_refuses_the_merge
 test_unreadable_backend_config_refuses_the_merge
 test_unreadable_user_backend_config_refuses_the_merge
 test_untraversable_user_backend_config_directory_refuses_the_merge
 test_absent_user_backend_config_directory_and_backlog_still_merge
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 14 ]; then
 test_backend_override_bypasses_unreadable_user_config
 test_github_red_checks_refuse_and_allow_red_waives_named
 test_github_draft_or_unreadable_draft_state_refuses
 test_superseded_failed_check_run_no_longer_refuses
 test_check_runs_never_supersede_status_contexts
 test_current_failed_check_run_still_refuses
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 15 ]; then
 test_late_finishing_old_success_does_not_hide_current_failure
 test_late_finishing_old_cancellation_is_superseded
 test_unfinished_rerun_keeps_a_check_red
 test_supersession_never_crosses_check_names
 test_undated_runs_never_supersede
 test_allow_red_still_waives_only_the_current_failure
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 16 ]; then
 test_allow_red_is_refused_while_away
 test_quiet_record_keeps_merges_attended
 test_allow_red_requires_one_separate_name
 test_away_record_permits_any_green_merge_under_away_authority
 test_away_branch_actor_merges_green_under_the_record
 test_away_branch_refuses_when_record_archived_during_preflight
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 17 ]; then
 test_away_posture_refuses_asynchronous_merge_paths
 test_away_plan_gated_403_does_not_block_the_merge
 test_away_record_does_not_bypass_red_or_identity
 test_unreadable_away_record_refuses_merge
 test_away_record_cannot_change_between_the_authority_read_and_the_merge
 test_a_record_made_unreadable_before_the_merge_refuses_it
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 18 ]; then
 test_merge_refuses_when_the_away_record_cannot_be_locked
 test_allow_red_refused_on_gitlab
 test_required_check_that_never_reported_refuses
 test_required_checks_reported_and_green_merge
 test_red_and_unreported_checks_are_reported_together
 test_unreadable_required_set_refuses
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 19 ]; then
 test_allow_missing_waives_only_the_named_unreported_check
 test_allow_missing_follows_the_allow_red_rules
-
-test_required_producer_identity
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 21 ]; then
+FM_PR_PRODUCER_KIND=classic test_required_producer_identity
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 23 ]; then
+FM_PR_PRODUCER_KIND=ruleset test_required_producer_identity
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 22 ]; then
 test_app_bound_required_status_context_matches_by_name
 test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
+fi
+if [ "${FM_PR_MERGE_TEST_PART:-0}" = 20 ]; then
 test_allow_missing_refused_on_forgejo
 test_allow_no_pipeline_merges_only_a_null_head_pipeline
 test_allow_no_pipeline_is_attended_only_and_gitlab_only
+fi
