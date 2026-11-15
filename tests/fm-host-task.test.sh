@@ -136,6 +136,15 @@ result.unlink()
 (state/'worker.status').write_text('done [at=1]: complete\n')
 run()
 assert not ready.exists() and not result.exists()
+# A legitimate slow delivery must finish through fm-send's own bounded protocol,
+# rather than disappearing at an unrelated 90-second wrapper deadline.
+(state/'worker.status').unlink()
+(data/'relay-request-launch1').unlink()
+(bin_dir/'fm-send.sh').write_text('#!/usr/bin/env bash\nsleep 91\nprintf delivered > "$FM_HOME/slow-delivered"\n')
+run(('--request','999999999'))
+assert (lab/'slow-delivered').read_text() == 'delivered'
+assert (data/'relay-request-launch1').read_text() == 'requested\n'
+assert 'handoff requested' in (state/'worker.status').read_text()
 print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure and terminal work')
 PYRELAY
 # Feed the native vendor statusline through the public wrapper. Existing display

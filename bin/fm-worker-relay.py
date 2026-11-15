@@ -140,7 +140,7 @@ def main():
                    'start no new operation. The owning watcher will relaunch this task with that note. '
                    'Do not report done unless the actual assignment is complete.')
         sent = subprocess.run(['bash', str(ROOT / 'fm-send.sh'), task, message], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if sent.returncode == 0:
             request.write('requested\n')
             request.flush()
