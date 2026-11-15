@@ -5840,7 +5840,7 @@ test_explicit_action_persists_until_authoritative_completion() {
   tasks_in "$home" block real-work --by action-call >/dev/null
   call=$(cat "$home/data/action-call/captain-call.json")
   identity=$(run_captain "$home" open action-call --identity) || fail 'action was not an open call'
-  run_captain "$home" capabilities --json | jq -e '.call_kinds == ["question","action"] and .action == {where:["chat"],completion:"complete-action",persistent:true}' >/dev/null \
+  run_captain "$home" capabilities --json | jq -e '.call_kinds == ["question","action","approval"] and .action == {where:["chat"],completion:"complete-action",persistent:true}' >/dev/null \
     || fail 'action capability is not explicit'
   snapshot=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     bash "$ROOT/bin/fm-tasks-axi.sh" work snapshot) || fail 'action work snapshot failed'

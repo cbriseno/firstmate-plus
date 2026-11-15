@@ -861,7 +861,7 @@ def validate_captain_call(value, task_id, hold_set):
                         where='chat', question=None, options=[], recommended=None,
                         context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
                         link=call_text(call.get('link'), CALL_BOUNDS['link'], True)))
-        if kind != 'question':
+        if kind not in ('question', 'approval'):
             return None
         options = [dict(id=o['id'], label=call_text(o['label'], CALL_BOUNDS['label']),
                         detail=call_text(o.get('detail'), CALL_BOUNDS['detail'], True))
@@ -872,7 +872,8 @@ def validate_captain_call(value, task_id, hold_set):
                 or not all(isinstance(i, str) and CALL_OPTION_ID.fullmatch(i) and i != 'reconcile' for i in ids)
                 or (call.get('recommended') is not None and call['recommended'] not in ids)):
             return None
-        return dict(call=dict(question=call_text(call['question'], CALL_BOUNDS['question']), options=options,
+        return dict(call=dict(**({'kind': 'approval'} if kind == 'approval' else {}),
+                    question=call_text(call['question'], CALL_BOUNDS['question']), options=options,
                     recommended=call.get('recommended'),
                     context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
                     link=call_text(call.get('link'), CALL_BOUNDS['link'], True)))

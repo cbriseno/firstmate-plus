@@ -319,6 +319,26 @@
 # source from the retained origin row. question.open belongs to the decision itself;
 # Revision 1.4 adds progress_checkpoints, progress_phases and verified_progress_gates.
 # Revision 1.6 adds worker_liveness and pause_reconciliation.
+# Revision 1.10 adds explainable_state_counts. Each task.placement has section,
+# code, reason, attention kinds and inputs: backlog/task state, typed hold,
+# inherited pause, open blockers, declared status/reason/age/until, worker
+# presence/liveness, native activity, project membership and capacity request.
+# Existing task.state remains the owner control state; placement is its board
+# explanation. A declared wait does not mean a parked or dead worker.
+# worker_liveness adds generation (null when unavailable) and age_seconds;
+# Projection refreshes ages on reads without inventing a new observation.
+# counts.sections is a disjoint partition of task keys, including empty groups.
+# counts.needs_you is the union of questions/actions/reports/approvals, never
+# the sum of those overlapping sets. unit and keys state exactly what is counted.
+# Questions/actions/approvals use the current call with no open dependency;
+# report review uses outcome.review=needed.
+# Approvals require an explicit captain-call kind=approval; prose never tags one.
+# counts.workers counts presence by task identity, independently of card section,
+# launches, occupied lanes and activity. crew retains its existing lane/ledger
+# semantics and must not be used as a card count. counts.capacity.limit=null
+# and state=unknown mean no configured limit, never zero available slots.
+# A capacity placement needs a queued resume or an observed spawn-deferred
+# marker and an applicable configured limit/resource constraint. Neither backlog prose nor quota establishes a wait.
 # completed/missing origins never answer, close or hide an outstanding decision.
 # request_removal accepts note up to 2000 characters, excluding NUL. Its preview
 # impact.consultation records canonical+short target, hierarchy initiative, real

@@ -18,6 +18,7 @@ import time
 import fcntl
 
 from fm_work_lock import acquire
+from fm_work_state import explain
 from fm_work_aliases import Aliases, PATH as ALIAS_PATH
 from fm_task_usage import aggregate as aggregate_usage
 from fm_progress import observed_run, sources as progress_sources, code_head
@@ -538,10 +539,14 @@ class Owner:
     def worker_liveness(self, task_id):
         if task_id in self._workers:
             return self._workers[task_id]
-        value = dict(state='unknown', source='none', observed_at=now(), verdict='no_metadata')
+        value = dict(state='unknown', source='none', observed_at=now(), verdict='no_metadata', gen=None)
         try:
             meta = 'state/' + task_id + '.meta'
             text = read_text(self.home, meta, 65536)
+            try:
+                value['gen'] = read_text(self.home, 'state/' + task_id + '.busy-gen', 4096).strip() or None
+            except FileNotFoundError:
+                pass
             # Remote paths and absent/ambiguous metadata cannot prove local death.
             if any(line.startswith('remote_host=') and line[12:] for line in text.splitlines()):
                 value['verdict'] = 'remote'
@@ -713,7 +718,7 @@ class Owner:
             receipt = facts['receipts'].get(task_id) if facts is not None else completion_receipt(self.home, row)
             project, subproject = self.display_membership(task_id)
             observed = observations.get(task_id, {})
-            tasks.append(dict(wait_until=observed.get('wait_until'), run_step=fresh_run_step(observed.get('run_step')), runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
+            tasks.append(dict(dispatch_wait=observed.get('dispatch_wait'), wait_until=observed.get('wait_until'), run_step=fresh_run_step(observed.get('run_step')), runtime=runtime, worker_liveness=worker, backlog_state=row['state'], key='task:' + task_id,
                 execution_context='host' if (observed.get('kind') or getattr(self, 'task_roles', {}).get(task_id)) == 'host' else 'project' if row.get('repo') else 'unknown',
                 native_activity=observed.get('native_activity'),
                 alias=self.aliases.alias('task:' + task_id), kind='task', parent=subproject or project,
@@ -912,11 +917,11 @@ class Owner:
                        reason=r['result'].get('reason'), running=r['result'].get('running'), cap=r['result'].get('cap'),
                        queue_position=queue.index(r['scope']) + 1 if r['scope'] in queue else None)
                   for r in current.values()]
-        return dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
+        return explain(dict(schema='fm-work-snapshot.v1', generated_at=now(), home=str(self.home), projects=[g for g in groups if g['kind'] == 'project'],
                     subprojects=[g for g in groups if g['kind'] == 'subproject'], tasks=tasks, requests=request_groups, sigue=sigue, rev=self.rev, history_sources=self.history_sources,
                     pause_controls=pauses, events=[e for r in sorted(controls, key=lambda r: r.get('at_ns', 0)) for e in r.get('events', [])],
                     crew=crew, yields=yields, main_inventory=self.observation.get('main_inventory'),
-                    aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized'))
+                    aliases=dict(state='active' if self.aliases.value is not None else 'uninitialized')), self.status)
 
     def scope_position(self, scope):
         # A control scope ranks by its highest member in «Mi orden» (set by snapshot).
@@ -1952,13 +1957,13 @@ def main():
         if args.verb == 'supervision':
             result = owner.supervision(args.tasks)
         elif args.verb == 'capabilities':
-            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.9', ops=OPS,
+            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.10', ops=OPS,
                           report_controls=['report.review'],
                           outcome_controls=['outcome.review'],
                           signals=['pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue'],
                           features=['progress', 'safe_point', 'group_dependencies', 'manual_order', 'priority_unset',
                                     'stable_aliases', 'normalized_hierarchy', 'logical_project_roots', 'question_provenance', 'removal_consultation',
-                                    'progress_checkpoints', 'progress_phases', 'verified_progress_gates', 'worker_liveness', 'pause_reconciliation', 'outcome_review'])
+                                    'progress_checkpoints', 'progress_phases', 'verified_progress_gates', 'worker_liveness', 'pause_reconciliation', 'outcome_review', 'explainable_state_counts'])
         else:
             if args.verb in ('bootstrap', 'snapshot', 'apply', 'request-status', 'close', 'reconcile', 'assign', 'normalize-apply', 'normalize-rollback', 'aliases-init') or '.' in args.verb or (owner.home / ALIAS_PATH).exists() or owner.env.get('FM_WORK_OWNER_FD'):
                 lock = owner.lock()

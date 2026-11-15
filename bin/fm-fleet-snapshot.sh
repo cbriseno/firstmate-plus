@@ -267,7 +267,7 @@ Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
 refreshes only its parent-side remote-summary cache as an observational side effect.
 
---work-observation emits local inventory and task pause/validation observations without remote collection.
+--work-observation emits local inventory, task pause/validation and spawn-deferral observations without remote collection.
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
@@ -2098,8 +2098,26 @@ printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary task file write failed" >&2; exit 1; }
 if [ "$OUTPUT_MODE" = work-observation ]; then
   main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" || exit 1
+  # A failed spawn leaves a typed marker even though there is no worker metadata.
+  # Read only declarations here; the watcher owns clearing the deferral.
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-project-capacity-lib.sh
+  . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+  capacity_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || capacity_config=$CONFIG
+  for marker in "$STATE"/*.spawn-deferred; do
+    [ -f "$marker" ] && [ ! -L "$marker" ] || continue
+    deferred_project=$(head -n 1 "$marker") || continue
+    fm_project_capacity_lookup "$capacity_config" "$(basename "$deferred_project")" || FM_PROJECT_CAPACITY=
+    deferred_id=$(basename "$marker" .spawn-deferred)
+    [ ! -f "$STATE/$deferred_id.meta" ] || continue
+    jq -n --arg id "$deferred_id" --argjson limit "${FM_PROJECT_CAPACITY:-null}" \
+      '{id:$id,dispatch_wait:{source:"spawn-deferred",project_limit:$limit}}'
+  done | jq -s . > "$JSON_TRANSPORT_DIR/deferrals.json" || exit 1
   jq -n --slurpfile inventory "$MAIN_INVENTORY_JSON_FILE" --slurpfile tasks "$TASKS_JSON_FILE" \
-    '{main_inventory:$inventory[0], tasks:[$tasks[0][] | {id,kind,wait_until,run_step,native_activity}]}'
+    --slurpfile deferrals "$JSON_TRANSPORT_DIR/deferrals.json" \
+    '{main_inventory:$inventory[0], tasks:(([$tasks[0][] | {id,kind,wait_until,run_step,native_activity}] + $deferrals[0])
+      | group_by(.id) | map(add))}'
   exit $?
 fi
 # Link registration independently of backlog ownership/phase. Queued or held

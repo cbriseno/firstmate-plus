@@ -3354,6 +3354,8 @@ spawn_deferred_tick() {
     reason="check: capacity available: retry deferred task $id"
     fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
     rm -f -- "$marker" || return 1
+    [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
     wake "$reason"
   done
   return 0

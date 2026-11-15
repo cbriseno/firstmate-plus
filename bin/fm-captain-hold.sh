@@ -24,7 +24,7 @@
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--repair-call] \
 #     (--question <line> --option <id>=<label>[|<detail>] --option <id>=<label>[|<detail>]... \
-#      [--recommended <id>] [--context <line>] [--link <report path or URL>]
+#      [--call-kind question|approval] [--recommended <id>] [--context <line>] [--link <report path or URL>]
 #      | --no-options <why> [--question <line> [--context <line>] [--link <report path or URL>]]
 #      | --call-kind action --instruction <line> --where chat [--context <line>] [--link <path or URL>])
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--attach <file>]... [--release | --release-in-flight] [--expected-identity <identity>]
@@ -69,6 +69,8 @@
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
 #
+# --call-kind approval tags a question as an approval for attention counts;
+# it uses the same options, answer, identity and resolution flow as a question.
 # STRUCTURED CALL FIELDS. The default call kind is question, including legacy
 # records without a kind and genuine freeform --no-options questions.
 # `--question`, the repeatable `--option`,
@@ -217,7 +219,7 @@
 # and returns {"schema":"fm-captain-hold.capabilities.v1",
 # "expected_identity":["answer","answers","reconcile-requests","complete-action","correct"],
 # "attachments":true,"correction":true,
-# "guarded_input":"single-row","call_kinds":["question","action"],
+# "guarded_input":"single-row","call_kinds":["question","action","approval"],
 # "action":{"where":["chat"],"completion":"complete-action","persistent":true}}.
 # Clients can require this before guarded intake.
 #
@@ -368,7 +370,7 @@ set -eu
 if [ "${1:-}" = capabilities ]; then
   [ "$#" -eq 2 ] && [ "$2" = --json ] \
     || { printf 'usage: fm-captain-hold.sh capabilities --json\n' >&2; exit 2; }
-  printf '%s\n' '{"schema":"fm-captain-hold.capabilities.v1","expected_identity":["answer","answers","reconcile-requests","complete-action","correct"],"attachments":true,"correction":true,"guarded_input":"single-row","call_kinds":["question","action"],"action":{"where":["chat"],"completion":"complete-action","persistent":true}}'
+  printf '%s\n' '{"schema":"fm-captain-hold.capabilities.v1","expected_identity":["answer","answers","reconcile-requests","complete-action","correct"],"attachments":true,"correction":true,"guarded_input":"single-row","call_kinds":["question","action","approval"],"action":{"where":["chat"],"completion":"complete-action","persistent":true}}'
   exit 0
 fi
 
@@ -1151,7 +1153,7 @@ call_record_kind() {  # <task-id>
   [ -f "$path" ] && [ ! -L "$path" ] || return 2
   jq -er --arg id "$1" '
     select(.schema == "fm-captain-call.v1" and .id == $id)
-    | (.call.kind // "question") | select(. == "question" or . == "action")
+    | (.call.kind // "question") | select(. == "question" or . == "action" or . == "approval")
   ' "$path" 2>/dev/null || return 2
 }
 
@@ -1204,7 +1206,8 @@ PY
 build_call_json() {  # <id> <question> <recommended> <context> <link> <no-options> <kind> <instruction> <where> [options...]
   local id=$1 question=$2 recommended=$3 context=$4 link=$5 no_options=$6 kind=$7 instruction=$8 where=$9 out
   shift 9
-  case "$kind" in question|action) ;; *) fail '--call-kind must be question or action' ;; esac
+  case "$kind" in question|action|approval) ;; *) fail '--call-kind must be question, action or approval' ;; esac
+  [ "$kind" != approval ] || [ -n "$question" ] || fail 'an approval needs --question'
   if [ "$kind" = action ]; then
     [ -n "$instruction" ] && [ "$where" = chat ] || fail 'an action needs --instruction and --where chat'
     [ "$#" -eq 0 ] && [ -z "$question$recommended$no_options" ] \
@@ -1260,6 +1263,7 @@ build_call_json() {  # <id> <question> <recommended> <context> <link> <no-option
          link:($link | optional("link"; 500)
                | if . != null and test("[[:space:]]") then error("link must not contain spaces") else . end)}
         end)}
+      | if $kind == "approval" and .call != null then .call.kind = "approval" else . end
       + (if $no_options == "" then {} else {no_options:($no_options | field("no-options reason"; 160))} end)
   ' --args "$@" 2>&1) || fail "${out#jq: error (at <unknown>): }"
   CALL_JSON=$out

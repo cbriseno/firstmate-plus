@@ -1956,6 +1956,8 @@ if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   if [ "$spawn_capacity_rc" -ne 0 ]; then
     if [ "$spawn_capacity_rc" -eq 75 ]; then
       printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+      [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{"source":"spawn-deferred","project_limit":null}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+        "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
       echo "deferred: task $ID was not launched and its backlog item stays queued; the watcher will wake dispatch when capacity is available; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
     fi
     exit "$spawn_capacity_rc"
@@ -1997,6 +1999,8 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   fi
   if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
     printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+    [ ! -e "$CONFIG/fleet-ledger" ] || printf '{"source":"spawn-deferred","project_limit":%s}\n' "$SPAWN_PROJECT_CAPACITY" | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
     echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - the watcher will wake dispatch when capacity is available" >&2
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
   fi

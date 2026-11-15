@@ -85,6 +85,8 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
         broken = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
         question = next(t['question'] for t in broken['snapshot']['tasks'] if t['key'] == 'task:decision')
         assert question['filing_required'] and not question['open'] and question['call'] is None, question
+        broken_task = next(t for t in broken['snapshot']['tasks'] if t['key'] == 'task:decision')
+        assert broken_task['placement']['code'] == 'call_record_required' and broken_task['placement']['attention'] == []
         replay = Projection(broken)
         assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision') == question
         run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design',
@@ -522,4 +524,89 @@ with tempfile.TemporaryDirectory(prefix='fm-work-recency-') as directory:
         assert row['updated'] == task_rows()[row['key']]['updated']
         assert row['observed'] == task_rows()[row['key']]['observed']
 print('ok - meaningful recency, three usage events, liveness, stable ties, late telemetry, delivery, decision and bootstrap recovery')
+# Five manual cases through real owners, then incremental telemetry at one cursor.
+with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
+    home = pathlib.Path(directory)
+    for part in ('data', 'state', 'config'): (home / part).mkdir()
+    (home / '.tasks.toml').write_text('backend="markdown"\n[markdown]\npath="data/backlog.md"\n')
+    (home / 'data/projects.md').write_text('- alpha [local-only] - Example\n')
+    (home / 'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+    (home / 'config/fleet-ledger').touch()
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'TASKS_AXI_'))}
+    env.update(FM_HOME=str(home), FM_LIVE='0')
+    def cli(script, *args, payload=None):
+        p = subprocess.run(['bash', str(root / 'bin' / script), *args], env=env, text=True,
+                           input=json.dumps(payload) if payload is not None else None, capture_output=True)
+        assert p.returncode == 0, (args, p.stdout, p.stderr)
+        return p.stdout
+    def work(*args, **kw): return json.loads(cli('fm-tasks-axi.sh', 'work', *args, **kw))
+    for key in ('ready', 'dependency', 'capacity', 'human', 'parked', 'action', 'approval', 'running'):
+        cli('fm-tasks-axi.sh', 'add', key, key, '--repo', 'alpha', *(['--kind', 'captain'] if key == 'action' else []))
+    cli('fm-tasks-axi.sh', 'hold', 'parked', '--kind', 'parked', '--reason', 'Parked deliberately')
+    for key, options in [('human', ['--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait']),
+                         ('action', ['--call-kind', 'action', '--instruction', 'Inspect the result', '--where', 'chat']),
+                         ('approval', ['--call-kind', 'approval', '--question', 'Approve?', '--option', 'yes=Approve', '--option', 'no=Wait'])]:
+        cli('fm-captain-hold.sh', 'hold', key, '--reason', 'Human response', '--category', 'product-design', *options)
+    draft = home / 'data/draft.json'
+    draft.write_text(json.dumps(dict(outcome=dict(role='final', review='needed'))))
+    cli('fm-tasks-axi.sh', 'presentation', 'human', '--presentation-file', str(draft))
+    work('apply', payload=dict(op='add_dep', target='task:dependency', on='task:ready',
+        expected_rev=work('snapshot')['rev'], actor='captain', request_id='state-dependency-0001'))
+    cli('fm-tasks-axi.sh', 'start', 'running')
+    (home / 'state/running.status').write_text('paused [at=1794614400]: Waiting for my command\n')
+    (home / 'config/lane-capacity').write_text('1\n')
+    (home / 'state/occupied.meta').write_text('kind=ship\n')
+    folder = home / 'data/work-requests'; folder.mkdir(exist_ok=True)
+    queued = dict(at='2026-11-14T00:00:00Z', at_ns=1, scope='task:capacity', signal='resume.request',
+        pause_state='queued', candidates=['capacity'], safe_tasks=[], operation=dict(op='clear_pause',
+        target='task:capacity', request_id='state-capacity-0001'), result=dict(state='received', reason='cap', running=1, cap=1))
+    (folder / 'capacity.json').write_text(json.dumps(queued))
+    base = work('bootstrap'); model = Projection(base)
+    def rows(): return {t['key'][5:]:t for t in model.value['tasks']}
+    assert all(t.get('placement') for t in rows().values()), 'missing placement explanation'
+    expected = dict(ready='ready', dependency='dependency', capacity='capacity', human='needs_you',
+                    parked='paused', action='needs_you', approval='needs_you', running='waiting')
+    assert {k:t['placement']['section'] for k,t in rows().items()} == expected
+    counts = model.value['counts']
+    assert counts['needs_you']['count'] == 3
+    assert {k:v['count'] for k,v in counts['needs_you']['by_kind'].items()} == dict(questions=1, actions=1, reports=1, approvals=1)
+    keys = [k for s in counts['sections'].values() for k in s['keys']]
+    assert len(keys) == len(set(keys)) == counts['tasks']['count'] == 8
+    stamp = int(time.time())
+    blocked_action = copy.deepcopy(model.rows['action'])
+    blocked_action['deps'] = [dict(type='blocked-by', id='ready')]
+    assert model.apply(dict(event='task.changed', task='action', ts=stamp, value=dict(task=blocked_action)))
+    assert rows()['action']['placement']['section'] == 'dependency' and rows()['action']['placement']['attention'] == []
+    assert model.value['counts']['needs_you']['count'] == 2
+    assert model.apply(dict(event='agent.liveness', task='running', ts=stamp,
+        value=dict(state='alive', source='worker.process', gen='worker-1', observed_at='2026-11-14T00:00:00Z')))
+    t = rows()['running']
+    assert t['placement']['section'] == 'waiting' and t['worker_liveness']['state'] == 'alive'
+    assert t['worker_liveness']['generation'] == 'worker-1' and t['worker_liveness']['age_seconds'] >= 0
+    # Launches are not cards or confirmed living workers.
+    assert model.apply(dict(event='task.dispatched', task='unfiled-launch', ts=stamp, kind='ship', value={}))
+    assert model.value['counts']['tasks']['count'] == 8 and model.value['counts']['workers']['alive']['count'] == 1
+    assert model.apply(dict(event='home.configuration', ts=stamp, value=dict(lane_capacity='', projects=base['registry_text'])))
+    assert model.value['counts']['capacity']['state'] == 'unknown' and model.value['counts']['capacity']['limit'] is None
+    assert rows()['capacity']['placement']['section'] == 'ready'
+    for value, section in [(dict(source='spawn-deferred', project_limit=1), 'capacity'), ({}, 'ready')]:
+        cli('fm-fleet-ledger.sh', 'entity', 'task.dispatch_wait', 'ready', payload=value)
+        event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+        assert model.apply(event) and rows()['ready']['placement']['section'] == section
+    assert model.apply(dict(event='task.status', task='running', ts=stamp, declared_at=stamp, state='working', text='paused waiting capacity approval'))
+    assert rows()['running']['placement']['section'] == 'running'  # prose has no classification power
+    decision = home / 'data/answer.txt'; decision.write_text('yes\n')
+    cli('fm-captain-hold.sh', 'answer', 'approval', '--decision-file', str(decision), '--release')
+    answered = next(t for t in work('snapshot')['tasks'] if t['key'] == 'task:approval')
+    assert not answered['question']['open'] and answered['placement']['attention'] == []
+    (home / 'config/lane-capacity').unlink()
+    (home / 'config/project-capacity').write_text('alpha 1\n')
+    (home / 'state/ready.spawn-deferred').write_text(str(home / 'projects/alpha') + '\n')
+    deferred = next(t for t in work('snapshot')['tasks'] if t['key'] == 'task:ready')
+    assert deferred['placement']['code'] == 'capacity_dispatch'
+    assert deferred['dispatch_wait']['project_limit'] == 1
+    (home / 'config/project-capacity').unlink()
+    unconfigured = next(t for t in work('snapshot')['tasks'] if t['key'] == 'task:ready')
+    assert unconfigured['placement']['section'] == 'ready' and unconfigured['dispatch_wait']['project_limit'] is None
+print('ok - five explained states, disjoint task counts, overlapping attention, worker generation and unknown capacity')
 PY

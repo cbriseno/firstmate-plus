@@ -11,8 +11,8 @@
 # Producers:
 #   bin/fm-brief.sh              appended (in every worker's status command,
 #                                right after its unchanged plain append)
-#   bin/fm-spawn.sh              dispatched (fresh spawns only, never relaunch)
-#   bin/fm-watch.sh              capture, once per poll cycle
+#   bin/fm-spawn.sh              dispatched (fresh spawns), entity (deferral)
+#   bin/fm-watch.sh              capture, entity (cleared deferral)
 #   bin/fm-pr-check.sh           pr_ready (a PR registered for review, not the
 #                                merge-time re-record from bin/fm-pr-merge.sh)
 #   bin/fm-merge-outcome-lib.sh  merged ... pr (a recorded PR merge)
@@ -40,7 +40,7 @@
 # an operator edit; it never scans endpoints or snapshots work.
 # docs/fleet-ledger.md owns entity event names and values.
 # entity reads one JSON object from stdin, preserving its complete value.
-# Unlike legacy producers, entity owners propagate append failures before success.
+# Entity returns failure; docs/fleet-ledger.md owns caller recovery policies.
 #
 # capture appends one task.status record for every complete (newline-ended)
 # line added to a state/<task>.status log since that task's byte offset in
@@ -66,7 +66,7 @@
 # home exactly as the other bin/ scripts do.
 #
 # Exit status: 0 on success or when off, 2 on a usage error, 1 when a record
-# could not be written. Legacy producers ignore failure; entity owners propagate it.
+# could not be written. Legacy producers ignore failure; entity reports it to its caller.
 set -u
 # Byte semantics for offsets and lengths; jq still reads the text as UTF-8.
 export LC_ALL=C
@@ -93,7 +93,7 @@ cmd=${1:-}
 case "$cmd" in
   entity)
     { [ "$#" -eq 3 ] && task_ok "$3"; } || usage
-    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|task.usage|work.structure|work.control|work.aliases|agent.activity|agent.retired|agent.liveness|primary.final) ;; *) usage ;; esac
+    case "$2" in call.opened|call.resolved|call.application|task.presentation|task.changed|task.completion|task.review|task.usage|work.structure|work.control|work.aliases|task.dispatch_wait|agent.activity|agent.retired|agent.liveness|primary.final) ;; *) usage ;; esac
     ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;

@@ -34,6 +34,7 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `task.status`      | `state`, `key`, `text`, `declared_at`, `status_token` | A complete, nonblank line in the task's status log is captured. |
 | `task.pr_ready`    | `pr`                                           | Firstmate records the task's PR as ready for review. |
 | `task.merged`      | `via` (`"pr"` or `"local"`), plus `pr` when `via` is `"pr"` | The task's PR merge is recorded, or its local-only branch landed. |
+| `task.dispatch_wait` | `home`, `value` | Spawn deferral publishes `{source:"spawn-deferred",project_limit:<number or null>}`; the capacity reminder publishes `{}` when it clears the wait. |
 | `task.cleaned_up`  | none                                           | The task's worker and local copy were removed. |
 | `call.opened` | `home`, `value` | A structured captain hold is saved or updated. |
 | `call.resolved` | `home`, `value` | The captain-hold owner settles the call and announces its resolution. |
@@ -54,12 +55,13 @@ Readers must ignore members and events they do not recognize, so later versions 
 
 For entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
 `call.opened` and `call.resolved` values carry the canonical task row and `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
-Direct status appends and task dispatches carry an optional `observation` containing local `main_inventory` and task `wait_until` and `run_step` facts from the canonical fleet snapshot.
+Direct status appends and task dispatches carry an optional `observation` containing local inventory, pause/validation, activity and spawn-deferral facts from the canonical fleet snapshot.
 Entity events publish their supplied resulting value without sampling the fleet while the producer holds the shared work lock.
 Validation samples expire according to their own timestamp and TTL.
 Presentation values carry the presentation owner's read result: declaration, outcome occurrence, checkpoint, lifecycle and evidence.
 Replays replace the value for that identity; they do not increment counters.
 Entity commands return failure if publication fails, preserving the already saved canonical change for explicit replay through its owner.
+Spawn-deferral telemetry is best-effort, like dispatch telemetry; its canonical marker remains recoverable by work bootstrap and never changes admission.
 The primary Stop guard reports capture failure and continues its existing supervision check, so a broken ledger cannot disable supervision.
 A crash between the canonical write and append can still omit an event; this is not a transactional journal or a complete board bootstrap.
 Backlog mutations use the canonical Markdown parser under the existing work lock, publishing changed rows without a runtime/history snapshot.

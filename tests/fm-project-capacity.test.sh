@@ -278,6 +278,7 @@ test_exhausted_capacity_defers_without_leaving_anything_behind() {
   local case_dir home out rc=0 before worktrees pid
   case_dir=$(make_case exhausted task-c)
   home="$case_dir/home"
+  touch "$home/config/fleet-ledger"
   declare_capacity "$home" "project 2"
   write_live "$home" live-a "$case_dir/project"
   write_live "$home" live-b "$case_dir/project"
@@ -290,11 +291,13 @@ test_exhausted_capacity_defers_without_leaving_anything_behind() {
   assert_contains "$out" "task task-c was not launched and its backlog item stays queued" \
     "the deferral did not say the task stays queued"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value.project_limit == 2)' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral event missing"
   capacity_watch "$case_dir"; pid=$!
   wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet at full project capacity"
   assert_present "$home/state/task-c.spawn-deferred" "project deferral has no persistent retry reminder"
   rm -f -- "$home/state/live-b.meta"
   expect_capacity_wake "$home" "$pid"
+  jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value == {})' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral clear event missing"
   pass "a spawn beyond capacity is deferred before any record, brief, endpoint, worktree, or backlog move exists"
 }
 

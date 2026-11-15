@@ -17,6 +17,7 @@ import datetime as dt
 from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row, validate_captain_call
 from fm_task_usage import read_usage
 from fm_progress import reporting_status, status_boundaries
+from fm_work_state import age_seconds
 
 
 TELEMETRY_EVENTS = frozenset(('task.usage', 'agent.activity', 'agent.retired', 'agent.liveness'))
@@ -157,6 +158,12 @@ class Projection(Owner):
     def value(self):
         for task in self._value['tasks']:
             task['run_step'] = fresh_run_step(task.get('run_step'))
+            if task.get('worker_liveness'):
+                task['worker_liveness']['age_seconds'] = age_seconds(task['worker_liveness'].get('observed_at'))
+            placement = task.get('placement')
+            if placement:
+                declared = placement['inputs']['declared']
+                declared['age_seconds'] = age_seconds(declared['at'])
         return self._value
 
     @value.setter
@@ -278,6 +285,7 @@ class Projection(Owner):
                     observed = dict(id=task)
                     self.observation.setdefault('tasks', []).append(observed)
                 observed['kind'] = event.get('kind')
+                observed['dispatch_wait'] = None
                 # Spawn can append dispatch after the child already exited.
                 self.launches.setdefault(task, True)
                 if self.workers.get(task, {}).get('source') != 'worker.process':
@@ -290,6 +298,12 @@ class Projection(Owner):
                 for observed in self.observation.get('tasks', []):
                     if observed.get('id') == task:
                         observed['native_activity'] = None
+        elif name == 'task.dispatch_wait':
+            observed = next((o for o in self.observation.get('tasks', []) if o.get('id') == task), None)
+            if observed is None:
+                observed = dict(id=task)
+                self.observation.setdefault('tasks', []).append(observed)
+            observed['dispatch_wait'] = value or None
         elif name == 'home.configuration':
             # Configuration publishes limits, not observed occupied lanes.
             cap = str(value.get('lane_capacity') or '').strip()
