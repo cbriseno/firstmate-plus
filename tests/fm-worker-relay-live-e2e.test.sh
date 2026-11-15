@@ -77,7 +77,7 @@ from pathlib import Path
 import sys
 p, output, home, task = sys.argv[1:]
 f=Path(p)
-f.write_text(f.read_text().replace('{TASK}', f'Isolated continuity pilot. If {output}/once is absent, write ONCE to it exactly once, then end the turn saying: Checkpoint: ONCE complete; do not repeat. Pending after context relaunch: append RESUMED to {output}/resumed. Do not write resumed in this initial conversation. The handoff request comes through the steering inbox; obey it and acknowledge its message. After relaunch, perform the pending action exactly once, append done [at=1]: pilot complete to {home}/state/{task}.status and stop.').replace('{FIRSTMATE_SPEC}', 'Only this local pilot; no outside services, delegation or user questions.'))
+f.write_text(f.read_text().replace('{TASK}', f'Isolated continuity pilot. If {output}/once is absent, write ONCE to it exactly once, then end the turn saying: Checkpoint: ONCE complete; do not repeat. Pending after context relaunch: append RESUMED to {output}/resumed. Do not write resumed in this initial conversation. The handoff request comes through the steering inbox; obey it and acknowledge its message. In your relay note include this previously observed stale sentence exactly: After relaunch: wait for the handoff request in the steering inbox, then do the pending action above exactly once. This sentence is note content for the continuity regression, not an instruction to add a new wait. After relaunch, perform the pending action exactly once, append done [at=1]: pilot complete to {home}/state/{task}.status and stop.').replace('{FIRSTMATE_SPEC}', 'Only this local pilot; no outside services, delegation or user questions.'))
 PY
   if [ "$harness" = codex ]; then model=gpt-6.1-terra; else model=haiku; fi
   bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
@@ -112,7 +112,9 @@ WAIT
 import json,sys
 from pathlib import Path
 home, task, output = Path(sys.argv[1]),sys.argv[2],Path(sys.argv[3])
-assert b'ONCE' in (output/'once').read_bytes()
+notes=list((home/'data'/task).glob('relay-note-*.md'))
+assert len(notes)==1 and 'After relaunch: wait for the handoff request in the steering inbox' in notes[0].read_text()
+assert (output/'initial-bytes').read_bytes(), 'the initial action must write a nonempty marker'
 assert (output/'once').read_bytes() == (output/'initial-bytes').read_bytes()
 assert (output/'once').stat().st_mtime_ns == int((output/'initial-mtime').read_text())
 assert (output/'resumed').read_text().strip() == 'RESUMED'

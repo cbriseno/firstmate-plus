@@ -1078,6 +1078,11 @@ record_note() {
         echo "'$inbox_q/handled/'. A steer sent before the relaunch survives there."
         echo
         printf '%s\n' "$NOTE"
+        echo
+        echo "This is the replacement session; the relaunch is already complete."
+        echo "After checking the inbox, continue the pending work from the note."
+        echo "An empty inbox does not require another handoff request."
+        echo "Keep explicit task holds and unresolved decisions in force."
       } >> "$RELAUNCH_BRIEF" \
         || die "could not append the progress note to task $ID's instructions"
       ;;

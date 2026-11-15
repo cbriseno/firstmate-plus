@@ -50,6 +50,8 @@ Verified 2026-11-15 UTC on Linux with Python 3.11.2, Herdr 0.9.5, codex-cli 0.16
 `FM_WORKER_RELAY_LIVE=1 FM_RELAY_CHECK="$CHECKER" bash bin/fm-heavy-run.sh bash tests/fm-worker-relay-live-e2e.test.sh` exercised both installed harnesses with the relay-lite checker and an artificial absolute threshold in an isolated home.
 The completed-turn callback requested and received one handoff note; the owning watcher relaunched through the existing control plane and delivered the session-history wake.
 Both sessions preserved the initial file's bytes and modification time, performed the pending action once, retained their profiles, and linked distinct archived/active transcripts.
+The live guard also retains a stale note asking for another handoff request and requires continuation with an empty inbox after relaunch.
+Explicit task holds and unresolved decisions remain in force.
 
 ```text
 PASS automatic relay relay-codex-1896968 new transcript; same profile; one acknowledged request; one continuation
