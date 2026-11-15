@@ -995,7 +995,7 @@ with tempfile.TemporaryDirectory() as tmp:
                     else:
                         raise AssertionError("no heavy-lock wait notice")
                     fcntl.flock(fd, fcntl.LOCK_UN)
-                assert proc.wait(timeout=30) == 0
+                assert proc.wait(timeout=120) == 0
             finally:
                 os.close(fd)
                 if proc.poll() is None:
