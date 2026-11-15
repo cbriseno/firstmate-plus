@@ -5814,6 +5814,14 @@ PY
   pass 'saved kanban answer stays settled with separate pending application, origin correlation and idempotent replay'
 }
 
+test_approval_capability() {
+  local home
+  home=$(make_home approval-capability)
+  run_captain "$home" capabilities --json | jq -e '.call_kinds == ["question","action","approval"] and .action == {where:["chat"],completion:"complete-action",persistent:true}' >/dev/null \
+    || fail 'approval capability is not explicit'
+  pass 'explicit approval capability preserves question/action support'
+}
+
 test_explicit_action_persists_until_authoritative_completion() {
   local home before call identity snapshot out note verb extra
   home=$(make_home explicit-action)
@@ -5840,8 +5848,7 @@ test_explicit_action_persists_until_authoritative_completion() {
   tasks_in "$home" block real-work --by action-call >/dev/null
   call=$(cat "$home/data/action-call/captain-call.json")
   identity=$(run_captain "$home" open action-call --identity) || fail 'action was not an open call'
-  run_captain "$home" capabilities --json | jq -e '.call_kinds == ["question","action","approval"] and .action == {where:["chat"],completion:"complete-action",persistent:true}' >/dev/null \
-    || fail 'action capability is not explicit'
+  test_approval_capability
   snapshot=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     bash "$ROOT/bin/fm-tasks-axi.sh" work snapshot) || fail 'action work snapshot failed'
   printf '%s' "$snapshot" | jq -e '
@@ -6121,6 +6128,11 @@ if [ -n "${FM_CAPTAIN_HOLD_TEST_MOOT:-}" ]; then
     test_archived_answered_hold_still_satisfies_the_gate
     test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
   fi
+  exit 0
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_CAPABILITIES:-}" = 1 ]; then
+  test_approval_capability
   exit 0
 fi
 

@@ -324,7 +324,9 @@
 # inherited pause, open blockers, declared status/reason/age/until, worker
 # presence/liveness, native activity, project membership and capacity request.
 # Existing task.state remains the owner control state; placement is its board
-# explanation. A declared wait does not mean a parked or dead worker.
+# explanation. reason retains applicable owner text, otherwise an explicit
+# reason code; a queued resource wait retains reason=resources even with cap=null.
+# A declared wait does not mean a parked or dead worker.
 # worker_liveness adds generation (null when unavailable) and age_seconds;
 # Projection refreshes ages on reads without inventing a new observation.
 # counts.sections is a disjoint partition of task keys, including empty groups.

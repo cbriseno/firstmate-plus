@@ -301,6 +301,36 @@ test_exhausted_capacity_defers_without_leaving_anything_behind() {
   pass "a spawn beyond capacity is deferred before any record, brief, endpoint, worktree, or backlog move exists"
 }
 
+# Event-only acceptance starts the watcher after releasing capacity, so the
+# preexisting full-capacity quiet assertion remains independently enforced above.
+test_dispatch_wait_events() {
+  local case_dir home out rc=0 before worktrees pid
+  case_dir=$(make_case dispatch-events task-c)
+  home="$case_dir/home"
+  mkdir -p "$home/lavish"
+  printf '%s\n' '{"sessions":[]}' > "$home/lavish/state.json"
+  touch "$home/config/fleet-ledger"
+  declare_capacity "$home" "project 1"
+  write_live "$home" live-a "$case_dir/project"
+  before=$(call_count "$case_dir"); worktrees=$(worktree_list "$case_dir")
+  out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "event case did not defer: $out"
+  assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  if [ "${FM_PROJECT_CAPACITY_TEST_EVENTS:-1}" != clear ]; then
+    jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value.project_limit == 1)' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral event missing"
+  fi
+  if [ "${FM_PROJECT_CAPACITY_TEST_EVENTS:-1}" = start ]; then
+    pass "spawn publishes its capacity deferral event"; return
+  fi
+  rm -f -- "$home/state/live-a.meta"
+  # This case waits for the capacity event, independently of host disk pressure.
+  date +%s > "$home/state/.cleanup-low-disk"
+  LAVISH_AXI_STATE_DIR="$home/lavish" FM_PROCEVENT_CLAIM_ROOT="$home/claims" capacity_watch "$case_dir"; pid=$!
+  expect_capacity_wake "$home" "$pid"
+  jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value == {})' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral clear event missing"
+  pass "spawn publishes the capacity wait and watcher publishes its removal"
+}
+
 # The capacity is the last field, so a project whose clone directory name holds
 # spaces can be declared. An indented '#' line is still a comment.
 test_spaced_project_name_is_declared() {
@@ -715,6 +745,12 @@ test_batch_rereads_lane_capacity_after_each_spawn() {
   pass "batch publishes one worker before rereading live capacity for the next"
 }
 
+if [ "${FM_PROJECT_CAPACITY_TEST_EVENTS:-0}" != 0 ]; then
+  test_dispatch_wait_events
+  exit 0
+fi
+
+test_dispatch_wait_events
 test_resource_verdict_defers_then_admits
 test_batch_rereads_lane_capacity_after_each_spawn
 test_undeclared_capacity_keeps_dispatch_uncapped

@@ -60,9 +60,9 @@ def explain(snapshot, statuses):
         if control is None:
             control = next((p for s, p in queued.items() if s in (task.get('project'), task.get('subproject'))
                             or s == 'request:' + (task.get('request') or {}).get('id', '')), None)
-        capacity_wait = bool(control and cap is not None and
-            ((control['reason'] == 'cap' and control.get('running') is not None and control['running'] >= cap)
-             or (control['reason'] == 'resources' and crew.get('reason') == 'resources')))
+        capacity_wait = bool(control and
+            (control['reason'] == 'resources' or
+             (control['reason'] == 'cap' and cap is not None and control.get('running') is not None and control['running'] >= cap)))
         dispatch = task.get('dispatch_wait')
         dispatch_limited = bool(dispatch and task['backlog_state'] == 'queued' and
                                 (dispatch.get('project_limit') is not None or cap is not None))
@@ -92,7 +92,8 @@ def explain(snapshot, statuses):
             section, code = 'ready', 'not_started'
         sections[section].append(key)
         task['placement'] = dict(section=section, code=code, unit='task', attention=kinds,
-            reason=task.get('reason') or (declared['reason'] if section == 'waiting' else None),
+            reason=control['reason'] if section == 'capacity' and capacity_wait else
+                task.get('reason') or (declared['reason'] if section == 'waiting' else None) or code,
             inputs=dict(question_open=question['open'], filing_required=question.get('filing_required', False), backlog_state=task['backlog_state'], task_state=state, hold=pause.get('condition') or own or None, own_pause=own or None,
                 inherited_pause=inherited, blockers=blocks, declared=declared, worker=worker,
                 worker_presence=presence, activity=task.get('native_activity'),

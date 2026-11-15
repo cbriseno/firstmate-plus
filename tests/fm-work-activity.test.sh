@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Bootstrap and activity through the real owner and busy writer.
 # Covers bin/fm_work_projection.py and bin/fm_work_state.py through public events.
+# FM_WORK_TEST_STATE=1 runs the P12 state cases; FM_WORK_TEST_RESOURCES=1 runs resource waits.
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 export ROOT
+if [ "${FM_WORK_TEST_STATE:-0}" != 1 ] && [ "${FM_WORK_TEST_RESOURCES:-0}" != 1 ]; then
 python3 - <<'PY'
 import copy, gc, json, os, pathlib, shlex, signal, subprocess, sys, tempfile, time, weakref
 root = pathlib.Path(os.environ['ROOT'])
@@ -525,6 +527,14 @@ with tempfile.TemporaryDirectory(prefix='fm-work-recency-') as directory:
         assert row['updated'] == task_rows()[row['key']]['updated']
         assert row['observed'] == task_rows()[row['key']]['observed']
 print('ok - meaningful recency, three usage events, liveness, stable ties, late telemetry, delivery, decision and bootstrap recovery')
+PY
+fi
+if [ "${FM_WORK_TEST_RESOURCES:-0}" != 1 ]; then
+python3 - <<'PY'
+import copy,json,os,pathlib,subprocess,sys,tempfile,time
+root=pathlib.Path(os.environ['ROOT'])
+sys.path.insert(0,str(root/'bin'))
+from fm_work_projection import Projection
 # Five manual cases through real owners, then incremental telemetry at one cursor.
 with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     home = pathlib.Path(directory)
@@ -611,3 +621,68 @@ with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     assert unconfigured['placement']['section'] == 'ready' and unconfigured['dispatch_wait']['project_limit'] is None
 print('ok - five explained states, disjoint task counts, overlapping attention, worker generation and unknown capacity')
 PY
+fi
+if [ "${FM_WORK_TEST_STATE:-0}" != 1 ]; then
+python3 - <<'PY'
+import copy,json,os,pathlib,subprocess,sys,tempfile,time
+root=pathlib.Path(os.environ['ROOT']);sys.path.insert(0,str(root/'bin'))
+from fm_work_projection import Projection
+with tempfile.TemporaryDirectory(prefix='fm-resource-wait-') as directory:
+    home=pathlib.Path(directory)
+    for part in ('data','state','config'): (home/part).mkdir()
+    (home/'.tasks.toml').write_text('backend="markdown"\n[markdown]\npath="data/backlog.md"\n')
+    (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+    (home/'config/fleet-ledger').touch()
+    env={k:v for k,v in os.environ.items() if not k.startswith(('FM_','TASKS_AXI_'))}
+    env.update(FM_HOME=str(home),FM_LIVE='0')
+    def cli(script,*args,payload=None):
+        p=subprocess.run(['bash',str(root/'bin'/script),*args],env=env,text=True,capture_output=True,
+                         input=json.dumps(payload) if payload is not None else None)
+        assert p.returncode==0,(args,p.stdout,p.stderr)
+        return p.stdout
+    def work(verb): return json.loads(cli('fm-tasks-axi.sh','work',verb))
+    cli('fm-tasks-axi.sh','add','resource','Resource wait')
+    cli('fm-tasks-axi.sh','hold','resource','--kind','parked','--reason','Held')
+    (home/'reserve').touch()
+    folder=home/'data/work-requests';folder.mkdir(exist_ok=True)
+    path=folder/'resource.json';config=home/'config/lane-capacity'
+    failures=[];checked=[]
+    def check(snapshot,label,cap,waiting):
+        task=next(t for t in snapshot['tasks'] if t['key']=='task:resource')
+        place=task.get('placement');checked.append(label)
+        print(label,json.dumps(dict(crew=snapshot['crew'],placement=place)),flush=True)
+        if place is None:
+            failures.append((label,'missing placement explanation'));return
+        wait=place['inputs']['capacity_wait'] or {}
+        expected=('capacity','capacity_resources') if waiting else ('paused','parked')
+        checks=[task['state']=='paused_own',task['pause']['own']['reason']=='Held',
+                snapshot['counts']['capacity']['limit']==cap,(place['section'],place['code'])==expected]
+        checks += [place['reason']=='resources',wait.get('reason')=='resources',wait.get('cap')==cap] if waiting else [place['inputs']['capacity_wait'] is None]
+        if not all(checks): failures.append((label,checks))
+    for mode,text,cap in [('invalid','invalid\n',None),('limited',f'2\nreserve-flag {home}/reserve\n',2),('unknown',None,None)]:
+        if path.exists(): path.unlink()
+        if text is None: config.unlink()
+        else: config.write_text(text)
+        # A typed queue record is the owner's explicit wait, not inferred prose.
+        base=work('bootstrap');model=Projection(base)
+        record=dict(at='2026-11-15T00:00:00Z',at_ns=1,scope='task:resource',signal='resume.request',
+            pause_state='queued',candidates=['resource'],safe_tasks=[],operation=dict(op='clear_pause',
+            target='task:resource',request_id='resource-case-'+mode),result=dict(state='received',reason='resources',running=0,cap=cap))
+        path.write_text(json.dumps(record))
+        cli('fm-fleet-ledger.sh','entity','work.control','resource',payload=record)
+        event=json.loads((home/'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
+        assert model.apply(event)
+        check(work('snapshot'),mode+' snapshot',cap,True)
+        check(work('bootstrap')['snapshot'],mode+' bootstrap',cap,True)
+        check(model.value,mode+' replay',cap,True)
+        record['cancelled']=True;path.write_text(json.dumps(record))
+        cli('fm-fleet-ledger.sh','entity','work.control','resource',payload=record)
+        assert model.apply(json.loads((home/'state/fleet-ledger.jsonl').read_text().splitlines()[-1]))
+        check(work('snapshot'),mode+' cleared snapshot',cap,False)
+        check(work('bootstrap')['snapshot'],mode+' cleared bootstrap',cap,False)
+        check(model.value,mode+' cleared replay',cap,False)
+    assert len(checked)==18,checked
+    assert not failures,failures
+print('ok - resource queue and withdrawal: 18 checks across snapshot, bootstrap and replay with invalid, known and unknown limits')
+PY
+fi
