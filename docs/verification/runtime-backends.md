@@ -63,6 +63,12 @@ The guard closed its private tmux server and named Herdr session and verified th
 macOS was inspected but not executed; the adapter passed Python 3.9 grammar parsing and uses only the standard library.
 These pilots do not calibrate production thresholds or enable workers in an operator home.
 
+On 2026-11-15 UTC, Claude Code 2.1.325 reported `context_window.context_window_size=1000000` through its native statusline for `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5` on Linux.
+The per-launch capture and display-preservation contract belongs to [fm-claude-context.py](../../bin/fm-claude-context.py).
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` refreshes native payload forwarding, display preservation and session replacement without model prompts.
+Set `FM_WORKER_RELAY_LIVE_CLAUDE_MODELS="claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5"` on the live guard above to select those exact models.
+The capture uses Python 3.9 standard-library file and subprocess interfaces shared by Linux and macOS; macOS live acceptance remains unverified.
+
 ## Worker temporary processes
 
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.

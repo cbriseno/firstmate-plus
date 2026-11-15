@@ -99,6 +99,16 @@ def wait(path):
     raise AssertionError('missing '+str(path))
 run(RELAY_STATE='unknown')
 assert not (lab/'requests').exists()
+native={'session_id':'one','transcript_path':'old-session','model':{'id':'claude-opus-5-5'},
+        'context_window':{'context_window_size':1000000}}
+(state/'worker.launch1.claude-context.json').write_text(json.dumps(native))
+record=state/'worker.meta'
+record.write_text(record.read_text().replace('harness=codex','harness=claude'))
+checker.write_text('import json,os,pathlib,sys; p=json.load(sys.stdin); pathlib.Path(os.environ["RELAY_PAYLOAD"]).write_text(json.dumps(p)); print(json.dumps({"schema":"relay-lite.check.v1","state":"unknown"}))')
+run(RELAY_PAYLOAD=str(lab/'payload'))
+assert json.loads((lab/'payload').read_text())['statusline']==native
+record.write_text(record.read_text().replace('harness=claude','harness=codex'))
+checker.write_text('import json,os; print(json.dumps({"schema":"relay-lite.check.v1","state":os.environ.get("RELAY_STATE","reached")}))')
 subprocess.run(args[:5]+['stale',str(checker)], check=True)
 run()
 wait(lab/'requests')
@@ -128,6 +138,32 @@ run()
 assert not ready.exists() and not result.exists()
 print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure and terminal work')
 PYRELAY
+# Feed the native vendor statusline through the public wrapper. Existing display
+# receives unchanged JSON, local overrides user settings, and only native fields persist.
+python3 - "$ROOT" "$TMP_ROOT" <<'PYCONTEXT'
+import json, pathlib, shlex, subprocess, sys
+root, tmp = map(pathlib.Path, sys.argv[1:])
+lab=tmp/'native-context'
+store, project = lab/'store', lab/'project'
+for p in (store, project/'.claude'): p.mkdir(parents=True)
+settings=lab/'settings.json'; settings.write_text('{"feedbackDrafts":"off"}')
+(store/'settings.json').write_text(json.dumps({'statusLine':{'type':'command','command':'printf user'}}))
+display=shlex.join([sys.executable,'-c','import json,sys; print(json.load(sys.stdin)["model"]["id"])'])
+(project/'.claude/settings.local.json').write_text(json.dumps({'statusLine':{'type':'command','command':display,'padding':2}}))
+snapshot=lab/'launch1.claude-context.json'
+subprocess.run([sys.executable,str(root/'bin/fm-claude-context.py'),'setup',str(settings),str(project),str(store),str(snapshot)],check=True)
+configured=json.loads(settings.read_text())
+assert configured['feedbackDrafts']=='off' and configured['statusLine']['padding']==2
+native={'session_id':'one','transcript_path':'/one.jsonl','model':{'id':'claude-opus-5-5'},
+        'context_window':{'context_window_size':1000000,'used_percentage':26},'unrelated':'omit'}
+result=subprocess.run(configured['statusLine']['command'],shell=True,input=json.dumps(native),text=True,capture_output=True,check=True)
+assert result.stdout.strip()=='claude-opus-5-5',result
+assert json.loads(snapshot.read_text())=={k:v for k,v in native.items() if k!='unrelated'}
+native.update(session_id='two',transcript_path='/two.jsonl')
+subprocess.run(configured['statusLine']['command'],shell=True,input=json.dumps(native),text=True,capture_output=True,check=True)
+assert json.loads(snapshot.read_text())['session_id']=='two'
+print('ok - Claude native window capture preserves effective display, payload, settings and session identity')
+PYCONTEXT
 for target in relative/path "$ROOT/AGENTS.md" "$TASK_HOME/projects/new/file"; do
   if run_brief "bad-$RANDOM" --host --path "$target" >/dev/null 2>&1; then fail "unsafe host path accepted: $target"; fi
 done

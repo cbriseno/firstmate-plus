@@ -3388,6 +3388,11 @@ BUSY_GEN=
       session_keys="$session_keys\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},"
     fi
     printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
+    if [ "$KIND" != secondmate ] && [ -f "$CONFIG/relay-lite.json" ]; then
+      python3 "$FM_ROOT/bin/fm-claude-context.py" setup "$STATE_REAL/$ID.claude-settings.json" \
+        "$WT" "${WORKER_ACCOUNT_ROOT:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
+        "$STATE_REAL/$ID.$BUSY_GEN.claude-context.json" || exit 1
+    fi
     ;;
   codex*)
     # Hookless pull source; the launch helper owns the verified native Linux

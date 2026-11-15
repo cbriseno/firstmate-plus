@@ -91,7 +91,11 @@ def main():
     if not mode:
         if not (home / 'config/relay-lite.json').exists():
             return
-        payload = json.dumps({'cwd': record['worktree'], 'transcript_path': current['session']})
+        payload = {'cwd': record['worktree'], 'transcript_path': current['session']}
+        snapshot = state / (task + '.' + gen + '.claude-context.json')
+        if record.get('harness') == 'claude' and snapshot.exists():
+            payload['statusline'] = json.loads(snapshot.read_text())
+        payload = json.dumps(payload)
         check = subprocess.run(['python3', checker, '--json', str(home)], input=payload,
                                text=True, capture_output=True, env=env, timeout=10)
         result = json.loads(check.stdout) if check.returncode == 0 else {}

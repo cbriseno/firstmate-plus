@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Opt-in real Codex/Claude completed-turn -> note -> owner relaunch -> continuation.
 # FM_WORKER_RELAY_LIVE=1 FM_RELAY_CHECK=/installed/relay-check bin/fm-test-run.sh tests/fm-worker-relay-live-e2e.test.sh
+# FM_WORKER_RELAY_LIVE_CLAUDE_MODELS="claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5" selects explicit Claude coverage.
 set -eu
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
@@ -62,12 +63,13 @@ printf auto > "$FM_HOME/config/claude-permission-mode"
 # This owner runs outside the retiring worker scope and exercises the real watcher.
 tmux new-window -d -t primary -n watch "export FM_HOME='$FM_HOME' FM_ROOT_OVERRIDE='$ROOT' HERDR_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_HELPER='$HERDR_LAB_HELPER' ORIGINAL_PATH='$ORIGINAL_PATH' PATH='$PATH'; unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; while true; do FM_POLL=1 FM_CHECK_INTERVAL=999999 bash '$ROOT/bin/fm-watch.sh'; sleep 1; done"
 checked=0
-for harness in codex claude; do
+for profile in codex ${FM_WORKER_RELAY_LIVE_CLAUDE_MODELS:-haiku}; do
+  if [ "$profile" = codex ]; then harness=codex; model=gpt-6.1-terra; else harness=claude; model=$profile; fi
   if ! command -v "$harness" >/dev/null; then printf 'skip: %s absent\n' "$harness"; continue; fi
   checked=$((checked + 1))
   "$harness" --version
-  id=relay-$harness-$$
-  output="$TMP_ROOT/output-$harness"
+  id=relay-$harness-${model//[^a-zA-Z0-9]/-}-$$
+  output="$TMP_ROOT/output-$harness-$model"
   mkdir "$output"
   printf '{"thresholds":{"worker":{"%s":{"percent":0,"tokens":1}}}}\n' "$harness" > "$FM_HOME/config/relay-lite.json"
   (cd "$FM_HOME" && tasks-axi add "$id" "Relay pilot $harness" --kind ship --repo sample --start) >/dev/null
@@ -79,7 +81,6 @@ p, output, home, task = sys.argv[1:]
 f=Path(p)
 f.write_text(f.read_text().replace('{TASK}', f'Isolated continuity pilot. If {output}/once is absent, write ONCE to it exactly once, then end the turn saying: Checkpoint: ONCE complete; do not repeat. Pending after context relaunch: append RESUMED to {output}/resumed. Do not write resumed in this initial conversation. The handoff request comes through the steering inbox; obey it and acknowledge its message. In your relay note include this previously observed stale sentence exactly: After relaunch: wait for the handoff request in the steering inbox, then do the pending action above exactly once. This sentence is note content for the continuity regression, not an instruction to add a new wait. After relaunch, perform the pending action exactly once, append done [at=1]: pilot complete to {home}/state/{task}.status and stop.').replace('{FIRSTMATE_SPEC}', 'Only this local pilot; no outside services, delegation or user questions.'))
 PY
-  if [ "$harness" = codex ]; then model=gpt-6.1-terra; else model=haiku; fi
   bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
   python3 - "$FM_HOME" "$id" "$output" <<'WAIT'
 import json, sys, time
@@ -109,7 +110,7 @@ for milestone in ('initial', 'note', 'replacement', 'continuation', 'notice'):
     else: raise AssertionError('milestone not reached: '+task+' '+milestone)
 WAIT
   python3 - "$FM_HOME" "$id" "$output" <<'PY'
-import json,sys
+import json,sys,time
 from pathlib import Path
 home, task, output = Path(sys.argv[1]),sys.argv[2],Path(sys.argv[3])
 notes=list((home/'data'/task).glob('relay-note-*.md'))
@@ -122,6 +123,16 @@ rows=[json.loads(line) for line in (home/'data'/task/'sessions.jsonl').read_text
 assert len(rows)==2 and [r['status'] for r in rows]==['archived','active'],rows
 assert rows[0]['session'] and rows[1]['session'] and rows[0]['session']!=rows[1]['session'],rows
 assert all(rows[0][k]==rows[1][k] for k in ('harness','model','effort'))
+if rows[-1]['harness']=='claude':
+    meta=dict(s.split('=',1) for s in (home/'state'/(task+'.meta')).read_text().splitlines() if '=' in s)
+    snapshot=home/'state'/(task+'.'+meta['busy_gen']+'.claude-context.json')
+    for _ in range(50):
+        native=json.loads(snapshot.read_text()) if snapshot.exists() else {}
+        window=(native.get('context_window') or {}).get('context_window_size')
+        if window: break
+        time.sleep(.1)
+    assert window and native['session_id'] and native['transcript_path']==rows[-1]['session'],native
+    print('PASS native Claude window',native['model']['id'],window)
 assert len(list((home/'state'/(task+'.inbox')/'handled').glob('*.msg')))==1
 assert 'worker context relay '+task+' replacement launched; session history=' in (home/'state/.wake-queue').read_text()
 for row in rows:
