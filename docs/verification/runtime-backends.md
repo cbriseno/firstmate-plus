@@ -51,7 +51,8 @@ Verified 2026-11-15 UTC on Linux with Python 3.11.2, Herdr 0.9.5, codex-cli 0.16
 The completed-turn callback requested and received one handoff note; the owning watcher relaunched through the existing control plane and delivered the session-history wake.
 Both sessions preserved the initial file's bytes and modification time, performed the pending action once, retained their profiles, and linked distinct archived/active transcripts.
 The live guard also retains a stale note asking for another handoff request and requires continuation with an empty inbox after relaunch.
-Explicit task holds and unresolved decisions remain in force.
+A wait for the current handoff or relaunch is satisfied when the replacement runs.
+Other explicit task holds and unresolved decisions remain in force.
 
 ```text
 PASS automatic relay relay-codex-1896968 new transcript; same profile; one acknowledged request; one continuation

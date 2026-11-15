@@ -1082,8 +1082,10 @@ record_note() {
         echo
         echo "This is the replacement session; the relaunch is already complete."
         echo "After checking the inbox, continue the pending work from the note."
-        echo "An empty inbox does not require another handoff request."
-        echo "Keep explicit task holds and unresolved decisions in force."
+        echo "Any earlier wait in this note or a paused status for this handoff request"
+        echo "or this relaunch is satisfied by the replacement now running."
+        echo "Do not wait for another handoff request before continuing."
+        echo "Keep all other explicit task holds and unresolved decisions in force."
       } >> "$RELAUNCH_BRIEF" \
         || die "could not append the progress note to task $ID's instructions"
       ;;
