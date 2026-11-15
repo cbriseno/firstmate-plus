@@ -36,11 +36,13 @@ assert_contains "$OUT" 'kind=host' 'host kind recorded'
 jq -e '.project == null and .status == "active" and .reason == "awaiting-transcript"' \
   "$TASK_HOME/data/$TASK_ID/sessions.jsonl" >/dev/null || fail 'host session invented a project'
 printf 'done [at=100]: host operation verified\n' >> "$TASK_HOME/state/$TASK_ID.status"
+touch "$TASK_HOME/state/$TASK_ID.relay-ready" "$TASK_HOME/state/$TASK_ID.relay-result"
 OUT=$(FM_HOME="$TASK_HOME" HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" TMUX=fake,1,0 \
   FM_STATE_OVERRIDE="$TASK_HOME/state" FM_DATA_OVERRIDE="$TASK_HOME/data" \
   FM_CONFIG_OVERRIDE="$TASK_HOME/config" FM_PROJECTS_OVERRIDE="$TASK_HOME/projects" \
   bash "$ROOT/bin/fm-teardown.sh" "$TASK_ID" 2>&1) || fail "host teardown failed: $OUT"
 [ ! -e "$TASK_HOME/data/$TASK_ID/work" ] || fail 'teardown left host scratch'
+[ ! -e "$TASK_HOME/state/$TASK_ID.relay-ready" ] && [ ! -e "$TASK_HOME/state/$TASK_ID.relay-result" ] || fail 'teardown left relay signals'
 [ "$(cat "$TARGET")" = preserve ] || fail 'teardown changed host target'
 pass 'first host assignment launches and tears down without a project or commit'
 
@@ -64,6 +66,68 @@ jq -e --arg settings "$TASK_HOME/state/claude-host.claude-settings.json" \
   'index("--settings") as $i | $i != null and .[$i+1] == $settings' \
   "$FM_HOST_ARGV" >/dev/null || fail 'Claude host launch lost its hook settings argument'
 pass 'Claude host launch delivers hook settings as a separate argument'
+# Exercise the relay adapter through its executable interface with a checker
+# fixture. Real Codex/Claude callback and lifecycle evidence belongs to the lab.
+python3 - "$ROOT" "$TMP_ROOT" <<'PYRELAY'
+import json, os, pathlib, shutil, subprocess, sys, time
+root, tmp = map(pathlib.Path, sys.argv[1:])
+lab = tmp / 'relay'
+bin_dir = lab / 'bin'
+state, data = lab / 'state', lab / 'data' / 'worker'
+for path in (bin_dir, state, data, lab / 'config'):
+    path.mkdir(parents=True, exist_ok=True)
+for name in ('fm-worker-relay.py', 'fm-redact-log.py'):
+    shutil.copy(root / 'bin' / name, bin_dir / name)
+for name, body in {
+    'fm-send.sh': 'printf requested >> "$FM_HOME/requests"',
+    'fm-control.sh': 'printf "%s\\n" "$@"; exit "${RELAY_FAIL:-0}"',
+    'fm-diag.sh': 'exit 0',
+}.items():
+    (bin_dir / name).write_text('#!/usr/bin/env bash\n' + body + '\n')
+checker = lab / 'checker'
+checker.write_text('import json,os; print(json.dumps({"schema":"relay-lite.check.v1","state":os.environ.get("RELAY_STATE","reached")}))')
+(lab / 'config/relay-lite.json').write_text('{}')
+(data / 'sessions.jsonl').write_text(json.dumps({'status':'active','session':'old-session'})+'\n')
+(state / 'worker.meta').write_text('kind=host\nbusy_gen=launch1\nworktree='+str(data)+'\nsessions_file='+str(data/'sessions.jsonl')+'\nharness=codex\nmodel=chosen\neffort=high\n')
+args = [sys.executable, str(bin_dir/'fm-worker-relay.py'), str(lab), str(state), 'worker', 'launch1', str(checker)]
+def run(extra=(), **env):
+    subprocess.run(args+list(extra), env=dict(os.environ, **env), check=True)
+def wait(path):
+    for _ in range(100):
+        if path.exists(): return
+        time.sleep(.05)
+    raise AssertionError('missing '+str(path))
+run(RELAY_STATE='unknown')
+assert not (lab/'requests').exists()
+subprocess.run(args[:5]+['stale',str(checker)], check=True)
+run()
+wait(lab/'requests')
+run()  # Replayed completion must not queue another handoff request.
+time.sleep(.2)
+assert (lab/'requests').read_text() == 'requested'
+note=data/'relay-note-launch1.md'
+note.write_text('Finished ONCE. Continue pending inbox; never repeat ONCE.')
+run()
+ready=state/'worker.relay-ready'
+assert ready.exists()
+subprocess.run([sys.executable,str(bin_dir/'fm-worker-relay.py'),'--dispatch',str(lab),str(state)],check=True)
+result=state/'worker.relay-result'
+wait(result)
+assert 'replacement launched' in result.read_text()
+control=(data/'relay-control-launch1.log').read_text()
+assert '--note-file\n'+str(note) in control
+assert '--harness\ncodex\n--model\nchosen\n--effort\nhigh' in control
+result.unlink()
+run()
+subprocess.run([sys.executable,str(bin_dir/'fm-worker-relay.py'),'--dispatch',str(lab),str(state)],env=dict(os.environ,RELAY_FAIL='1'),check=True)
+wait(result)
+assert 'incomplete' in result.read_text() and note.exists()
+result.unlink()
+(state/'worker.status').write_text('done [at=1]: complete\n')
+run()
+assert not ready.exists() and not result.exists()
+print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure and terminal work')
+PYRELAY
 for target in relative/path "$ROOT/AGENTS.md" "$TASK_HOME/projects/new/file"; do
   if run_brief "bad-$RANDOM" --host --path "$target" >/dev/null 2>&1; then fail "unsafe host path accepted: $target"; fi
 done

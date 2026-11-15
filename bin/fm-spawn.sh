@@ -3312,6 +3312,12 @@ BUSY_GEN=
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
     ;;
   esac
+  worker_relay_cmd=:
+  if [ "$KIND" != secondmate ] && { [ "$HARNESS" = codex ] || [ "$HARNESS" = claude ]; }; then
+    relay_checker=${FM_RELAY_CHECK:-$(command -v relay-check || true)}
+    relay_checker=${relay_checker:-${XDG_DATA_HOME:-$HOME/.local/share}/firstmate-extensions/runtime/context-relay-lite/relay-check}
+    worker_relay_cmd="python3 $(shell_quote "$FM_ROOT/bin/fm-worker-relay.py") $(shell_quote "$FM_HOME") $(shell_quote "$STATE_REAL") $(shell_quote "$ID") $(shell_quote "$BUSY_GEN") $(shell_quote "$relay_checker")"
+  fi
   case "$WIRING_HARNESS" in
   claude*)
     # Semantic busy-state hooks (bin/fm-busy-lib.sh): UserPromptSubmit opens
@@ -3365,7 +3371,7 @@ BUSY_GEN=
       if [ "$busy_notify_turnend" = true ]; then
         stop_turnend="touch $(shell_quote "$TURNEND"); "
       fi
-      j_stop=$(json_escape "${stop_turnend}$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true; $usage_cmd || true")
+      j_stop=$(json_escape "${stop_turnend}$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true; $usage_cmd || true; $worker_relay_cmd")
       stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"},$perm_clear_hook]}],"
     fi
     hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"},$perm_clear_hook]}],${stop_entry}${perm_entries}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
@@ -3693,6 +3699,7 @@ if [ "$HARNESS" = codex ] && [ -n "$BUSY_GEN" ]; then
   codex_ledger="[ ! -e $(shell_quote "$CONFIG/fleet-ledger") ] || $(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID") idle --gen $(shell_quote "$BUSY_GEN") --source codex-notify --event turn-complete"
 fi
 LAUNCH=${LAUNCH//__CODEXLEDGER__/$codex_ledger}
+LAUNCH=${LAUNCH//__WORKERRELAY__/${worker_relay_cmd:-:}}
 
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in

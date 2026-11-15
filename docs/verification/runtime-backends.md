@@ -43,6 +43,24 @@ The Claude host pilot exposed a missing argument separator that joined the last 
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh tests/fm-control-relaunch.test.sh` refreshes executable argument delivery and transactional failure coverage without submitting model prompts.
 macOS was not executed in these pilots; the fix changes only a Bash argument separator and adds no dependency or automatic relay trigger.
 
+### Automatic worker context handoff
+
+The adapter contract belongs to [fm-worker-relay.py](../../bin/fm-worker-relay.py).
+Verified 2026-11-15 UTC on Linux with Python 3.11.2, Herdr 0.9.5, codex-cli 0.169.0 and Claude Code 2.1.325.
+`FM_WORKER_RELAY_LIVE=1 FM_RELAY_CHECK="$CHECKER" bash bin/fm-heavy-run.sh bash tests/fm-worker-relay-live-e2e.test.sh` exercised both installed harnesses with the relay-lite checker and an artificial absolute threshold in an isolated home.
+The completed-turn callback requested and received one handoff note; the owning watcher relaunched through the existing control plane and delivered the session-history wake.
+Both sessions preserved the initial file's bytes and modification time, performed the pending action once, retained their profiles, and linked distinct archived/active transcripts.
+
+```text
+PASS automatic relay relay-codex-1896968 new transcript; same profile; one acknowledged request; one continuation
+PASS automatic relay relay-claude-1896968 new transcript; same profile; one acknowledged request; one continuation
+```
+
+The guard closed its private tmux server and named Herdr session and verified the default session unchanged.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` covers unknown checker results, replayed callbacks, retired generations, profile/note preservation, control failure, terminal tasks and teardown of relay signals.
+macOS was inspected but not executed; the adapter passed Python 3.9 grammar parsing and uses only the standard library.
+These pilots do not calibrate production thresholds or enable workers in an operator home.
+
 ## Worker temporary processes
 
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.

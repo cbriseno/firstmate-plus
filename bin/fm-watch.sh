@@ -3769,6 +3769,21 @@ while :; do
 
   cleanup_tick || exit 1
 
+  # Worker Stop publishes the safe point; lifecycle control must run outside
+  # the retiring worker's process scope (which reaps all of its descendants).
+  for relay_ready in "$STATE"/*.relay-ready; do
+    [ -f "$relay_ready" ] || continue
+    python3 "$SCRIPT_DIR/fm-worker-relay.py" --dispatch "$FM_HOME" "$STATE"
+    break
+  done
+  for relay_result in "$STATE"/*.relay-result; do
+    [ -f "$relay_result" ] || continue
+    reason="check: $(cat "$relay_result")"
+    fm_wake_append check "$relay_result" "$reason" || exit 1
+    rm -f -- "$relay_result"
+    wake "$reason"
+  done
+
   login_expiry_tick
 
   # Parked panes are absent by design; preserve the existing dated-pause

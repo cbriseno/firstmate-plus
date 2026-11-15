@@ -98,6 +98,15 @@ After recording the answer through `fm-captain-hold.sh answer --release-in-fligh
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
 
+### Automatic worker context handoff
+
+Worker Claude Stop and Codex completed-turn callbacks use the optional relay-lite checker; its configuration and measurement contract remain owned by that extension.
+The worker finishes its current operation and prepares a handoff note through its existing steering inbox.
+The owning watcher then performs this same relaunch outside the worker's process scope and emits a session-history check wake for the primary.
+Secondmates keep their primary relay integration.
+Missing checker or measurement leaves the worker running and emits a diagnostic; worker thresholds remain disabled until an operator enables them after a pilot.
+Checker discovery, safe-point files and callback mechanics belong to [fm-worker-relay.py](../bin/fm-worker-relay.py); active harness evidence belongs to [runtime verification](verification/runtime-backends.md).
+
 ### Reclaiming a task whose endpoint is gone
 
 A Herdr pane or workspace can be destroyed out from under a live task by churn or a session restart.
