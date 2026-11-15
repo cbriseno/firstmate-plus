@@ -237,6 +237,104 @@ hold_source_lock_then_handle() {  # <home> <source-id> <sequence> <ready-file> <
   HOLDER_PID=$!
 }
 
+# Unspecified synthetic sources keep the legacy one-round contract without
+# consulting a machine's installed CLI. Synchronous-reply fixtures override it.
+mkdir -p "$TMP_ROOT/legacy-version"
+# shellcheck disable=SC2016 # The fixture evaluates its own $1 when executed.
+printf '#!/bin/sh\n[ "$1" = --version ] && echo 0.1.79\n' > "$TMP_ROOT/legacy-version/lavish-axi"
+chmod +x "$TMP_ROOT/legacy-version/lavish-axi"
+export PATH="$TMP_ROOT/legacy-version:$PATH"
+
+if [ -z "${FM_PROCEVENT_CASE:-}" ] || [ "${FM_PROCEVENT_CASE:-}" = listener-handoff ]; then
+  for owner in fm-config-board-20261114 macb-p16-20261114; do
+    HANDOFF="$TMP_ROOT/handoff-$owner"; export HANDOFF
+    mkdir -p "$HANDOFF/bin"; new_home "$HANDOFF/home"
+    fm_test_track_procevent_home "$HANDOFF/home"
+    new_task_endpoint "$HANDOFF/home" "$owner"
+    cat > "$HANDOFF/bin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+set -eu
+[ "$1" != --version ] || { echo 0.1.97; exit 0; }
+n=$(cat "$HANDOFF/$1-count" 2>/dev/null || echo 0); n=$((n + 1))
+echo "$n" > "$HANDOFF/$1-count"
+if [ "$n" = 1 ] || [ -e "$HANDOFF/always-fail" ]; then
+  printf 'error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port %s` to inspect server startup\n' "$LAVISH_AXI_PORT"
+  exit 1
+fi
+if [ "$1" = reply ]; then
+  cat "$4" >> "$HANDOFF/replies"
+  exit 0
+fi
+: > "$HANDOFF/poll$n"
+while [ ! -e "$HANDOFF/release$n" ]; do sleep 0.05; done
+if [ "$n" = 4 ]; then
+  printf 'session:\n  status: ended\n  session_ended: true\n'
+else
+  printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","round %s","","message",""\n' "$n"
+fi
+SH
+    chmod +x "$HANDOFF/bin/lavish-axi"
+    handoff_art="$HANDOFF/board.html"; printf '<h1>handoff</h1>\n' > "$handoff_art"
+    lavish_session "$handoff_art"
+    handoff_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$handoff_art")
+    printf 'reply before listening\n' > "$HANDOFF/reply"
+    PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
+      "$ROOT/bin/fm-procevent-lavish.sh" arm "$handoff_art" --for "$owner" \
+      --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "$owner arm failed"
+    [ "$(cat "$HANDOFF/reply-count")" = 2 ] || fail "startup reply was not retried"
+    [ "$(wc -l < "$HANDOFF/replies" | tr -d ' ')" = 1 ] || fail "reply duplicated"
+    # Empty ready markers are intentional; wait_for requires nonempty files.
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll2" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll2" ] || fail "startup poll was not retried"
+    touch "$HANDOFF/release2"
+    wait_for "$HANDOFF/home/state/$owner.inbox/001.msg" 200 || fail "first feedback missing"
+    printf 'done: report ready\n' > "$HANDOFF/home/state/$owner.status"
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll3" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll3" ] || fail "$owner stopped listening between turns"
+    touch "$HANDOFF/release3"
+    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.result" 200 || fail "second feedback missing"
+    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll4" ] && break; sleep 0.1; done
+    [ -e "$HANDOFF/poll4" ] || fail "$owner done stopped listening"
+    FM_HOME="$HANDOFF/home" "$ROOT/bin/fm-inbox.sh" list | grep -F 'round 3' >/dev/null \
+      || fail "done-owner feedback did not reach the primary"
+    assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" "listening acknowledged feedback"
+    PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+      "$ROOT/bin/fm-procevent-lavish.sh" arm "$handoff_art" --for "$owner" \
+      --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "reply while listening failed"
+    [ -f "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" ] || fail "oldest round not acknowledged"
+    assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.handled" "reply acknowledged unread newer feedback"
+    touch "$HANDOFF/release4"
+    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.3.result" 200 || fail "terminal feedback missing"
+    if pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null 2>&1; then
+      fail "terminal acknowledgement orphaned an earlier unhandled capture"
+    fi
+    [ -f "$HANDOFF/home/state/procevent/$handoff_id.source" ] || fail "refused conclusion removed ownership"
+    pe "$HANDOFF/home" handled "$handoff_id" 2 >/dev/null || fail "second acknowledgement failed"
+    pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null || fail "terminal acknowledgement failed"
+    assert_absent "$HANDOFF/home/state/procevent/$handoff_id.source" "terminal source remained armed"
+    [ "$(cat "$HANDOFF/poll-count")" = 4 ] || fail "terminal board was polled again"
+    pass "$owner keeps listening after feedback and done; reply acknowledges only its oldest round"
+  done
+  touch "$HANDOFF/always-fail"
+  for operation in reply poll; do
+    printf '0\n' > "$HANDOFF/$operation-count"
+    if [ "$operation" = reply ]; then
+      retry_args=(deliver-reply poll "$handoff_art" --agent-reply-file "$HANDOFF/reply")
+    else
+      retry_args=(poll "$handoff_art")
+    fi
+    if PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
+      "$ROOT/bin/fm-procevent-lavish.sh" "${retry_args[@]}" > "$HANDOFF/exhausted-$operation" 2>&1; then
+      fail "$operation reported success after persistent startup failures"
+    fi
+    [ "$(cat "$HANDOFF/$operation-count")" = 13 ] || fail "$operation retries were not bounded"
+    assert_contains "$(cat "$HANDOFF/exhausted-$operation")" 'server did not start' "exhausted failure disappeared"
+    [ -s "$HANDOFF/reply" ] || fail "failed retry consumed the original reply"
+  done
+  pass "persistent startup errors surface after thirteen attempts and preserve the reply"
+  [ "${FM_PROCEVENT_CASE:-}" != listener-handoff ] || exit 0
+fi
+
 # --- inert with nothing configured ------------------------------------------
 IDLE="$TMP_ROOT/idle"; mkdir -p "$IDLE"
 out=$(pe "$IDLE" list)

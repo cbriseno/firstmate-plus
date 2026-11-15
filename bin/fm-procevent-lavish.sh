@@ -13,6 +13,7 @@
 #   fm-procevent-lavish.sh retire <artifact.html>
 #   fm-procevent-lavish.sh poll <artifact.html> [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
+#   fm-procevent-lavish.sh relisten <result-file>
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
 #            waiting, disconnected, missing, or unknown.
@@ -42,8 +43,8 @@
 #            status. A declared nonempty block parsed as empty is incomplete.
 # poll       The registered listener command `arm` publishes, not a command to
 #            run in a conversational turn. It runs the published blocking poll
-#            and prints its response verbatim, absorbing only the one exact
-#            transient interruption described below. A staged reply still
+#            and prints its response verbatim, absorbing only the exact
+#            transient errors described below. A staged reply still
 #            present when it starts is posted before the long-poll: through
 #            `lavish-axi reply` when supported, otherwise through the legacy
 #            best-effort `poll --agent-reply` path.
@@ -54,6 +55,9 @@
 #            3 when the installed Lavish is a confirmed older release without
 #            synchronous reply so the listener keeps the legacy path, and any
 #            other status when the reply failed or the version is unknown.
+# relisten   Keep the detached runner between nonterminal feedback rounds, even
+#            while the owner is replying or done. A supplied capture must be
+#            feedback or a browser disconnect, never terminal or an error.
 # terminal   Exit 0 when the captured result means this Lavish source will never
 #            produce another result, so the runner may retire it; any other exit
 #            keeps it armed. This is the generic adapter contract bin/fm-procevent.sh
@@ -130,6 +134,11 @@
 #   error: Lavish Editor poll response was interrupted
 #   code: SERVER_ERROR
 #
+# The exact three-line startup failure (`Lavish Editor server did not start`,
+# `code: SERVER_ERROR`, and its port-specific `help[1]` server command) is
+# retried by poll and synchronous reply with this same bound and cadence.
+# Reply files are consumed only after acceptance.
+#
 # That is an internal retry, not news, so registering the raw poll made the
 # generic runner capture it and wake the whole fleet. `poll` therefore re-runs
 # the published poll up to POLL_RETRY_LIMIT times for that exact response, with
@@ -205,12 +214,27 @@ lavish_reply_compatible() {
   die "cannot confirm a supported lavish-axi version, so the staged reply was not posted; retry once \`lavish-axi --version\` reports a supported release"
 }
 
+lavish_startup_error() {  # <captured-cli-output>
+  # shellcheck disable=SC2016 # Compare the CLI's literal backtick-quoted help.
+  [ "$1" = "$(printf 'error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port %s` to inspect server startup' "$LAVISH_AXI_PORT")" ]
+}
+
 post_lavish_reply() {  # <artifact> <reply-file>
-  local output
-  if ! output=$(lavish-axi reply "$1" --agent-reply-file "$2" 2>&1); then
+  local output attempt=0 started delay
+  delay=$(poll_retry_delay) || return 1
+  while :; do
+    started=$(poll_iteration_started) || return 1
+    if output=$(lavish-axi reply "$1" --agent-reply-file "$2" 2>&1); then
+      return 0
+    fi
+    if lavish_startup_error "$output" && [ "$attempt" -lt "$POLL_RETRY_LIMIT" ]; then
+      attempt=$((attempt + 1))
+      poll_iteration_floor_wait "$started" "$delay" || return 1
+      continue
+    fi
     [ -n "$output" ] || output="lavish-axi reply exited nonzero"
     die "Lavish did not accept the staged reply: $output"
-  fi
+  done
 }
 
 # Canonical identity is physical, not the path string: Lavish itself keys a
@@ -281,7 +305,7 @@ cmd_arm() {
     printf 'still-listening: %s\n' "$id"
     printf 'artifact: %s\n' "$real"
     [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
-    printf 'note: an earlier listener is still live and serving this board; this registration takes effect only after the source is retired and armed again\n'
+    printf 'note: an earlier listener is still live and serving this board; a continuing task listener adopts an unchanged command after capture; other commands take effect after the source is retired and armed again\n'
     exit 0
   fi
   if [ "$listening" -ne 0 ]; then
@@ -321,16 +345,21 @@ POLL_RETRY_DELAY_DEFAULT=5
 POLL_RETRY_DELAY_MIN=1
 POLL_RETRY_DELAY_MAX=60
 
-# Exit 0 only for the exact two-line interruption, and nothing else. The whole
-# response must be those two lines with those exact bytes: whitespace variants,
+# Match only the exact interruption or port-specific startup error. The whole
+# response must have the expected bytes: whitespace variants,
 # a longer response that merely opens with them, and any other SERVER_ERROR are
 # genuine errors this adapter must never swallow.
 poll_response_filter() {  # <response-file>
   perl -e '
     use strict;
     use warnings;
-    my ($stage) = @ARGV;
-    my $expected = "error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n";
+    my ($stage, $port) = @ARGV;
+    my @expected = (
+      "error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n",
+      "error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port $port` to inspect server startup\n",
+    );
+    my $limit = 1;
+    for (@expected) { $limit = length($_) + 1 if length($_) >= $limit; }
     open my $staged, ">", $stage or exit 2;
     binmode STDIN;
     binmode STDOUT;
@@ -353,22 +382,24 @@ poll_response_filter() {  # <response-file>
         write_all(*STDOUT, $chunk);
         next;
       }
-      my $room = length($expected) + 1 - length($candidate);
+      my $room = $limit - length($candidate);
       my $take = length($chunk) < $room ? length($chunk) : $room;
       my $prefix = substr($chunk, 0, $take);
       $candidate .= $prefix;
       write_all($staged, $prefix);
-      my $matches_prefix = length($candidate) <= length($expected)
-        && substr($expected, 0, length($candidate)) eq $candidate;
+      my $matches_prefix = grep {
+        length($candidate) <= length($_)
+          && substr($_, 0, length($candidate)) eq $candidate
+      } @expected;
       if (!$matches_prefix) {
         write_all(*STDOUT, $candidate);
         write_all(*STDOUT, substr($chunk, $take));
         $streaming = 1;
       }
     }
-    exit 10 if !$streaming && $candidate eq $expected;
+    exit 10 if !$streaming && grep { $candidate eq $_ } @expected;
     write_all(*STDOUT, $candidate) unless $streaming;
-  ' "$1"
+  ' "$1" "$LAVISH_AXI_PORT"
 }
 
 # Minimum seconds between retry attempt starts. FM_LAVISH_POLL_RETRY_DELAY is a
@@ -973,6 +1004,18 @@ case "${1-}" in
   answers)   shift; cmd_answers "$@" ;;
   reconciles) shift; cmd_reconciles "$@" ;;
   read)      shift; cmd_read "$@" ;;
+  relisten)
+    shift
+    [ "$#" -eq 1 ] || exit 1
+    # Older clients can reply only by replacing a poll; retain their round
+    # handoff rather than hold an indefinite poll that cannot post the reply.
+    lavish_reply_compatible || exit 1
+    cmd_terminal "$1" && exit 1
+    case "$(cmd_classify "$1")" in
+      feedback|disconnected) exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac

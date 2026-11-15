@@ -32,7 +32,7 @@
 # register-task
 #            Record a worker-owned built-in source. Its one source record
 #            persists across rounds, and re-registration by the same task
-#            acknowledges nonterminal captured rounds without touching the
+#            acknowledges the oldest nonterminal captured round without touching the
 #            source claim. Terminal rounds are concluded with `handled`. A
 #            staged `--agent-reply-file` is handed to the adapter's
 #            `deliver-reply` under the source lock once the task is eligible,
@@ -72,7 +72,8 @@
 #            republish every durably captured result with no handled
 #            acknowledgement yet - regardless of any earlier publication - and
 #            start a runner for any registered source that has no live owner and
-#            no open task-owned round. This is liveness repair only - it never
+#            no open task-owned round that its adapter refuses to listen through.
+#            This is liveness repair only - it never
 #            discovers results by
 #            polling the source, because the child blocks on the source itself.
 #            A start is REPORTED only once it is confirmed: starting a runner is
@@ -419,6 +420,15 @@ adapter_self_announcing() {  # <adapter>
   "$script" self-announcing >/dev/null 2>&1
 }
 
+# A positive adapter verdict allows another read without acknowledging this
+# durable capture. Missing support, errors, and terminal results keep the gate.
+adapter_result_can_relisten() {  # <adapter> <result-file>
+  local script
+  script=$(adapter_script "$1")
+  [ -f "$script" ] && [ ! -L "$script" ] || return 1
+  "$script" relisten "$2" >/dev/null 2>&1
+}
+
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
 source_field() {  # <source-id> <field>
   sed -n "s/^$2=//p" "$(source_file "$1")" | head -1
@@ -428,6 +438,14 @@ source_owner_task() { source_field "$1" owner_task; }
 # Every captured round of one source with no handled acknowledgement yet.
 source_pending() {  # <source-id>
   fm_procevent_pending "$STATE" | awk -v id="$1" 'index($0, "/" id ".") { print }'
+}
+source_pending_blocks_listener() {  # <source-id>
+  local result adapter
+  while IFS= read -r result; do
+    adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+    adapter_result_can_relisten "$adapter" "$result" || return 0
+  done < <(source_pending "$1")
+  return 1
 }
 # The registration record is a worker-owned board's ONLY ownership evidence, so
 # it cannot be retired while a captured round of it is still unacknowledged.
@@ -687,7 +705,8 @@ cmd_register_task() {
     fm_procevent_source_lock_release "$id"
     die "cannot publish task-owned registration"
   fi
-  # Re-arm is the worker's acknowledgement of every open nonterminal round.
+  # Re-arm acknowledges the oldest open round only. A listener can already have
+  # captured newer feedback that the worker has not read while preparing this reply.
   # It deliberately does not inspect, acquire, release, or replace the claim.
   while IFS= read -r pending; do
     [ -n "$pending" ] || continue
@@ -698,6 +717,7 @@ cmd_register_task() {
       fm_procevent_source_lock_release "$id"
       die "cannot acknowledge captured round: $result"
     }
+    break
   done < <(source_pending "$id")
   [ -z "$prior_record" ] || rm -f -- "$prior_record"
   for stale in "$REG/.$id.reply."*; do
@@ -1041,7 +1061,7 @@ cmd_start_public() {
 }
 
 cmd_start() {
-  local id=${1-} adapter out rc claimed bound_rc published_capture=0 handled_capture=0 self_announcing=0 task_owner='' task_pending
+  local id=${1-} adapter out rc claimed bound_rc published_capture=0 handled_capture=0 self_announcing=0 task_owner=''
   local extension_owner=0 extension_load_state extension_sequence='' extension_request_id=''
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   require_runner_group
@@ -1060,8 +1080,7 @@ cmd_start() {
   fi
   if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
     task_owner=$(source_owner_task "$id" 2>/dev/null || true)
-    task_pending=$(source_pending "$id" | head -1)
-    if [ -n "$task_pending" ]; then
+    if source_pending_blocks_listener "$id"; then
       fm_procevent_source_lock_release "$id"
       printf 'round-open: %s\n' "$id"
       exit 0
@@ -1154,7 +1173,7 @@ cmd_start() {
     [ "$extension_owner" -eq 0 ] || return 1
     script=$(adapter_script "$adapter")
     [ -f "$script" ] && [ ! -L "$script" ] || return 1
-    "$script" relisten >/dev/null 2>&1 || return 1
+    "$script" relisten "$@" >/dev/null 2>&1 || return 1
     registration=$(source_file "$id")
     [ -f "$registration" ] && [ ! -L "$registration" ] || return 1
     fm_procevent_source_lock_acquire "$id" || return 1
@@ -1477,6 +1496,9 @@ EOF
   if [ "$handled_capture" -eq 1 ] && adopt_relisten; then
     continue
   fi
+  if [ -n "$task_owner" ] && adopt_relisten "$durable"; then
+    continue
+  fi
   break
   done
 }
@@ -1757,7 +1779,7 @@ cmd_reconcile() {
     return 0
   fi
   trap 'fm_lock_release "$STATE/.procevent-reconcile.lock"' EXIT
-  local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
+  local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
@@ -1820,8 +1842,7 @@ cmd_reconcile() {
         fm_procevent_claim_state_locked "$id"
         claim_state=$?
         if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
-          task_pending=$(source_pending "$id" | head -1)
-          if [ -n "$task_pending" ]; then
+          if source_pending_blocks_listener "$id"; then
             fm_procevent_source_lock_release "$id"
             continue
           fi
@@ -2148,7 +2169,7 @@ cmd_classify() {
 }
 
 cmd_handled() {
-  local id=${1-} seq=${2-} status result='' result_adapter='' conclude=0 registration='' retained=''
+  local id=${1-} seq=${2-} status result='' result_adapter='' conclude=0 registration='' retained='' pending
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   case "$seq" in ''|*[!0-9]*) die "sequence must be a nonnegative integer: $seq" ;; esac
   owner_lease_refresh
@@ -2162,6 +2183,11 @@ cmd_handled() {
     fi
   fi
   if [ "$conclude" -eq 1 ]; then
+    while IFS= read -r pending; do
+      [ "$pending" = "$result" ] && continue
+      fm_procevent_source_lock_release "$id"
+      die "cannot conclude source $id while another captured round is unacknowledged; handle it first with bin/fm-procevent.sh handled $id $(fm_procevent_result_sequence "$pending")"
+    done < <(source_pending "$id")
     registration=$(source_file "$id")
     retained=$(umask 077; mktemp "$REG/.$id.concluding.XXXXXX") || {
       fm_procevent_source_lock_release "$id"

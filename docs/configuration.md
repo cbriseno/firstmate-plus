@@ -2220,10 +2220,13 @@ Its header owns the exact commands and private episode mechanics; `tests/fm-lavi
 
 **Retry interrupted Lavish polls**
 
-That adapter, and only that adapter, retries the one exact transient response a cut-short listener returns while its marks remain available (`error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`), up to 12 times with poll starts at least 5 seconds apart, so an internal retry never reaches the runner as a captured result.
+That adapter, and only that adapter, retries the exact transient response a cut-short listener returns while its marks remain available (`error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`), up to 12 times with poll starts at least 5 seconds apart, so an internal retry never reaches the runner as a captured result.
 This start-to-start governor is a no-op after a normally blocking poll but caps an immediately returning poll under the shipped defaults independently of the owner lease and registration launch pacing.
 
-Real feedback, ended and missing sessions, any other `SERVER_ERROR`, and that same interruption still standing once the bound is spent are all captured and announced normally; `FM_LAVISH_POLL_RETRY_DELAY` is a bounded 1 to 60 second test override for the interval only, and the runner itself stays adapter-agnostic.
+Real feedback, ended and missing sessions, other errors, and that same interruption still standing once the bound is spent are all captured and announced normally; `FM_LAVISH_POLL_RETRY_DELAY` is a bounded 1 to 60 second test override for the interval only, and the runner itself stays adapter-agnostic.
+The adapter also retries the exact `Lavish Editor server did not start` / `SERVER_ERROR` response with its matching port-specific startup help, using the same bound and cadence for polls and synchronous replies.
+Other startup failures remain errors; an exhausted reply retry preserves the original reply file and leaves the round unacknowledged.
+
 An already-armed Lavish source keeps its registered listener command until it is retired and armed again, so retire the source, then arm it again to adopt this retry policy.
 
 ### Crew-hosted Lavish review boards
@@ -2237,13 +2240,13 @@ After opening the artifact as required above, the worker arms it with `bin/fm-pr
 
 - The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`, and a failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
 - An earlier registration's listener that releases the board inside the confirm window lets the new registration start, and `arm` then reports `armed` as usual.
-- When a live listener from an earlier registration of the same board still holds it when the window ends, `arm` exits zero with `still-listening` instead of `armed`, because that earlier listener keeps serving the board and the new registration takes effect only after the source is retired and armed again.
+- When a live listener from an earlier registration of the same board still holds it when the window ends, `arm` exits zero with `still-listening` instead of `armed`, because that earlier listener keeps serving the board; a continuing task listener adopts the registration after its next capture when the listener command is unchanged, while other commands require retiring and arming again.
 - The arm is refused unless that task id has valid, identity-matching endpoint metadata, because a board whose owner has no endpoint would collect feedback nobody can be told about.
 
 **Acknowledge a round by re-arming**
 
 The registration persists as one task-owned source record, while each captured nonterminal round remains open until the worker re-arms and the existing handled marker acknowledges that round.
-Re-arm acknowledges that round and registers the next listener: the board is armed once while no record exists, and a further arm by the same owner is refused unless an unacknowledged nonterminal round is waiting, so an open round is never replaced before its owner acknowledges it.
+Re-arm acknowledges only the oldest open nonterminal round and registers the next listener; newer captures remain unacknowledged: the board is armed once while no record exists, and a further arm by the same owner is refused unless an unacknowledged nonterminal round is waiting, so an open round is never replaced before its owner acknowledges it.
 
 **Post an agent reply**
 
@@ -2264,12 +2267,14 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
 - If the owner has declared `done`, is parked, or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
-- A task-owned source with an unhandled capture is not relaunched, so delivery failure cannot consume a round and start another poll.
+- With synchronous-reply clients (0.1.80 or newer), the detached runner listens again after nonterminal feedback or a browser disconnect, including while the owner is replying or has declared `done`; reconciliation can restore that listener while feedback remains unacknowledged.
+- Listening never acknowledges a capture; terminal results and errors still stop continuation, and older clients retain their one-round reply handoff.
 - That record is the only ownership evidence there is, so while any captured round of it is unacknowledged every retirement path refuses - the runner's own terminal retirement and an explicit `retire` alike - and the refusal names the acknowledgement that releases it.
 
 **Conclude a terminal round**
 
 - A terminal result, including `session_ended`, an empty End, or missing, is delivered to the owner with an explicit stop-and-conclude instruction and is never auto-rearmed.
+- Earlier captured batches must be acknowledged before concluding a terminal round, so ending the review cannot orphan unread feedback.
 - That round keeps the board with its owner: the source record is not retired while the terminal capture is unacknowledged, so no second armer can take the board, and acknowledging it with `bin/fm-procevent.sh handled <source-id> <sequence>` is what concludes and retires it.
 - That conclude retains the registration it is retiring, removes it, then records the acknowledgement and restores the registration if that record cannot be written, so a failed conclude never leaves the round open with its owner gone.
 - An interruption between those two durable steps leaves the board unregistered with its terminal round still open, which nothing relaunches and the same `handled` call finishes.
@@ -2279,7 +2284,7 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 - A second armer is refused with the current owner named, and the source list derives `listening`, `round-open`, or `dead` from the claim and handled captures without a second ownership record.
 - If the hosting worker cannot be recovered, relaunch a worker to re-host after the old claim is proved dead; the primary never adopts the board.
-- The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
+- There is a short transport gap while the runner captures and routes a result and starts its next blocking poll; it no longer waits for an owner turn to resume listening.
 - The interim crew instruction emitted by `bin/fm-brief.sh` points workers at this arm-and-acknowledge contract.
 
 **Register deterministic condition and action watches**
