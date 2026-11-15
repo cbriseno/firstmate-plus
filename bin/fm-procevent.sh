@@ -266,6 +266,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }
@@ -842,7 +844,8 @@ publish_result() {  # <result-file>
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ "$adapter" = lavish ] && [ -n "$closed_candidate" ] \
       && fm_pr_task_id_valid "$closed_candidate" \
-      && { [ ! -e "$STATE/$closed_candidate.meta" ] || [ -e "$STATE/$closed_candidate.parked" ]; } \
+      && { [ ! -e "$STATE/$closed_candidate.meta" ] || [ -e "$STATE/$closed_candidate.parked" ] \
+        || [ "$(status_line_verb "$(last_status_line "$STATE/$closed_candidate.status")")" = 'done' ]; } \
       && ! adapter_result_is_silent "$adapter" "$result"
     then
       {

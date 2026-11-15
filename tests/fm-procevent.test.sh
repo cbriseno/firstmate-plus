@@ -266,6 +266,44 @@ pe "$HCLOSED" handled closed-board 1 >/dev/null || fail "closed board acknowledg
 [ -z "$(pe "$HCLOSED" pending-lavish)" ] || fail "handled board remained in handoff inventory"
 pass "closed board feedback reaches firstmate once and remains visible through handoff until handled"
 
+# 2026-11-15 CST: config-board 05:43 and P16 06:29:58 retained their
+# metadata/listeners after done. Capture must reach the primary immediately,
+# even with no watcher running and before its 300-second fallback is due.
+while IFS='|' read -r task source sequence words; do
+  task_home="$TMP_ROOT/done-$task"; new_home "$task_home"
+  new_task_endpoint "$task_home" "$task"
+  fm_test_track_procevent_home "$task_home"
+  payload="$task_home/feedback"
+  printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "1","%s","article#option-b","span",""\n' "$words" > "$payload"
+  pe "$task_home" register-task lavish "$source" "$task" -- cat "$payload" >/dev/null \
+    || fail "$task registration failed"
+  if [ "$sequence" = 2 ]; then
+    mkdir -p "$task_home/state/procevent-inbox"
+    printf 'prior round\n' > "$task_home/state/procevent-inbox/$source.1.result"
+    printf 'lavish\n' > "$task_home/state/procevent-inbox/$source.1.adapter"
+    pe "$task_home" handled "$source" 1 >/dev/null || fail "prior round acknowledgement failed"
+  fi
+  printf 'working: preparing report\ndone [at=1794697319]: report ready; listener retained\n' > "$task_home/state/$task.status"
+  pe "$task_home" start "$source" >/dev/null || fail "$task capture failed"
+  result="$task_home/state/procevent-inbox/$source.$sequence.result"
+  [ -f "$result" ] || fail "$task did not capture the expected round"
+  FM_HOME="$task_home" "$ROOT/bin/fm-inbox.sh" list | grep -F "$words" >/dev/null \
+    || fail "$task done-owner feedback did not reach the primary without a watcher"
+  assert_contains "$(wake_payloads "$task_home")" "procevent lavish $source $sequence" \
+    "$task primary wake missing at capture"
+  [ ! -e "$task_home/state/$task.inbox/001.msg" ] || fail "$task feedback was sent to a done owner"
+  assert_absent "${result%.result}.handled" "primary routing acknowledged feedback prematurely"
+  pe "$task_home" reconcile >/dev/null || fail "$task replay failed"
+  [ "$(find "$task_home/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "$task replay duplicated the primary note"
+  pe "$task_home" handled "$source" "$sequence" >/dev/null || fail "$task acknowledgement failed"
+  [ -z "$(pe "$task_home" pending-lavish)" ] || fail "$task handled feedback remained pending"
+  pass "$task done-owner capture reaches the primary without a watcher"
+done <<'CASES'
+fm-config-board-20261114|lavish-293e7806abf3be67|1|Forma de planear
+macb-p16-20261114|lavish-97dcbefa32d48837|2|No me gusta este indicador animado para el progreso
+CASES
+
 if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
   HALIVE="$TMP_ROOT/live-feedback"; new_home "$HALIVE"
   mkdir -p "$HALIVE/state/procevent-inbox"
@@ -273,6 +311,7 @@ if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
   printf 'lavish\n' > "$HALIVE/state/procevent-inbox/live-board.1.adapter"
   printf 'live-worker\n' > "$HALIVE/state/procevent-inbox/live-board.1.owner-task"
   new_task_endpoint "$HALIVE" live-worker
+  printf 'done: earlier report\nworking: resumed report iteration\n' > "$HALIVE/state/live-worker.status"
   pe "$HALIVE" reconcile >/dev/null || fail "live owner reconciliation failed"
   [ -f "$HALIVE/state/live-worker.inbox/001.msg" ] || fail "live owner did not receive feedback"
   [ ! -d "$HALIVE/state/inbox" ] || fail "live owner feedback reached captain inbox"
