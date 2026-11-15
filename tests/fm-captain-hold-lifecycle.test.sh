@@ -2667,7 +2667,7 @@ run_drain() {  # <home>
   local home=$1
   PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
-    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" FM_DIVERGENCE_TIMEOUT=120 \
     "$ROOT/bin/fm-wake-drain.sh" 2>/dev/null
 }
 
@@ -2899,6 +2899,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   local precedence_pr rejected_pr approved_pr released_pr json show
   home=$(make_home retained-row-artifacts)
   perl -0pi -e 's/done_keep = 10/done_keep = 20/' "$home/.tasks.toml"
+  if [ "${FM_RETAINED_ARTIFACT_GROUP:-reports}" = reports ]; then
   retained_id=sample-retained-report
   mkdir -p "$home/data/$retained_id"
   tasks_in "$home" add "$retained_id" "Investigate retained report evidence" --kind scout \
@@ -2946,6 +2947,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   assert_contains "$show" "hold_kind: captain" \
     "the report precedence row lost its retained-scout evidence"
 
+  elif [ "$FM_RETAINED_ARTIFACT_GROUP" = rejected ]; then
   rejected_id=sample-rejected-merge
   rejected_pr="https://github.com/sample/sample/pull/22"
   tasks_in "$home" add "$rejected_id" "Decide whether $rejected_pr may merge" --kind ship \
@@ -2991,6 +2993,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   assert_contains "$show" "hold_kind: captain" \
     "the report-path question lost its non-release evidence"
 
+  elif [ "$FM_RETAINED_ARTIFACT_GROUP" = approved ]; then
   approved_id=sample-approved-merge
   approved_pr="https://github.com/sample/sample/pull/23"
   repo="$home/projects/sample-approved"
@@ -3047,6 +3050,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     2> "$home/local-teardown.err" \
     || fail "released local cleanup failed: $(cat "$home/local-teardown.err")"
 
+  else
   released_id=sample-released-report
   released_pr=https://github.com/sample/sample/pull/24
   mkdir -p "$home/data/$released_id"
@@ -3105,41 +3109,27 @@ test_retained_row_artifacts_survive_captain_answers() {
   tasks_in "$home" 'done' "$legacy_id" >/dev/null \
     || fail "could not complete the kindless legacy delivery"
 
+  fi
   json=$(run_bearings "$home" --all-landed) \
     || fail "Bearings failed after retained delivery answers"
-  printf '%s' "$json" | jq -e \
-    --arg retained_id "$retained_id" --arg retained "data/$retained_id/report.md" \
-    --arg precedence_id "$precedence_id" \
-    --arg precedence "data/$precedence_id/report.md" \
-    --arg rejected_id "$rejected_id" --arg rejected_local_id "$rejected_local_id" \
-    --arg report_question_id "$report_question_id" \
-    --arg approved_id "$approved_id" --arg local_id "$local_id" \
-    --arg approved_pr "$approved_pr" --arg released_id "$released_id" \
-    --arg answered_id "$answered_id" --arg reportless_scout_id "$reportless_scout_id" \
-    --arg legacy_id "$legacy_id" --arg decision_local_id "$decision_local_id" \
-    --arg released "data/$released_id/report.md" '
-      (.landed | any(.id == $retained_id and .artifact == $retained))
-        and (.landed | any(.id == $precedence_id and .artifact == $precedence))
-        and (.landed | any(.id == $rejected_id) | not)
-        and (.landed | any(.id == $rejected_local_id) | not)
-        and (.landed | any(.id == $report_question_id) | not)
-        and (.landed | any(.id == $approved_id and .artifact == $approved_pr))
-        and (.landed | any(.id == $local_id))
-        and (.landed | any(.id == $released_id and .artifact == $released))
-        # Without the explicit captain-kind boundary, the artifactless answered
-        # call falls through the compatibility path and this assertion fails.
-        and (.landed | any(.id == $answered_id) | not)
-        # Without the explicit scout-kind boundary, this row is rendered with
-        # an empty artifact even though a scout has no delivery without a report.
-        and (.landed | any(.id == $reportless_scout_id) | not)
-        # Requiring a present non-captain kind would also remove this older
-        # artifactless delivery, so the compatibility boundary stays observable.
-        and (.landed | any(.id == $legacy_id))
-        # The captain worded this decision "local main" and the work closed
-        # with no artifact, so reading that prose as a recorded note would
-        # publish a local-only landing that never happened.
-        and (.landed | any(.id == $decision_local_id and .artifact == "-"))
-    ' >/dev/null || fail "released, retained, or rejected deliveries were misclassified: $json"
+  case "${FM_RETAINED_ARTIFACT_GROUP:-reports}" in
+    reports)
+      printf '%s' "$json" | jq -e --arg id "$retained_id" --arg artifact "data/$retained_id/report.md" \
+        --arg precedence_id "$precedence_id" --arg precedence "data/$precedence_id/report.md" \
+        '(.landed | any(.id == $id and .artifact == $artifact)) and (.landed | any(.id == $precedence_id and .artifact == $precedence))' >/dev/null ;;
+    rejected)
+      printf '%s' "$json" | jq -e --arg id "$rejected_id" --arg local_id "$rejected_local_id" \
+        --arg question_id "$report_question_id" \
+        '(.landed | any(.id == $id) | not) and (.landed | any(.id == $local_id) | not) and (.landed | any(.id == $question_id) | not)' >/dev/null ;;
+    approved)
+      printf '%s' "$json" | jq -e --arg id "$approved_id" --arg artifact "$approved_pr" --arg local_id "$local_id" \
+        '(.landed | any(.id == $id and .artifact == $artifact)) and (.landed | any(.id == $local_id))' >/dev/null ;;
+    released)
+      printf '%s' "$json" | jq -e --arg id "$released_id" --arg artifact "data/$released_id/report.md" \
+        --arg answered_id "$answered_id" --arg scout_id "$reportless_scout_id" --arg legacy_id "$legacy_id" \
+        --arg decision_id "$decision_local_id" \
+        '(.landed | any(.id == $id and .artifact == $artifact)) and (.landed | any(.id == $answered_id) | not) and (.landed | any(.id == $scout_id) | not) and (.landed | any(.id == $legacy_id)) and (.landed | any(.id == $decision_id and .artifact == "-"))' >/dev/null ;;
+  esac || fail "released, retained, or rejected deliveries were misclassified: $json"
   pass "release and scout report retention distinguish deliveries from rejected merge answers"
 }
 
@@ -4467,7 +4457,8 @@ test_complete_refuses_an_entry_held_for_another_origin() {
 
 test_hold_origins_precede_backend_holds() {
   local home phase timing failure id shown origin until_args=()
-  local phases=(new active released) timings=(plain dated)
+  local phases=(new active released) timings=(plain dated) failures=(lookup write hold)
+  [ -z "${FM_HOLD_ORIGIN_FAILURE:-}" ] || failures=("$FM_HOLD_ORIGIN_FAILURE")
   [ -z "${FM_HOLD_ORIGIN_PHASE:-}" ] || phases=("$FM_HOLD_ORIGIN_PHASE")
   [ -z "${FM_HOLD_ORIGIN_TIMING:-}" ] || timings=("$FM_HOLD_ORIGIN_TIMING")
   for phase in "${phases[@]}"; do
@@ -4517,7 +4508,7 @@ SH
       chmod +x "$home/fakebin/tasks-axi"
       until_args=()
       [ "$timing" != dated ] || until_args=(--until 2099-01-01)
-      for failure in lookup write hold; do
+      for failure in "${failures[@]}"; do
         : > "$home/fail-$failure"
         if run_captain "$home" hold "$id" "${FM_TEST_CALL[@]}" --title "Separate call" --reason "Choose for B" \
           --origin origin-b ${until_args[@]+"${until_args[@]}"} > "$home/hold.out" 2> "$home/hold.err"; then
@@ -6194,6 +6185,8 @@ if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 6 ]; then
 fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 7 ]; then
   test_expected_identity_intakes
+fi
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 55 ]; then
   test_expected_identity_secondmate
 fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 27 ]; then
@@ -6239,10 +6232,10 @@ if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 45 ]; then
   FM_HOLD_ORIGIN_PHASE=active FM_HOLD_ORIGIN_TIMING=dated test_hold_origins_precede_backend_holds
 fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 46 ]; then
-  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=plain test_hold_origins_precede_backend_holds
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=plain FM_HOLD_ORIGIN_FAILURE=lookup test_hold_origins_precede_backend_holds
 fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 47 ]; then
-  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=dated test_hold_origins_precede_backend_holds
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=dated FM_HOLD_ORIGIN_FAILURE=lookup test_hold_origins_precede_backend_holds
 fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 30 ]; then
   test_historical_self_inventory_has_workable_repair
@@ -6374,4 +6367,32 @@ fi
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 20 ]; then
   test_archived_answered_hold_still_satisfies_the_gate
   test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 56 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=plain FM_HOLD_ORIGIN_FAILURE=write test_hold_origins_precede_backend_holds
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 57 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=plain FM_HOLD_ORIGIN_FAILURE=hold test_hold_origins_precede_backend_holds
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 58 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=dated FM_HOLD_ORIGIN_FAILURE=write test_hold_origins_precede_backend_holds
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 59 ]; then
+  FM_HOLD_ORIGIN_PHASE=released FM_HOLD_ORIGIN_TIMING=dated FM_HOLD_ORIGIN_FAILURE=hold test_hold_origins_precede_backend_holds
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 60 ]; then
+  FM_RETAINED_ARTIFACT_GROUP=rejected test_retained_row_artifacts_survive_captain_answers
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 61 ]; then
+  FM_RETAINED_ARTIFACT_GROUP=approved test_retained_row_artifacts_survive_captain_answers
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 62 ]; then
+  FM_RETAINED_ARTIFACT_GROUP=released test_retained_row_artifacts_survive_captain_answers
 fi
