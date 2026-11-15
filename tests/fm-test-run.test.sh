@@ -1763,6 +1763,7 @@ test_host_test_slots() {
   python3 - "$RUNNER" <<'PYTEST' || fail "host test slots did not wait and release"
 import fcntl
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1779,10 +1780,23 @@ for slot in (1, 2):
         os.close(fd)
 assert fds, "no test slot available for fixture"
 with tempfile.TemporaryDirectory() as tmp:
+    fakebin = os.path.join(tmp, "bin")
+    os.mkdir(fakebin)
+    for name, body in {
+        "uname": 'echo "$TEST_OS"',
+        "getconf": 'echo 4',
+        "awk": 'if [ "$2" = /proc/meminfo ]; then echo "$TEST_MEM_KB"; else exec "' + shutil.which("awk") + '" "$@"; fi',
+        "sysctl": 'case "$2" in hw.memsize) echo 8589934592 ;; kern.memorystatus_level) echo 50 ;; esac',
+    }.items():
+        path = os.path.join(fakebin, name)
+        with open(path, "w") as out:
+            out.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
     fixture = os.path.join(tmp, "fixture.test.sh")
     with open(fixture, "w") as out:
         out.write("#!/usr/bin/env bash\nexit 0\n")
     env = os.environ.copy()
+    env.update(PATH=fakebin + os.pathsep + env["PATH"], TEST_OS="unknown", TEST_MEM_KB="3145728")
     env["FM_TEST_LOCK_DIR"] = lock_dir.name
     env.pop("FM_TEST_HOST_LOCKED", None)
     env.pop("FM_TEST_SKIP_HOST_LOCK", None)
@@ -1809,6 +1823,29 @@ with tempfile.TemporaryDirectory() as tmp:
                 proc.wait()
             for fd in fds:
                 os.close(fd)
+    # With the first two slots occupied, both supported probes admit a third.
+    for slot in (1, 2):
+        fd = os.open(os.path.join(lock_dir.name, f"firstmate-test-{os.getuid()}-{slot}.lock"), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        fds.append(fd)
+    try:
+        for system in ("Linux", "Darwin"):
+            env["TEST_OS"] = system
+            subprocess.run(["bash", sys.argv[1], fixture], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, env=env, check=True, timeout=20)
+        # The outer runner holds the third slot; its child must inherit it.
+        with open(fixture, "w") as out:
+            out.write('bash "$RUNNER_PATH" "$INNER_FIXTURE"\n')
+        inner = os.path.join(tmp, "inner.test.sh")
+        with open(inner, "w") as out:
+            out.write("exit 0\n")
+        env.update(TEST_OS="Linux", TEST_MEM_KB="2097152", RUNNER_PATH=sys.argv[1], INNER_FIXTURE=inner)
+        subprocess.run(["bash", sys.argv[1], fixture], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, env=env, check=True, timeout=20)
+    finally:
+        for fd in fds:
+            os.close(fd)
+        fds.clear()
     with open(fixture, "w") as out:
         out.write('sleep 60 </dev/null >/dev/null 2>&1 &\necho $! > "$PIDFILE"\n')
     env["PIDFILE"] = os.path.join(tmp, "pid")

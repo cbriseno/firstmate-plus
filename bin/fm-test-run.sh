@@ -3,9 +3,11 @@
 # composition for portable CI shards, local --jobs for proven-concurrent work,
 # timing markers, and the complete-regression coverage guard.
 #
-# Test runs share two host slots across homes and worktrees. When both are
-# occupied, a line names their PIDs and FM_TEST_SKIP_HOST_LOCK=1 bypasses the
-# limit. Nested runners inherit their parent's slot. Live-harness and real-Herdr
+# Test runs share host slots across homes and worktrees: two baseline slots,
+# plus one per available GiB above the first, capped at the CPU count (minimum
+# two). Unknown memory retains two slots. When all slots are occupied, a line
+# names their PIDs and FM_TEST_SKIP_HOST_LOCK=1 bypasses the limit. Nested
+# runners inherit their parent's slot. Live-harness and real-Herdr
 # suites additionally use bin/fm-heavy-run.sh's single heavy-session host slot.
 #
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
@@ -2205,9 +2207,30 @@ if [ "${#SCRIPTS[@]}" -eq 0 ]; then
   exit "$empty_rc"
 fi
 
-# Use the same inherited fcntl lock pattern as fm-lint, with two slots.
+# Probe available memory in KiB; an unsupported or failed probe is unknown.
+available_memory_kb() {
+  local bytes level
+  case "$(uname -s 2>/dev/null)" in
+    Linux) awk '/^MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null ;;
+    Darwin)
+      bytes=$(sysctl -n hw.memsize 2>/dev/null) || return
+      level=$(sysctl -n kern.memorystatus_level 2>/dev/null) || return
+      case "$bytes:$level" in *[!0-9:]*|:*) return ;; esac
+      [ -n "$level" ] && [ "$level" -le 100 ] || return
+      echo $((bytes * level / 102400)) ;;
+  esac
+}
+
+# Use the same inherited fcntl lock pattern as fm-lint.
 if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1 ]; then
-  exec python3 - "${BASH:-bash}" "$ROOT/bin/fm-test-run.sh" "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}" <<'PYLOCK'
+  available_kb=$(available_memory_kb) || available_kb=
+  case "$available_kb" in ''|*[!0-9]*) slots=2 ;;
+    *) slots=$((2 + available_kb / 1048576 - 1)); [ "$slots" -ge 2 ] || slots=2 ;;
+  esac
+  cpus=$(cpu_count)
+  [ "$cpus" -ge 2 ] || cpus=2
+  [ "$slots" -le "$cpus" ] || slots=$cpus
+  exec python3 - "$slots" "${BASH:-bash}" "$ROOT/bin/fm-test-run.sh" "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}" <<'PYLOCK'
 import fcntl
 import os
 import sys
@@ -2215,7 +2238,7 @@ import time
 
 lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
 fds = [os.open(os.path.join(lock_dir, f"firstmate-test-{os.getuid()}-{slot}.lock"),
-               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in (1, 2)]
+               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in range(1, int(sys.argv[1]) + 1)]
 reported = False
 while True:
     for fd in fds:
@@ -2228,7 +2251,7 @@ while True:
         os.set_inheritable(fd, True)
         os.environ["FM_TEST_HOST_LOCKED"] = "1"
         os.environ["FM_TEST_HOST_LOCK_FD"] = str(fd)
-        os.execvp(sys.argv[1], sys.argv[1:])
+        os.execvp(sys.argv[2], sys.argv[2:])
     if not reported:
         holders = []
         for fd in fds:
