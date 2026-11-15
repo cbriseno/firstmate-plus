@@ -105,7 +105,17 @@ For visual review boards, follow the [crew-hosted board contract](../../../docs/
 
 ## Reports
 
-For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record. Include the results and data needed to read it offline, with detailed evidence in expandable sections where useful; use no CDN, external fonts, agent interface, or required service. Copy and adapt the inline theme in [report-theme.html](report-theme.html) for both plain reading and Lavish review; the layout may fit the content. Use natural, concise language and diagrams or interactions when helpful. Give firstmate the full report link and a one- or two-sentence outcome. Keep the existing result/review declaration current. Opening a report must not start Lavish; on-demand integration is a separate capability.
+For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record.
+Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and the on-demand Lavish control when available.
+Start with the result, its significance, and the next action in plain, friendly language; write for a quick reader, not for the author of the investigation.
+Use a meaningful visual such as a comparison, diagram, or proportion when it clarifies the result, and put supporting data, methods, and technical detail in expandable sections.
+Keep the initially visible narrative to approximately 300 words or fewer; use only the detail needed to understand or decide, and avoid repeating commands or technical text without a purpose.
+Show the generation date and time with its time zone, plus relative age that refreshes locally when JavaScript is available; the absolute time must remain visible without it.
+Name the model and reasoning effort of the report author only; if either is unknown, say so rather than guessing.
+Include the evidence needed to read the report offline without a CDN, external fonts, agent interface, or required service.
+Give firstmate the full report link and a one- or two-sentence outcome.
+Keep the existing result/review declaration current.
+Opening a report must not start Lavish; on-demand integration is a separate capability.
 
 ## Project memory
 

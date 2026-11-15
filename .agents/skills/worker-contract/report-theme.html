@@ -1,28 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Report theme</title>
+<title>Referencia de informes</title>
 <style>
-:root { color-scheme: light; font-family: system-ui, sans-serif; color: #202b35; background: #fff; }
-body { max-width: 68rem; margin: 0 auto; padding: 2rem 1.5rem; line-height: 1.6; }
-h1, h2, h3 { line-height: 1.25; }
-a { color: #145b91; }
-section, details { margin: 1.5rem 0; }
-.summary, .review { background: #f2f5f7; padding: 1rem; border-radius: .5rem; }
-table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
-th, td { border: 1px solid #dce2e7; padding: .5rem; text-align: left; vertical-align: top; }
-pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; --bg:#f7f7f4; --ink:#202b35; --muted:#52616a; --panel:#fff; --line:#cbd5d7; --accent:#17635e; --soft:#e0efeb; }
+@media (prefers-color-scheme: dark) { :root { --bg:#151d20; --ink:#eff5f3; --muted:#b4c4c2; --panel:#202c2f; --line:#49605f; --accent:#8bd6c2; --soft:#294642; } }
+* { box-sizing:border-box; }
+body { margin:0 auto; max-width:90rem; padding:clamp(1rem, 3vw, 3rem); background:var(--bg); color:var(--ink); line-height:1.55; }
+header { border-bottom:1px solid var(--line); padding-bottom:1.2rem; }
+h1, h2, h3 { line-height:1.2; } h1 { font-size:clamp(2rem, 4vw, 3.5rem); margin:.3rem 0; max-width:24ch; }
+h2 { margin-top:0; } p { max-width:75ch; } a { color:var(--accent); } .eyebrow, .meta { color:var(--muted); font-size:.9rem; }
+.overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%, 17rem),1fr)); gap:1rem; margin:1.5rem 0; }
+.card, details { background:var(--panel); border:1px solid var(--line); border-radius:.8rem; padding:1.2rem; min-width:0; }
+.card p:last-child { margin-bottom:0; } .highlight { background:var(--soft); } .number { display:block; font-size:clamp(2rem,4vw,3rem); line-height:1.1; font-weight:750; color:var(--accent); }
+section, details { margin:1.5rem 0; } summary { cursor:pointer; font-weight:700; } details > :last-child { margin-bottom:0; }
+table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto; } th, td { border-bottom:1px solid var(--line); padding:.65rem; text-align:left; vertical-align:top; } pre, code { white-space:pre-wrap; overflow-wrap:anywhere; }
 </style>
 </head>
 <body>
-<header><p>Illustrative example · two layouts, one theme</p><h1>A report that works offline</h1></header>
+<header>
+<p class="eyebrow">Ejemplo · informe autónomo</p>
+<h1>La conclusión va primero</h1>
+<p>Una frase clara explica qué pasó y por qué importa, sin obligar a abrir los detalles.</p>
+<p class="meta">Generado: <time datetime="2026-11-15T16:00:00Z" data-relative>15 nov 2026, 10:00 (UTC−06:00)</time> · <span data-age-for="2026-11-15T16:00:00Z"></span><br>Autor del informe: modelo y esfuerzo por indicar</p>
+</header>
 <main>
-<section class="summary"><h2>Reading layout</h2><p><strong>Result:</strong> The example report opens without a network connection. It contains its own text and styles.</p></section>
-<section><h2>What it means</h2><p>The reader can see the result immediately and open the supporting evidence when needed.</p></section>
-<details><summary>Evidence and method</summary><p>This example is a single HTML file with inline styles. Actual reports should include the data behind their conclusions here.</p></details>
-<section class="review"><h2>Review layout</h2><p>Use the same theme to make a decision easy to review:</p><table><thead><tr><th>Choice</th><th>Effect</th></tr></thead><tbody><tr><td>Short report</td><td>Result first; details can be opened.</td></tr><tr><td>Comparison</td><td>Choices appear side by side for feedback.</td></tr></tbody></table><p>Which presentation makes this result easiest to understand?</p></section>
+<div class="overview">
+<section class="card highlight"><h2>Resultado</h2><span class="number">3 de 4</span><p>Una cifra con contexto ayuda a entender el hallazgo de un vistazo.</p></section>
+<section class="card"><h2>Qué sigue</h2><p>Una acción concreta, con sus límites cuando hagan falta.</p></section>
+</div>
+<details><summary>Datos y método</summary><p>Aquí van la evidencia, las limitaciones y los detalles técnicos que respaldan el resultado.</p></details>
 </main>
+<script>
+// Keep the absolute timestamp visible even if scripting is disabled.
+function updateAges() {
+  document.querySelectorAll('[data-age-for]').forEach(function (el) {
+    const t = Date.parse(el.dataset.ageFor), delta = Date.now() - t;
+    if (!Number.isFinite(t)) return;
+    if (delta < 0) { el.textContent = 'fecha futura'; return; }
+    const minutes = Math.floor(delta / 60000);
+    el.textContent = minutes < 1 ? 'hace menos de un min' : minutes < 60 ? 'hace ' + minutes + ' min' : minutes < 1440 ? 'hace ' + Math.floor(minutes / 60) + ' h' : 'hace ' + Math.floor(minutes / 1440) + (minutes < 2880 ? ' día' : ' días');
+  });
+}
+updateAges(); setInterval(updateAges, 60000);
+</script>
 </body>
 </html>
