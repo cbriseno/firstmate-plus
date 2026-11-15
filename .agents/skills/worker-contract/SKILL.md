@@ -106,7 +106,7 @@ For visual review boards, follow the [crew-hosted board contract](../../../docs/
 ## Reports
 
 For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record.
-Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and the on-demand Lavish control when available.
+Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and the on-demand Lavish control with its direct-file fallback.
 Start with the result, its significance, and the next action in plain, friendly language; write for a quick reader, not for the author of the investigation.
 Use a meaningful visual such as a comparison, diagram, or proportion when it clarifies the result, and put supporting data, methods, and technical detail in expandable sections.
 Keep the initially visible narrative to approximately 300 words or fewer; use only the detail needed to understand or decide, and avoid repeating commands or technical text without a purpose.
