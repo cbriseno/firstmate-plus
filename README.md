@@ -5,6 +5,7 @@ It is an independent experimental derivative of [Kun Chen's Firstmate](https://g
 It is intended for operators who can review agent permissions and maintain their own CLI toolchain.
 
 This distribution retains the work API, task hierarchy and dependencies, progress checkpoints, captain decision records, and explicit session-lock release endpoints from the customized source line.
+For Deck integrations, `work report.review` returns `{ok:true,url,owner:"author|resumed|primary"}` when the review is ready; `bin/fm-tasks-axi.sh --help` owns its payload and routing contract.
 Distribution-specific changes include English-default work-control copy with an optional Spanish locale, a generic notification argv interface, and offline standalone and pairwise acceptance scenarios.
 Work-control messages default to English and support a per-installation Spanish locale.
 The generic event notification command is disabled unless configured.

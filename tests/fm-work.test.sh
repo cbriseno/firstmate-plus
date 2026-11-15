@@ -4,6 +4,7 @@
 # manual order/Undo, normalization/rollback and lossless source preservation.
 # FM_WORK_TEST_SNAPSHOT=1 selects snapshot contention and its setup checks.
 # FM_WORK_TEST_SUPERVISION=1 selects bounded supervision and writer exclusion.
+# FM_WORK_TEST_REPORT=1 selects on-demand report review and listener reuse.
 set -euo pipefail
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -29,6 +30,100 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         global checks
         assert value, message
         checks += 1
+    if os.environ.get('FM_WORK_TEST_REPORT') == '1':
+        fakebin=home/'fakebin'; fakebin.mkdir()
+        lavish=fakebin/'lavish-axi'
+        lavish.write_text('''#!/usr/bin/env python3
+import hashlib,json,os,pathlib,sys,time
+if sys.argv[1]=='--version': print('0.1.80'); sys.exit(0)
+artifact=pathlib.Path(sys.argv[2]).resolve()
+store=pathlib.Path(os.environ['LAVISH_AXI_STATE_DIR'])/'state.json'
+if sys.argv[1]=='--no-open':
+    key=hashlib.sha256(str(artifact).encode()).hexdigest()[:16]
+    store.parent.mkdir(exist_ok=True)
+    value=json.loads(store.read_text()) if store.exists() else {'sessions':{}}
+    value['sessions'][key]={'file':str(artifact),'status':'open','url':'http://127.0.0.1:14387/session/'+key}
+    store.write_text(json.dumps(value)); sys.exit(0)
+if sys.argv[1]=='poll':
+    trigger=artifact.parent/'feedback'
+    deadline=time.monotonic()+180
+    while not trigger.exists() and time.monotonic()<deadline: time.sleep(.05)
+    if trigger.exists(): print(trigger.read_text()); trigger.unlink()
+    sys.exit(0)
+sys.exit(1)
+''')
+        lavish.chmod(0o755)
+        # Only the lifecycle and backend-read command boundaries are doubled;
+        # no pane is inspected, resumed, launched or closed by this suite.
+        bash=fakebin/'bash'
+        bash.write_text('''#!/bin/sh
+if [ "${1##*/}" = fm-control.sh ]; then
+    printf '%s %s\\n' "$2" "$3" >> "$FM_HOME/resume-calls"
+    [ "${REVIEW_FAIL_RESUME:-0}" != 1 ] || exit 1
+    [ "$2" = a ] && [ "$3" = resume ] || exit 1
+    rm -f "$FM_HOME/state/a.parked"
+    touch "$FM_HOME/author-alive"
+    exit 0
+fi
+if [ "$1" = -c ] && [ "$3" = fm-work ]; then
+    if [ -e "$FM_HOME/author-alive" ]; then echo alive; else echo dead; fi
+    exit 0
+fi
+exec /bin/bash "$@"
+''')
+        bash.chmod(0o755)
+        env.update(PATH=str(fakebin)+os.pathsep+env['PATH'], LAVISH_AXI_STATE_DIR=str(home/'lavish'),
+                   FM_PROCEVENT_CLAIM_ROOT=str(home/'claims'))
+        report=home/'data/a/report.html'; report.parent.mkdir()
+        report.write_text('<!doctype html><html><title>Result</title><body>Read offline</body></html>')
+        (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
+        cli('add','a','Report','--repo','alpha',raw=True)
+        check(cli('work','capabilities')['report_controls']==['report.review'], 'owner advertises connected review')
+        check(not (home/'lavish').exists(), 'reading capabilities starts no review session')
+        check(cli('work','report.review',payload={'target':'task:missing'})['code']=='unknown_target', 'unregistered task refuses')
+        for payload in ({'target':'task:../a'}, {'target':'task:a','path':'/tmp/arbitrary.html'}, {'target':'project:alpha'}):
+            check(cli('work','report.review',payload=payload)['code']=='invalid_value', 'paths and extra fields refuse')
+        report.unlink(); report.symlink_to(home/'data/backlog.md')
+        check(cli('work','report.review',payload={'target':'task:a'})['code']=='no_report', 'symlink report refuses before opening Lavish')
+        report.unlink(); report.write_text('<html><body>Result</body></html>')
+        try:
+            first=cli('work','report.review',payload={'target':'task:a'})
+            second=cli('work','report.review',payload={'target':'task:a'})
+            check(first.get('ok') is True and first.get('owner')=='primary' and first==second,
+                  'closed author designates primary; repeated click reuses session and releases work lock')
+            store=json.loads((home/'lavish/state.json').read_text())
+            check(len(store['sessions'])==1, 'one report creates one saved session')
+            sources=list((home/'state/procevent').glob('*.source'))
+            check(len(sources)==1, 'one report creates one listener registration')
+            source=sources[0].stem
+            listing=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'list'],env=env,text=True)
+            check(any(line.split()[0]==source and line.split()[2]=='live' for line in listing.splitlines() if line.split()), 'returned URL has a supervised listener')
+            # A captured worker round is covered by its owner, never acknowledged by a click.
+            capture=home/'state/procevent-inbox'; capture.mkdir(exist_ok=True)
+            (capture/(source+'.1.result')).write_text('session:\n  status: feedback\n')
+            (capture/(source+'.1.adapter')).write_text('lavish\n')
+            (capture/(source+'.1.owner-task')).write_text('a\n')
+            check(cli('work','report.review',payload={'target':'task:a'})==first, 'click with open round reuses review')
+            pending=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'pending-lavish'],env=env,text=True)
+            check(source+'.1.result' in pending, 'click preserves unacknowledged feedback')
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'handled',source,'1'],env=env,check=True,capture_output=True)
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'sweep-home'],env=env,check=True,capture_output=True)
+            (home/'state/a.meta').write_text('window=fixture:fm-a\nworktree='+str(home)+'\nproject=alpha\nkind=scout\n')
+            (home/'state/a.parked').write_text('park_phase=parked\n')
+            env['REVIEW_FAIL_RESUME']='1'
+            check(cli('work','report.review',payload={'target':'task:a'}).get('ok') is not True,
+                  'failed resume never returns a ready session')
+            env.pop('REVIEW_FAIL_RESUME')
+            resumed=cli('work','report.review',payload={'target':'task:a'})
+            author=cli('work','report.review',payload={'target':'task:a'})
+            check(resumed.get('owner')=='resumed' and author.get('owner')=='author'
+                  and resumed.get('url')==first['url']==author.get('url'), 'resumed author and later live author keep the same session')
+            check((home/'resume-calls').read_text().splitlines()==['a resume','a resume'],
+                  'resume uses the existing control exactly once per attempt and is not repeated for a live author')
+        finally:
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'sweep-home'],env=env,check=True,capture_output=True)
+        print('PASS: report review (%d checks)' % checks)
+        sys.exit(0)
     if os.environ.get('FM_WORK_TEST_SUPERVISION') == '1':
         import fcntl, shutil
         (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
@@ -1118,5 +1213,7 @@ exit 1
                 check(bool(held)==(action=='resume'),'preview leaves the selected pause unchanged')
         check(task(snapshot(),'prueba-pause')['state']==('paused_own' if action=='pause' else 'ready'),
               'retained history control confirms the actual pause state')
+    subprocess.run(['bash', str(root/'tests/fm-work.test.sh')],
+                   env=dict(os.environ, FM_WORK_TEST_REPORT='1'), check=True)
     print('PASS: %d work owner behavioral assertions'%checks)
 PY

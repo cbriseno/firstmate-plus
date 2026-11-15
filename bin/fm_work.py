@@ -1341,6 +1341,68 @@ class Owner:
                     undo=dict(target=target, occurrence=authored['outcome_occurrence'],
                               review=outcome['review'], expected_review=payload['review']))
 
+    def review_report(self, payload):
+        refuse(set(payload) != {'target'} or not isinstance(payload.get('target'), str)
+               or not re.fullmatch(r'task:[A-Za-z0-9][A-Za-z0-9_-]{0,127}', payload['target']),
+               'invalid_value', 'Review requires a task identity, without a file path.')
+        target = payload['target']
+        task = target[5:]
+        refuse(task not in self.rows, 'unknown_target', 'Unknown task.')
+        relative = 'data/' + task + '/report.html'
+        try:
+            read_text(self.home, relative, 16 * 1024 * 1024)
+        except (OSError, ValueError):
+            raise Refusal('no_report', 'No registered local HTML report.')
+        artifact = str(self.home / relative)
+        env = dict(self.env)
+        # Detached listeners must not retain the caller's work mutation lock.
+        env.pop('FM_WORK_OWNER_FD', None)
+        def control(script, *args):
+            result = subprocess.run(['bash', str(BIN / script), *args], env=env,
+                                    text=True, capture_output=True,
+                                    timeout=90 if script == 'fm-control.sh' else 30)
+            refuse(result.returncode != 0, 'owner_failed', result.stderr.strip()[:500]
+                   or 'The review listener is unavailable.')
+            return result.stdout
+        refuse(not shutil.which('lavish-axi'), 'unavailable', 'lavish-axi is not installed.')
+        destination = 'primary'
+        if (self.home / ('state/' + task + '.parked')).exists():
+            control('fm-control.sh', task, 'resume')
+            refuse(self.worker_liveness(task)['state'] != 'alive',
+                   'owner_failed', 'The resumed report author is not confirmed alive.')
+            destination = 'resumed'
+        elif self.worker_liveness(task)['state'] == 'alive':
+            destination = 'author'
+        opened = subprocess.run(['lavish-axi', '--no-open', artifact],
+                                env=env, text=True, capture_output=True, timeout=30)
+        refuse(opened.returncode != 0, 'owner_failed', 'Lavish could not open this report.')
+        store = Path(self.env.get('LAVISH_AXI_STATE_DIR', str(Path.home() / '.lavish-axi'))) / 'state.json'
+        with store.open(encoding='utf-8') as stream:
+            sessions = json.load(stream)['sessions']
+        matches = [s for s in sessions.values() if s.get('file') == str(Path(artifact).resolve())
+                   and s.get('status') == 'open']
+        refuse(len(matches) != 1, 'owner_failed', 'Lavish did not confirm one open session.')
+        url = matches[0].get('url', '')
+        refuse(not isinstance(url, str) or not re.fullmatch(
+            r'https?://[^\s/?#@]+/session/[a-f0-9]{16}', url),
+            'owner_failed', 'Lavish returned an invalid review URL.')
+        source = control('fm-procevent-lavish.sh', 'source-id', artifact).strip()
+        registered = [line.split() for line in control('fm-procevent.sh', 'list').splitlines()
+                      if line.split() and line.split()[0] == source]
+        if registered:
+            # A click is never an acknowledgement of a captured feedback round.
+            holder = registered[0][2]
+            if not holder.startswith('task:'):
+                destination = 'primary'
+            if holder not in ('live',) and not holder.endswith(('/listening', '/round-open')):
+                control('fm-procevent.sh', 'ensure-listening', source)
+        else:
+            args = ['arm', artifact]
+            if destination != 'primary':
+                args += ['--for', task]
+            control('fm-procevent-lavish.sh', *args)
+        return dict(ok=True, url=url, owner=destination)
+
     def control_event(self, record, event, **fields):
         events = record.setdefault('events', [])
         if not any(e['event'] == event and e.get('task') == fields.get('task') and e.get('reason') == fields.get('reason') for e in events):
@@ -1865,7 +1927,7 @@ class Owner:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['capabilities', 'supervision', 'bootstrap', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
-        'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review',
+        'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review', 'report.review',
         'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Request display order: activity or persisted manual order.')
     parser.add_argument('--runtime', action='store_true', help='Include full bounded crew reconciliation in addition to fresh endpoint liveness.')
@@ -1890,7 +1952,8 @@ def main():
         if args.verb == 'supervision':
             result = owner.supervision(args.tasks)
         elif args.verb == 'capabilities':
-            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.8', ops=OPS,
+            result = dict(schema='fm-work-capabilities.v1', contract_major=1, revision='1.9', ops=OPS,
+                          report_controls=['report.review'],
                           outcome_controls=['outcome.review'],
                           signals=['pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue'],
                           features=['progress', 'safe_point', 'group_dependencies', 'manual_order', 'priority_unset',
@@ -2008,17 +2071,25 @@ def main():
                 refuse(len(payload) > 65536, 'invalid_value', tr('Request too large.'))
                 op = json.loads(payload)
                 refuse(not isinstance(op, dict), 'invalid_value', tr('A JSON object is required.'))
-                if '.' in args.verb and args.verb != 'outcome.review':
+                if '.' in args.verb and args.verb not in ('outcome.review', 'report.review'):
                     op['target'] = op.get('target', op.get('scope'))
                     op['expected_rev'] = op.get('expected_rev', op.get('rev'))
                 for field in ('target', 'on', 'before', 'after'):
-                    if args.verb == 'outcome.review':
+                    if args.verb in ('outcome.review', 'report.review'):
                         break
                     if op.get(field) is not None:
                         if op.get('op') == 'move' and isinstance(op[field], str) and op[field] in owner.request_keys():
                             continue
                         op[field] = owner.aliases.resolve(op[field])
-                if args.verb == 'outcome.review':
+                if args.verb == 'report.review':
+                    # Lifecycle controls own their locks. A resumed worker may
+                    # immediately publish progress through the work owner.
+                    os.close(lock)
+                    lock = None
+                    del owner.lock_fd
+                    owner.env.pop('FM_WORK_OWNER_FD', None)
+                    result = owner.review_report(op)
+                elif args.verb == 'outcome.review':
                     result = owner.review_outcome(op)
                 elif '.' in args.verb:
                     op['scope'] = op['target']

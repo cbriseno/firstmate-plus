@@ -213,6 +213,14 @@
 # code=owner_failed. Always inspect state/code, not only process success.
 # Capabilities revision 1.8 advertises outcome_controls:["outcome.review"]
 # and feature outcome_review. Snapshot exposes the persisted mark to all clients.
+#   work report.review                  Explicit Lavish review; {"target":"task:<id>"} on stdin.
+# Resolves data/<id>/report.html for a registered task, opens/reuses with --no-open,
+# confirms a supervised listener, and returns {ok:true,url,owner} only when ready.
+# Existing captured feedback is never acknowledged by a repeated click.
+# owner is author|resumed|primary: a parked author is resumed through fm-control;
+# an unavailable author designates firstmate to receive feedback and recover it.
+# Reads do not start Lavish; arbitrary file paths and extra fields are refused.
+# Capabilities revision 1.9 adds report_controls:["report.review"].
 # pause.request notifies workers, then closes only after their keyed safe point;
 # FM_WORK_SAFE_POINT_TIMEOUT (seconds, 1..86400, default 300) exposes an
 # unconfirmed pause without killing the worker. The main wake drain advances

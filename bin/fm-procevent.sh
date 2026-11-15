@@ -841,22 +841,12 @@ publish_result() {  # <result-file>
   fm_procevent_source_lock_acquire "$id" || return 1
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ "$adapter" = lavish ] && [ -n "$closed_candidate" ] \
-      && fm_pr_task_id_valid "$closed_candidate" && [ ! -e "$STATE/$closed_candidate.meta" ] \
-      && ! adapter_result_is_silent "$adapter" "$result" \
-      && python3 - "$FM_HOME/data/$closed_candidate/completion.json" "$FM_HOME" "$closed_candidate" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1], encoding='utf-8') as f:
-        receipt = json.load(f)
-    assert receipt.get('schema') == 'fm-delivery-completion.v1'
-    assert receipt.get('home') == sys.argv[2] and receipt.get('id') == sys.argv[3]
-    assert receipt.get('valid') is True
-except (OSError, ValueError, AssertionError):
-    sys.exit(1)
-PY
+      && fm_pr_task_id_valid "$closed_candidate" \
+      && { [ ! -e "$STATE/$closed_candidate.meta" ] || [ -e "$STATE/$closed_candidate.parked" ]; } \
+      && ! adapter_result_is_silent "$adapter" "$result"
     then
       {
-        printf 'Lavish feedback from closed task %s. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$closed_candidate" "$id" "$seq"
+        printf 'Lavish feedback from unavailable task %s. Recover the author for report iterations; route new work or decisions through firstmate. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$closed_candidate" "$id" "$seq"
         "$SCRIPT_DIR/fm-procevent-lavish.sh" read "$result"
       } | FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-inbox.sh" note --request-id "lavish:$id:$seq" - >/dev/null || true
       owner_task=
@@ -877,7 +867,7 @@ PY
           esac
         fi
         unset FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD
-        message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply the round, and re-arm the board with the reply."
+        message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply in-scope report iterations, route new tasks or decisions through firstmate, and re-arm the board with the reply."
       fi
       # Snapshot the records that already exist (active and handled) before
       # the idempotent write, so a dedup match - including one already

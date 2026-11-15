@@ -277,6 +277,22 @@ if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
   [ -f "$HALIVE/state/live-worker.inbox/001.msg" ] || fail "live owner did not receive feedback"
   [ ! -d "$HALIVE/state/inbox" ] || fail "live owner feedback reached captain inbox"
   pass "live owner retains its board feedback"
+  for unavailable in parked closed; do
+    if [ "$unavailable" = parked ]; then
+      printf 'park_phase=parked\n' > "$HALIVE/state/live-worker.parked"
+    else
+      rm -f -- "$HALIVE/state/live-worker.meta" "$HALIVE/state/live-worker.parked"
+    fi
+    cp "$HCLOSED/state/procevent-inbox/closed-board.1.result" "$HALIVE/state/procevent-inbox/$unavailable-board.1.result"
+    printf 'lavish\n' > "$HALIVE/state/procevent-inbox/$unavailable-board.1.adapter"
+    printf 'live-worker\n' > "$HALIVE/state/procevent-inbox/$unavailable-board.1.owner-task"
+    pe "$HALIVE" reconcile >/dev/null || fail "$unavailable owner routing failed"
+    FM_HOME="$HALIVE" "$ROOT/bin/fm-inbox.sh" list | grep -F 'closed board words' >/dev/null \
+      || fail "$unavailable owner feedback did not reach firstmate"
+    pe "$HALIVE" pending-lavish | grep -F "$unavailable-board.1.result" >/dev/null \
+      || fail "$unavailable owner capture was acknowledged before handling"
+  done
+  pass "parked and closed authors keep feedback routed without a completion receipt"
   exit 0
 fi
 
