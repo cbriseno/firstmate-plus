@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Crew-state: ambiguous runs and coarse ledger arbitration.
+set -u
+
+# shellcheck source=tests/crew-state-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/crew-state-helpers.sh"
+
+test_coarse_head_tied_row_is_exempt_even_when_the_record_head_diverged
+test_unrecognised_ledger_word_keeps_the_ordinary_supersede_note
+test_daemon_probe_requires_positive_running_answer
+test_unanswered_daemon_probe_does_not_suppress_live_run
+test_coarse_live_row_is_exempt_from_the_dead_daemon_verdict
+test_coarse_live_row_keeps_the_original_supersede_note
+test_coarse_live_rebased_row_is_not_attributed
+test_terminal_rebased_run_is_not_attributed
+test_competing_live_runs_report_unknown_with_both_ids
+test_newer_failed_run_is_not_hidden_by_older_live_run
+test_unverifiable_run_selection_reports_unknown
+test_legacy_conflicting_run_records_report_unknown
+
+echo "all crew-state arbitration tests passed"

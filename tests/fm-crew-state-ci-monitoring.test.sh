@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Crew-state: CI monitoring and ready/fixing transitions.
+set -u
+
+# shellcheck source=tests/crew-state-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/crew-state-helpers.sh"
+
+test_ci_ready_done_log_beats_monitoring_run
+test_ci_monitoring_checks_green_surfaces_done
+test_top_level_ci_checks_green_surfaces_done
+test_ci_monitoring_no_checks_stays_working
+test_ci_no_checks_status_log_override_stays_working
+test_ci_monitoring_green_then_rearm_stays_green
+test_ci_monitoring_green_before_log_tail_stays_green
+test_ci_monitoring_no_checks_yet_stays_working
+test_ci_monitoring_still_waiting_stays_working
+test_ci_monitoring_green_then_new_issue_stays_working
+test_ci_ready_done_log_relapse_stays_working
+test_ci_fixing_after_green_stays_working
+test_top_level_fixing_ci_running_after_green_stays_working
+test_top_level_fixing_done_log_stays_working
+
+echo "all crew-state ci-monitoring tests passed"

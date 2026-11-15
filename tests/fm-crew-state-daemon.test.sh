@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Crew-state: daemon-confirmed attribution and open decisions.
+set -u
+
+# shellcheck source=tests/crew-state-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/crew-state-helpers.sh"
+
+test_live_record_at_diverged_head_binds_while_daemon_answers
+test_anchored_continuation_binds_while_daemon_answers
+test_unverified_coarse_record_makes_no_supersede_claim
+test_coarse_failed_record_with_dead_daemon_reads_unknown
+test_selected_run_anchored_continuation_needs_a_live_daemon
+test_selected_run_anchored_continuation_binds_while_daemon_answers
+test_selected_run_anchored_parked_keeps_its_gate_with_a_dead_daemon
+test_selected_run_dead_daemon_leaves_the_open_decision_open
+test_coarse_pending_ledger_word_reads_unknown
+test_unanswered_probe_does_not_turn_a_failed_coarse_record_into_a_gate
+test_selected_route_dead_daemon_names_the_run_once
+test_head_tied_row_reads_the_same_whichever_run_axi_names
+
+echo "all crew-state daemon tests passed"

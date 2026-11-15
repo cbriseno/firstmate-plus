@@ -21,7 +21,7 @@ GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
 
 The live evidence here reads two changes on a private Gerrit server, so a reader outside that network cannot rerun these commands against the same data.
 The server is named below as `review.example` and its project as `group/apps/console`, the placeholders the fixtures use; every other byte is the tool's own output.
-What these transcripts establish is a property of Gerrit's own record shape rather than of any one server, and the hermetic regressions in `tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers.test.sh` pin every one of them with no server at all, so the reproducible check is that suite rather than these transcripts.
+What these transcripts establish is a property of Gerrit's own record shape rather than of any one server, and the hermetic regressions in `tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers*.test.sh` pin every one of them with no server at all, so the reproducible check is that suite rather than these transcripts.
 Change 4200 is merged, and change 4201 was open and blocked on review when this was collected.
 
 ## Status is read explicitly, because submittability is a different question
@@ -113,7 +113,7 @@ The server permitting self-approval is what makes this a policy boundary rather 
 
 ## What the hermetic regression pins
 
-`tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers.test.sh` cover, with no server:
+`tests/fm-pr-check-security.test.sh` and `tests/fm-pr-check-security-providers*.test.sh` cover, with no server:
 
 - The canonical change URL parses into the provider-tagged identity with its whole nested project path, and an adversarial URL matrix is refused.
 - Only an exact `MERGED` status wakes the watch, and a fully submittable open change does not.
@@ -128,6 +128,6 @@ The server permitting self-approval is what makes this a policy boundary rather 
 - A no-mistakes done naming a Gerrit change is also refused unless the copy holds a passed pipeline's result: refused when the run's outcome is missing or not a pass, while the run reports `recover_custody` or `continue_active_run`, when HEAD's tree differs from the pipeline head's, or when the run cannot be read, and accepted once recovered even after the Change-Id stamp rewrote the branch's messages.
 - A `published for review` done whose URL is not a canonical Gerrit change URL is refused, even when a remote-tracking ref holds HEAD.
 
-`tests/fm-crew-state.test.sh` pins the crew-state read with no server either: a passed run whose change is open reports `PR open`, an abandoned one `PR closed`, a merged one `PR merged`, and an unreadable record or one naming another change reports an honest unknown rather than a merge.
+`tests/fm-crew-state-forge-disposition.test.sh` pins the crew-state read with no server either: a passed run whose change is open reports `PR open`, an abandoned one `PR closed`, a merged one `PR merged`, and an unreadable record or one naming another change reports an honest unknown rather than a merge.
 
 Refresh this record by rerunning those suites, and rerun the transcripts above after a `gerrit-axi` upgrade.

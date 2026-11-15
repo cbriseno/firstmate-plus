@@ -1599,7 +1599,7 @@ SH
 # submittable change into a merge. Its evidence against a real change is in
 # docs/gerrit-change-watch.md; this exercises the same paths hermetically.
 test_gerrit_merge_watch() {
-  local dir state out rc url value notool entry bindir name tool
+  local dir state out rc url value notool tool
   dir=$(make_case gerrit-merge-watch)
   state="$dir/home/state"
   url=https://gerrit.example/c/group/apps/console/+/4201
@@ -1687,21 +1687,8 @@ group/apps/console
   # tool the Gerrit branch needs. The whole search path is mirrored without it,
   # because a real one anywhere on PATH would make this prove nothing.
   for tool in gerrit-axi jq; do
-    notool="$dir/no-$tool"
-    rm -rf "$notool"
-    mkdir -p "$notool"
-    while IFS= read -r bindir; do
-      [ -d "$bindir" ] || continue
-      for entry in "$bindir"/*; do
-        [ -e "$entry" ] || continue
-        name=$(basename "$entry")
-        [ "$name" = "$tool" ] && continue
-        [ -e "$notool/$name" ] || ln -s "$entry" "$notool/$name" 2>/dev/null
-      done
-    done <<EOF
-$dir/fakebin
-$(printf '%s\n' "$BASE_PATH" | tr ':' '\n')
-EOF
+    notool=$(fm_test_base_path_sans "$dir/fakebin:$BASE_PATH" "$tool") \
+      || fail "could not curate the $tool-free search path"
     ! PATH="$notool" command -v "$tool" >/dev/null 2>&1 \
       || fail "the $tool-free search path still resolved $tool"
     out=$(FM_TEST_GERRIT_STATUS=MERGED FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" \
@@ -2150,7 +2137,7 @@ SH
 }
 
 test_gitlab_merge_watch() {
-  local dir state out rc url value noglab entry bindir name
+  local dir state out rc url value noglab
   dir=$(make_case gitlab-merge-watch)
   state="$dir/home/state"
   url=https://gitlab.example/group/subgroup/project/-/merge_requests/7
@@ -2189,20 +2176,8 @@ group/subgroup/project
   # An absent CLI must produce no wake rather than a false merge. The whole
   # search path is mirrored without glab, because a real glab anywhere on
   # PATH would make this prove nothing.
-  noglab="$dir/noglab"
-  mkdir -p "$noglab"
-  while IFS= read -r bindir; do
-    [ -d "$bindir" ] || continue
-    for entry in "$bindir"/*; do
-      [ -e "$entry" ] || continue
-      name=$(basename "$entry")
-      [ "$name" = glab ] && continue
-      [ -e "$noglab/$name" ] || ln -s "$entry" "$noglab/$name" 2>/dev/null
-    done
-  done <<EOF
-$dir/fakebin
-$(printf '%s\n' "$BASE_PATH" | tr ':' '\n')
-EOF
+  noglab=$(fm_test_base_path_sans "$dir/fakebin:$BASE_PATH" glab) \
+    || fail "could not curate the glab-free search path"
   ! PATH="$noglab" command -v glab >/dev/null 2>&1 \
     || fail "the glab-free search path still resolved glab"
   out=$(FM_TEST_GLAB_STATE=merged FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
@@ -2669,7 +2644,7 @@ test_persistent_secondmate_retirement_is_poll_only() {
 }
 
 test_retirement_crash_recovery() {
-  local dir state rc raw_count drain_count historical_poll
+  local dir state raw_count drain_count
 
   dir=$(make_case retirement-after-queue)
   state="$dir/home/state"
@@ -2692,6 +2667,11 @@ test_retirement_crash_recovery() {
   drain_count=$(grep -cF "$(printf '\tcheck\tmerged-task-a-https://github.com/o/r/pull/3\t')" \
     "$dir/drain.out" || true)
   [ "$drain_count" -eq 1 ] || fail "terminal merge row was lost or duplicated at drain"
+  pass "queued terminal crash recovers without losing or duplicating the merge row"
+}
+
+test_retirement_receipt_and_check_removal_recovery() {
+  local dir state rc
 
   dir=$(make_case retirement-after-receipt)
   state="$dir/home/state"
@@ -2724,6 +2704,11 @@ test_retirement_crash_recovery() {
   case "$(cat "$dir/restart.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "post-check-removal restart did not reach the control check" ;; esac
   assert_poll_absent "$state" task-a
   fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" || fail "completed retirement was not idempotent"
+  pass "receipt and check-removal crash points recover without duplicate execution"
+}
+
+test_retirement_sidecar_removal_recovery() {
+  local dir state rc
 
   dir=$(make_case retirement-after-registration-removal)
   state="$dir/home/state"
@@ -2756,6 +2741,11 @@ test_retirement_crash_recovery() {
   [ "$rc" -eq 0 ] || fail "receipt-only restart failed: $(cat "$dir/restart.err")"
   case "$(cat "$dir/restart.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "receipt-only restart did not reach the control check" ;; esac
   assert_poll_absent "$state" task-a
+  pass "registration-removal and receipt-only crash points recover to the control check"
+}
+
+test_retirement_template_update_recovery() {
+  local dir state historical_poll
 
   dir=$(make_case retirement-after-template-update)
   state="$dir/home/state"
@@ -2786,7 +2776,7 @@ test_retirement_crash_recovery() {
   ! grep "$(printf '\tcheck\t%s/task-a.check.sh\t' "$state")" "$state/.wake-queue" >/dev/null 2>&1 \
     || fail "template-update recovery left the handled terminal wake queued"
   assert_poll_absent "$state" task-a
-  pass "queue, receipt, and every fixed-path removal crash point recover without loss or repeated execution"
+  pass "template-update recovery preserves the pending wake until its acknowledgement"
 }
 
 test_external_merge_transition_retires_only_terminal_poll() {
@@ -3057,35 +3047,41 @@ queue_merge() {  # <dir> <url>
     || fail "the accepted queued merge did not persist its authority"
 }
 
-test_merged_poll_row_carries_the_merge_authority() {
-  local dir state url expected posture
+check_merged_poll_row_carries_the_merge_authority() {
+  local posture=$1 dir state url expected
   url=https://github.com/o/r/pull/1
 
   # Both a yolo=on task and an ordinary one merge under the record's away
   # authority; the words model retired the per-task grant and the yolo tag.
-  for posture in yolo words; do
-    dir=$(make_case "queued-merge-authority-$posture")
-    state="$dir/home/state"
-    write_task_meta "$dir" task-a
-    if [ "$posture" = yolo ]; then
-      printf 'yolo=on\n' >> "$state/task-a.meta"
-      write_away_record "$dir"
-    else
-      write_away_record "$dir" --words 'merge task-a when green'
-    fi
-    expected=away
-    run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
-      || fail "$posture: could not arm the merge poll"
-    queue_merge "$dir" "$url"
-    archive_away_record "$dir"
-    run_merged_poll_cycle "$dir"
-    [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url $expected" ] \
-      || fail "$posture: archived posture lost persisted authority: $(merged_ledger_row "$state" task-a)"
-    [ ! -e "$state/task-a.merge-authority" ] \
-      || fail "$posture: published merge left its authority record behind"
-  done
+  dir=$(make_case "queued-merge-authority-$posture")
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  if [ "$posture" = yolo ]; then
+    printf 'yolo=on\n' >> "$state/task-a.meta"
+    write_away_record "$dir"
+  else
+    write_away_record "$dir" --words 'merge task-a when green'
+  fi
+  expected=away
+  run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
+    || fail "$posture: could not arm the merge poll"
+  queue_merge "$dir" "$url"
+  archive_away_record "$dir"
+  run_merged_poll_cycle "$dir"
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url $expected" ] \
+    || fail "$posture: archived posture lost persisted authority: $(merged_ledger_row "$state" task-a)"
+  [ ! -e "$state/task-a.merge-authority" ] \
+    || fail "$posture: published merge left its authority record behind"
 
-  pass "queued merges retain their away authority after captain return"
+  pass "$posture queued merge retains its away authority after captain return"
+}
+
+test_merged_poll_row_carries_the_merge_authority() {
+  check_merged_poll_row_carries_the_merge_authority yolo
+}
+
+test_merged_poll_row_carries_words_merge_authority() {
+  check_merged_poll_row_carries_the_merge_authority words
 }
 
 test_merged_poll_row_names_no_authority_when_no_record_grants_one() {
@@ -3392,10 +3388,9 @@ SH
   pass "a poll armed before a volume renumber is re-recorded under the control lock and keeps detecting merges"
 }
 
-test_device_rerecord_refuses_tampered_artifacts() {
+device_rerecord_refuses_tamper_cases() {
   local mutation dir state out rc registration_sha shifted_device replacement exercised=
-  for mutation in swapped-check altered-check swapped-sidecar altered-sidecar altered-template-hash \
-    wrong-mode hardlinked-check split-device foreign-device; do
+  for mutation in "$@"; do
     # A regular file cannot sit on another device than its own directory without
     # a file mount, which Darwin does not offer, and Darwin's device helper reads
     # /usr/bin/stat directly, so no PATH fake can stand in there.
@@ -3476,6 +3471,23 @@ SH
     ! ls "$state"/.fm-pr-poll-registration.* >/dev/null 2>&1 \
       || fail "$mutation left a staged registration behind"
   done
+  pass "a renumbered registration refuses tampered artifacts:$exercised"
+}
+
+test_device_rerecord_refuses_tampered_artifacts() {
+  device_rerecord_refuses_tamper_cases swapped-check altered-check hardlinked-check
+}
+
+test_device_rerecord_refuses_sidecar_tampering() {
+  device_rerecord_refuses_tamper_cases swapped-sidecar altered-sidecar altered-template-hash
+}
+
+test_device_rerecord_refuses_device_tampering() {
+  device_rerecord_refuses_tamper_cases wrong-mode split-device foreign-device
+}
+
+test_device_rerecord_refuses_pending_retirement() {
+  local dir state
 
   dir=$(make_case device-rerecord-pending-retirement)
   state="$dir/home/state"
@@ -3490,7 +3502,7 @@ SH
     || fail "a pending retirement receipt did not keep its artifacts from being re-recorded"
   ! fm_pr_poll_registration_rerecord_device "$state" task-a "$POLL" \
     || fail "a pending retirement receipt was re-recorded around"
-  pass "a renumbered registration is never re-recorded around a tampered artifact:$exercised, or a pending retirement"
+  pass "a pending retirement cannot be re-recorded around"
 }
 
 start_poll_publish_holder() {  # <dir> <state> <id>

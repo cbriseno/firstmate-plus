@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Crew-state: cross-branch run selection and published delivery.
+set -u
+
+# shellcheck source=tests/crew-state-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/crew-state-helpers.sh"
+
+test_cross_branch_attribution_via_runs_list
+test_coarse_socket_refusal_reports_blocked
+test_coarse_failed_ledger_with_daemon_down_reports_unknown
+test_cross_branch_attribution_picks_most_recent_row
+test_terminal_run_keeps_newer_failure_over_live_sibling
+test_runs_list_newer_failure_outranks_older_live_row
+test_unfetched_older_live_sibling_does_not_hide_failure
+test_only_terminal_rows_keep_newest_first_precedence
+test_unknown_status_row_keeps_newest_first_precedence
+test_terminal_run_without_live_sibling_is_unchanged
+test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
+test_other_branch_run_ignored
+test_unpushed_ship_done_is_blocked
+test_merged_pr_reads_done_under_captured_meta
+test_no_mistakes_prevalidation_done_stays_done
+test_moved_remote_branch_without_named_head_is_blocked
+test_external_review_done_reads_ready
+
+echo "all crew-state run-selection tests passed"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Crew-state: live, husk, gone and unreadable local endpoints.
+set -u
+
+# shellcheck source=tests/crew-state-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/crew-state-helpers.sh"
+
+test_no_run_busy_pane
+test_no_run_overview_zero_branch_falls_through
+test_no_run_launch_prompt_parked_is_not_working
+test_no_run_footer_text_alone_is_not_working
+test_no_run_herdr_unknown_uses_backend_capture
+test_no_run_herdr_cli_failure_reads_unreachable_not_gone
+test_no_run_herdr_alive_with_failed_read_stays_live
+test_no_run_herdr_husk_dead_still_reads_gone
+test_no_run_herdr_idle_agent_status_outranked_by_record
+test_no_run_herdr_idle_agent_status_and_idle_record_stays_idle
+test_no_run_idle_pane_uses_log
+test_no_run_idle_pane_uses_keyed_log
+test_no_run_idle_pane_paused
+test_no_run_idle_pane_custom_paused_verb
+test_no_run_idle_secondmate_resolved_event_not_state
+test_dead_window_ignores_stale_status_log
+test_gone_window_in_live_session_ignores_stale_status_log
+test_no_run_tmux_unreadable_reads_unreachable_not_gone
+test_dead_window_still_reports_terminal_run_step
+test_dead_window_still_reports_active_run_step
+test_no_timeout_uses_perl_bound
+
+echo "all crew-state endpoints tests passed"

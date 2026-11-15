@@ -971,6 +971,7 @@ assert_present() {
 # bare BASE_PATH.
 fm_test_base_path_sans() {
   local base_path=$1 dir src entry name tool skip
+  local links=()
   shift
   local tools=("$@")
   dir=$(fm_test_tmproot fm-base-path-sans) || return 1
@@ -978,6 +979,7 @@ fm_test_base_path_sans() {
   IFS=: read -ra dirs <<< "$base_path"
   for src in "${dirs[@]}"; do
     [ -d "$src" ] || continue
+    links=()
     for entry in "$src"/*; do
       [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=${entry##*/}
@@ -990,8 +992,16 @@ fm_test_base_path_sans() {
         fi
       done
       [ "$skip" -eq 1 ] && continue
-      ln -s "$entry" "$dir/$name" 2>/dev/null || true
+      links+=("$entry")
+      # Keep source order while avoiding a process for every PATH entry.
+      if [ "${#links[@]}" -ge 64 ]; then
+        ln -s "${links[@]}" "$dir" 2>/dev/null || true
+        links=()
+      fi
     done
+    if [ "${#links[@]}" -gt 0 ]; then
+      ln -s "${links[@]}" "$dir" 2>/dev/null || true
+    fi
   done
   printf '%s\n' "$dir"
 }
