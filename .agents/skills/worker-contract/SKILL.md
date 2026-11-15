@@ -106,7 +106,7 @@ For visual review boards, follow the [crew-hosted board contract](../../../docs/
 ## Reports
 
 For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record.
-Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and the on-demand Lavish control with its direct-file fallback.
+Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and a clear space for report actions, with the direct-file review instructions until the connected controls are available.
 Start with the result, its significance, and the next action in plain, friendly language for the reader, never agent-to-agent prose.
 Spell out names rather than presenting unexplained IDs or version labels.
 Explain a flow with a step-by-step diagram and a concrete end-to-end example; present data in tables or charts instead of paragraphs.
