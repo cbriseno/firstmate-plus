@@ -14,9 +14,9 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
-#        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--effect <line>] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--effect <line>] [--herdr-lab]
+#        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...] [--effect <line>]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -91,6 +91,15 @@
 # authority and records it in the task record, and bin/fm-promote.sh honors it
 # the same way. Ship-only: a scout publishes nothing and a charter is not a
 # delivery contract.
+# --effect <line> declares the one outward action (a push, a publication, a
+# deploy) that the task's own ask performs, for ship, scout, and host briefs.
+# Every generated contract forbids pushing and publishing, so without it a task
+# whose objective is that action would carry a contract contradicting its own
+# ask. It renders a `# Authorized outward effect` section with an
+# `Outward effect:` line that lifts those prohibitions for exactly that action;
+# bin/fm-spawn.sh applies the self-repository publication gate to such a brief
+# even on local-only. Compare the ask's outward actions with the contract before
+# scaffolding; a task whose deliverable is only that action is a host task.
 # --project <dir> is the task's project directory, used to detect when a ship
 # brief would publish to firstmate's own repository: for such a task this
 # scaffold refuses a publishing mode that the home's role or recorded consent
@@ -232,6 +241,8 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 PROJECT_DIR=
 PROJECT_DIR_SET=0
+EFFECT=
+EFFECT_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -248,6 +259,7 @@ for a in "$@"; do
       shape) SHAPE=$a; SHAPE_SET=1 ;;
       upstream-consent) UPSTREAM_CONSENT=$a; UPSTREAM_CONSENT_SET=1 ;;
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
+      effect) EFFECT=$a; EFFECT_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -275,6 +287,8 @@ for a in "$@"; do
     --upstream-consent=*) UPSTREAM_CONSENT=${a#--upstream-consent=}; UPSTREAM_CONSENT_SET=1 ;;
     --project) want_value="project" ;;
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
+    --effect) want_value=effect ;;
+    --effect=*) EFFECT=${a#--effect=}; EFFECT_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -682,6 +696,16 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 For complex work, list the independent deliverables and how they integrate in this spec before dispatch.
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+if [ "$EFFECT_SET" -eq 1 ]; then
+  case "$KIND" in secondmate) echo "error: --effect applies only to ship, scout, and host briefs" >&2; exit 1 ;; esac
+  case "$EFFECT" in ''|*$'\n'*|*$'\r'*) echo "error: --effect needs one line naming the exact outward action the task's own ask performs" >&2; exit 1 ;; esac
+  TASK_SECTION="$TASK_SECTION
+
+# Authorized outward effect
+Outward effect: $EFFECT
+This task's own ask requires exactly this outward action: perform it as stated, through every gate the task names.
+The push, PR, publication, and remote-write prohibitions elsewhere in this brief do not apply to this one action; everything else they forbid stays forbidden."
+fi
 
 WORK_OWNERSHIP_LINE='If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
 Own the monitoring and follow-up for this task within its authorized scope; report concrete results with their full artifact links.
@@ -791,6 +815,7 @@ $WAIT_BLOCK
 # Definition of done
 Write findings to \`$DATA/$ID/report.md\` with what you did, findings, evidence, recommendations and unresolved work. Also deliver \`$DATA/$ID/report.html\` under the worker contract; retain the Markdown record for existing task integrations.
 For a diagnosis, follow diagnostic-reasoning and cite the always-on diagnostic logs; with local changes include the applied diff (including new files), commands to reproduce, and the result.
+A plan or protocol reports its expected quota and cost as information and never proposes waiting for a captain approval because the work spends them.
 $LAVISH_LINE
 Before reporting done, load \`captain-hold-lifecycle\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.

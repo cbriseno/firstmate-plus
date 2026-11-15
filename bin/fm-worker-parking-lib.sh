@@ -117,6 +117,7 @@ resume_check_policy() {
   fm_lock_release "$CONTROL_LOCK"
   fm_lease_guard_release
   "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --category product-design \
+    --challenge 'Resuming on another harness than the saved worker would override the recorded usage policy choice' \
     --reason "El worker guardado usa $HARNESS y la política actual usa $policy" \
     --question 'Cambió el arnés de la política de uso. ¿Cómo quieres retomar este trabajo?' \
     --option "original=Continuar con el worker original|Retomar el chat guardado en $HARNESS cuando sea posible." \

@@ -708,6 +708,7 @@ open_idle_captain_call() { # <id> <record> <fingerprint> <hours> <link> <timeout
     "$CAPTAIN_HOLD_BIN" hold "$id" \
     --reason "No live worker and nothing due for ${hours}h; supervision opened this call instead of re-checking it as a wait" \
     --category captain-only-fact \
+    --challenge "Supervision design: whether to close, keep or restart work nobody is doing is asked, not decided (this script's header)" \
     --context "Nobody has worked on this for ${hours} hours: its worker is gone and it waits on nothing that is due." \
     --question "No one is working on this any more. What should happen to it?" \
     --option "close=Close it as delivered|Clean up, and note anything still kept or left to check" \

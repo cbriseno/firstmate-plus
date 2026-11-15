@@ -20,8 +20,17 @@
 # and secondmate-home ownership aligned with the work that discovered the call.
 #
 # Usage:
-#   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact.
-#   fm-captain-hold.sh hold <task-id> --reason <reason> \
+#   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact
+#   (AGENTS.md section 9 owns their meaning). `money` also requires --charge
+#   naming the real payment or purchase, so quota, tokens, and subscription use
+#   cannot pass as money. Every hold that passes call fields (it opens or
+#   re-opens a call) also requires --challenge: one line saying why no prior
+#   rule or decision, standing captain-shared authorization, reversibility, or
+#   contradiction with what was already asked settles it. Both are refused in
+#   one line before any mutation; a hold that opens a call records them as
+#   `Captain hold challenge:` and `Captain hold charge:` body lines beside
+#   `Captain hold origin:`, while a repeat of an active hold leaves the body alone.
+#   fm-captain-hold.sh hold <task-id> --reason <reason> --category <category> [--charge <line>] [--challenge <line>] \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--repair-call] \
 #     (--question <line> --option <id>=<label>[|<detail>] --option <id>=<label>[|<detail>]... \
 #      [--call-kind question|approval] [--recommended <id>] [--context <line>] [--link <report path or URL>]
@@ -1164,11 +1173,11 @@ refuse_without_choices() {  # <task-id> <why>
   printf 'fm-captain-hold: %s\n' "$2" >&2
   cat >&2 <<EOF
 A captain call needs real choices the captain can click. Hold it as:
-  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> --challenge "<why no rule settles it>" \\
     --question "<the question>" --option <id>="<choice>" --option <id>="<choice>" \\
     [--recommended <id>] [--context "<one line>"] [--link <report path or URL>]
 Only for a genuinely open question or a wait with no choices (a human action, a date):
-  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> --challenge "<why no rule settles it>" \\
     --no-options "<why there are no choices>" [--question "<the question>"]
 EOF
   exit 1
@@ -1176,9 +1185,34 @@ EOF
 
 refuse_category() {
   printf 'fm-captain-hold: %s\n' "$1" >&2
-  printf '%s\n' 'Allowed --category values: product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
-  printf '%s\n' 'Solo pregunta al capitán por producto/diseño, acciones destructivas o irreversibles sin respaldo, dinero, credenciales/seguridad, o un dato que solo el capitán tiene. Para cualquier otra cosa, hazlo y repórtalo.' >&2
+  printf '%s\n' 'Allowed --category values (AGENTS.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
+  printf '%s\n' 'Solo pregunta al capitán por su gusto o visión de producto, acciones destructivas o irreversibles sin respaldo, pagos o compras reales, credenciales/seguridad, o un dato que solo el capitán tiene. Para cualquier otra cosa, hazlo y repórtalo.' >&2
   exit 1
+}
+
+# One-line refusals for a hold that is not the captain's (AGENTS.md section 9).
+refuse_charge() {
+  fail 'money means a real payment or purchase; quota, tokens and subscription use are reported, never held - decide with your recommendation and note it on the task, or pass --charge "<what is bought, from whom, how much>" for a real charge'
+}
+
+refuse_challenge() {
+  fail 'question the hold first: does a prior rule or decision answer it, does captain-shared authorize it, is it reversible, does it contradict what was asked? If any does, decide with your recommendation and note it on the task; if none does, pass --challenge "<why none settles it>"'
+}
+
+# Record one `Captain hold <label>:` line right under the hold-set stamp.
+write_hold_line() {  # <task-id> <shown-body> <label> <value>
+  local id=$1 body=$2 label=$3 value=$4 stamp rest new_body tmp
+  body=$(decode_shown_value "$body") || fail "could not decode the existing body for $id"
+  stamp=$(printf '%s\n' "$body" | sed -n 1p)
+  rest=$(printf '%s\n' "$body" | sed 1d | awk -v p="Captain hold $label: " 'index($0, p) != 1')
+  new_body=$(printf '%s\nCaptain hold %s: %s' "$stamp" "$label" "$value")
+  [ -z "$rest" ] || new_body=$(printf '%s\n%s' "$new_body" "$rest")
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-line.XXXXXX") || fail "cannot stage the hold $label"
+  if ! { printf '%s\n' "$new_body" > "$tmp" && tasks_axi update "$id" --body-file "$tmp" >/dev/null; }; then
+    rm -f -- "$tmp"
+    fail "could not record the hold $label on $id"
+  fi
+  rm -f -- "$tmp"
 }
 
 # True when the private call record already gives the current hold lifecycle
@@ -1483,6 +1517,7 @@ command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
   local question='' recommended='' context='' link='' no_options='' category='' call_given=0 call_kind=question instruction='' where='' existing_call_kind repair_call=0 call_path
+  local charge='' challenge=''
   local -a call_options=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1494,6 +1529,8 @@ command_hold() {
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
       --category) shift; category=${1:-} ;;
+      --charge) shift; charge=${1:-} ;;
+      --challenge) shift; challenge=${1:-} ;;
       --repair-call) repair_call=1 ;;
       --question) shift; question=${1:-}; call_given=1 ;;
       --call-kind) shift; call_kind=${1:-}; call_given=1 ;;
@@ -1519,6 +1556,10 @@ command_hold() {
     '') refuse_category '--category is required' ;;
     *) refuse_category "unsupported --category: $category" ;;
   esac
+  [ "$category" != money ] || [ -n "$charge" ] || refuse_charge
+  [ -z "$charge" ] || validate_one_line --charge "$charge"
+  [ "$call_given" = 0 ] || [ -n "$challenge" ] || refuse_challenge
+  [ -z "$challenge" ] || validate_one_line --challenge "$challenge"
   if [ "$call_given" = 1 ]; then
     build_call_json "$id" "$question" "$recommended" "$context" "$link" "$no_options" "$call_kind" "$instruction" "$where" \
       "${call_options[@]+"${call_options[@]}"}"
@@ -1616,6 +1657,15 @@ command_hold() {
     origin=$(task_identity "$origin") || exit $?
     previous_origin=$(body_hold_origin "$(show_field_value "$show" body)")
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
+  fi
+  # Only a hold that opens a call records its challenge; a repeat keeps the body.
+  if [ "$call_given" = 1 ]; then
+    task_show_or_fail "$id" "task $id disappeared before recording its hold challenge"
+    write_hold_line "$id" "$(show_field "$show" body)" challenge "$challenge"
+  fi
+  if [ "$call_given" = 1 ] && [ -n "$charge" ]; then
+    task_show_or_fail "$id" "task $id disappeared before recording its hold charge"
+    write_hold_line "$id" "$(show_field "$show" body)" charge "$charge"
   fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \

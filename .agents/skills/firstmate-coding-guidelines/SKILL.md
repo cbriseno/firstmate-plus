@@ -78,6 +78,7 @@ Mark an axis not applicable only after inspecting its integration surface, and u
 
 For critical safety, routing, startup, and supervision infrastructure, prefer deterministic and idempotent enforcement over relying on agent memory alone.
 Keep instructions as the authority and discovery layer, but make repeated execution converge safely and make invalid or unsafe states fail closed wherever the runtime can enforce them.
+Fail closed only on a requirement that is defined: when the repository or configuration never defined what a gate asks for, the gate prints one warning line naming the missing definition and continues.
 
 ### Harness-dependent checks
 

@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert rows['task:projectless']['execution_context'] == 'unknown'
     assert rows['task:registered']['execution_context'] == 'project'
     assert rows['task:unresolved']['repository_project'] == 'project:typo'
-    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design',
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture',
         '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
     filed = next(t['question'] for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks'] if t['key'] == 'task:decision')
     assert filed['open'] and not filed['filing_required'] and filed['call'] is not None
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
         assert broken_task['placement']['code'] == 'call_record_required' and broken_task['placement']['attention'] == []
         replay = Projection(broken)
         assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision') == question
-        run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design',
+        run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture',
             '--repair-call', '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
         repaired = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
         question = next(t['question'] for t in repaired['snapshot']['tasks'] if t['key'] == 'task:decision')
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
             replay.apply(json.loads(line))
         assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
     # An intentional no-options wait is supported even without a question.
-    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture login', '--category', 'credentials-security',
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture login', '--category', 'credentials-security', '--challenge', 'fixture',
         '--no-options', 'The user must log in')
     freeform = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
     question = next(t['question'] for t in freeform['snapshot']['tasks'] if t['key'] == 'task:decision')
@@ -112,11 +112,11 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
     # Explicit recovery must not turn a known human action into a question.
     run('fm-captain-hold.sh', 'hold', 'action', '--title', 'Synthetic login action', '--repo', 'firstmate',
-        '--reason', 'Login', '--category', 'credentials-security', '--call-kind', 'action',
+        '--reason', 'Login', '--category', 'credentials-security', '--challenge', 'fixture', '--call-kind', 'action',
         '--instruction', 'Complete the login in chat', '--where', 'chat')
     action_record = (home / 'data/action/captain-call.json').read_bytes()
     refused = subprocess.run(['bash', str(root / 'bin/fm-captain-hold.sh'), 'hold', 'action', '--repair-call',
-        '--reason', 'Fixture', '--category', 'product-design', '--question', 'Choose?',
+        '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture', '--question', 'Choose?',
         '--option', 'yes=Proceed', '--option', 'no=Wait'], env=env, capture_output=True, text=True)
     assert refused.returncode != 0 and 'outstanding action cannot become a question' in refused.stderr
     assert (home / 'data/action/captain-call.json').read_bytes() == action_record
@@ -557,7 +557,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     for key, options in [('human', ['--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait']),
                          ('action', ['--call-kind', 'action', '--instruction', 'Inspect the result', '--where', 'chat']),
                          ('approval', ['--call-kind', 'approval', '--question', 'Approve?', '--option', 'yes=Approve', '--option', 'no=Wait'])]:
-        cli('fm-captain-hold.sh', 'hold', key, '--reason', 'Human response', '--category', 'product-design', *options)
+        cli('fm-captain-hold.sh', 'hold', key, '--reason', 'Human response', '--category', 'product-design', '--challenge', 'fixture', *options)
     draft = home / 'data/draft.json'
     draft.write_text(json.dumps(dict(outcome=dict(role='final', review='needed'))))
     cli('fm-tasks-axi.sh', 'presentation', 'human', '--presentation-file', str(draft))

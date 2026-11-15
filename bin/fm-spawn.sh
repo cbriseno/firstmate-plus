@@ -2211,8 +2211,9 @@ if [ "$KIND" = ship ]; then
   # under an explicit grant - this home's maintainer scope in
   # config/firstmate-role, or this one task's recorded upstream consent. Every
   # other project passes through unchanged; local-only publishes nothing and
-  # never reaches this gate.
-  if [ "$MODE" != local-only ]; then
+  # never reaches this gate unless its brief declares an outward effect
+  # (bin/fm-brief.sh --effect), which may publish.
+  if [ "$MODE" != local-only ] || grep -q '^Outward effect: ' "$BRIEF" 2>/dev/null; then
     gate_rc=0
     fm_role_gate_self_publish "$FM_HOME" "$CONFIG" "$PROJ_ABS" "$FM_ROOT" "$UPSTREAM_CONSENT" || gate_rc=$?
     case $gate_rc in

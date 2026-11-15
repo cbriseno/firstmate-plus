@@ -60,6 +60,7 @@ def run():
                    '--title', 'Acciones pendientes de actualización',
                    '--reason', 'Aceptar o posponer las acciones de actualización',
                    '--category', 'product-design',
+                   '--challenge', 'Update actions change the installed setup; this offer asks before applying them',
                    '--question', question, '--context', labels[:200],
                    '--option', 'apply=Aplicarlas', '--option', 'skip=Dejarlas pendientes',
                    '--recommended', 'apply', '--link', str(notes)]
