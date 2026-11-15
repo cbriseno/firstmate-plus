@@ -841,13 +841,46 @@ def call_text(value, bound, optional=False):
     return value
 
 
-def read_captain_call(task, data):
-    """The open captain hold's call record, written by fm-captain-hold.sh hold.
+def validate_captain_call(value, task_id, hold_set):
+    """Validate a stored or replayed call, preserving intentional no-options waits."""
+    try:
+        if (not hold_set or value.get('schema') != 'fm-captain-call.v1' or value.get('id') != task_id
+                or value.get('hold_set') != hold_set):
+            return None
+        call = value['call']
+        no_options = call_text(value.get('no_options'), 160, True)
+        if call is None:
+            return dict(call=None) if no_options else None
+        kind = call.get('kind', 'question')
+        if kind == 'action':
+            if (call.get('where') != 'chat' or call.get('options') != []
+                    or call.get('recommended') is not None or call.get('question') is not None
+                    or value.get('no_options') is not None):
+                return None
+            return dict(call=dict(kind='action', instruction=call_text(call['instruction'], CALL_BOUNDS['instruction']),
+                        where='chat', question=None, options=[], recommended=None,
+                        context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
+                        link=call_text(call.get('link'), CALL_BOUNDS['link'], True)))
+        if kind != 'question':
+            return None
+        options = [dict(id=o['id'], label=call_text(o['label'], CALL_BOUNDS['label']),
+                        detail=call_text(o.get('detail'), CALL_BOUNDS['detail'], True))
+                   for o in call['options']]
+        ids = [o['id'] for o in options]
+        if (len(options) > 8 or (len(options) < 2 and not no_options)
+                or (no_options and (options or call.get('recommended') is not None)) or len(set(ids)) != len(ids)
+                or not all(isinstance(i, str) and CALL_OPTION_ID.fullmatch(i) and i != 'reconcile' for i in ids)
+                or (call.get('recommended') is not None and call['recommended'] not in ids)):
+            return None
+        return dict(call=dict(question=call_text(call['question'], CALL_BOUNDS['question']), options=options,
+                    recommended=call.get('recommended'),
+                    context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
+                    link=call_text(call.get('link'), CALL_BOUNDS['link'], True)))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
-    It is exported only while the row is an open captain hold whose hold-set
-    stamp matches the record, so an older lifecycle's options never resurface.
-    Anything absent or malformed yields None: the row keeps its plain reason.
-    """
+def read_captain_call_record(task, data):
+    """Return the current valid record, including a declared wait without a question."""
     task_id = task.get('id')
     if (not task.get('structured') or task.get('hold_kind') != 'captain' or task.get('state') == 'done'
             or task.get('hold_reason') is None or not task.get('hold_set')
@@ -855,36 +888,18 @@ def read_captain_call(task, data):
         return None
     try:
         value = json.loads(read_text(Path(data), task_id + '/captain-call.json', 16384))
-        if (value.get('schema') != 'fm-captain-call.v1' or value.get('id') != task_id
-                or value.get('hold_set') != task['hold_set']):
-            return None
-        call = value['call']
-        kind = call.get('kind', 'question')
-        if kind == 'action':
-            if (call.get('where') != 'chat' or call.get('options') != []
-                    or call.get('recommended') is not None or call.get('question') is not None
-                    or value.get('no_options') is not None or task.get('hold_until')):
-                return None
-            return dict(kind='action', instruction=call_text(call['instruction'], CALL_BOUNDS['instruction']),
-                        where='chat', question=None, options=[], recommended=None,
-                        context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
-                        link=call_text(call.get('link'), CALL_BOUNDS['link'], True))
-        if kind != 'question':
-            return None
-        options = [dict(id=o['id'], label=call_text(o['label'], CALL_BOUNDS['label']),
-                        detail=call_text(o.get('detail'), CALL_BOUNDS['detail'], True))
-                   for o in call['options']]
-        ids = [o['id'] for o in options]
-        if (len(options) > 8 or len(set(ids)) != len(ids)
-                or not all(isinstance(i, str) and CALL_OPTION_ID.fullmatch(i) for i in ids)
-                or (call.get('recommended') is not None and call['recommended'] not in ids)):
-            return None
-        return dict(question=call_text(call['question'], CALL_BOUNDS['question']), options=options,
-                    recommended=call.get('recommended'),
-                    context=call_text(call.get('context'), CALL_BOUNDS['context'], True),
-                    link=call_text(call.get('link'), CALL_BOUNDS['link'], True))
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError):
         return None
+    record = validate_captain_call(value, task_id, task['hold_set'])
+    if record and (record['call'] or {}).get('kind') == 'action' and task.get('hold_until'):
+        return None
+    return record
+
+
+def read_captain_call(task, data):
+    """The valid card for the current open hold; never infer one from its reason."""
+    record = read_captain_call_record(task, data)
+    return record['call'] if record else None
 
 
 def presentation_groups(home, data=None):

@@ -72,6 +72,49 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
         '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
     filed = next(t['question'] for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks'] if t['key'] == 'task:decision')
     assert filed['open'] and not filed['filing_required'] and filed['call'] is not None
+    # R1-11/12: an absent or invalid card belongs to owner repair, not a
+    # question the user can answer. Exercise the producer and event replay.
+    record = home / 'data/decision/captain-call.json'
+    original = json.loads(record.read_text())
+    for damage in (None, '{broken', json.dumps(dict(original, call={'options': original['call']['options']})),
+                   json.dumps(dict(original, call=dict(original['call'], options=original['call']['options'][:1])))):
+        if damage is None:
+            record.unlink()
+        else:
+            record.write_text(damage)
+        broken = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
+        question = next(t['question'] for t in broken['snapshot']['tasks'] if t['key'] == 'task:decision')
+        assert question['filing_required'] and not question['open'] and question['call'] is None, question
+        replay = Projection(broken)
+        assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision') == question
+        run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design',
+            '--repair-call', '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
+        repaired = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
+        question = next(t['question'] for t in repaired['snapshot']['tasks'] if t['key'] == 'task:decision')
+        assert question['open'] and not question['filing_required'] and question['answer'] is None
+        assert question['call'] == original['call'] and json.loads(record.read_text())['hold_set'] == original['hold_set']
+        for line in (home / 'state/fleet-ledger.jsonl').read_text().splitlines():
+            replay.apply(json.loads(line))
+        assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
+    # An intentional no-options wait is supported even without a question.
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture login', '--category', 'credentials-security',
+        '--no-options', 'The user must log in')
+    freeform = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
+    question = next(t['question'] for t in freeform['snapshot']['tasks'] if t['key'] == 'task:decision')
+    assert question['open'] and not question['filing_required'] and question['call'] is None, question
+    replay = Projection(freeform)
+    replay.apply(json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1]))
+    assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
+    # Explicit recovery must not turn a known human action into a question.
+    run('fm-captain-hold.sh', 'hold', 'action', '--title', 'Synthetic login action', '--repo', 'firstmate',
+        '--reason', 'Login', '--category', 'credentials-security', '--call-kind', 'action',
+        '--instruction', 'Complete the login in chat', '--where', 'chat')
+    action_record = (home / 'data/action/captain-call.json').read_bytes()
+    refused = subprocess.run(['bash', str(root / 'bin/fm-captain-hold.sh'), 'hold', 'action', '--repair-call',
+        '--reason', 'Fixture', '--category', 'product-design', '--question', 'Choose?',
+        '--option', 'yes=Proceed', '--option', 'no=Wait'], env=env, capture_output=True, text=True)
+    assert refused.returncode != 0 and 'outstanding action cannot become a question' in refused.stderr
+    assert (home / 'data/action/captain-call.json').read_bytes() == action_record
     # Keep the remaining lifecycle fixture focused on its original row.
     (home / 'data/backlog.md').write_text('# Tasks\n\n## In flight\n\n- [ ] activity - Turn activity (repo: firstmate)\n\n## Queued\n\n## Done\n')
     # Real snapshot reports the orphan instead of inventing a worker.

@@ -22,7 +22,7 @@
 # Usage:
 #   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact.
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--repair-call] \
 #     (--question <line> --option <id>=<label>[|<detail>] --option <id>=<label>[|<detail>]... \
 #      [--recommended <id>] [--context <line>] [--link <report path or URL>]
 #      | --no-options <why> [--question <line> [--context <line>] [--link <report path or URL>]]
@@ -99,6 +99,9 @@
 # this hold lifecycle by its hold-set stamp. An active hold's repeat without
 # fields keeps its record, and a new lifecycle (new stamp) never matches an
 # older record.
+# `--repair-call` permits replacing an unreadable regular call record, only
+# with explicit call fields. It preserves the active hold lifecycle and never
+# answers the question or converts a readable outstanding action to a question.
 # bin/fm-fleet-snapshot.sh exports a matching record as each open captain
 # hold's `call` object and omits it otherwise; nothing ever derives options
 # from reason or body prose.
@@ -1183,12 +1186,16 @@ call_record_satisfies() {  # <task-id> <hold-set>
   [ -n "$2" ] || return 1
   path=$(captain_call_path "$1") || return 1
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
-  jq -e --arg schema "$CALL_SCHEMA" --arg id "$1" --arg hold_set "$2" '
-    .schema == $schema and .id == $id and .hold_set == $hold_set
-    and ((.call.kind == "action" and (.call.instruction | type) == "string" and .call.where == "chat")
-         or ((.no_options // null) | type) == "string"
-         or (((.call // {}).options // []) | length) >= 2)
-  ' "$path" >/dev/null 2>&1
+  python3 - "$SCRIPT_DIR" "$path" "$1" "$2" <<'PY'
+import json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from fm_delivery import validate_captain_call
+try:
+    record = json.loads(pathlib.Path(sys.argv[2]).read_text())
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if validate_captain_call(record, sys.argv[3], sys.argv[4]) else 1)
+PY
 }
 
 # Normalize the structured flags into one record payload in CALL_JSON, or fail
@@ -1471,7 +1478,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
-  local question='' recommended='' context='' link='' no_options='' category='' call_given=0 call_kind=question instruction='' where='' existing_call_kind
+  local question='' recommended='' context='' link='' no_options='' category='' call_given=0 call_kind=question instruction='' where='' existing_call_kind repair_call=0 call_path
   local -a call_options=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1483,6 +1490,7 @@ command_hold() {
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
       --category) shift; category=${1:-} ;;
+      --repair-call) repair_call=1 ;;
       --question) shift; question=${1:-}; call_given=1 ;;
       --call-kind) shift; call_kind=${1:-}; call_given=1 ;;
       --instruction) shift; instruction=${1:-}; call_given=1 ;;
@@ -1501,6 +1509,7 @@ command_hold() {
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
+  [ "$repair_call" = 0 ] || [ "$call_given" = 1 ] || fail '--repair-call needs explicit call fields'
   case "$category" in
     product-design|unbacked-destructive|money|credentials-security|captain-only-fact) ;;
     '') refuse_category '--category is required' ;;
@@ -1534,7 +1543,12 @@ command_hold() {
     state=$(show_field "$show" state)
     [ "$state" != "done" ] \
       || fail "task $id is already closed; a new captain call needs its own task"
-    existing_call_kind=$(call_record_kind "$id") || fail "cannot read the call type for $id"
+    if ! existing_call_kind=$(call_record_kind "$id"); then
+      call_path=$(captain_call_path "$id") || fail "cannot resolve the call record for $id"
+      [ "$repair_call" = 1 ] && [ -f "$call_path" ] && [ ! -L "$call_path" ] \
+        || fail "cannot read the call type for $id; retry with --repair-call and explicit call fields"
+      existing_call_kind=''
+    fi
     if [ "$existing_call_kind" = action ]; then
       [ "$call_given" = 0 ] || [ "$call_kind" = action ] \
         || fail 'an outstanding action cannot become a question; complete the requested action first'

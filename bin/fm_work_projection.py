@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from fm_work import Owner, digest, time_value, latest, read_text, fresh_run_step, start_work_observation, work_observation
 import datetime as dt
-from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row
+from fm_delivery import BIN, completion_receipt, read_presentation, delivery_row, validate_captain_call
 from fm_task_usage import read_usage
 from fm_progress import reporting_status, status_boundaries
 
@@ -83,6 +83,7 @@ def bootstrap(owner, observation=None):
     snapshot = owner.snapshot()
     selector = subprocess.run(['bash', '-c', '. "$1/fm-landed-lib.sh"; printf "%s" "$FM_LANDED_JQ_DEFS"', 'projection', str(BIN)], capture_output=True, text=True, check=True).stdout
     facts = dict(calls={t['key'][5:]: t['question']['call'] for t in snapshot['tasks']},
+        call_hold_set={t['key'][5:]: t['question']['asked']['value'] if t['question']['open'] else None for t in snapshot['tasks']},
         receipts={i: completion_receipt(owner.home, r) for i,r in owner.rows.items()},
         created={t['key'][5:]: t['created'] for t in snapshot['tasks']},
         usage={i: read_usage(owner.data / i / 'usage.json') for i in owner.rows},
@@ -147,6 +148,8 @@ class Projection(Owner):
         self.rev = base['snapshot']['rev']
         self.facts.setdefault('changed', {})
         self.facts.setdefault('observed', {})
+        self.facts.setdefault('call_hold_set', {t['key'][5:]: t['question']['asked']['value'] if t['question']['open'] else None
+                                              for t in base['snapshot']['tasks']})
         self.status_tokens = {task: {token for line, token in status_boundaries(status) if reporting_status(line)}
                               for task, status in self.status.items()}
 
@@ -302,7 +305,10 @@ class Projection(Owner):
         if name in ('call.opened', 'call.resolved', 'call.application'):
             if name == 'call.application' and (task, value['call']['hold_set']) in self.calls:
                 self.calls[(task, value['call']['hold_set'])]['answer'] = value.get('answer')
-            self.facts['calls'][task] = (value.get('call') or {}).get('call')
+            stored = value.get('call') or {}
+            record = validate_captain_call(stored, task, stored.get('hold_set'))
+            self.facts['calls'][task] = record['call'] if record else None
+            self.facts['call_hold_set'][task] = stored.get('hold_set') if record else None
             if value.get('answer'):
                 self.captain_answers[task] = value['answer']
                 affected.add(value['answer']['origin'])

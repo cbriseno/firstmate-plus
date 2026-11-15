@@ -23,7 +23,7 @@ from fm_task_usage import aggregate as aggregate_usage
 from fm_progress import observed_run, sources as progress_sources, code_head
 
 from fm_delivery import (fleet_event, BIN, canonical_read, home_path, read_text,
-                         read_presentation, read_captain_call, read_captain_answer, task_creation, completion_receipt, retained_history,
+                         read_presentation, read_captain_call_record, read_captain_answer, task_creation, completion_receipt, retained_history,
                          reconcile_progress)
 
 VISIBILITIES = ('public', 'private', 'unknown')
@@ -703,7 +703,12 @@ class Owner:
             if not lifecycle['evidence']['current']:
                 progress = None
             call_row = dict(row, structured=True, hold_kind=(hold or {}).get('kind'), hold_reason=(hold or {}).get('reason'), hold_set=hold_set)
-            call = facts['calls'].get(task_id) if facts is not None else read_captain_call(call_row, str(self.data))
+            record = read_captain_call_record(call_row, str(self.data)) if facts is None else None
+            call = facts['calls'].get(task_id) if facts is not None else record['call'] if record else None
+            call_ready = (bool(hold_set) and facts.get('call_hold_set', {}).get(task_id) == hold_set) if facts is not None else record is not None
+            if not call_ready:
+                call = None
+            captain_hold = bool(hold and hold.get('kind') == 'captain' and row['state'] != 'done')
             origin = re.search(r'^Captain hold origin:\s*(\S+)\s*$', (row.get('body') or ''), re.M)
             receipt = facts['receipts'].get(task_id) if facts is not None else completion_receipt(self.home, row)
             project, subproject = self.display_membership(task_id)
@@ -718,8 +723,8 @@ class Owner:
                     state='stopping' if state == 'stopping' else 'paused' if state in ('paused_own', 'paused_inherited') and running else 'set_aside' if state in ('paused_own', 'paused_inherited') else 'none',
                     paused_by='task:' + task_id if task_pause or (hold and hold.get('kind') == 'parked') else (inherited or {}).get('from')),
                 blocked_by=blocks, frees=dict(direct=[], chain_count=0), root_blocker=next((b['ref'] for b in blocks if b['open']), None),
-                question=dict(origin_task='task:' + origin[1] if origin else None, open=bool(hold and hold.get('kind') == 'captain' and row['state'] != 'done'),
-                    filing_required=bool(row.get('kind') == 'captain' and row['state'] != 'done' and (not hold or hold.get('kind') != 'captain')),
+                question=dict(origin_task='task:' + origin[1] if origin else None, open=captain_hold and call_ready,
+                    filing_required=bool(row['state'] != 'done' and (row.get('kind') == 'captain' or captain_hold) and not (captain_hold and call_ready)),
                     call=call, answer=self.captain_answers.get(task_id), asked=time_value(hold_set, 'captain_hold')),
                 recorded_answers=self.answers_by_origin.get(task_id, []),
                 progress=None if p.get('closure') else progress, declared_progress=None if p.get('closure') else declared_progress, progress_evidence=lifecycle['evidence'],

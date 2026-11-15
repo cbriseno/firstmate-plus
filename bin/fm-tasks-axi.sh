@@ -16,7 +16,8 @@
 # Adding without --repo warns once and remains valid for projectless host work.
 # Creation also warns about unregistered projects and captain rows without a
 # captain hold; neither warning blocks the legitimate add-then-hold sequence.
-# work snapshot tasks expose question.filing_required for those open rows.
+# work snapshot tasks expose question.filing_required for those open rows and
+# held rows with missing or invalid call records; they are not open questions.
 # execution_context is host only for recorded kind=host, project for a declared
 # repo, otherwise unknown. Native observations use fm-busy-lib.sh's classifier;
 # bootstrap/live activity.ts retains the busy record's Unix seconds.
