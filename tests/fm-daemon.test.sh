@@ -184,6 +184,23 @@ test_classify_signal_survives_a_later_routine_append() {
   pass "an actionable event is escalated to an away captain despite later routine appends"
 }
 
+test_new_pauses_wake_once() {
+  local dir state out
+  dir=$(make_supercase pause-signal); state="$dir/state"
+  printf 'paused [at=1]: send the commit to the reviewer\nworking: tidying\n' > "$state/request.status"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/request.status" "$state")
+  case "$out" in escalate\|*'paused [at=1]: send the commit to the reviewer'*) ;;
+    *) fail "new pause did not wake the supervisor: $out" ;; esac
+  seen_through "$state" request
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/request.status" "$state")
+  case "$out" in self\|*) ;; *) fail "seen pause woke again: $out" ;; esac
+  printf 'paused [at=2]: assign the review\n' >> "$state/request.status"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/request.status" "$state")
+  case "$out" in escalate\|*'paused [at=2]: assign the review'*) ;;
+    *) fail "second pause did not wake the supervisor: $out" ;; esac
+  pass "each new pause wakes once, including when followed by routine progress"
+}
+
 # The away-mode backstop must reach the same event when the per-wake path never
 # ran, which is exactly what it exists for.
 test_classification_commits_its_captured_endpoint() {
@@ -823,8 +840,10 @@ test_stale_diagnostic_wedge_survives_busy_housekeeping() {
     echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
     [ "$case_name" = prior-terminal ] \
       && seen_through "$state" "$task"
-    [ "$case_name" = paused ] \
-      && echo $(( $(date +%s) - 500 )) > "$state/.subsuper-paused-$key"
+    if [ "$case_name" = paused ]; then
+      seen_through "$state" "$task" # The initial pause signal was already delivered.
+      echo $(( $(date +%s) - 500 )) > "$state/.subsuper-paused-$key"
+    fi
 
     (
       kill() { printf 'kill %s\n' "$*" >> "$action_log"; }
@@ -3334,6 +3353,7 @@ test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
 test_classify_signal_skips_turn_end_markers
 test_classify_signal_survives_a_later_routine_append
+test_new_pauses_wake_once
 test_classification_commits_its_captured_endpoint
 test_stale_masked_event_escalates_at_captured_endpoint
 test_stale_read_failure_surfaces_without_advancing_seen

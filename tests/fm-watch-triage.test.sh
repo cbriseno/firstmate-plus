@@ -322,7 +322,7 @@ test_unrecognized_status_prefix_is_visible() {
   status_is_paused "$(last_status_line "$state/prose.status")" \
     || fail "continuation prose cleared the pause classification"
   status_span_has_actionable "$state/prose.status" 0 \
-    && fail "a paused declaration or its continuation became a supervisor event"
+    && fail "a paused declaration or its continuation became a stale event"
   for continuation in 'https://github.com/o/r/pull/12' 'Reason: upstream is slow' \
     'Note: see above' 'e.g.: the release notes' '10:30 retry scheduled'; do
     printf 'paused: waiting on the upstream release\n%s\n' "$continuation" > "$state/paused-cont.status"
@@ -331,7 +331,7 @@ test_unrecognized_status_prefix_is_visible() {
     status_is_paused "$(last_status_line "$state/paused-cont.status")" \
       || fail "continuation '$continuation' cleared the pause classification"
     status_span_has_actionable "$state/paused-cont.status" 0 \
-      && fail "continuation '$continuation' after paused: became a supervisor event"
+      && fail "continuation '$continuation' after paused: became a stale event"
     printf 'working: opened PR\n%s\n' "$continuation" > "$state/working-cont.status"
     [ "$(last_status_line "$state/working-cont.status")" = 'working: opened PR' ] \
       || fail "continuation '$continuation' hid the working declaration"
@@ -2110,6 +2110,22 @@ test_actionable_signal_survives_a_later_routine_append() {
     || fail "the masked actionable signal was not queued"
   unset FM_FAKE_CREW_STATE
   pass "a captain event hidden behind a later routine append is still surfaced (queue + exit)"
+}
+
+test_new_pause_signal_wakes() {
+  local dir state out status_file sig pid
+  dir=$(make_case pause-signal); state="$dir/state"; out="$dir/watch.out"
+  status_file="$state/task.status"
+  printf 'working: setup\n' > "$status_file"
+  sig=$(seen_sig "$status_file"); printf '%s' "$sig" > "$state/.seen-task_status"
+  printf 'paused [at=1]: send the commit to the reviewer\nworking: tidying\n' >> "$status_file"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$dir/fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 300 || { reap "$pid"; fail "watcher did not surface a new pause"; }
+  grep -F "signal: $status_file" "$out" >/dev/null || fail "new pause was not signaled"
+  unset FM_FAKE_CREW_STATE
+  pass "a new pause wakes the watcher even when followed by progress"
 }
 
 # A status log only grows: a remote second mate's mirrored parent channel passes a
@@ -5698,6 +5714,7 @@ test_ordinary_blocked_signal_payload_remains_branch_eligible
 test_codex_question_reported_as_blocked
 test_routine_signal_payload_not_marked_needs_decision
 test_actionable_signal_survives_a_later_routine_append
+test_new_pause_signal_wakes
 test_keyed_decision_signal_reads_only_the_new_span
 test_release_completion_survives_a_later_routine_append
 test_routine_appends_after_a_classified_event_stay_absorbed

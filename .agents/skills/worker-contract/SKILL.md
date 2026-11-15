@@ -23,7 +23,7 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
    States: working, needs-decision, blocked, paused, done, failed.
    Use the declared external-wait status in place of `paused` throughout this contract.
    Substitute `<epoch>` with the current Unix time in seconds - run `date +%s` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
+   New `paused`, decision, failure, and completion lines wake firstmate; routine `working` lines may be absorbed, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
    needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;
    firstmate reads your pane for that.

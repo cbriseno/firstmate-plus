@@ -366,7 +366,7 @@ classify_signal() {  # <reason-after-colon> <state>
     [ -e "$f" ] || [ -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     record=$(status_span_first_actionable_record "$f" \
-      "$(status_seen_offset "$state" "$task")")
+      "$(status_seen_offset "$state" "$task")" '' '' 1)
     rc=$?
     [ "$rc" -eq 1 ] && [ -z "$record" ] && continue
     if [ "$rc" -eq 2 ]; then
@@ -1382,7 +1382,7 @@ housekeeping() {  # <state>
       [ "$f" = "$exclude" ] && continue
       task=$(basename "$f"); task="${task%.status}"
       record=$(status_span_first_actionable_record "$f" \
-        "$(status_seen_offset "$state" "$task")")
+        "$(status_seen_offset "$state" "$task")" '' '' 1)
       rc=$?
       if [ "$rc" -eq 2 ]; then
         ident=$(status_observed_signature "$f")

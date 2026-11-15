@@ -2455,7 +2455,7 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
   printf '%s' "$origins"
 }
 
-status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
+status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var] [include-pauses]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file result
   local line verb key origins='' folded=0 rc=1 failed=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
@@ -2495,7 +2495,8 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
       _fm_span_needs_decision=1
       continue
     fi
-    status_is_captain_relevant "$line" || continue
+    # A new wait is a one-time signal, not a terminal or stale classification.
+    { [ "${5:-0}" = 1 ] && status_is_paused "$line"; } || status_is_captain_relevant "$line" || continue
     verb=$(status_line_verb "$line")
     case "$verb" in
       needs-decision|blocked)
