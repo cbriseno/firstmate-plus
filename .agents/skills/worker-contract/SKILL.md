@@ -111,7 +111,11 @@ Start with the result, its significance, and the next action in plain, friendly 
 Spell out names rather than presenting unexplained IDs or version labels.
 Explain a flow with a step-by-step diagram and a concrete end-to-end example; present data in tables or charts instead of paragraphs.
 Adapt the visuals to the subject, and put supporting data, methods, technical verification, and other technical detail in expandable sections or a separate record.
-Keep the initially visible narrative to approximately 300 words or fewer; use only the detail needed to understand or decide, and avoid repeating commands or technical text without a purpose.
+Keep the initially visible report to at most 300 words and one screen; put the remaining detail in closed expandable sections.
+Before delivering it, open the report in a browser with those sections closed and run the adjacent [report check](report-check.js) as a browser expression (for example, `chrome-devtools-axi eval "$(cat /path/to/worker-contract/report-check.js)"`).
+It counts rendered HTML and SVG text, including headings, table cells and closed-section summaries, and reports visible graphic candidates; inspect the page and count actual flow diagrams, including any made from HTML rather than graphics.
+Record the visible word count and actual diagram count with the result, and do not deliver until the count is at most 300, at least one flow diagram is visible, and the opening screen includes a complete end-to-end example and data in tables.
+Check the screen visually as well: a word count alone cannot prove it fits, and a graphic count cannot establish that a diagram explains the flow.
 Show the generation date and time in the reader's local time, never UTC, plus relative age that refreshes locally when JavaScript is available; the absolute local time must remain visible without it.
 Name the model and reasoning effort of the report author only; if either is unknown, say so rather than guessing.
 Include the evidence needed to read the report offline without a CDN, external fonts, agent interface, or required service.
