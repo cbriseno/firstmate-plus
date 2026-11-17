@@ -18,6 +18,8 @@ set -u
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_ROOT=$(fm_test_tmproot fm-procevent-tests)
+JQ_TEST_BIN=$(dirname "$(command -v jq)")
+SUPERVISION_TEST_PATH="${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$JQ_TEST_BIN"
 export FM_PROCEVENT_CLAIM_ROOT="$TMP_ROOT/claims"
 export LAVISH_AXI_STATE_DIR="$TMP_ROOT/lavish-state"
 mkdir -p "$LAVISH_AXI_STATE_DIR"
@@ -160,10 +162,57 @@ process_executing() {  # <pid-or-negative-group>
   '
 }
 
-wait_for() {  # <file> [tries]
-  local f=$1 n=${2:-100}
-  for _ in $(seq 1 "$n"); do [ -s "$f" ] && return 0; sleep 0.1; done
+wait_until() {  # <condition-function> [args...]
+  local condition=$1
+  shift
+  for _ in $(seq 1 6000); do
+    "$condition" "$@" && return 0
+    sleep 0.1
+  done
   return 1
+}
+
+wait_file_ready() {  # <file> [exact-content]
+  [ -s "$1" ] || return 1
+  [ -z "${2-}" ] || [ "$(cat "$1" 2>/dev/null || true)" = "$2" ]
+}
+wait_for() {  # <file> [exact-content]
+  wait_until wait_file_ready "$@"
+}
+wait_file_exists() { [ -e "$1" ]; }
+wait_for_exists() { wait_until wait_file_exists "$1"; }
+wait_file_absent() { [ ! -e "$1" ]; }
+wait_for_absent() { wait_until wait_file_absent "$1"; }
+wait_process_stopped() { ! process_executing "$1"; }
+wait_for_process_stopped() { wait_until wait_process_stopped "$1"; }
+wait_text_line() { grep -qx "$2" "$1" 2>/dev/null; }
+wait_for_text_line() { wait_until wait_text_line "$@"; }
+wait_text_match() { grep -q "$2" "$1" 2>/dev/null; }
+wait_for_text_match() { wait_until wait_text_match "$@"; }
+wait_process_transition() {
+  if [ "$proof_state" = zombie ]; then
+    case "$(ps -o stat= -p "$PROOF_PID" 2>/dev/null | tr -d '[:space:]')" in Z*) return 0 ;; esac
+    return 1
+  fi
+  ! kill -0 "$PROOF_PID" 2>/dev/null
+}
+wait_fast_source_finished() {
+  first_result "$HFC" aa-fast-src >/dev/null 2>&1 \
+    && [ ! -e "$HFC/state/procevent/aa-fast-src.runner" ] \
+    && [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/aa-fast-src.claim" ]
+}
+wait_noisy_staging() {
+  local dir=$1 candidate
+  staged=''
+  for candidate in "$dir"/.noisy-src.*.output; do
+    if [ -f "$candidate" ]; then staged=$candidate; break; fi
+  done
+  [ -n "$staged" ]
+}
+wait_comm_sleep() { case "$(ps -p "$1" -o comm= 2>/dev/null)" in *sleep) return 0 ;; esac; return 1; }
+wait_capture_ready() {  # <home> <source-id>
+  first_result "$1" "$2" >/dev/null 2>&1 \
+    && [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$2.claim" ]
 }
 
 # Arm now starts the listener, so a later start would poll again. Wait for the
@@ -171,35 +220,18 @@ wait_for() {  # <file> [tries]
 # claim: the result lands before the runner publishes and exits, and a retire or
 # re-arm in that gap meets a live claim the synchronous start never left behind.
 wait_capture() {  # <home> <source-id> [tries]
-  local home=$1 id=$2 n=${3:-100}
-  local _
-  for _ in $(seq 1 "$n"); do
-    if first_result "$home" "$id" >/dev/null 2>&1 \
-      && [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$id.claim" ]; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  return 1
+  wait_until wait_capture_ready "$1" "$2"
 }
 
-# <file> <count> [tries]: wait until <file> holds at least <count> lines. A
-# detached runner appends its execution marker after the command that started it
-# has already returned, so a caller that needs that append must wait for it
-# rather than assume a fixed settle window covered it on a loaded machine.
+# <file> <count>: wait until <file> holds at least <count> lines.
+wait_lines_ready() {
+  local f=$1 want=$2 have=0
+  if [ -f "$f" ]; then have=$(wc -l < "$f" | tr -d ' '); fi
+  case "$have" in ''|*[!0-9]*) have=0 ;; esac
+  [ "$have" -ge "$want" ]
+}
 wait_for_lines() {
-  local f=$1 want=$2 n=${3:-100} have
-  for _ in $(seq 1 "$n"); do
-    if [ -f "$f" ]; then
-      have=$(wc -l < "$f" | tr -d ' ')
-    else
-      have=0
-    fi
-    case "$have" in ''|*[!0-9]*) have=0 ;; esac
-    [ "$have" -ge "$want" ] && return 0
-    sleep 0.1
-  done
-  return 1
+  wait_until wait_lines_ready "$1" "$2"
 }
 
 hold_source_lock() {  # <source-id> <ready-file> <release-file>
@@ -280,7 +312,7 @@ SH
     || fail "a confirmation timeout retired the source instead of preserving recovery"
   assert_not_contains "$(cat "$LATE/arm.out")" 'armed:' "unconfirmed arm printed ready"
   touch "$LATE/release"
-  wait_for "$LATE/listening" 600 || fail "the normal detached runner did not recover"
+  wait_for "$LATE/listening" || fail "the normal detached runner did not recover"
   assert_contains "$(pe "$LATE/home" list)" 'live' "recovered listener did not own its source"
   pe "$LATE/home" retire "$late_id" >/dev/null || fail "late-start listener cleanup failed"
   pass "a confirmation timeout preserves registration and the detached listener recovers"
@@ -294,6 +326,7 @@ SH
 #!/usr/bin/env bash
 set -eu
 [ "$1" != --version ] || { echo 0.1.97; exit 0; }
+[ "${1-} ${2-}" != 'reply --help' ] || exit 0
 n=$(cat "$HANDOFF/$1-count" 2>/dev/null || echo 0); n=$((n + 1))
 echo "$n" > "$HANDOFF/$1-count"
 if [ "$n" = 1 ] || [ -e "$HANDOFF/always-fail" ] || { [ "$1" = poll ] && [ "$n" -le 14 ]; }; then
@@ -322,18 +355,15 @@ SH
       --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "$owner arm failed"
     [ "$(cat "$HANDOFF/reply-count")" = 2 ] || fail "startup reply was not retried"
     [ "$(wc -l < "$HANDOFF/replies" | tr -d ' ')" = 1 ] || fail "reply duplicated"
-    # Empty ready markers are intentional; wait_for requires nonempty files.
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll15" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll15" ] || fail "startup poll was not retried"
+    # Empty ready markers are intentional; poll for existence directly.
+    wait_for_exists "$HANDOFF/poll15" || fail "startup poll was not retried"
     touch "$HANDOFF/release15"
-    wait_for "$HANDOFF/home/state/$owner.inbox/001.msg" 200 || fail "first feedback missing"
+    wait_for "$HANDOFF/home/state/$owner.inbox/001.msg" || fail "first feedback missing"
     printf 'done: report ready\n' > "$HANDOFF/home/state/$owner.status"
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll16" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll16" ] || fail "$owner stopped listening between turns"
+    wait_for_exists "$HANDOFF/poll16" || fail "$owner stopped listening between turns"
     touch "$HANDOFF/release16"
-    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.result" 200 || fail "second feedback missing"
-    for _ in $(seq 1 600); do [ -e "$HANDOFF/poll17" ] && break; sleep 0.1; done
-    [ -e "$HANDOFF/poll17" ] || fail "$owner done stopped listening"
+    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.result" || fail "second feedback missing"
+    wait_for_exists "$HANDOFF/poll17" || fail "$owner done stopped listening"
     FM_HOME="$HANDOFF/home" "$ROOT/bin/fm-inbox.sh" list | grep -F 'round 16' >/dev/null \
       || fail "done-owner feedback did not reach the primary"
     assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" "listening acknowledged feedback"
@@ -343,7 +373,7 @@ SH
     [ -f "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" ] || fail "oldest round not acknowledged"
     assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.handled" "reply acknowledged unread newer feedback"
     touch "$HANDOFF/release17"
-    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.3.result" 200 || fail "terminal feedback missing"
+    wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.3.result" || fail "terminal feedback missing"
     if pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null 2>&1; then
       fail "terminal acknowledgement orphaned an earlier unhandled capture"
     fi
@@ -466,7 +496,7 @@ if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
   exit 0
 fi
 
-sup=$(PATH="${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" bash -c \
+sup=$(PATH="$SUPERVISION_TEST_PATH" bash -c \
   '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2" && echo yes || echo no' _ "$ROOT" "$IDLE/state")
 assert_contains "$sup" no "an unconfigured home does not need supervision"
 
@@ -476,7 +506,7 @@ TRIG="$TMP_ROOT/trigger-one"
 out=$(pe_register "$H1" lavish src-one -- "$BLOCKER" "$TRIG" "payload one")
 assert_contains "$out" "registered: src-one" "register records a source"
 
-sup=$(PATH="${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" bash -c \
+sup=$(PATH="$SUPERVISION_TEST_PATH" bash -c \
   '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2" && echo yes || echo no' _ "$ROOT" "$H1/state")
 assert_contains "$sup" yes "a registered source needs supervision with no task metadata"
 
@@ -519,7 +549,7 @@ pe "$HSYM" reconcile >/dev/null
 wait_for "$FM_PROCEVENT_CLAIM_ROOT/symlinked-src.claim" \
   || fail "a home reached through a symlinked ancestor never claimed its source"
 : > "$SYM_TRIGGER"
-wait_for "$HSYM/state/.wake-queue" \
+wait_for_text_match "$HSYM/state/.wake-queue" 'check: procevent lavish symlinked-src 1' \
   || fail "a home reached through a symlinked ancestor published no event"
 assert_contains "$(wake_payloads "$HSYM")" "procevent lavish symlinked-src 1" \
   "the symlinked-ancestor home publishes the committed result sequence"
@@ -973,11 +1003,7 @@ assert_not_contains "$quiet_out" "not-autohandled" \
 # makes "no wake" a real observation instead of a race the test won by being
 # early.
 QUIET_HANDLED="$HEMPTY/state/procevent-inbox/$quiet_id.1.handled"
-for _ in $(seq 1 100); do
-  [ -f "$QUIET_HANDLED" ] && break
-  sleep 0.1
-done
-[ -f "$QUIET_HANDLED" ] \
+wait_for_exists "$QUIET_HANDLED" \
   || fail "a silenced result was not durably recorded handled, so a later reconcile would announce it"
 [ "$(count_results "$HEMPTY" "$quiet_id")" = 1 ] \
   || fail "an empty board close captured $(count_results "$HEMPTY" "$quiet_id") results instead of one"
@@ -1060,10 +1086,9 @@ assert_contains "$list_out" "task:worker-1/listening" \
 PATH="$MULTI_BIN:$PATH" LAVISH_AXI_HOST=recovery.example LAVISH_AXI_PORT=34387 FM_HOME="$HMULTI" \
   pe "$HMULTI" start "$multi_id" > "$MULTI_ROOT/run1" 2>&1 &
 MULTI_RUN=$!
-for _ in $(seq 1 100); do [ "$(cat "$MULTI_ROOT/count" 2>/dev/null || true)" = 1 ] && break; sleep 0.02; done
+wait_for "$MULTI_ROOT/count" 1 || fail "the first worker poll did not start"
 touch "$MULTI_ROOT/trigger1"
-for _ in $(seq 1 100); do [ -f "$HMULTI/state/worker-1.inbox/001.msg" ] && break; sleep 0.02; done
-[ -f "$HMULTI/state/worker-1.inbox/001.msg" ] \
+wait_for "$HMULTI/state/worker-1.inbox/001.msg" \
   || fail "worker-owned feedback did not reach the worker inbox"
 [ -z "$(wake_payloads "$HMULTI")" ] \
   || fail "worker-owned feedback woke firstmate: $(wake_payloads "$HMULTI")"
@@ -1105,25 +1130,17 @@ PATH="$MULTI_BIN:$PATH" FM_HOME="$HMULTI" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$MULTI_ART" --for worker-1 \
   --agent-reply-file "$MULTI_ROOT/reply2" >/dev/null
 wait "$MULTI_RUN" || true
-for _ in $(seq 1 100); do
-  PATH="$MULTI_BIN:$PATH" pe "$HMULTI" reconcile >/dev/null 2>&1 || true
-  [ "$(cat "$MULTI_ROOT/count" 2>/dev/null || true)" = 2 ] && break
-  sleep 0.03
-done
+wait_for "$MULTI_ROOT/count" 2 || fail "the second worker poll did not start"
 touch "$MULTI_ROOT/trigger2"
-for _ in $(seq 1 100); do [ -f "$HMULTI/state/worker-1.inbox/002.msg" ] && break; sleep 0.02; done
-[ -f "$HMULTI/state/worker-1.inbox/002.msg" ] \
+wait_for "$HMULTI/state/worker-1.inbox/002.msg" \
   || fail "the next worker-owned feedback did not reach the worker inbox"
 PATH="$MULTI_BIN:$PATH" FM_HOME="$HMULTI" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$MULTI_ART" --for worker-1 \
   --agent-reply-file "$MULTI_ROOT/reply3" >/dev/null
-for _ in $(seq 1 100); do
-  PATH="$MULTI_BIN:$PATH" pe "$HMULTI" reconcile >/dev/null 2>&1 || true
-  [ "$(cat "$MULTI_ROOT/count" 2>/dev/null || true)" = 3 ] && break
-  sleep 0.03
-done
+wait_for "$MULTI_ROOT/count" 3 || fail "the terminal worker poll did not start"
 touch "$MULTI_ROOT/trigger3"
-for _ in $(seq 1 100); do [ -f "$HMULTI/state/worker-1.inbox/003.msg" ] && break; sleep 0.02; done
+wait_for "$HMULTI/state/worker-1.inbox/003.msg" \
+  || fail "the terminal worker feedback did not reach the worker inbox"
 [ -f "$HMULTI/state/procevent-inbox/$multi_id.1.handled" ] \
   || fail "first worker-owned round was not acknowledged by re-arm"
 [ -f "$HMULTI/state/procevent-inbox/$multi_id.2.handled" ] \
@@ -1442,6 +1459,7 @@ INTR_ROOT="$TMP_ROOT/lavish-interrupted-root"; mkdir -p "$INTR_ROOT"; export INT
 INTR_BIN=$(fm_fakebin "$TMP_ROOT/lavish-interrupted-stub")
 cat > "$INTR_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
 n=$(cat "$INTR_ROOT/count" 2>/dev/null || echo 0)
 printf '%s\n' "$((n + 1))" > "$INTR_ROOT/count"
 printf 'session:\n  status: ended\n  session_ended: true\n'
@@ -1666,6 +1684,9 @@ i=$((n - 1))
 case "${plan[$i]}" in
   interrupt)
     printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n'; exit 1 ;;
+  listener-active)
+    [ -z "${LAVISH_TIMES:-}" ] || perl -MTime::HiRes=time -e 'print time, "\n"' >> "$LAVISH_TIMES"
+    printf 'error: "Lavish Editor already has an active poll listener (current listener: lab; active for %sms)"\ncode: LISTENER_ACTIVE\nhelp[1]: Use --takeover only when you intend to displace the current listener\n' "$n"; exit 1 ;;
   near-interrupt)
     printf 'error: Lavish Editor poll response was interrupted \ncode: SERVER_ERROR\n'; exit 1 ;;
   other-server-error)
@@ -1703,6 +1724,31 @@ pass "the shipped poll governor bounds an instantly returning source"
 # A bounded test override keeps the retry policy's real bound under test without
 # making the suite wait out the production delay.
 export FM_LAVISH_POLL_RETRY_DELAY=1
+
+# A second live listener is not feedback. Retry in the same runner with
+# increasing delays, then capture the real answer exactly once after release.
+HBUSY="$TMP_ROOT/hbusy"; new_home "$HBUSY"
+BUSY_ART="$TMP_ROOT/busy-board.html"
+printf '<h1>busy</h1>\n' > "$BUSY_ART"
+lavish_session "$BUSY_ART"
+busy_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$BUSY_ART")
+LAVISH_COUNT="$TMP_ROOT/busy-count"; LAVISH_SCRIPT="listener-active listener-active listener-active feedback"
+LAVISH_TIMES="$TMP_ROOT/busy-times"; export LAVISH_TIMES
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HBUSY" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$BUSY_ART" >/dev/null
+wait_for "$HBUSY/state/.wake-queue" || fail "feedback after listener conflict produced no wake"
+[ "$(cat "$LAVISH_COUNT")" = 4 ] || fail "listener conflict did not recover in the same poll"
+[ "$(count_results "$HBUSY" "$busy_id")" = 1 ] || fail "listener conflicts became captured rounds"
+assert_grep 'ship it' "$(first_result "$HBUSY" "$busy_id")" "only real feedback is captured"
+perl -e '
+  open my $in, "<", $ARGV[0] or die $!;
+  my @t = <$in>;
+  @t == 3 && $t[1]-$t[0] >= .9 && $t[2]-$t[1] >= 1.9 or die "conflict retries did not back off\n";
+' "$LAVISH_TIMES" || fail "listener-conflict retry cadence did not increase"
+unset LAVISH_TIMES
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HBUSY" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$BUSY_ART" >/dev/null
+pass "listener conflicts wait silently with backoff and deliver only real feedback"
 
 # Two interruptions, then the captain's real feedback: the retries are silent and
 # only the feedback becomes a captured result and a check wake.
@@ -1746,7 +1792,7 @@ LAVISH_COUNT="$TMP_ROOT/reply-retry-count"; LAVISH_SCRIPT="interrupt interrupt f
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HREPLY" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$REPLY_ART" --for worker-9 \
   --agent-reply-file "$TMP_ROOT/reply-retry.txt" >/dev/null
-wait_for "$HREPLY/state/worker-9.inbox/001.msg" 200 \
+wait_for "$HREPLY/state/worker-9.inbox/001.msg" \
   || fail "the round that delivered after quiet retries did not reach the worker inbox"
 [ "$(cat "$LAVISH_COUNT")" = 3 ] \
   || fail "the reply-carrying listener was polled $(cat "$LAVISH_COUNT") times, not the two quiet retries plus the delivering poll"
@@ -1829,7 +1875,7 @@ fm_test_track_procevent_home "$HEXH"
 LAVISH_COUNT="$TMP_ROOT/exhaust-count"; LAVISH_SCRIPT="$(printf 'interrupt %.0s' {1..14})feedback"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$EXH_ART" >/dev/null
-wait_capture "$HEXH" "$exh_id" 200 \
+wait_capture "$HEXH" "$exh_id" \
   || fail "recovery produced no captured feedback"
 [ "$(cat "$LAVISH_COUNT")" = 15 ] \
   || fail "the listener polled $(cat "$LAVISH_COUNT") times, not fourteen interruptions plus the recovered poll"
@@ -1938,7 +1984,9 @@ PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HSTREAM" TMPDIR="$STREAM_TMPDIR" \
 wait_for "$LAVISH_STREAM_READY" || fail "streaming poll did not start"
 stream_staged=("$STREAM_TMPDIR"/fm-lavish-poll.*)
 [ -e "${stream_staged[0]}" ] || fail "streaming poll created no classifier staging file"
-[ "$(wc -c < "${stream_staged[0]}" | tr -d ' ')" -le 100 ] \
+# Classifier staging holds only enough bytes to reject the exact known error
+# prefixes; the separate runner output bound below remains 100 bytes.
+[ "$(wc -c < "${stream_staged[0]}" | tr -d ' ')" -le 256 ] \
   || fail "streaming poll exceeded its bounded classifier staging"
 : > "$LAVISH_STREAM_RELEASE"
 wait_for "$HSTREAM/state/.wake-queue" || fail "streaming poll produced no wake"
@@ -2055,7 +2103,7 @@ runner_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/shared-src.claim" 2>/dev/null
 [ -n "$runner_pid" ] || fail "no runner pid recorded for the blocked source"
 kill -0 "$runner_pid" 2>/dev/null || fail "the blocked runner is not live before retirement"
 pe "$HA" retire shared-src >/dev/null
-for _ in $(seq 1 40); do process_executing "$runner_pid" || break; sleep 0.1; done
+wait_for_process_stopped "$runner_pid" || fail "retire left the blocked runner alive"
 process_executing "$runner_pid" && fail "retire left the blocked runner alive"
 assert_absent "$FM_PROCEVENT_CLAIM_ROOT/shared-src.claim" "retire releases the claim"
 pass "retiring a never-completing source stops its runner and its blocked child"
@@ -2079,7 +2127,7 @@ fi
 rm -f "$HZ/state/procevent/orphan-src.source"
 out=$(pe "$HZ" reconcile)
 assert_contains "$out" "stopped=1" "reconcile stops a runner whose registration was removed"
-for _ in $(seq 1 40); do process_executing "$orphan_pid" || break; sleep 0.1; done
+wait_for_process_stopped "$orphan_pid" || fail "reconcile left an orphaned runner alive"
 process_executing "$orphan_pid" && fail "reconcile left an orphaned runner alive"
 pass "reconcile reaps a runner whose source registration is gone"
 
@@ -2132,7 +2180,7 @@ for _ in $(seq 1 24); do
   pe "$HR" start race-src >/dev/null &
   race_pids+=("$!")
 done
-wait_for "$RACE_LOG" 300 || fail "no contender acquired the stale claim"
+wait_for "$RACE_LOG" || fail "no contender acquired the stale claim"
 sleep 0.5
 [ "$(wc -l < "$RACE_LOG" | tr -d ' ')" = 1 ] || fail "stale-claim race started more than one runner"
 : > "$RACE_TRIGGER"
@@ -2176,7 +2224,7 @@ case "$orphan_leader" in ''|*[!0-9]*) fail "could not read the runner leader pid
 printf '%s\n' "$orphan_leader" > "$ORPHAN_GROUP"
 
 kill -KILL "$orphan_leader" 2>/dev/null || fail "could not kill the runner leader"
-for _ in $(seq 1 50); do process_executing "$orphan_leader" || break; sleep 0.1; done
+wait_for_process_stopped "$orphan_leader" || fail "the runner leader survived SIGKILL"
 process_executing "$orphan_leader" && fail "the runner leader survived SIGKILL"
 kill -0 -"$orphan_leader" 2>/dev/null || fail "fixture invalid: the owned child group did not survive the leader"
 
@@ -2227,7 +2275,7 @@ assert_contains "$orphan_again" "uncertain=1" \
 kill -0 -"$orphan_leader" 2>/dev/null \
   || fail "announcing the strand signalled the leaderless process group"
 kill -KILL -"$orphan_leader" 2>/dev/null || true
-for _ in $(seq 1 50); do process_executing -"$orphan_leader" || break; sleep 0.1; done
+wait_for_process_stopped -"$orphan_leader" || fail "the leaderless fixture group did not stop after cleanup"
 process_executing -"$orphan_leader" && fail "could not clean up the leaderless fixture group"
 pe "$HG" retire orphan-src >/dev/null
 pass "an ambiguous leaderless group is preserved without replacement"
@@ -2279,7 +2327,7 @@ case "$sr_leader" in ''|*[!0-9]*) fail "could not read the state-root fixture le
 
 kill -KILL -"$sr_leader" 2>/dev/null || true
 kill -KILL "$sr_leader" 2>/dev/null || true
-for _ in $(seq 1 50); do process_executing -"$sr_leader" || break; sleep 0.1; done
+wait_for_process_stopped -"$sr_leader" || fail "the state-root fixture group survived SIGKILL"
 process_executing "$sr_leader" && fail "the state-root fixture leader survived SIGKILL"
 process_executing -"$sr_leader" && fail "fixture invalid: the owned group outlived the whole generation"
 # Drift the live state root away from what the claim recorded.
@@ -2479,7 +2527,7 @@ wait "$sr5_start_pid" \
   || fail "start failed after reclaiming the undrifted claim: $(cat "$TMP_ROOT/reused-plain-start.out")"
 assert_contains "$(cat "$TMP_ROOT/reused-plain-start.out")" "captured:" \
   "the reclaiming start did not capture the source's result"
-for _ in $(seq 1 50); do process_executing -"$sr5_leader" || break; sleep 0.1; done
+wait_for_process_stopped -"$sr5_leader" || fail "the reused-pid fixture group did not stop"
 pe "$HSR5" retire reused-plain-src >/dev/null 2>&1 || true
 pass "start reclaims a reused-pid claim whose leftovers can still be tidied"
 
@@ -2554,11 +2602,7 @@ ep_reconcile "started=1" 0 "a repaired source did not confirm"
 assert_contains "$ep_out" "failed=0" "a repaired source was still reported failed: $ep_out"
 [ "$(launch_failed_wake_count "$HEP" episode-src)" = 1 ] \
   || fail "a confirmed launch produced a launch-failed wake: $ep_out"
-for _ in $(seq 1 100); do
-  [ -e "$FM_PROCEVENT_CLAIM_ROOT/episode-src.claim" ] || break
-  sleep 0.1
-done
-[ ! -e "$FM_PROCEVENT_CLAIM_ROOT/episode-src.claim" ] \
+wait_for_absent "$FM_PROCEVENT_CLAIM_ROOT/episode-src.claim" \
   || fail "the confirmed episode runner never released its claim"
 ep_damage
 ep_reconcile "failed=1" 1 "a source that failed again after recovering was not reported failed"
@@ -2661,14 +2705,7 @@ FC_READY="$TMP_ROOT/fast-hold-ready"; FC_RELEASE="$TMP_ROOT/fast-hold-release"
 hold_source_lock zz-hold-src "$FC_READY" "$FC_RELEASE"
 wait_for "$FC_READY" || fail "the fast-source fixture could not hold a source lock"
 (
-  for _ in $(seq 1 600); do
-    if first_result "$HFC" aa-fast-src >/dev/null 2>&1 \
-      && [ ! -e "$HFC/state/procevent/aa-fast-src.runner" ] \
-      && [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/aa-fast-src.claim" ]; then
-      break
-    fi
-    sleep 0.05
-  done
+  wait_until wait_fast_source_finished || fail "the fast source did not finish before releasing the held lock"
   : > "$FC_RELEASE"
 ) &
 FC_RELEASER=$!
@@ -2893,7 +2930,7 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # claim - so the sweep would race that exit and see one source or two depending
 # on which won.
 kill -KILL -"$sweep_pid_two" 2>/dev/null || true
-for _ in $(seq 1 50); do process_executing "$sweep_pid_two" || break; sleep 0.1; done
+wait_for_process_stopped "$sweep_pid_two" || fail "the claim-only sweep fixture runner did not stop"
 process_executing "$sweep_pid_two" \
   && fail "the claim-only sweep fixture runner did not stop"
 assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" \
@@ -2906,7 +2943,7 @@ assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep preflight 
 out=$(pe "$HM" sweep-home)
 assert_contains "$out" "swept: attempted=2" "home sweep retires registrations and owned claim-only sources"
 for sweep_pid in "$sweep_pid_one" "$sweep_pid_two"; do
-  for _ in $(seq 1 40); do process_executing "$sweep_pid" || break; sleep 0.1; done
+  wait_for_process_stopped "$sweep_pid" || fail "home sweep left a runner alive"
   process_executing "$sweep_pid" && fail "home sweep left a runner alive"
 done
 assert_absent "$HM/state/procevent/sweep-one.source" "home sweep removes registrations"
@@ -3010,14 +3047,8 @@ FM_PROCEVENT_MAX_OUTPUT_BYTES=100 pe "$HG" reconcile >/dev/null
 wait_for "$NOISY_PID" || fail "noisy source child did not start"
 noisy_child=$(cat "$NOISY_PID")
 staged=
-for _ in $(seq 1 100); do
-  for candidate in "$HG/state/procevent"/.noisy-src.*.output; do
-    if [ -f "$candidate" ]; then staged=$candidate; break; fi
-  done
-  [ -n "$staged" ] && break
-  sleep 0.1
-done
-[ -n "$staged" ] || fail "noisy source created no bounded staging file"
+wait_until wait_noisy_staging "$HG/state/procevent" \
+  || fail "noisy source created no bounded staging file"
 sleep 0.2
 [ "$(wc -c < "$staged" | tr -d ' ')" -le 100 ] || fail "live staging exceeded the configured output bound"
 pe "$HG" retire noisy-src >/dev/null
@@ -3127,7 +3158,8 @@ SH
         "proved escalation releases its claim after $post_term_case identity"
       ;;
   esac
-  for _ in $(seq 1 50); do process_executing -"$POST_TERM_RUNNER" || break; sleep 0.1; done
+  wait_for_process_stopped -"$POST_TERM_RUNNER" \
+    || fail "the post-TERM fixture group survived: $post_term_case"
   process_executing -"$POST_TERM_RUNNER" && fail "the post-TERM fixture group survived: $post_term_case"
   pe "$HPOST_TERM" retire post-term-src >/dev/null
   pass "stop $post_term_case evidence preserves the proved-stop boundary"
@@ -3326,6 +3358,10 @@ printf 'error: No active Lavish Editor session for this file\ncode: NOT_FOUND\n'
 silent_says no "a missing session is not a no-op"
 printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n' > "$SIL"
 silent_says no "a server error is not a no-op"
+printf 'error: "Another listener"\ncode: LISTENER_ACTIVE\n' > "$SIL"
+[ "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$SIL")" = listener-active ] \
+  || fail "listener conflict was not classified"
+silent_says yes "a live listener already serves this board"
 printf 'garbage that is not a session block\n' > "$SIL"
 silent_says no "an unreadable result fails closed and is announced"
 printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nfeedback[1]{text}:\n  prompts[0]{x}:\n' > "$SIL"
@@ -3830,7 +3866,7 @@ pe_register "$HFLOOR" lavish floor-src -- \
 # the wait, then retire immediately instead of running beside the other cases.
 FM_PROCEVENT_OWNER_LEASE_SECONDS=600 FM_PROCEVENT_OWNER_CHECK_SECONDS=1 \
   FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=1 pe "$HFLOOR" reconcile >/dev/null
-wait_for_lines "$TMP_ROOT/launch-times" 3 600 \
+wait_for_lines "$TMP_ROOT/launch-times" 3 \
   || fail "the orphan-storm fixture did not produce three launch samples"
 pe "$HFLOOR" retire floor-src >/dev/null
 launch_count=$(wc -l < "$TMP_ROOT/launch-times" | tr -d ' ')
@@ -4101,7 +4137,8 @@ kill -0 -"$REUSED_GROUP_RUNNER" 2>/dev/null \
 rm -f "$REUSED_GROUP_MARKER"
 PATH="$REUSED_GROUP_BIN:$PATH" FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-reused-group-proc" \
   pe "$HREUSED_GROUP" retire reused-runner-group-src >/dev/null
-for _ in $(seq 1 50); do process_executing -"$REUSED_GROUP_RUNNER" || break; sleep 0.1; done
+wait_for_process_stopped -"$REUSED_GROUP_RUNNER" \
+  || fail "retirement left the group alive once runner identity was unambiguous"
 process_executing -"$REUSED_GROUP_RUNNER" \
   && fail "retirement left the group alive once runner identity was unambiguous"
 pass "a detected ambiguous reused-PID group is not signalled"
@@ -4196,13 +4233,8 @@ orphan_pe() {  # <home> <command...>
     FM_HOME="$home" "$ROOT/bin/fm-procevent.sh" "$@"
 }
 
-wait_gone() {  # <pid-or-group-spec> [tries]
-  local spec=$1 n=${2:-160}
-  for _ in $(seq 1 "$n"); do
-    process_executing "$spec" || return 0
-    sleep 0.1
-  done
-  return 1
+wait_gone() {  # <pid-or-group-spec>
+  wait_for_process_stopped "$1"
 }
 
 HORPHAN="$TMP_ROOT/orphan-dead-owner"; new_home "$HORPHAN"
@@ -4429,24 +4461,11 @@ PL
     pe "$HPROOF" retire proof-src >"$HPROOF/retire.log" 2>&1 &
   PROOF_STOP=$!
   proof_transition=0
-  for _ in $(seq 1 100); do
-    if [ "$proof_state" = zombie ]; then
-      case "$(ps -o stat= -p "$PROOF_PID" 2>/dev/null | tr -d '[:space:]')" in
-        Z*) proof_transition=1; break ;;
-      esac
-    elif ! kill -0 "$PROOF_PID" 2>/dev/null; then
-      proof_transition=1
-      break
-    fi
-    sleep 0.05
-  done
+  wait_until wait_process_transition && proof_transition=1
   proof_survivor=0
   process_executing "$PROOF_CHILD" && proof_survivor=1
   proof_reaped=0
-  for _ in $(seq 1 100); do
-    if ! process_executing "$PROOF_CHILD"; then proof_reaped=1; break; fi
-    sleep 0.1
-  done
+  wait_for_process_stopped "$PROOF_CHILD" && proof_reaped=1
   [ -z "$PROOF_RELEASE" ] || touch "$PROOF_RELEASE"
   PROOF_RELEASE=
   proof_status=0
@@ -4701,11 +4720,7 @@ for interval in 08 010; do
     pe "$HINTERVAL" reconcile >/dev/null
   wait_for "$HINTERVAL/poll.descendant" \
     || fail "a zero-prefixed decimal interval ($interval) prevented the listener from starting"
-  for _ in $(seq 1 100); do
-    grep -qx "$expected_half" "$HINTERVAL/sleeps" 2>/dev/null && break
-    sleep 0.1
-  done
-  grep -qx "$expected_half" "$HINTERVAL/sleeps" \
+  wait_for_text_line "$HINTERVAL/sleeps" "$expected_half" \
     || fail "the guard did not sleep half of the decimal interval $interval (expected ${expected_half}s)"
   pe "$HINTERVAL" retire "interval-$interval" >/dev/null \
     || fail "retiring the decimal-interval listener ($interval) reported failure"
@@ -4876,16 +4891,10 @@ PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
 assert_contains "$(cat "$READY/arm.out")" "armed: $ready_id" "a live listener was not reported ready"
 [ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] \
   || fail "arm reported ready without a listener claim"
-for _ in $(seq 1 50); do
-  grep -q started "$READY_MARK" && break
-  sleep 0.05
-done
-grep -q started "$READY_MARK" || fail "arm reported ready before the listener command ran"
+wait_for_text_match "$READY_MARK" started || fail "arm reported ready before the listener command ran"
 touch "$READY_RELEASE"
-for _ in $(seq 1 50); do
-  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] || break
-  sleep 0.05
-done
+wait_for_absent "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" \
+  || fail "the ready-arm listener did not release its claim"
 PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$ready_art" >/dev/null 2>&1 || true
 pass "arm reports ready only after the listener is running"
@@ -4918,17 +4927,11 @@ touch "$delay_rel"
 wait "$delay_arm" || fail "arm failed after the delayed listener was allowed to start: $(cat "$DELAY/arm.err")"
 assert_contains "$(cat "$DELAY/arm.out")" "armed: $delay_id" \
   "arm did not report ready once the delayed listener was running"
-for _ in $(seq 1 50); do
-  grep -q started "$READY_MARK" && break
-  sleep 0.05
-done
-grep -q started "$READY_MARK" || fail "the delayed listener never ran"
+wait_for_text_match "$READY_MARK" started || fail "the delayed listener never ran"
 touch "$READY_RELEASE"
 wait "$HOLDER_PID" 2>/dev/null || true
-for _ in $(seq 1 50); do
-  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" ] || break
-  sleep 0.05
-done
+wait_for_absent "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" \
+  || fail "the delayed-arm listener did not release its claim"
 PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$delay_art" >/dev/null 2>&1 || true
 pass "arm waits out a delayed listener start before reporting ready"
@@ -5284,21 +5287,14 @@ cp "$drain_claim" "$DRAIN/generation-one.claim"
 touch "$DRAIN/release1"
 wait_for "$DRAIN/home/state/procevent-inbox/$drain_id.1.result" \
   || fail "the first generation of the draining fixture never captured its round"
-for _ in $(seq 1 100); do
-  [ -e "$drain_claim" ] || break
-  sleep 0.05
-done
-[ ! -e "$drain_claim" ] || fail "the first generation of the draining fixture never exited"
+wait_for_absent "$drain_claim" || fail "the first generation of the draining fixture never exited"
 # Stand the first generation's claim back up on a live process so the re-arm
 # meets it still held, then release it partway through the confirm window.
 setsid sleep 60 &
 drain_holder=$!
 # Read the identity only once the holder has exec'd sleep: mid-exec its cmdline
 # can read empty, and a pre-exec identity would never match the live holder.
-for _ in $(seq 1 100); do
-  case "$(ps -p "$drain_holder" -o comm= 2>/dev/null)" in *sleep) break ;; esac
-  sleep 0.05
-done
+wait_until wait_comm_sleep "$drain_holder" || fail "the draining fixture holder did not exec sleep"
 drain_holder_identity=$(bash -c '. "$1/bin/fm-wake-lib.sh"; fm_pid_identity "$2"' _ "$ROOT" "$drain_holder") \
   || fail "could not read the draining holder's identity"
 awk -v pid="$drain_holder" -v ident="$drain_holder_identity" \

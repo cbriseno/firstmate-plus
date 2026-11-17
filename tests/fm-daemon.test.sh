@@ -141,6 +141,54 @@ test_classify_signal_skips_turn_end_markers() {
   pass "turn-end markers stay routine while mixed actionable status batches escalate"
 }
 
+test_worker_recovery_wakes_reach_escalation() (
+  local dir state variant verb kind verdict out gen
+  for variant in stopped unknown busy validating paused secondmate terminal; do
+    dir=$(make_supercase "worker-turnend-$variant"); state="$dir/state"
+    verb=working; kind=ship; verdict='state: unknown'
+    case "$variant" in
+      busy) verdict='state: working · source: pane · busy' ;;
+      validating) verdict='state: working · source: run-step · running' ;;
+      paused) verb=paused ;;
+      secondmate) kind=secondmate ;;
+      terminal) verb='done' ;;
+    esac
+    printf 'kind=%s\nharness=claude\nwindow=sess:fm-worker\n' "$kind" > "$state/worker.meta"
+    printf '%s: recorded declaration\n' "$verb" > "$state/worker.status"
+    : > "$state/worker.turn-ended"
+    export FM_CREW_STATE_BIN
+    FM_CREW_STATE_BIN=$(make_fake_crew_state "$dir/fakebin")
+    export FM_FAKE_CREW_STATE="$verdict"
+    out=$(classify_signal "$state/worker.turn-ended" "$state")
+    case "$variant:$out" in
+      stopped:self*|unknown:self*|busy:self*|validating:self*|paused:self*|secondmate:self*|terminal:self*) ;;
+      *) fail "$variant turn-end classification was $out" ;;
+    esac
+  done
+  dir=$(make_supercase worker-recovery); state="$dir/state"
+  printf 'kind=ship\nharness=claude\nwindow=sess:fm-worker\n' > "$state/worker.meta"
+  printf 'working: waiting for firstmate\n' > "$state/worker.status"
+  export FM_CREW_STATE_BIN
+  FM_CREW_STATE_BIN=$(make_fake_crew_state "$dir/fakebin")
+  export FM_FAKE_CREW_STATE='state: unknown'
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" worker)
+  for variant in idle busy unknown; do
+    "$ROOT/bin/fm-busy-event.sh" apply "$state" worker "$variant" \
+      --gen "$gen" --source claude-hook --event stop
+    out=$(classify_stale sess:fm-worker "$state")
+    case "$variant:$out" in idle:escalate*|busy:self*|unknown:self*) ;;
+      *) fail "$variant stale classification was $out" ;;
+    esac
+  done
+  for variant in dead missing; do
+    FM_ESCALATE_BATCH_SECS=999999 handle_wake \
+      "stale: sess:fm-worker (idle 0s, agent $variant - endpoint recovery required)" "$state"
+    grep -F "agent $variant" "$state/.subsuper-escalations" >/dev/null \
+      || fail "$variant recovery wake was reabsorbed by daemon"
+  done
+  pass 'stopped turns, verified idle and endpoint death reach escalation; active work and declared waits stay quiet'
+)
+
 test_classify_signal_survives_a_later_routine_append() {
   local dir state out
   dir=$(make_supercase classify-masked)
@@ -3190,6 +3238,11 @@ test_inject_msg_defers_on_unrecognized_composer_state() {
   pass "inject_msg: unrecognized composer states defer by default"
 }
 
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit $?
+fi
+
 test_afk_start_refuses_when_flag_cannot_be_written
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
@@ -3255,6 +3308,7 @@ test_tmux_composer_state_requires_matching_box_borders
 test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
 test_classify_signal_skips_turn_end_markers
+test_worker_recovery_wakes_reach_escalation || exit 1
 test_classify_signal_survives_a_later_routine_append
 test_new_pauses_wake_once
 test_classification_commits_its_captured_endpoint

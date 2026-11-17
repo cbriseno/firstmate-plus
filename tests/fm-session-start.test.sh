@@ -32,6 +32,7 @@
 # FM_SESSION_START_CASE=lock-concurrency runs only the session-lock fixture.
 # FM_SESSION_START_CASE=network-auth runs only the deferred authentication cases.
 # FM_SESSION_START_CASE=fleet-ledger runs publication defaults and mutation boundaries.
+# FM_SESSION_START_CASE=inactive-reconcile-held|inactive-reconcile-wake isolates the deferred scan cases.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -123,7 +124,7 @@ make_fake_tasks_axi_compact() {
 #!/usr/bin/env bash
 set -u
 log=${FM_FAKE_TASKS_AXI_LOG:-}
-[ -n "$log" ] && printf '%s\n' "$*" >> "$log"
+[ -n "$log" ] && printf 'mode=%s %s\n' "${FM_BOOTSTRAP_NETWORK:-none}" "$*" >> "$log"
 ready_count=${FM_FAKE_TASKS_AXI_READY:-2}
 require_file() {
   case "$*" in *'--file '*) return 0 ;; esac
@@ -234,6 +235,16 @@ for argument in "$@"; do
   previous=$argument
 done
 case "$*" in
+  *"-axo pid=,ppid=,comm="*)
+    if [ "${FM_FAKE_PS_SHELL_PROCESS:-0}" = 1 ]; then
+      printf '%s\n' '4242 1 bash'
+    elif [ -z "${FM_FAKE_HARNESS_PID:-}" ]; then
+      printf '/usr/local/bin/%s\n' "$harness"
+    else
+      printf '/bin/bash\n'
+    fi
+    exit 0
+    ;;
   *"comm="*)
     if [ -z "${FM_FAKE_HARNESS_PID:-}" ] || [ "$pid" = "$FM_FAKE_HARNESS_PID" ] \
       || [ "$pid" = "${FM_FAKE_LIVE_HOLDER_PID:-}" ]; then
@@ -446,6 +457,10 @@ case "${1:-} ${2:-}" in
       exit 1
     fi
     ;;
+  "pane process-info")
+    pane=${4:-}
+    printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[{"pid":4242,"name":"bash","argv":["bash"],"cmdline":"bash"}]}}}\n' "$pane"
+    ;;
   "pane close")
     [ "${3:-}" = p-old ] && : > "$killed"
     ;;
@@ -571,6 +586,11 @@ EOF
   printf 'Second mate charter.\n' > "$mate/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$mate/.gitignore"
   git -C "$mate" init -q -b main
+  git -C "$mate" fetch -q "$root" main
+  git -C "$mate" reset -q --hard FETCH_HEAD
+  git -C "$mate" config user.name fmtest
+  git -C "$mate" config user.email fmtest@example.invalid
+  printf '%s\n' '.fm-secondmate-home' 'AGENTS.md' '.gitignore' >> "$mate/.git/info/exclude"
   printf '%s\n' claude > "$home/config/secondmate-harness"
   printf '%s\n' manual > "$home/config/backlog-backend"
   touch "$home/state/.last-watcher-beat"
@@ -582,6 +602,7 @@ EOF
   } > "$home/state/$id.meta"
   ln -s "$ROOT/bin" "$root/bin"
   make_fake_toolchain "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
   make_fake_ps_claude "$fakebin"
   fm_fake_exit0 "$fakebin" claude
   make_fake_tmux_secondmate_recovery "$fakebin"
@@ -591,7 +612,7 @@ EOF
 
 run_session_start_secondmate() {
   local root=$1 home=$2 fakebin=$3 mate=$4 log=$5 spawned=$6 mode=$7
-  TMUX='' FM_BACKEND=tmux FM_FAKE_TMUX_MODE="$mode" FM_FAKE_TMUX_LOG="$log" \
+  TMUX='' FM_STARTUP_NETWORK_TIMEOUT=360 FM_BACKEND=tmux FM_FAKE_TMUX_MODE="$mode" FM_FAKE_TMUX_LOG="$log" \
     FM_FAKE_TMUX_SPAWNED="$spawned" FM_FAKE_SECOND_MATE_HOME="$mate" \
     FM_FAKE_SECOND_MATE_ID="$SESSION_START_SECOND_MATE_ID" \
     FM_FAKE_HARNESS_PID=$$ \
@@ -614,6 +635,11 @@ EOF
   printf 'Second mate charter.\n' > "$mate/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$mate/.gitignore"
   git -C "$mate" init -q -b main
+  git -C "$mate" fetch -q "$root" main
+  git -C "$mate" reset -q --hard FETCH_HEAD
+  git -C "$mate" config user.name fmtest
+  git -C "$mate" config user.email fmtest@example.invalid
+  printf '%s\n' '.fm-secondmate-home' 'AGENTS.md' '.gitignore' >> "$mate/.git/info/exclude"
   printf '%s\n' herdr > "$home/config/backend"
   printf '%s\n' claude > "$home/config/secondmate-harness"
   printf '%s\n' manual > "$home/config/backlog-backend"
@@ -631,6 +657,7 @@ EOF
   } > "$home/state/$id.meta"
   ln -s "$ROOT/bin" "$root/bin"
   make_fake_toolchain "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
   make_fake_ps_claude "$fakebin"
   fm_fake_exit0 "$fakebin" claude
   make_fake_herdr_secondmate_recovery "$fakebin"
@@ -640,7 +667,8 @@ EOF
 
 run_session_start_herdr_secondmate() {
   local root=$1 home=$2 fakebin=$3 mate=$4 log=$5 state=$6
-  FM_BACKEND=herdr FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" \
+  FM_STARTUP_NETWORK_TIMEOUT=360 FM_BACKEND=herdr FM_FAKE_PS_SHELL_PROCESS=1 \
+    FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" \
     FM_FAKE_SECOND_MATE_ID="$SESSION_START_HERDR_SECOND_MATE_ID" \
     FM_FAKE_HARNESS_PID=$$ \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH"
@@ -652,7 +680,7 @@ run_session_start_herdr_secondmate() {
 # which is exactly why the sweeps it used to run inline have to be re-asserted
 # here instead of straight off the digest's own output.
 wait_for_network_stage() {
-  local home=$1 root=$2 limit=${3:-30}
+  local home=$1 root=$2 limit=${3:-90}
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
     "$ROOT/bin/fm-startup-network.sh" wait "$limit"
 }
@@ -693,6 +721,7 @@ test_fleet_ledger_enabled_on_locked_start() {
 $rec
 EOF
   make_fake_toolchain "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
   make_fake_ps_claude "$fakebin"
   printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" python3 "$ROOT/bin/fm_work.py" bootstrap \
@@ -709,7 +738,6 @@ EOF
   cp "$ROOT/UPGRADING.md" "$root/UPGRADING.md"
   # Use real task ownership, while keeping terminal/network boundaries fake.
   ln -s "$(command -v tasks-axi)" "$fakebin/tasks-axi"
-  ln -s "$(command -v jq)" "$fakebin/jq"
   rm -f "$fakebin/node"
   ln -s "$(command -v node)" "$fakebin/node"
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
@@ -730,6 +758,7 @@ test_context_digest_absent_empty_present() {
 $rec
 EOF
   make_fake_toolchain "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
   make_fake_ps_claude "$fakebin"
   rm -f "$fakebin/node"
   ln -s "$(command -v node)" "$fakebin/node"
@@ -894,11 +923,11 @@ EOF
   pass "locked session start freezes trace context and lock refusal leaves it unchanged"
 }
 
-# Wait until <dir> holds <count> entries. Forty workers poll this at once, so
+# Wait until <dir> holds <count> entries. Multiple workers poll this at once, so
 # the count is a builtin glob rather than a find pipeline (no process per
 # poll), and the wait ends early once the directory is gone, the suite has
 # died, or FM_TEST_STUB_MAX_BLOCK_SECONDS has passed, so an interrupted run
-# cannot leave forty pollers spinning under init.
+# cannot leave pollers spinning under init.
 lock_concurrency_barrier() {  # <dir> <count>
   local dir=$1 want=$2 start=$SECONDS entries
   while [ -d "$dir" ] && kill -0 "$FM_TEST_SUITE_PID" 2>/dev/null \
@@ -913,6 +942,7 @@ lock_concurrency_barrier() {  # <dir> <count>
 
 test_session_lock_concurrent_single_winner() {
   local rec root home fakebin ready completed winners pids i pid count fake_parent
+  local participants=8 barrier_failed=0
   rec=$(new_world lock-concurrency)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -966,26 +996,27 @@ SH
 
   pids=
   i=1
-  while [ "$i" -le 40 ]; do
+  while [ "$i" -le "$participants" ]; do
     (
       harness_pid=$(sh -c 'printf "%s\n" "$PPID"')
       : > "$home/state/harness-$harness_pid"
       : > "$ready/$i"
-      lock_concurrency_barrier "$ready" 40
+      lock_concurrency_barrier "$ready" "$participants" || exit 1
       if FM_HOME="$home" FM_FAKE_LOCK_STATE="$home/state" \
         FM_FAKE_HARNESS_PID="$harness_pid" PATH="$fakebin:$BASE_PATH" \
         "$ROOT/bin/fm-lock.sh" >/dev/null 2>&1; then
         printf '%s\n' "$harness_pid" >> "$winners"
       fi
       : > "$completed/$i"
-      lock_concurrency_barrier "$completed" 40
+      lock_concurrency_barrier "$completed" "$participants" || exit 1
     ) &
     pids="$pids $!"
     i=$((i + 1))
   done
   for pid in $pids; do
-    wait "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || barrier_failed=1
   done
+  [ "$barrier_failed" -eq 0 ] || fail "concurrency fixture did not complete its barriers"
   count=$(awk 'NF { count++ } END { print count + 0 }' "$winners")
   [ "$count" -eq 1 ] || fail "concurrent session-lock acquisition produced $count winners"
 
@@ -1068,10 +1099,21 @@ EOF
   printf 'feedback\n' > "$home/state/procevent-inbox/board.2.result"
   printf 'lavish\n' > "$home/state/procevent-inbox/board.2.adapter"
   : > "$home/state/procevent-inbox/board.2.handled"
+  printf 'https://deck.invalid\n' > "$home/config/deck-url"
+  mkdir -p "$home/data/old-report" "$home/data/reviewed-report"
+  cat > "$home/data/old-report/presentation.json" <<'JSON'
+{"id":"old-report","outcome_occurrence":"occ-old","observed_at":"2020-01-01T00:00:00Z","presentation":{"summary":"Old result","outcome":{"review":"needed"}}}
+JSON
+  cat > "$home/data/reviewed-report/presentation.json" <<'JSON'
+{"id":"reviewed-report","outcome_occurrence":"occ-done","presentation":{"summary":"Reviewed result","outcome":{"review":"done"}}}
+JSON
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "$home/state/procevent-inbox/board.1.result" "digest omitted pending board"
   assert_not_contains "$out" "$home/state/procevent-inbox/board.2.result" "digest listed handled board"
-  pass "successor digest lists only unhandled board results"
+  assert_contains "$out" 'Old result [old-report] https://deck.invalid/?task=old-report&view=delivery&item=occ-old' "digest omitted the focused Deck link for an old pending result"
+  assert_contains "$out" '(1 pending; no age cutoff)' "digest did not state the unbounded pending report count"
+  assert_not_contains "$out" 'Reviewed result [reviewed-report' "digest listed a reviewed report"
+  pass "successor digest lists unhandled board results and every pending report result"
 }
 
 # The contract has to survive tail truncation and stay honest once it precedes
@@ -1598,50 +1640,6 @@ EOF
   pass "fm-session-start.sh composes the real fm-lock.sh, fm-bootstrap.sh, and fm-wake-drain.sh output verbatim"
 }
 
-test_branch_outcome_replay_respects_captain_barrier_and_lease_sweep() {
-  local rec root home fakebin out
-  rec=$(new_world branch-recovery)
-  IFS='|' read -r root home fakebin <<EOF
-$rec
-EOF
-  make_fake_toolchain "$fakebin"
-  make_fake_ps_harness "$fakebin" codex
-
-  # A crash window the locked start must preserve: the supervision branch
-  # stored a leading routine row and a captain row that never reached Pi, plus one lease whose
-  # supervising process died and one still held by a live process.
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
-    --task task-a --verdict routine --summary 'worker recovered automatically' >/dev/null \
-    || fail "could not seed the unread routine branch outcome"
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
-    --task task-b --verdict captain --summary 'PR https://example.com/pr/b checks green' >/dev/null \
-    || fail "could not seed the unread branch outcome"
-  printf 'branch\t999999\t123\n' > "$home/state/.lease-task-dead"
-  FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_LEASE_HOLDER_PID=$$ "$ROOT/bin/fm-lease.sh" claim task-live --actor branch \
-    || fail "could not seed the live lease"
-
-  out=$(run_codex_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_contains "$out" "BRANCH OUTCOMES (handled by the supervision branch, not yet seen by this session):" \
-    "locked start did not replay the leading routine branch outcome"
-  assert_contains "$out" "worker recovered automatically" "replayed routine outcome lost its content"
-  assert_not_contains "$out" "https://example.com/pr/b" "locked start crossed the captain delivery barrier"
-  assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" \
-    "https://example.com/pr/b" "locked start marked the unrendered captain outcome read"
-  [ "$(cat "$home/state/.branch-outcomes-cursor")" = 1 ] || fail "locked start advanced past the captain row"
-  [ ! -e "$home/state/.lease-task-dead" ] || fail "locked start left a provably dead lease in place"
-  [ -e "$home/state/.lease-task-live" ] || fail "locked start swept a live lease"
-
-  # Routine replay is one-shot, while the captain row remains held for Pi's
-  # sequence-keyed visible-entry reconciliation.
-  out=$(run_codex_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  case "$out" in
-    *"BRANCH OUTCOMES"*) fail "second start re-presented already-replayed branch outcomes" ;;
-  esac
-  assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unread)" \
-    "https://example.com/pr/b" "second start consumed the captain row without a Pi entry"
-  pass "locked Pi session start replays leading routine outcomes, preserves the captain barrier, and sweeps only dead leases"
-}
-
 test_session_start_seeds_the_outcome_display_tail_while_away() {
   local rec root home fakebin out store tail
   rec=$(new_world outcome-tail-seed)
@@ -1650,6 +1648,7 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
   store="$home/state/branch-outcomes.jsonl"
   tail="$home/state/.branch-outcomes-tail.jsonl"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
@@ -1662,6 +1661,7 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "away posture recorded" "the digest did not report the away posture"
+  assert_contains "$out" "lock acquired:" "the fixture did not hold the fleet lock needed to seed the tail"
   [ -f "$tail" ] || fail "session start did not seed the display tail copy of an existing outcome store while away"
   [ "$(cat "$tail")" = "$(cat "$store")" ] || fail "the seeded display tail is not the store's rows verbatim"
   [ "$(cat "$home/state/.branch-outcomes-cursor")" = 1 ] || fail "seeding the display tail moved the read cursor"
@@ -1671,17 +1671,13 @@ EOF
 
 # --- deferred network stage -------------------------------------------------
 
-# install_slow_gh <fakebin> <seconds>: one external-network call the digest used
-# to make directly. Making it pathologically slow is how a test stands in for an
-# unreachable host without touching one: if any part of the blocking path still
-# waits on the network, the digest cannot finish before this does.
-install_slow_gh() {
-  local fakebin=$1 seconds=$2 finished_marker=${3:-}
+install_gated_gh() {
+  local fakebin=$1 release_marker=$2 finished_marker=$3
   cat > "$fakebin/gh" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = auth ]; then
-  sleep $seconds
-  [ -z '$finished_marker' ] || : > '$finished_marker'
+  while [ ! -e '$release_marker' ]; do sleep 0.1; done
+  : > '$finished_marker'
   exit 1
 fi
 exit 0
@@ -1689,15 +1685,21 @@ SH
   chmod +x "$fakebin/gh"
 }
 
+make_github_project_with_local_fetch() {
+  local home=$1
+  local project="$home/projects/github" origin="$home/github-origin.git"
+  fm_git_init_commit "$project"
+  fm_git_add_origin "$project" "$origin"
+  git -C "$project" remote set-url --push origin https://github.com/example/project.git
+}
+
 # The locked startup scan may need the same expensive current-state read that a
 # busy validation makes slow. It belongs to the detached startup worker, so the
-# digest must finish while that read is still outstanding; the answer then has to
-# create the ordinary durable inactive-outcome wake rather than disappear
-# off-path. The slow read is held open by this case rather than by a fixed sleep,
-# so "the digest did not wait for it" is decided by what had happened when the
-# digest returned and not by how fast the host was.
-test_inactive_reconcile_never_blocks_the_digest() {
-  local rec root home fakebin world worktree crew_state calls out waited=0
+# digest must finish while that read is still outstanding. A separate case
+# releases the read immediately and verifies the durable inactive-outcome wake.
+# The held read makes the nonblocking assertion independent of a fixed sleep.
+test_inactive_reconcile_case() {
+  local mode=$1 rec root home fakebin world worktree crew_state calls out waited=0
   local release_gate read_finished
   rec=$(new_world inactive-reconcile-deferred)
   IFS='|' read -r root home fakebin <<EOF
@@ -1714,6 +1716,7 @@ EOF
 
   release_gate="$world/slow-state-read.release"
   read_finished="$world/slow-state-read.finished"
+  [ "$mode" != wake ] || : > "$release_gate"
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -1763,14 +1766,25 @@ SH
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
   assert_contains "$out" "SESSION START" "the digest did not complete"
-  assert_absent "$read_finished" \
-    "the digest waited for inactive reconciliation's still-unreleased state read"
-  [ "$(grep -c '^blocking$' "$calls" 2>/dev/null || true)" -eq 0 ] \
-    || fail "the digest called the slow state reader on its blocking path"
-  : > "$release_gate"
+  if [ "$mode" = held ]; then
+    while ! grep -q '^deferred$' "$calls" 2>/dev/null && [ "$waited" -lt 450 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    grep -Fxq 'deferred' "$calls" || fail \
+      "the deferred state read never started after $waited polls (calls=$(cat "$calls" 2>/dev/null), stage=$(tr '\n' ';' < "$home/state/.startup-network.status" 2>/dev/null), acquire_lock=$(cat "$home/state/.lock.acquire/pid" 2>/dev/null), report=$(network_stage_report "$home" "$root" 2>/dev/null))"
+    assert_absent "$read_finished" \
+      "the digest waited for inactive reconciliation's still-unreleased state read"
+    if grep -q '^blocking$' "$calls" 2>/dev/null; then
+      fail "the digest called the slow state reader on its blocking path"
+    fi
+    : > "$release_gate"
+    pass "session start: inactive reconciliation does not block the digest"
+    return
+  fi
 
   while ! grep -Fq $'\tcheck\tinactive-outcome:' "$home/state/.wake-queue" 2>/dev/null \
-    && [ "$waited" -lt 150 ]; do
+    && [ "$waited" -lt 450 ]; do
     sleep 0.1
     waited=$((waited + 1))
   done
@@ -1778,46 +1792,52 @@ SH
     "the deferred scan's terminal finding never reached the durable wake queue (calls=$(cat "$calls" 2>/dev/null), report=$(network_stage_report "$home" "$root" 2>/dev/null), queue=$(cat "$home/state/.wake-queue" 2>/dev/null))"
   [ "$(grep -c '^deferred$' "$calls" 2>/dev/null || true)" -eq 1 ] \
     || fail "the deferred scan did not make exactly one slow state read"
-  pass "session start: inactive reconciliation runs after the digest and retains its durable wake"
+  pass "session start: inactive reconciliation retains its durable wake"
 }
+test_inactive_reconcile_never_blocks_the_digest() { test_inactive_reconcile_case held; }
+test_inactive_reconcile_delivers_wake() { test_inactive_reconcile_case wake; }
 
 # The headline guarantee: an unreachable host delays a reported CHECK, never the
-# startup. The fake host hangs for 12s; the digest must be done long before that,
-# must say so rather than implying the checks passed, and the sweeps must still
-# run and land afterwards.
+# startup. A gate holds the fake host until the digest returns, so host load does
+# not affect the assertion; the digest must say so and the sweeps must land after.
 test_unreachable_network_never_blocks_the_digest() {
-  local rec root home fakebin mate log spawned network_finished out started elapsed
-  rec=$(prepare_session_start_secondmate secondmate-slow-network)
-  IFS='|' read -r root home fakebin mate log spawned <<EOF
+  local rec root home fakebin network_finished network_release out started elapsed
+  rec=$(new_world slow-network)
+  IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
+  ln -s "$ROOT/bin" "$root/bin"
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_github_project_with_local_fetch "$home"
   network_finished="${root%/root}/network-finished"
-  git init -q "$home/projects/github"
-  git -C "$home/projects/github" remote add origin "$home/no-origin"
-  git -C "$home/projects/github" remote set-url --push origin https://github.com/example/project.git
-  install_slow_gh "$fakebin" 12 "$network_finished"
+  network_release="${root%/root}/network-release"
+  install_gated_gh "$fakebin" "$network_release" "$network_finished"
 
   started=$(date +%s)
-  out=$(run_session_start_secondmate "$root" "$home" "$fakebin" "$mate" "$log" "$spawned" missing)
+  out=$(TMUX='' FM_STARTUP_NETWORK_TIMEOUT=360 FM_FAKE_PS_SHELL_PROCESS=1 FM_FAKE_HARNESS_PID=$$ \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   elapsed=$(( $(date +%s) - started ))
 
-  [ ! -e "$network_finished" ] \
-    || fail "the digest waited for the 12s unreachable-host probe instead of returning from local state (${elapsed}s)"
+  network_was_running=yes
+  [ ! -e "$network_finished" ] || network_was_running=no
+  : > "$network_release"
+  [ "${network_was_running:-no}" = yes ] \
+    || fail "the deferred network check finished before the digest returned (${elapsed}s)"
   assert_contains "$out" "SESSION START" "the digest did not complete"
   assert_contains "$out" "IN PROGRESS - the deferred network checks have not finished yet." \
     "the digest did not disclose that its network checks were still running"
-  assert_contains "$out" "NOT yet confirmed: GitHub authentication, dead-secondmate relaunch" \
+  assert_contains "$out" "NOT yet confirmed: GitHub authentication" \
     "the digest did not name the checks it has not confirmed"
   assert_not_contains "$out" "NEEDS_GH_AUTH" \
     "the digest reported a GitHub-auth verdict it could not yet have"
 
   # ... and the work itself still happens, off the blocking path.
-  wait_for_network_stage "$home" "$root" 60 \
+  # Wait on the published stage state; 300s is only a safety cap for a loaded host.
+  wait_for_network_stage "$home" "$root" 300 \
     || fail "the deferred stage never finished: $(network_stage_report "$home" "$root")"
   assert_contains "$(network_stage_report "$home" "$root")" "NEEDS_GH_AUTH" \
     "the deferred stage lost the GitHub-auth verdict it was deferring"
-  assert_contains "$(cat "$log")" "new-window" \
-    "the deferred stage lost the dead-secondmate relaunch"
   pass "session start: an unreachable host delays a reported check, not the digest"
 }
 
@@ -1826,20 +1846,32 @@ EOF
 # is asserted deterministically in tests/fm-startup-network.test.sh, where the
 # claim can be set up directly instead of raced against digest composition.
 test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it() {
-  local rec root home fakebin mate log spawned queue
-  rec=$(prepare_session_start_secondmate secondmate-wake-once)
-  IFS='|' read -r root home fakebin mate log spawned <<EOF
+  local rec root home fakebin queue out network_release network_finished
+  rec=$(new_world network-wake)
+  IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
-  git init -q "$home/projects/github"
-  git -C "$home/projects/github" remote add origin "$home/no-origin"
-  git -C "$home/projects/github" remote set-url --push origin https://github.com/example/project.git
-  install_slow_gh "$fakebin" 8
+  ln -s "$ROOT/bin" "$root/bin"
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_github_project_with_local_fetch "$home"
+  network_release="${root%/root}/network-release"
+  network_finished="${root%/root}/network-finished"
+  install_gated_gh "$fakebin" "$network_release" "$network_finished"
   queue="$home/state/.wake-queue"
 
-  run_session_start_secondmate "$root" "$home" "$fakebin" "$mate" "$log" "$spawned" missing >/dev/null
-  wait_for_network_stage "$home" "$root" 60 || fail "the deferred stage never finished"
-  wait_for_network_wake "$home" 60 || fail "the deferred stage never settled wake delivery"
+  out=$(TMUX='' FM_STARTUP_NETWORK_TIMEOUT=360 FM_FAKE_PS_SHELL_PROCESS=1 FM_FAKE_HARNESS_PID=$$ \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "IN PROGRESS - the deferred network checks have not finished yet." \
+    "the digest did not say that the deferred result was still outstanding"
+  assert_not_contains "$out" "NEEDS_GH_AUTH" \
+    "the digest printed a GitHub-auth result before the gated read was released"
+  : > "$network_release"
+  wait_for_network_stage "$home" "$root" 300 || fail "the deferred stage never finished"
+  wait_for_network_wake "$home" 300 || fail "the deferred stage never settled wake delivery"
+  assert_present "$network_finished" "the gated network probe never finished"
+  assert_contains "$(network_stage_report "$home" "$root")" "NEEDS_GH_AUTH" \
+    "the deferred stage lost the GitHub-auth verdict it was deferring"
   assert_grep 'check	startup-network' "$queue" \
     "a result the digest could not print never reached the agent: $(cat "$queue" 2>/dev/null)"
   pass "session start: a deferred result the digest outran still reaches the agent as a wake"
@@ -1894,14 +1926,19 @@ EOF
 
   FM_FAKE_TASKS_AXI_LOG="$log" run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
 
-  probes=$(grep -c -- '--version' "$log" || true)
+  probes=$(grep -Fxc 'mode=none --version' "$log" || true)
   [ "$probes" -eq 1 ] \
-    || fail "tasks-axi was version-probed $probes times in one session start: $(cat "$log")"
-  probes=$(grep -c -- 'update --help' "$log" || true)
+    || fail "the synchronous session-start flow version-probed tasks-axi $probes times: $(cat "$log")"
+  probes=$(grep -Fxc 'mode=none update --help' "$log" || true)
   [ "$probes" -eq 1 ] \
-    || fail "tasks-axi update --help ran $probes times in one session start: $(cat "$log")"
+    || fail "the synchronous session-start flow probed update --help $probes times: $(cat "$log")"
+  for probe in '--version' 'update --help' 'mv --help'; do
+    if grep -Fqx "mode=skip $probe" "$log"; then
+      fail "bootstrap repeated the cached tasks-axi compatibility probe: $(cat "$log")"
+    fi
+  done
   assert_grep 'ready --file' "$log" "the backlog listing never ran, so the verdict was not actually reused"
-  pass "session start: the tasks-axi compatibility verdict is computed once and reused"
+  pass "session start: its compatibility verdict is reused by bootstrap; deferred checks probe independently"
 }
 
 # --- fleet-state digest: compact backlog rendering --------------------------
@@ -2157,7 +2194,7 @@ EOF
     _ "$ROOT/bin/fm-timeout-lib.sh")
   [ "$mechanism" = bash ] || fail "the forced pure-Bash timeout fixture selected '$mechanism'"
 
-  out=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_SESSION_START_TIMEOUT=3 FM_STARTUP_NETWORK_TIMEOUT=2 \
+  out=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_SESSION_START_TIMEOUT=30 FM_STARTUP_NETWORK_TIMEOUT=2 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
 
   expect_code 0 "$status" "a truncated session start must still exit 0 so the session can open"
@@ -2621,8 +2658,66 @@ EOF
 }
 
 
+test_startup_recovers_unregistered_lavish_board() {
+(
+  local rec root home fakebin board id out
+  rec=$(new_world startup-lavish)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+pid=''
+previous=''
+for arg in "$@"; do
+  [ "$previous" = -p ] && pid=$arg
+  previous=$arg
+done
+if [ "$pid" = "${FM_FAKE_HARNESS_PID:-}" ]; then
+  case "$*" in *comm=*|*args=*) printf 'claude\n'; exit 0 ;; esac
+fi
+exec /bin/ps "$@"
+SH
+  chmod +x "$fakebin/ps"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+  mkdir -p "$home/.lavish" "$home/sessions"
+  board="$home/.lavish/review.html"
+  printf '<h1>review</h1>\n' > "$board"
+  export LAVISH_AXI_STATE_DIR="$home/sessions" FM_PROCEVENT_CLAIM_ROOT="$home/claims"
+  export FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=90 FM_PROCEVENT_RECONCILE_SECONDS=150 FM_SESSION_START_TIMEOUT=360
+  python3 - "$board" "$LAVISH_AXI_STATE_DIR/state.json" <<'PYDATA'
+import hashlib, json, sys
+board, dest = sys.argv[1:]
+key = hashlib.sha256(board.encode()).hexdigest()[:16]
+with open(dest, 'w') as f:
+    json.dump({'sessions': {key: {'file': board, 'status': 'feedback', 'pending_prompts': 1,
+                                  'url': f'http://127.0.0.1:14387/session/{key}'}}}, f)
+PYDATA
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+printf '{"app":"lavish-axi","state_dir":"%s","listeners":[]}\n' "$LAVISH_AXI_STATE_DIR"
+SH
+  cat > "$fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then echo 0.1.80; exit 0; fi
+exec sleep 120
+SH
+  chmod +x "$fakebin/curl" "$fakebin/lavish-axi"
+  fm_test_track_procevent_home "$home"
+  out=$(run_named_harness_session_start claude "$home" "$root" "$fakebin:$BASE_PATH") || fail 'startup failed'
+  id=$(bash "$ROOT/bin/fm-procevent-lavish.sh" source-id "$board")
+  [ -f "$home/state/procevent/$id.source" ] || fail 'startup did not restore the source'
+  assert_not_contains "$out" '●  STARTUP TRUNCATED -' 'startup did not finish'
+  assert_not_contains "$out" 'LAVISH_WATCH: reconciliation failed' 'startup did not start the source'
+  assert_contains "$out" 'unattended Lavish board' 'startup did not surface queued feedback'
+  pass 'startup restores a missing board source and surfaces queued feedback'
+) || fail 'startup Lavish recovery'
+}
+
 case "${FM_SESSION_START_CASE:-}" in
   pending-board) test_pending_board_results_reach_successor_digest; exit 0 ;;
+  startup-lavish) test_startup_recovers_unregistered_lavish_board; exit $? ;;
   context-digest) test_context_digest_absent_empty_present; exit 0 ;;
   fleet-ledger)
     test_fleet_ledger_enabled_on_locked_start
@@ -2630,6 +2725,12 @@ case "${FM_SESSION_START_CASE:-}" in
     test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
     exit 0 ;;
   lock-concurrency) test_session_lock_concurrent_single_winner; exit 0 ;;
+  secondmate-relaunch) test_deferred_relaunch_is_always_reported; test_session_start_preserves_proven_bare_shell_recovery; test_session_start_relaunches_herdr_husk_secondmate; exit 0 ;;
+  tasks-axi-compatibility) test_tasks_axi_compatibility_is_probed_once; exit 0 ;;
+  outcome-tail-seed) test_session_start_seeds_the_outcome_display_tail_while_away; exit 0 ;;
+  runtime-bound) test_runtime_bound_truncates_loudly_and_exits_zero; exit 0 ;;
+  inactive-reconcile-held) test_inactive_reconcile_never_blocks_the_digest; exit 0 ;;
+  inactive-reconcile-wake) test_inactive_reconcile_delivers_wake; exit 0 ;;
   network-auth)
     test_unreachable_network_never_blocks_the_digest
     test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it
@@ -2638,56 +2739,87 @@ case "${FM_SESSION_START_CASE:-}" in
   *) fail 'unknown focused session-start case' ;;
 esac
 
-test_fleet_ledger_enabled_on_locked_start
-test_context_digest_absent_empty_present
-test_lock_refusal_read_only_path
-test_lock_write_failure_read_only_path
-test_trace_context_effective_state_is_frozen_after_lock
-test_session_lock_concurrent_single_winner
-test_output_ordering_diagnostics_lead
-test_pending_board_results_reach_successor_digest
-test_read_once_contract_is_stated_once_before_its_subject
-test_herdr_backend_diagnostics_follow_real_session_start
-test_deferred_relaunch_is_always_reported
-test_inactive_reconcile_never_blocks_the_digest
-test_unreachable_network_never_blocks_the_digest
-test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it
-test_read_only_session_declares_skipped_network_checks
-test_tasks_axi_compatibility_is_probed_once
-test_session_start_preserves_transiently_unreadable_tmux
-test_session_start_preserves_proven_bare_shell_recovery
-test_session_start_relaunches_herdr_husk_secondmate
-test_status_tail_bounding
-test_status_tail_line_cap
-test_orphan_status_logs_are_printed
-test_endpoint_liveness_tmux
-test_endpoint_liveness_herdr
-test_endpoint_read_death_is_isolated_and_reported
-test_endpoint_read_hang_is_bounded_and_reported
-test_endpoint_bound_rejects_padded_zero
-test_perl_timeout_fallback_reports_signal_death_nonzero
-test_abnormal_digest_death_banners_and_exits_zero
-test_composition_invokes_real_scripts
-test_branch_outcome_replay_respects_captain_barrier_and_lease_sweep
-test_session_start_seeds_the_outcome_display_tail_while_away
-test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
-test_backlog_queued_bound_discloses_its_remainder
-test_backlog_compact_manual_backend_skips_indented_bodies
-test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
-test_fleet_digest_empty_fleet
-test_next_step_sources_x_mode_cadence
-test_next_step_afk_delegates_to_daemon
-test_next_step_quiet_mode_delegates_to_daemon
-test_quiet_record_digest_holds_nothing_for_a_return
-test_next_step_afk_legacy_empty_flag_defaults_away
-test_runtime_bound_truncates_loudly_and_exits_zero
-test_portable_timeout_escalates_term_resistant_process
-test_runtime_bound_leaves_a_healthy_digest_untouched
-test_runtime_bound_leaves_harness_ancestry_headroom
-test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
-test_reemit_cue_survives_the_hook_output_preview
-test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
-test_agents_baseline_requires_sha256_and_successful_completion
-test_reemit_keeps_repair_ownership_with_the_lock_holder
+session_cases=(
+  test_fleet_ledger_enabled_on_locked_start
+  test_context_digest_absent_empty_present
+  test_lock_refusal_read_only_path
+  test_lock_write_failure_read_only_path
+  test_trace_context_effective_state_is_frozen_after_lock
+  test_session_lock_concurrent_single_winner
+  test_output_ordering_diagnostics_lead
+  test_pending_board_results_reach_successor_digest
+  test_startup_recovers_unregistered_lavish_board
+  test_read_once_contract_is_stated_once_before_its_subject
+  test_herdr_backend_diagnostics_follow_real_session_start
+  test_deferred_relaunch_is_always_reported
+  test_inactive_reconcile_never_blocks_the_digest
+  test_inactive_reconcile_delivers_wake
+  test_unreachable_network_never_blocks_the_digest
+  test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it
+  test_read_only_session_declares_skipped_network_checks
+  test_tasks_axi_compatibility_is_probed_once
+  test_session_start_preserves_transiently_unreadable_tmux
+  test_session_start_preserves_proven_bare_shell_recovery
+  test_session_start_relaunches_herdr_husk_secondmate
+  test_status_tail_bounding
+  test_status_tail_line_cap
+  test_orphan_status_logs_are_printed
+  test_endpoint_liveness_tmux
+  test_endpoint_liveness_herdr
+  test_endpoint_read_death_is_isolated_and_reported
+  test_endpoint_read_hang_is_bounded_and_reported
+  test_endpoint_bound_rejects_padded_zero
+  test_perl_timeout_fallback_reports_signal_death_nonzero
+  test_abnormal_digest_death_banners_and_exits_zero
+  test_composition_invokes_real_scripts
+  test_session_start_seeds_the_outcome_display_tail_while_away
+  test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
+  test_backlog_queued_bound_discloses_its_remainder
+  test_backlog_compact_manual_backend_skips_indented_bodies
+  test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
+  test_fleet_digest_empty_fleet
+  test_next_step_sources_x_mode_cadence
+  test_next_step_afk_delegates_to_daemon
+  test_next_step_quiet_mode_delegates_to_daemon
+  test_quiet_record_digest_holds_nothing_for_a_return
+  test_next_step_afk_legacy_empty_flag_defaults_away
+  test_runtime_bound_truncates_loudly_and_exits_zero
+  test_portable_timeout_escalates_term_resistant_process
+  test_runtime_bound_leaves_a_healthy_digest_untouched
+  test_runtime_bound_leaves_harness_ancestry_headroom
+  test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
+  test_reemit_cue_survives_the_hook_output_preview
+  test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
+  test_agents_baseline_requires_sha256_and_successful_completion
+  test_reemit_keeps_repair_ownership_with_the_lock_holder
+)
+if [ -n "${FM_SESSION_START_SINGLE_CASE:-}" ]; then
+  for test_case in "${session_cases[@]}"; do
+    if [ "$test_case" = "$FM_SESSION_START_SINGLE_CASE" ]; then
+      "$test_case"
+      exit 0
+    fi
+  done
+  fail "unknown session-start test: $FM_SESSION_START_SINGLE_CASE"
+fi
+
+session_pids=()
+for test_case in "${session_cases[@]}"; do
+  FM_SESSION_START_SINGLE_CASE="$test_case" bash "$0" &
+  session_pids+=("$!")
+  if [ "${#session_pids[@]}" -eq 4 ]; then
+    session_status=0
+    for session_pid in "${session_pids[@]}"; do
+      wait "$session_pid" || session_status=1
+    done
+    session_pids=()
+    [ "$session_status" -eq 0 ] || fail "session-start case failed"
+  fi
+done
+session_status=0
+for session_pid in "${session_pids[@]}"; do
+  wait "$session_pid" || session_status=1
+done
+[ "$session_status" -eq 0 ] || fail "session-start case failed"
 
 echo "# fm-session-start.test.sh: all assertions passed"

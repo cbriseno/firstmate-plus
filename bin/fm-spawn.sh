@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse worktree, or a
 # secondmate in its isolated firstmate home.
+# For fresh launches, when dispatch rules declare categories, briefs contain one
+#   Dispatch category: <category> line and, if reason_required, a nonempty
+#   Dispatch rationale: <reason> line. The resolved harness, model and any
+#   declared effort must match that rule. FM_MODEL_CATEGORY_OVERRIDE=1 skips it.
+# Relaunches inherit the recorded profile without revalidating categories.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> --host [--path <path>...] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
 #          Uses data/<id>/work without Git; paths must match the brief manifest.
@@ -65,8 +70,8 @@
 #   secondmate's charter.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
-#   task's own recorded worktree, reusing its recorded endpoint when that
-#   endpoint still exists, instead of creating either from scratch. It is
+#   task's own recorded worktree. A surviving endpoint is reused when its
+#   presentation still matches; Herdr restores a recorded projection otherwise. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
 #   owns the checkpoint, the progress note, stopping the previous agent, and the
 #   transaction; call fm-control rather than this flag directly unless you are
@@ -81,7 +86,7 @@
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
 #   the new incarnation. Two verdicts are agent-free: a `dead` endpoint is
-#   ADOPTED as-is, while an endpoint PROVEN gone is RE-CREATED in the recorded
+#   reusable, while an endpoint PROVEN gone is RE-CREATED in the recorded
 #   worktree and the republished record rebinds the task to it. That proof is
 #   its own step, because a backend's `missing` also covers an endpoint that is
 #   merely unreachable from here - and it is only available on HERDR, which must
@@ -1927,11 +1932,6 @@ elif [ "$KIND" = host ]; then
     grep -qxF -- "$host_path" "$DATA/$ID/brief.md" || { echo 'error: host brief must name every authorized path' >&2; exit 1; }
   done
   WT="$DATA/$ID/work"
-  if [ "$RELAUNCH" -eq 0 ]; then
-    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
-    mkdir -m 700 "$WT" || exit 1
-  fi
-  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
   PROJ_ABS=$WT
   BRIEF="$DATA/$ID/brief.md"
 else
@@ -1945,6 +1945,36 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
   ! git -C "$PROJ_ABS" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "error: spawn refused: project $PROJ_ABS has no commit yet (unborn HEAD), so there is nothing to branch a worktree from; make one commit in the project, for example 'git -C $PROJ_ABS commit --allow-empty -m \"chore: initial commit\"', then spawn again" >&2
   exit 1
+fi
+# Category declarations are optional until the existing dispatch matrix opts in.
+# Validate fresh dispatches only; relaunches already have a resolved profile.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-dispatch.json" ] && [ "${FM_MODEL_CATEGORY_OVERRIDE:-0}" != 1 ]; then
+  category_enabled=$(jq -r 'if ((.rules // []) | type) != "array" then error("invalid rules") else any((.rules // [])[]; has("category")) end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || {
+    echo 'error: invalid dispatch categories; fix config/crew-dispatch.json or skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1;
+  }
+  if [ "$category_enabled" = true ]; then
+    category=$(sed -n 's/^Dispatch category: //p' "$BRIEF" 2>/dev/null)
+    rationale=$(sed -n 's/^Dispatch rationale: //p' "$BRIEF" 2>/dev/null)
+    if ! jq -e --arg category "$category" --arg harness "$HARNESS" --arg model "$MODEL" --arg effort "$EFFORT" --arg rationale "$rationale" '
+      (if $category == "default" and has("default") then [{use: .default}] else [.rules[] | select(.category == $category)] end) as $rules |
+      ($category | test("^[a-z0-9-]+$")) and ($rules | length == 1) and
+      (($rules[0].reason_required // false) != true or ($rationale | test("[^[:space:]]"))) and
+      (($rules[0].use | if type == "array" then . else [.] end) |
+        any(.[]; .harness == $harness and (.model // "") == $model and
+          ((.effort // "") == "" or .effort == $effort)))
+    ' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+      echo 'error: dispatch category, rationale or profile mismatch; correct the brief/profile or skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2
+      exit 1
+    fi
+  fi
+fi
+unset FM_MODEL_CATEGORY_OVERRIDE
+if [ "$KIND" = host ]; then
+  if [ "$RELAUNCH" -eq 0 ]; then
+    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
+    mkdir -m 700 "$WT" || exit 1
+  fi
+  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
 fi
 # Read live home capacity for each fresh worker, never the watcher's cached
 # document. The existing task-set lock stays held through metadata publication,
@@ -2069,6 +2099,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   {
     fm_brief_worker_role "$STATE" "$ID" &&
       printf '\n' &&
+      printf 'Report author at launch: model=%s; reasoning effort=%s. Use these for reports you author; if either is default or changes later, verify the actual value before naming it.\n\n' "${MODEL:-default}" "${EFFORT:-default}" &&
       printf '# Current progress reporting contract\nThis supersedes earlier progress reporting instructions, including in a retained brief.\n' &&
       FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID" &&
       printf '\n' &&
@@ -2636,6 +2667,87 @@ if [ "$RELAUNCH" -eq 1 ]; then
   # uncommitted changes are exactly as the previous agent left them, and nothing
   # below may touch them.
   [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
+  # Every replacement route (control, context relay and parked resume) comes
+  # here. Restore presentation before adopting/rebinding the endpoint, rather
+  # than sending a lost projected task through the ordinary flat container.
+  if [ "$BACKEND" = herdr ] && [ "$KIND" != secondmate ] &&
+    { [ -e "$STATE/$ID.herdr-presentation" ] || [ -L "$STATE/$ID.herdr-presentation" ]; } &&
+    HERDR_SESSION="$HERDR_SES" fm_backend_herdr_presentation_enabled "$CONFIG" "$STATE"; then
+    HERDR_PROJECTED=1
+    HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+    spawn_herdr_presentation_order_lock_acquire "$HERDR_SES" || {
+      echo "error: herdr relaunch could not acquire its presentation lock" >&2
+      exit 1
+    }
+    fm_backend_herdr_projection_journal_snapshot "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
+    HERDR_HOME_ID=$(fm_backend_herdr_projection_home_identity "$FM_HOME") || exit 1
+    HERDR_PARENT_LABEL=$(fm_backend_herdr_workspace_label)
+    HERDR_PARENT_WORKSPACE_ID=
+    # shellcheck disable=SC2153 # journal_snapshot populates the binding fields.
+    if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ]; then
+      [ "$FM_BACKEND_HERDR_JOURNAL_HOME" = "$HERDR_HOME_ID" ] &&
+        [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$HERDR_SES" ] &&
+        [ "$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL" = "$HERDR_PARENT_LABEL" ] || {
+        echo "error: herdr relaunch projection belongs to another home or session" >&2
+        exit 1
+      }
+      HERDR_PARENT_WORKSPACE_ID=$FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID
+    fi
+    if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] &&
+      [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$HERDR_WORKSPACE_ID" ] &&
+      [ "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" = "$HERDR_TAB_ID" ] &&
+      [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$HERDR_PANE_ID" ] &&
+      fm_backend_herdr_projection_live_binding_matches "$HERDR_SES" \
+        "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" "$HERDR_WORKSPACE_ID" \
+        "$HERDR_TAB_ID" "$HERDR_PANE_ID" "$HERDR_PARENT_WORKSPACE_ID" \
+        "$HERDR_PARENT_LABEL" "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" "$W"; then
+      : # A correctly projected endpoint survives an ordinary context handoff.
+    else
+      fm_backend_herdr_projection_recovery_allows_flat "$HERDR_SES" \
+        "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
+      if [ -z "$HERDR_PARENT_WORKSPACE_ID" ]; then
+        HERDR_PARENT_WORKSPACE_ID=$(HERDR_PANE_ID="$RELAUNCH_LAUNCHER_PANE_ID" \
+          fm_backend_herdr_container_ensure "$WT" launcher-home "$HERDR_SES") || exit 1
+        HERDR_PARENT_WORKSPACE_ID=${HERDR_PARENT_WORKSPACE_ID%%$'\t'*}
+        HERDR_PARENT_WORKSPACE_ID=${HERDR_PARENT_WORKSPACE_ID#*:}
+      fi
+      fm_backend_herdr_cli "$HERDR_SES" workspace get "$HERDR_PARENT_WORKSPACE_ID" \
+        | jq -e --arg label "$HERDR_PARENT_LABEL" '.result.workspace.label == $label' >/dev/null || {
+        echo "error: herdr relaunch could not verify its original presentation parent" >&2
+        exit 1
+      }
+      HERDR_OLD_PANE_ID=$HERDR_PANE_ID
+      HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID" restart) || exit 1
+      HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
+      if ! HERDR_SESSION="$HERDR_SES" fm_backend_herdr_projection_create_task "$WT" "$HERDR_PROJECTION_LABEL" "$W"; then
+        if [ "$FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE" = 1 ]; then
+          HERDR_PROJECTION_ABORT_CLEANUP=1
+          HERDR_PROJECTION_ABORT_SESSION=$HERDR_SES
+          HERDR_PROJECTION_ABORT_TASK_PANE=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
+          HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
+        fi
+        exit 1
+      fi
+      HERDR_WORKSPACE_ID=$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID
+      HERDR_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_TAB_ID
+      HERDR_PANE_ID=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
+      HERDR_PROJECTION_ABORT_CLEANUP=1
+      HERDR_PROJECTION_ABORT_SESSION=$HERDR_SES
+      HERDR_PROJECTION_ABORT_TASK_PANE=$HERDR_PANE_ID
+      HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
+      fm_backend_herdr_projection_order_best_effort "$HERDR_SES" "$HERDR_WORKSPACE_ID" \
+        "$HERDR_PARENT_LABEL" "$HERDR_PARENT_WORKSPACE_ID"
+      fm_backend_herdr_projection_journal_bind "$HERDR_PRESENTATION_JOURNAL" "$ID" \
+        "$HERDR_HOME_ID" "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID" \
+        "$HERDR_PARENT_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$W" || exit 1
+      if [ "$RELAUNCH_REBIND" -eq 0 ]; then
+        fm_backend_herdr_projection_close_pane_focus_preserving \
+          "$HERDR_SES" "$HERDR_OLD_PANE_ID" no-agent || exit 1
+      fi
+      RELAUNCH_TARGET="$HERDR_SES:$HERDR_PANE_ID"
+      RELAUNCH_REBIND=0
+    fi
+  fi
   if [ "$RELAUNCH_REBIND" -eq 0 ]; then
     # Adopt the recorded endpoint instead of creating one. This is what keeps a
     # relaunch a REPLACEMENT rather than a second copy of the task: no new
@@ -2655,11 +2767,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # the session the record names (fm_control_endpoint_absence_verdict owns
     # that argument). tmux and every secondmate were already refused.
     #
-    # This deliberately uses the FLAT container shape rather than Herdr's
-    # presentation projection: projection is a presentation-only layout that is
-    # never endpoint or ownership authority, and flat is already the documented
-    # fallback for every recovery it cannot bind exactly
-    # (docs/herdr-backend.md "Presentation spaces").
+    # Projected replacements were restored above. This is the ordinary flat
+    # container path when task presentation is disabled or unrecorded.
     #
     # KNOWN LIMITATION (bead fm-herdr-rebind-leak-20260913): the tab minted
     # below is registered with no abort cleanup, so a later refusal leaves that
@@ -3866,6 +3975,11 @@ fi
 # kill switch below it is an export statement, so it survives a compound raw
 # launch and the launch-env-allowlist `env -i` wrapper.
 LAUNCH="export FM_TASK_INBOX=$(shell_quote "$STATE_REAL/$ID.inbox"); $LAUNCH"
+if [ "$KIND" != secondmate ] && [ -f "$CONFIG/relay-lite.json" ] && [ -f "${relay_checker:-/nonexistent}" ]; then
+  LAUNCH="export FM_WORKER_RELAY_AUTOMATIC=1; $LAUNCH"
+else
+  LAUNCH="unset FM_WORKER_RELAY_AUTOMATIC; $LAUNCH"
+fi
 fm_spawn_extension launch || exit 1
 LAUNCH="export COMPACT_ADVISER_DISABLE=1; $LAUNCH"
 # When the live-harness gate has exported DISABLE_AUTOUPDATER into this spawn's

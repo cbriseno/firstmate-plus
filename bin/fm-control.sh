@@ -59,8 +59,8 @@
 #              a tmux server it cannot address, and it will not claim a stop it
 #              cannot see.
 #   relaunch   Transactionally replace the running agent with a new one, in the
-#              SAME worktree - and the same endpoint whenever that endpoint
-#              still exists - on the same or a newly chosen
+#              SAME worktree and a surviving, correctly placed endpoint,
+#              on the same or a newly chosen
 #              harness/model/effort - so switching harness is one ordinary use
 #              of this verb. When the recorded endpoint is instead proven gone -
 #              a Herdr pane or workspace destroyed in churn - the launch owner
@@ -71,6 +71,7 @@
 #              answer. Reclaim is HERDR-ONLY for the reason `exit` gives above:
 #              a tmux `missing` cannot be proven absent from a task record, so
 #              it refuses.
+#              Placement restoration belongs to fm-spawn.sh --relaunch.
 #              An explicit `default` model or effort clears that
 #              axis for the replacement. With no explicit axis, a secondmate
 #              re-resolves its durable config/secondmate-harness pin (harness

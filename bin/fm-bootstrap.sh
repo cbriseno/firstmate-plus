@@ -1521,6 +1521,8 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
   # gate independently of the record-reconciliation secondmate exemption.
   if fm_backlog_transition_applies "$CONFIG" "$DATA" ship; then
     if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      FM_TASKS_AXI_COMPATIBLE="$FM_TASKS_AXI_COMPATIBLE_MEMO" \
+      FM_TASKS_AXI_CHECK_REASON="$FM_TASKS_AXI_CHECK_REASON_MEMO" \
       bash "$SCRIPT_DIR/fm-captain-hold.sh" sweep-moot; then
       echo 'BACKLOG_RECONCILE: automatic moot-call retirement failed; retry bin/fm-captain-hold.sh sweep-moot'
     fi

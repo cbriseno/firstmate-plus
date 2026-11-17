@@ -2814,6 +2814,55 @@ SH
   pass "fm-control exit removes the dialog file before it releases the control lock"
 }
 
+
+# Relaunch and context handoff retain the task's resolved profile even when
+# current dispatch categories cannot validate its original brief.
+test_relaunch_keeps_profile_without_revalidating_category() {
+  local dir id flow declaration harness model out rc
+  for flow in control handoff spawn; do
+    harness=claude model=opus
+    [ "$flow" != handoff ] || { harness=codex; model=gpt-6.1-sol; }
+    for declaration in legacy stale; do
+      id="rl-category-$flow-$declaration"
+      dir=$(new_case "$id" "$id")
+      add_ship_task "$dir" "$id" "$harness"
+      printf '%s' "$harness" > "$dir/fake/command"
+      printf '%s' "$harness" > "$dir/fake/becomes"
+      sed "s/^model=.*/model=$model/; s/^effort=.*/effort=high/" \
+        "$dir/home/state/$id.meta" > "$dir/meta-profile"
+      mv "$dir/meta-profile" "$dir/home/state/$id.meta"
+      mkdir -p "$dir/home/config"
+      printf '%s\n' '{"rules":[{"when":"new work","category":"standard","reason_required":true,"use":{"harness":"codex","model":"gpt-6.1-terra"}}]}' \
+        > "$dir/home/config/crew-dispatch.json"
+      if [ "$declaration" = stale ]; then
+        printf '\nDispatch category: standard\nDispatch rationale: Original dispatch.\n' \
+          >> "$dir/home/data/$id/brief.md"
+      fi
+      printf 'Continue from the saved progress.\n' > "$dir/note.md"
+      case "$flow" in
+        control) out=$(unset FM_MODEL_CATEGORY_OVERRIDE; run_control "$dir" "$id" relaunch --note "Continue from the saved progress."); rc=$? ;;
+        handoff) out=$(unset FM_MODEL_CATEGORY_OVERRIDE; run_control "$dir" "$id" relaunch --note-file "$dir/note.md"); rc=$? ;;
+        spawn)
+          printf 'zsh' > "$dir/fake/command"
+          out=$(unset FM_MODEL_CATEGORY_OVERRIDE; run_spawn "$dir" "$id" --relaunch); rc=$?
+          ;;
+      esac
+      expect_code 0 "$rc" "$flow must relaunch a $declaration brief without a category override"$'\n'"$out"
+      [ "$(meta_field "$dir" "$id" harness)" = "$harness" ] || fail "recorded harness lost: $out"
+      [ "$(meta_field "$dir" "$id" model)" = "$model" ] || fail "recorded model lost: $out"
+      [ "$(meta_field "$dir" "$id" effort)" = high ] || fail "recorded effort lost: $out"
+      [ "$(cat "$dir/fake/command")" = "$harness" ] || fail "replacement agent did not start: $out"
+      assert_contains "$(recorded_launch "$dir")" "--model '$model'" "replacement must use the recorded model"
+      if [ "$flow" != spawn ]; then
+        assert_grep 'Continue from the saved progress.' "$dir/home/data/$id/launch-brief.md" "replacement must receive the progress note"
+      fi
+    done
+  done
+  pass "relaunch and context handoff retain resolved profiles without revalidating dispatch categories"
+}
+
+test_relaunch_keeps_profile_without_revalidating_category
+
 test_exit_and_relaunch_remove_the_dialog_file
 test_exit_removes_the_dialog_file_before_releasing_the_lock
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint

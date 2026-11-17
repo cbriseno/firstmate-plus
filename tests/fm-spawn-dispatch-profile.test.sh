@@ -1617,6 +1617,106 @@ SH
 test_spawn_captures_original_attempt_time_and_status_boundary
 [ "${1:-}" != --card-time-only ] || exit 0
 
+
+test_category_profile_guard() {
+  local rec id out status
+  id=report-theme-ref-20261115
+  rec=$(make_spawn_case category codex "$id")
+  read_case_record "$rec"
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{"rules":[{"when":"ordinary work","category":"standard","use":{"harness":"codex","model":"gpt-6.1-terra"}},{"when":"critical planning","category":"critical-planning","reason_required":true,"use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}
+JSON
+  printf '\nDispatch category: standard\n' >> "$HOME_DIR/data/$id/brief.md"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6-astra 2>&1); status=$?
+  expect_code 1 "$status" "standard category must reject Astra"
+  assert_contains "$out" 'FM_MODEL_CATEGORY_OVERRIDE=1' "refusal must show the skip"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6.1-terra 2>&1); status=$?
+  expect_code 0 "$status" "standard category must accept Terra: $out"
+  id=critical-z1
+  fm_test_spawn_brief "$HOME_DIR" "$id"
+  printf '\nDispatch category: critical-planning\nDispatch rationale: Complex and consequential analysis.\n' >> "$HOME_DIR/data/$id/brief.md"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6-luna --effort high 2>&1); status=$?
+  expect_code 1 "$status" "critical planning must reject a small model"
+  assert_contains "$out" 'FM_MODEL_CATEGORY_OVERRIDE=1' "critical refusal must show the skip"
+  id=reason-z1
+  fm_test_spawn_brief "$HOME_DIR" "$id"
+  printf '\nDispatch category: critical-planning\n' >> "$HOME_DIR/data/$id/brief.md"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6-astra --effort high 2>&1); status=$?
+  expect_code 1 "$status" "critical planning requires a rationale"
+  printf 'Dispatch rationale: Complex and consequential analysis.\n' >> "$HOME_DIR/data/$id/brief.md"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6-astra --effort high 2>&1); status=$?
+  expect_code 0 "$status" "critical planning must accept a strong profile with rationale: $out"
+  id="override-z1"
+  rec=$(make_spawn_case category-override codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"ordinary work","category":"standard","use":{"harness":"codex","model":"gpt-6.1-terra"}}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  printf '\nDispatch category: standard\n' >> "$HOME_DIR/data/$id/brief.md"
+  out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-6-astra 2>&1); status=$?
+  expect_code 0 "$status" "documented override must bypass the category guard: $out"
+  pass "category guard rejects both model mismatches and accepts matching profiles and explicit override"
+}
+
+
+test_scaffold_category_flow() {
+  local rec id out status
+  id=scaffold-z1
+  rec=$(make_spawn_case scaffold-category codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"ordinary work","category":"standard","use":{"harness":"codex","model":"gpt-6.1-terra"}},{"when":"critical planning","category":"critical-planning","reason_required":true,"use":{"harness":"codex","model":"gpt-6-astra","effort":"high"}}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  rm "$HOME_DIR/data/$id/brief.md"
+  out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-brief.sh" "$id" project --mode local-only 2>&1); status=$?
+  expect_code 1 "$status" "categorized configuration must request a category"
+  out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-brief.sh" "$id" project --mode local-only --category critical-planning 2>&1); status=$?
+  expect_code 1 "$status" "critical category must request a rationale"
+  out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-brief.sh" "$id" project --mode local-only --category critical-planning --rationale 'Complex and consequential planning' 2>&1); status=$?
+  expect_code 0 "$status" "critical scaffold with a rationale failed: $out"
+  assert_grep 'Dispatch rationale: Complex and consequential planning' "$HOME_DIR/data/$id/brief.md" "scaffold omitted rationale"
+  rm "$HOME_DIR/data/$id/brief.md"
+  out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-brief.sh" "$id" project --mode local-only --category standard 2>&1); status=$?
+  expect_code 0 "$status" "scaffolding a configured category failed: $out"
+  python3 - "$HOME_DIR/data/$id/brief.md" <<'PYBRIEF'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("{TASK}", "Improve the report template.").replace("{FIRSTMATE_SPEC}", "Update the template.")
+path.write_text(text)
+PYBRIEF
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode local-only --yolo off --harness codex --model gpt-6-astra 2>&1); status=$?
+  expect_code 1 "$status" "scaffolded standard category must reject Astra"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode local-only --yolo off --harness codex --model gpt-6.1-terra 2>&1); status=$?
+  expect_code 0 "$status" "scaffolded standard category must accept Terra: $out"
+  id=legacy-z1
+  rec=$(make_spawn_case legacy-category codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"ordinary work","category":"standard","use":{"harness":"codex","model":"gpt-6.1-terra"}}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --harness codex --model gpt-6.1-terra 2>&1); status=$?
+  expect_code 1 "$status" "uncategorized legacy brief must be refused: $out"
+  assert_contains "$out" 'FM_MODEL_CATEGORY_OVERRIDE=1' "uncategorized refusal must show the skip"
+  [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] || fail "category refusal must be one line: $out"
+  out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --harness codex --model gpt-6.1-terra 2>&1); status=$?
+  expect_code 0 "$status" "documented override must launch an uncategorized legacy brief: $out"
+  id=host-category-z1
+  rec=$(make_spawn_case host-category codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"ordinary work","category":"standard","use":{"harness":"codex","model":"gpt-6.1-terra"}}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  mkdir -p "$CASE_DIR/target"
+  rm "$HOME_DIR/data/$id/brief.md"
+  FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-brief.sh" "$id" --host --path "$CASE_DIR/target" --category standard >/dev/null || fail "host scaffold failed"
+  python3 - "$HOME_DIR/data/$id/brief.md" <<'PYHOST'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("{TASK}", "Perform a disposable check.").replace("{FIRSTMATE_SPEC}", "No external effects.")
+path.write_text(text)
+PYHOST
+  out=$(run_spawn "$HOME_DIR" "$HOME_DIR/data/$id/work" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --host --harness codex --model gpt-6-astra 2>&1); status=$?
+  expect_code 1 "$status" "host category must reject Astra"
+  [ ! -e "$HOME_DIR/data/$id/work" ] || fail "rejected host spawn left scratch behind"
+  out=$(run_spawn "$HOME_DIR" "$HOME_DIR/data/$id/work" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --host --harness codex --model gpt-6.1-terra 2>&1); status=$?
+  expect_code 0 "$status" "host must be retryable with the matching model: $out"
+  pass "scaffolded category reaches spawn, uncategorized briefs require the visible override, and rejected host attempts are retryable"
+}
+
+test_scaffold_category_flow
+test_category_profile_guard
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home

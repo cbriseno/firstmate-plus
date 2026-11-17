@@ -134,8 +134,8 @@
 # The context and fleet-state digests
 # below are always read-only, so they run unconditionally in both modes.
 #
-# BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
-# surface, so it carries what this turn can act on and nothing else.
+# BACKLOG DIGEST: task rows are a RECOVERY input, while pending report results
+# are a reporting surface explicitly requested by the actionable-reports plan.
 #   - `done` rows are never listed. Retained completion history belongs to the
 #     reporting surfaces (bin/fm-bearings-snapshot.sh, /ahoy), and at startup it
 #     is pure weight - 10 done rows cost 3.3KB in an observed main-home digest.
@@ -605,6 +605,62 @@ print_backlog_compact() {
   fi
 }
 
+# The primary startup digest lists every report still awaiting review. Read the
+# home-owned declarations directly: a completed task is still an actionable
+# result, and age never expires its review mark.
+print_pending_report_results() {
+  local file deck_url=''
+  local -a files=()
+  for file in "$DATA"/*/presentation.json; do
+    [ -f "$file" ] && [ ! -L "$file" ] && [ ! -L "${file%/*}" ] || continue
+    files+=("$file")
+  done
+  subsection "Pending report results"
+  if [ "${#files[@]}" -eq 0 ]; then
+    printf '(none)\n'
+    return 0
+  fi
+  if [ -f "$CONFIG/deck-url" ] && [ ! -L "$CONFIG/deck-url" ]; then
+    deck_url=$(cat "$CONFIG/deck-url")
+    [[ "$deck_url" =~ ^https?://[^[:space:]/?#]+(/[^[:space:]?#]*)?$ ]] || deck_url=''
+  fi
+  python3 - "$deck_url" "${files[@]}" <<'PY'
+import json
+import sys
+from urllib.parse import quote
+
+deck = sys.argv[1].rstrip('/')
+pending = []
+for path in sys.argv[2:]:
+    try:
+        with open(path, encoding='utf-8') as source:
+            record = json.load(source)
+    except (OSError, ValueError) as error:
+        print(f'(could not read report review declaration: {path}: {error})')
+        continue
+    presentation = record.get('presentation') or {}
+    outcome = presentation.get('outcome') or {}
+    if outcome.get('review') != 'needed':
+        continue
+    task_id = record.get('id') or 'unknown'
+    occurrence = record.get('outcome_occurrence') or ''
+    request = presentation.get('request') or {}
+    label = ' '.join(str(request.get('label') or presentation.get('summary') or 'Untitled report').split())
+    link = (f'{deck}/?task={quote(str(task_id), safe="")}&view=delivery&item={quote(str(occurrence), safe="")}'
+            if deck and occurrence else '')
+    pending.append((str(task_id), label, str(occurrence), link))
+
+for task_id, label, occurrence, link in pending:
+    if link:
+        print(f'- {label} [{task_id}] {link}')
+    elif occurrence:
+        print(f'- {label} [{task_id}; occurrence={occurrence}] (open in Te necesita)')
+    else:
+        print(f'- {label} [{task_id}; occurrence missing] (open in Te necesita)')
+print(f'({len(pending)} pending; no age cutoff)' if pending else '(none)')
+PY
+}
+
 print_status_tail() {
   local status=$1 line
   printf 'status tail (last %s line(s), each capped at %s characters, wake-EVENT history, not current state; full log: %s):\n' \
@@ -788,6 +844,16 @@ else
   printf '(silent - all good)\n'
 fi
 
+# Recover this home's board listeners before the startup wake drain.
+if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-lavish-watch.sh" scan \
+    || printf 'LAVISH_WATCH: recovery failed; the watcher will retry.\n'
+  if [ -d "$STATE/procevent" ]; then
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" reconcile \
+      || printf 'LAVISH_WATCH: reconciliation failed; the watcher will retry.\n'
+  fi
+fi
+
 # --- 3. wake-drain ---------------------------------------------------------
 # The inactive-outcome startup scan runs in the deferred worker launched above,
 # where its potentially slow current-state reads cannot block this digest. It
@@ -874,6 +940,7 @@ EOF
 stage fleet-state
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
+print_pending_report_results
 
 subsection "Work under way (state/*.meta)"
 META_FOUND=0

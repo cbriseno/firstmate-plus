@@ -505,6 +505,16 @@ EOF
   assert_contains "$out" "rewrite" "refusal did not explain how to resolve it"
   git -C "$proj" checkout -q "fix/$id"
   git -C "$proj" reset -q --hard HEAD~2
+  git -C "$proj" commit --allow-empty -qm "Save pending work before worker close"
+  wip=$(git -C "$proj" rev-parse --short HEAD)
+  git -C "$proj" commit --allow-empty -qm finished
+  git -C "$proj" checkout -q "$main"
+  if out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id" 2>&1); then
+    fail "local merge accepted the worker-close preservation subject"
+  fi
+  assert_contains "$out" "$wip" "refusal did not identify the preservation commit"
+  git -C "$proj" checkout -q "fix/$id"
+  git -C "$proj" reset -q --hard HEAD~2
   git -C "$proj" commit --allow-empty -qm finished
   fix=$(git -C "$proj" rev-parse HEAD)
   git -C "$proj" checkout -q "$main"

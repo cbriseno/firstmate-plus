@@ -888,7 +888,7 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_HOME changed charter bytes compared with the same absolute home"
-  assert_grep ">> '$home/state/relative-home.status'" "$brief" \
+  assert_grep "FM_HOME='$home' FM_STATE_OVERRIDE='$home/state' FM_CONFIG_OVERRIDE='$home/config' bash '$ROOT/bin/fm-task-status.sh' 'relative-home' '{state}' '{one short line}'" "$brief" \
     "relative FM_HOME did not render an absolute secondmate status path"
 
   brief="$home/data/relative-state/brief.md"
@@ -904,7 +904,7 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_STATE_OVERRIDE changed charter bytes compared with the same absolute state directory"
-  assert_grep ">> '$state_override/relative-state.status'" "$brief" \
+  assert_grep "FM_HOME='$home' FM_STATE_OVERRIDE='$state_override' FM_CONFIG_OVERRIDE='$home/config' bash '$ROOT/bin/fm-task-status.sh' 'relative-state' '{state}' '{one short line}'" "$brief" \
     "relative FM_STATE_OVERRIDE did not render an absolute secondmate status path"
 
   brief="$data_override/relative-data/brief.md"
@@ -920,7 +920,7 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_DATA_OVERRIDE changed charter bytes compared with the same absolute data directory"
-  assert_grep ">> '$home/state/relative-data.status'" "$brief" \
+  assert_grep "FM_HOME='$home' FM_STATE_OVERRIDE='$home/state' FM_CONFIG_OVERRIDE='$home/config' bash '$ROOT/bin/fm-task-status.sh' 'relative-data' '{state}' '{one short line}'" "$brief" \
     "relative FM_DATA_OVERRIDE changed the absolute default status path"
 
   err="$root/unresolved.err"
@@ -971,7 +971,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {
 }
 
 test_pause_verb_override_renders_all_brief_scaffolds() {
-  local home kind id brief append now epoch templates template line signals
+  local home kind id brief append now end epoch templates template line signals
   home="$TMP_ROOT/pause-verb-home"
   mkdir -p "$home/data"
 
@@ -999,24 +999,26 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
       sed 's/paused/awaiting/g' "$ROOT/.agents/skills/worker-contract/SKILL.md" >> "$home/data/$id/effective-contract"
       brief="$home/data/$id/effective-contract"
     fi
-    # Fill the scaffold's generated status-append command the way a worker does
-    # and run it. The stamp must be a value the worker supplies, so the command
-    # may not carry an unevaluated substitution that a file-write tool would
-    # copy through verbatim.
-    # shellcheck disable=SC2016 # Match literal backticks in the generated interface.
-    append=$(sed -n '/`echo "{state}/s/.*`\(echo .*\)`.*/\1/p' "$brief")
+    # Run the generated status command and check its timestamp and payload.
+    # shellcheck disable=SC2016 # The backticks belong to the generated brief.
+    append=$(sed -n '/`FM_HOME=.*fm-task-status\.sh/s/.*`\(FM_HOME=.*\)`.*/\1/p' "$brief")
+    [ -n "$append" ] || fail "$kind scaffold omitted its status command"
     now=$(date +%s)
     append=${append//\{state\}/done}
     append=${append//\{one short line\}/test event}
-    append=${append//<epoch>/$now}
     case "$append" in
       *"\$("*) fail "$kind scaffold left an unevaluated command in its status-append line" ;;
     esac
     mkdir -p "$home/state"
     bash -c "$append" || fail "generated status command failed"
+    end=$(date +%s)
     epoch=$(bash -c '. "$1"; status_line_at_epoch "$(cat "$2")"' _ \
       "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-    [ "$epoch" = "$now" ] || fail "$kind scaffold did not record the worker's event time"
+    case "$epoch" in ''|*[!0-9]*) fail "$kind scaffold did not record a numeric event time" ;; esac
+    [ "$epoch" -ge "$now" ] && [ "$epoch" -le "$end" ] \
+      || fail "$kind scaffold recorded an event time outside the command's execution"
+    assert_grep "done [at=$epoch]: test event" "$home/state/$id.status" \
+      "$kind scaffold did not record the requested event"
     # Every status signal the brief instructs a worker to append is a template
     # the worker fills in and writes verbatim, with or without a shell, not only
     # rule 4's echo: substitute each one's named placeholders and read the stamp
@@ -1126,7 +1128,8 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 test_scout_lavish_line_follows_presentation_floor() {
   local base label version expect case_dir fakebin brief n=0
   local hosting='use the lavish-axi rule'
-  local text_only='deliver your findings as a text report without Lavish'
+  local html_required='still deliver the required standalone HTML report'
+  local ask_firstmate='ask firstmate to arrange any requested review'
   base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
   while IFS='^' read -r label version expect; do
     [ -n "$label" ] || continue
@@ -1141,9 +1144,9 @@ test_scout_lavish_line_follows_presentation_floor() {
     brief="$case_dir/home/data/scout-lavish/brief.md"
     if [ "$expect" = hosting ]; then
       assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
-      assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
     else
-      assert_grep "$text_only" "$brief" "$label: scout brief did not ask for a text report"
+      assert_grep "$html_required" "$brief" "$label: scout brief did not require HTML"
+      assert_grep "$ask_firstmate" "$brief" "$label: scout brief did not provide the review fallback"
       assert_no_grep "$hosting" "$brief" "$label: scout brief offered a below-floor Lavish"
     fi
   done <<'ROWS'
@@ -1154,7 +1157,7 @@ lavish-axi above the reply feature floor^0.2.0^hosting
 lavish-axi below the board compatibility floor^0.1.76^text
 absent lavish-axi^absent^text
 ROWS
-  pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
+  pass "fm-brief.sh: scout HTML is required while Lavish hosting follows the bootstrap version floor"
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
@@ -1768,6 +1771,14 @@ test_workers_flag_independent_work_and_own_monitoring() {
     assert_contains "$brief" 'If independent pieces can run in parallel, report the proposed split to firstmate' "$kind must flag independent pieces"
     assert_contains "$brief" 'do not delegate them yourself' "$kind must retain worker authority boundaries"
     assert_contains "$brief" 'Own the monitoring and follow-up for this task' "$kind must own its monitoring"
+    assert_contains "$brief" 'worker-contract/SKILL.md' "$kind must use the shared worker contract"
+    if [ "$kind" = host ]; then
+      assert_contains "$brief" 'read and follow only the Obstacles and escalation section' 'host must load the shared obstacle procedure'
+      assert_contains "$brief" 'it owns recovery and blocked classification' 'host must retain a single classification owner'
+      case "$brief" in
+        *'stop retrying that path and append'*) fail 'host must not turn exhausted retries into an automatic block' ;;
+      esac
+    fi
   done
   pass "worker briefs flag parallel pieces and retain monitoring ownership"
 }

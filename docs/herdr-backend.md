@@ -362,7 +362,8 @@ Once the exact pane is confirmed gone, teardown retires the task's own journal w
 ### Restart recovery
 
 Recovery is deliberately conservative and presentation-only.
-An existing journal suppresses another projected create.
+An existing journal suppresses another projected create on ordinary spawn recovery.
+Control-plane relaunch and parked resume restore the task’s own presentation space through the replacement path described below.
 Before any recovery mutation, Firstmate holds both the task spawn lock and the named-session presentation lock.
 That presentation lock lives in a namespace private to the OS account, so another account on the same host running its own Firstmate on Herdr cannot block this account's spawn, recovery, or teardown.
 A namespace at this account's name that another account owns, or that is not mode 700, is still refused and is never adopted, chowned, or removed.
@@ -464,7 +465,8 @@ Any of these preserves the candidate and lets session startup continue with at m
   Pass `fm-spawn.sh --herdr-resume-lock-wait` to opt that recovery into waiting for the lock instead, so concurrent recoveries can serialize.
   The flag applies to a fresh ship or scout spawn that recovers a journal.
   The multi-task path forwards the flag to each per-pair spawn.
-  `fm-spawn.sh --relaunch` and `--secondmate` take no exact-resume presentation-order lock, so the flag has no effect there.
+  Control-plane relaunch takes the bounded presentation lock when restoring projection; this flag does not change that wait.
+  `--secondmate` does not use the task presentation lock.
   Dead-owner reclaim still stops the wait when a holder crashed.
   Unbounded blocking on the session lock is never the default.
 - Existing layouts are not force-renamed or rearranged.
@@ -473,7 +475,13 @@ Any of these preserves the candidate and lets session startup continue with at m
   Session start removes only the exact home-local, uniquely journal-correlated, childless idle-shell shape above.
 - Spaces have no cross-home cleanup path, and a secondmate child can clean up only from its exact home.
 - Every stale-looking space outside that narrow startup proof still requires manual cleanup in Herdr's UI after human inspection.
-- Regaining a dedicated space after degradation requires stopping the flat task, manually checking the stale projection, and clearing its journal before a genuinely fresh launch.
+- Control-plane relaunch, including context handoff and parked resume, preserves a correctly projected endpoint.
+  A missing or flattened endpoint with a presentation journal receives a newly created dedicated space in its recorded session after the recorded and token-matched endpoints are proven agent-free.
+  The original version 2 parent binding is retained; an unbound attempt journal resolves its parent through the ordinary launcher identity.
+  The journal receives a fresh attempt token before creation and advances to the new exact binding before metadata publication.
+  Only the old recorded agent-free pane is closed; other stale spaces remain untouched.
+  An unverifiable parent or projection fails the replacement rather than placing it in the primary workspace.
+  An explicit presentation opt-out retains flat placement.
 - The visible token is only a restart-stable correlator and never substitutes for the exact binding.
 
 ### Presentation tests

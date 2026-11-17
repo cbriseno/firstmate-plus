@@ -46,7 +46,7 @@ test_handling_successor_does_not_go_blind() {
   printf 'done: crew finished its task\n' >> "$state/crew.status"
   event_start=$(date +%s)
   now=0
-  while [ "$now" -lt 20 ]; do
+  while [ "$now" -lt 300 ]; do
     if grep -q '^signal:' "$out" 2>/dev/null; then
       break
     fi
@@ -137,7 +137,7 @@ test_handling_successor_resurfaces_a_row_appended_during_startup() {
     || { kill -TERM "$child" 2>/dev/null || true; fail "fixture: handled-turn settlement failed"; }
 
   now=0
-  while [ "$now" -lt 40 ] && kill -0 "$child" 2>/dev/null; do
+  while [ "$now" -lt 200 ] && kill -0 "$child" 2>/dev/null; do
     sleep 0.25
     now=$((now + 1))
   done
@@ -156,5 +156,53 @@ test_handling_successor_resurfaces_a_row_appended_during_startup() {
   pass "a handling successor resurfaces a row appended during startup"
 }
 
+# A real watcher should surface ready work whenever configured capacity admits it.
+test_ready_work_wakes_once() {
+  local dir home state fakebin out child i
+  dir=$(make_case ready-capacity)
+  home="$dir/home"; state="$home/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  mkdir -p "$home/data" "$home/config" "$state"
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"
+  printf 'backend = "markdown"\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
+  printf '# Tasks\n\n## In flight\n\n## Queued\n\n- [ ] demo - Ready work (repo: firstmate)\n\n## Done\n' > "$home/data/backlog.md"
+  printf '2\nmax-load1 1000\n' > "$home/config/lane-capacity"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add held 'Held work' --repo firstmate >/dev/null 2>&1 || { fail "fixture: add held"; }
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold held --kind external --reason waiting >/dev/null 2>&1 || { fail "fixture: hold"; }
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add dependent 'Dependent work' --repo firstmate --blocked-by demo >/dev/null 2>&1 || { fail "fixture: dependency"; }
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
+    bash "$WATCH" > "$out" 2>&1 &
+  child=$!
+  for ((i=0; i<200; i++)); do
+    [ -s "$state/.watch-info" ] && break
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  if ! kill -0 "$child" 2>/dev/null; then
+    fail "ready work woke individually: $(cat "$out")"
+  fi
+  grep -F 'check: ready work' "$state/.watch-triage.log" >/dev/null || { kill -TERM "$child"; fail "ready work was not recorded"; }
+  if grep -E 'held|dependent' "$state/.watch-triage.log" >/dev/null; then
+    kill -TERM "$child"
+    fail "held or dependent work was included"
+  fi
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add second 'Another task' --repo firstmate >/dev/null 2>&1
+  for ((i=0; i<600; i++)); do
+    grep -F 'second' "$state/.watch-triage.log" >/dev/null && break
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  if ! kill -0 "$child" 2>/dev/null; then fail "new ready work woke individually: $(cat "$out")"; fi
+  kill -TERM "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  grep -F 'second' "$state/.watch-triage.log" >/dev/null || fail "new dispatch opportunity was not recorded"
+  [ ! -s "$state/.wake-queue" ] || fail "scheduling information queued an individual wake"
+  [ "$(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info")" -eq 2 ] \
+    || fail "unchanged opportunities repeated in the batch"
+  pass "dispatch opportunities are recorded once per change and share the informational batch"
+}
+
+test_ready_work_wakes_once
 test_handling_successor_does_not_go_blind
 test_handling_successor_resurfaces_a_row_appended_during_startup

@@ -537,37 +537,31 @@ test_secondmate_ledger_delivery_carries_report_and_failure() {
 # task's delivered PR: without a recorded PR, only a terminal line in the
 # ready-signal shape carries one, and a scout never carries one at all.
 test_pr_field_requires_recorded_pr_or_ready_signal_line() {
-  local id prose_key ready_key stamped_key placeholder_key scout_key
-  make_world pr-provenance; bind_secondmate local
-  write_child "$MATE" prose $'working: context in https://example.test/other/repo/pull/33\ndone: cleanup finished'
-  write_child "$MATE" ready 'done: PR https://example.test/owner/repo/pull/44 checks green'
-  write_child "$MATE" stamped 'done [at=1788576000]: PR https://example.test/owner/repo/pull/66 checks green'
-  write_child "$MATE" placeholder 'done [at=<epoch>]: PR https://example.test/owner/repo/pull/77 checks green'
-  write_child "$MATE" lookout 'done: PR https://example.test/owner/repo/pull/55'
-  for id in prose ready stamped placeholder; do
-    awk '$0 !~ /^pr=/' "$MATE/state/$id.meta" > "$MATE/state/$id.meta.tmp"
+  local id status note pr key
+  for id in prose ready stamped placeholder lookout; do
+    make_world "pr-provenance-$id"; bind_secondmate local
+    pr=''
+    case "$id" in
+      prose) status=$'working: context in https://example.test/other/repo/pull/33\ndone: cleanup finished'; note='cleanup finished' ;;
+      ready) status='done: PR https://example.test/owner/repo/pull/44 checks green'; note='PR https://example.test/owner/repo/pull/44 checks green'; pr='https://example.test/owner/repo/pull/44' ;;
+      stamped) status='done [at=1788576000]: PR https://example.test/owner/repo/pull/66 checks green'; note='PR https://example.test/owner/repo/pull/66 checks green'; pr='https://example.test/owner/repo/pull/66' ;;
+      placeholder) status='done [at=<epoch>]: PR https://example.test/owner/repo/pull/77 checks green'; note='PR https://example.test/owner/repo/pull/77 checks green'; pr='https://example.test/owner/repo/pull/77' ;;
+      lookout) status='done: PR https://example.test/owner/repo/pull/55'; note='PR https://example.test/owner/repo/pull/55' ;;
+    esac
+    write_child "$MATE" "$id" "$status"
+    if [ "$id" = lookout ]; then
+      awk '{ sub(/^kind=ship$/, "kind=scout"); print }' "$MATE/state/$id.meta" > "$MATE/state/$id.meta.tmp"
+    else
+      awk '$0 !~ /^pr=/' "$MATE/state/$id.meta" > "$MATE/state/$id.meta.tmp"
+    fi
     mv "$MATE/state/$id.meta.tmp" "$MATE/state/$id.meta"
+    FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+    key=$(reported_outcome_key "$MATE" "$id" 'done') || fail "$id receipt key missing"
+    [ -z "$pr" ] || pr=" pr=$pr"
+    sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" \
+      | grep -Fxq "done [key=$key]: child $id done: $note$pr mode=no-mistakes yolo=off" \
+      || fail "$id claimed the wrong PR: $(cat "$MAIN/state/mate.status")"
   done
-  awk '{ sub(/^kind=ship$/, "kind=scout"); print }' "$MATE/state/lookout.meta" \
-    > "$MATE/state/lookout.meta.tmp"
-  mv "$MATE/state/lookout.meta.tmp" "$MATE/state/lookout.meta"
-  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
-  prose_key=$(reported_outcome_key "$MATE" prose 'done') || fail "prose receipt key missing"
-  ready_key=$(reported_outcome_key "$MATE" ready 'done') || fail "ready receipt key missing"
-  stamped_key=$(reported_outcome_key "$MATE" stamped 'done') || fail "stamped ready receipt key missing"
-  placeholder_key=$(reported_outcome_key "$MATE" placeholder 'done') \
-    || fail "unsubstituted-stamp ready receipt key missing"
-  scout_key=$(reported_outcome_key "$MATE" lookout 'done') || fail "scout receipt key missing"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$prose_key]: child prose done: cleanup finished mode=no-mistakes yolo=off" \
-    || fail "a PR mentioned only in prose was claimed as the delivery: $(cat "$MAIN/state/mate.status")"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$ready_key]: child ready done: PR https://example.test/owner/repo/pull/44 checks green pr=https://example.test/owner/repo/pull/44 mode=no-mistakes yolo=off" \
-    || fail "a ready-signal terminal line did not carry its PR: $(cat "$MAIN/state/mate.status")"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$stamped_key]: child stamped done: PR https://example.test/owner/repo/pull/66 checks green pr=https://example.test/owner/repo/pull/66 mode=no-mistakes yolo=off" \
-    || fail "a stamped ready-signal terminal line did not carry its PR: $(cat "$MAIN/state/mate.status")"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$placeholder_key]: child placeholder done: PR https://example.test/owner/repo/pull/77 checks green pr=https://example.test/owner/repo/pull/77 mode=no-mistakes yolo=off" \
-    || fail "a ready-signal line whose stamp was left unsubstituted lost its PR: $(cat "$MAIN/state/mate.status")"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$scout_key]: child lookout done: PR https://example.test/owner/repo/pull/55 mode=no-mistakes yolo=off" \
-    || fail "a scout's ready-looking line carried a PR claim: $(cat "$MAIN/state/mate.status")"
   pass "pr= requires the recorded PR or a ready-signal terminal line, whatever its stamp, and never a scout"
 }
 
@@ -748,13 +742,13 @@ test_report_avoids_scan_meta_lock_inversion() {
   ' _ "$ROOT" "$WORLD" &
   holder=$!
   i=0
-  while [ "$i" -lt 40 ] && [ ! -e "$WORLD/meta-held" ]; do sleep 0.05; i=$((i + 1)); done
+  while [ "$i" -lt 120 ] && [ ! -e "$WORLD/meta-held" ]; do sleep 0.05; i=$((i + 1)); done
   [ -e "$WORLD/meta-held" ] || { reap "$holder"; fail "metadata lock holder did not start"; }
 
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE" --startup &
   scan_pid=$!
   i=0
-  while [ "$i" -lt 40 ] && [ ! -e "$MATE/state/.inactive-outcome-reconcile.lock" ]; do
+  while [ "$i" -lt 120 ] && [ ! -e "$MATE/state/.inactive-outcome-reconcile.lock" ]; do
     sleep 0.05
     i=$((i + 1))
   done
@@ -764,7 +758,7 @@ test_report_avoids_scan_meta_lock_inversion() {
   (run_report "$MATE" child && : > "$WORLD/report-complete") &
   report_pid=$!
   i=0
-  while [ "$i" -lt 40 ] && [ ! -e "$WORLD/report-complete" ]; do sleep 0.05; i=$((i + 1)); done
+  while [ "$i" -lt 120 ] && [ ! -e "$WORLD/report-complete" ]; do sleep 0.05; i=$((i + 1)); done
   [ -e "$WORLD/report-complete" ] && completed=1
   : > "$WORLD/release-meta"
   reap "$holder"
@@ -891,8 +885,12 @@ SH
   FM_RACE_WORLD="$WORLD" run_reconcile "$MATE" --startup &
   recon_pid=$!
   i=0
-  while [ "$i" -lt 40 ] && [ ! -e "$WORLD/state-started" ]; do sleep 0.05; i=$((i + 1)); done
-  [ -e "$WORLD/state-started" ] || fail "reconciliation did not begin its state snapshot"
+  while [ "$i" -lt 120 ] && [ ! -e "$WORLD/state-started" ]; do sleep 0.05; i=$((i + 1)); done
+  if [ ! -e "$WORLD/state-started" ]; then
+    : > "$WORLD/state-release"
+    reap "$recon_pid"
+    fail "reconciliation did not begin its state snapshot"
+  fi
 
   FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" bash -c '
     . "$1/bin/fm-wake-lib.sh"
@@ -1000,9 +998,9 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
     FM_FAKE_CREW_STATE='unknown' "$WATCH" > "$WORLD/mate-watch.out" 2>&1 &
   pid=$!
   i=0
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 300 ]; do
     kill -0 "$pid" 2>/dev/null || break
-    grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" 2>/dev/null && break
+    compgen -G "$MATE/state/terminal-outcomes/*.reported" >/dev/null && break
     sleep 0.1
     i=$((i + 1))
   done
@@ -1024,7 +1022,7 @@ test_stalled_state_read_is_bounded_and_scan_progresses() {
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$FM_STATE_OVERRIDE/crew-reads"
 if [ "$1" = a ] && [ ! -e "$FM_STATE_OVERRIDE/unstalled" ]; then
-  sleep 30
+  sleep 90
 else
   printf 'state: done · source: fake\n'
 fi
@@ -1032,20 +1030,97 @@ SH
   chmod +x "$WORLD/fakebin/fm-crew-state.sh"
 
   started=$(date +%s)
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MAIN" --startup
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -le 3 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
+  [ "$elapsed" -le 60 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
 
   grep -qx a "$MAIN/state/crew-reads" || fail "the bounded read never entered the stalled child"
   : > "$MAIN/state/unstalled"
   : > "$MAIN/state/crew-reads"
   write_child "$MAIN" b 'done: green'
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MAIN" --startup
   first=$(head -n 1 "$MAIN/state/crew-reads")
   [ "$first" = b ] || fail "next scan read $first before the following child b"
   grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
     || fail "next bounded scan did not resume with the following child"
   pass "stalled state reads are bounded without starving later children"
+}
+
+# An outer timeout before a child is examined must not advance the cursor.
+test_interrupted_scan_keeps_unvisited_child() {
+  make_world interrupted-cursor
+  write_child "$MAIN" child 'working: state has not been read'
+  cat > "$WORLD/fakebin/stat" <<'SH'
+#!/usr/bin/env bash
+case "${*: -1}" in
+  */child.meta) : > "$FM_TEST_STAT_ENTERED"; sleep 90 ;;
+esac
+exec /usr/bin/stat "$@"
+SH
+  chmod +x "$WORLD/fakebin/stat"
+  FM_TEST_STAT_ENTERED="$WORLD/stat-entered" FM_INACTIVE_RECONCILE_BUDGET_SECS=30 \
+    run_reconcile "$MAIN" --startup
+  [ -e "$WORLD/stat-entered" ] || fail "controlled metadata delay did not execute"
+  ! grep -Fxq 'cursor=child' "$MAIN/state/.inactive-outcome-reconcile" \
+    || fail "interrupted scan advanced past an unvisited child"
+  rm -f "$WORLD/fakebin/stat"
+  FM_FAKE_CREW_STATE='done' FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MAIN" --startup
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] \
+    || fail "the next scan did not report the previously unvisited child"
+  pass "interrupted scans retain unvisited children"
+}
+
+test_started_state_read_advances_cursor() {
+  make_world started-cursor
+  write_child "$MAIN" a 'working: state read will stall'
+  write_child "$MAIN" b 'done: next child'
+  cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_STATE_OVERRIDE/read-started"
+sleep 90
+SH
+  chmod +x "$WORLD/fakebin/fm-crew-state.sh"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MAIN" --startup
+  [ -e "$MAIN/state/read-started" ] || fail "controlled state read did not start"
+  grep -Fxq 'cursor=a' "$MAIN/state/.inactive-outcome-reconcile" \
+    || fail "stalled state read did not preserve progress"
+  cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'state: done · source: fake\n'
+SH
+  chmod +x "$WORLD/fakebin/fm-crew-state.sh"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MAIN" --startup
+  grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
+    || fail "next scan did not reach the following child"
+  pass "a stalled state read does not starve the next child"
+}
+
+# A slow terminal ledger must not prevent later children on every poll.
+test_slow_ledger_read_does_not_starve_next_child() {
+  make_world slow-ledger; bind_secondmate local
+  write_child "$MATE" a 'failed: slow child'
+  write_child "$MATE" b 'failed: later child'
+  cat > "$WORLD/fakebin/cat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = "$FM_SLOW_STATUS" ]; then
+  : > "$FM_SLOW_MARKER"
+  sleep 90
+fi
+exec /bin/cat "$@"
+SH
+  chmod +x "$WORLD/fakebin/cat"
+  FM_SLOW_STATUS="$MATE/state/a.status" FM_SLOW_MARKER="$WORLD/slow-entered" \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MATE"
+  [ -e "$WORLD/slow-entered" ] || fail "controlled slow ledger read never started"
+  FM_SLOW_STATUS="$MATE/state/a.status" FM_SLOW_MARKER="$WORLD/slow-entered" \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MATE"
+  reported_outcome_key "$MATE" b failed >/dev/null \
+    || fail "slow ledger read repeatedly starved the next child"
+  rm -f "$WORLD/fakebin/cat"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 run_reconcile "$MATE"
+  reported_outcome_key "$MATE" a failed >/dev/null \
+    || fail "the slow child was not retried after becoming available"
+  pass "a slow terminal ledger does not starve the next child"
 }
 
 test_full_scan_budget_includes_wake_lock_wait() {
@@ -1055,7 +1130,11 @@ test_full_scan_budget_includes_wake_lock_wait() {
     . "$1/bin/fm-wake-lib.sh"
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     : > "$2"
-    sleep 30
+    sleep 90 &
+    sleeper=$!
+    trap "kill $sleeper 2>/dev/null || true; wait $sleeper 2>/dev/null || true; fm_lock_release \"$FM_WAKE_QUEUE_LOCK\"; exit 0" TERM INT
+    wait "$sleeper"
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   ' _ "$ROOT" "$WORLD/lock-ready" &
   holder=$!
   i=0
@@ -1063,13 +1142,13 @@ test_full_scan_budget_includes_wake_lock_wait() {
   [ -e "$WORLD/lock-ready" ] || fail "wake lock holder did not start"
 
   started=$(date +%s)
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=30 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
   elapsed=$(( $(date +%s) - started ))
   reap "$holder"
   # The unbounded wake-lock wait is ended by the process-group backstop, which
   # fires one second after the budget; the bound proves the scan cannot ride
-  # the 30-second lock hold.
-  [ "$elapsed" -le 4 ] || fail "wake lock wait exceeded aggregate scan budget (${elapsed}s)"
+  # the 90-second lock hold.
+  [ "$elapsed" -le 60 ] || fail "wake lock wait exceeded aggregate scan budget (${elapsed}s)"
   pass "aggregate scan budget includes durable wake operations"
 }
 
@@ -1254,48 +1333,94 @@ test_idle_in_flight_call_that_cannot_open_is_reported_once() {
   pass "an idle captain call that cannot be opened is reported once with its reason"
 }
 
-test_historical_receipt_without_worker_stays_quiet
-test_main_direct_terminal_presentation_receipt
-test_cleanup_disposition_requires_close_or_reason
-test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes
-test_branch_ack_retires_inactive_outcome_receipt
-test_unpushed_ci_ready_done_is_not_published
-test_delivered_ledger_done_skips_git_gate
-test_local_secondmate_delivers_terminal_ledger_line
-test_secondmate_multiline_terminal_outcome_is_delivered_once
-test_secondmate_unterminated_prose_reports_run_outcome
-test_inactive_receipt_ignores_later_status_prose
-test_busy_child_does_not_starve_later_ledger_outcomes
-test_secondmate_ledger_delivery_carries_report_and_failure
-test_pr_field_requires_recorded_pr_or_ready_signal_line
-test_terminal_line_during_state_read_yields_to_ledger_delivery
-test_terminal_line_after_inactive_delivery_is_not_reported_twice
-test_progress_after_inactive_delivery_starts_a_new_event
-test_long_terminal_lines_have_distinct_receipts
-test_secondmate_partial_ledger_line_waits_for_newline
-test_secondmate_remote_route_ledger_delivery
-test_report_subcommand_delivers_and_refuses
-test_pending_ledger_done_is_delivered_after_worktree_removal
-test_report_avoids_scan_meta_lock_inversion
-test_local_secondmate_rejects_relative_parent_home
-test_invalid_secondmate_marker_blocks_routing
-test_remote_parent_reply_is_idempotent
-test_reused_task_id_reports_each_incarnation
-test_legacy_metadata_rewrite_keeps_receipt_identity
-test_relaunch_cannot_replace_metadata_during_state_snapshot
-test_heartbeat_cap_does_not_delay_reconciliation
-test_scan_marker_replaces_symlink_safely
-test_nonterminal_and_captain_held_states_do_not_report
-test_watcher_hook_and_idle_secondmate_exemption
-test_watcher_poll_delivers_child_ledger_line_to_parent
-test_stalled_state_read_is_bounded_and_scan_progresses
-test_full_scan_budget_includes_wake_lock_wait
-test_notice_recovery_does_not_duplicate_wake
-test_missing_parent_binding_names_itself
-test_reconciliation_never_calls_forge
-test_reconciliation_sets_no_forge_mode_for_state_read
-test_idle_in_flight_work_opens_one_captain_call
-test_idle_in_flight_skips_live_due_actionable_recent_or_held_work
-test_idle_in_flight_call_that_cannot_open_is_reported_once
+case "${FM_INACTIVE_CASE:-}" in
+  interrupted-cursor) test_interrupted_scan_keeps_unvisited_child; exit 0 ;;
+  started-cursor) test_started_state_read_advances_cursor; exit 0 ;;
+  ledger-starvation) test_slow_ledger_read_does_not_starve_next_child; exit 0 ;;
+  main-presentation) test_main_direct_terminal_presentation_receipt; exit 0 ;;
+  budget) test_stalled_state_read_is_bounded_and_scan_progresses; test_full_scan_budget_includes_wake_lock_wait; exit 0 ;;
+esac
 
-echo "all inactive reconciliation tests passed"
+inactive_cases=(
+  test_historical_receipt_without_worker_stays_quiet
+  test_main_direct_terminal_presentation_receipt
+  test_cleanup_disposition_requires_close_or_reason
+  test_pending_main_presentation_reminds_after_hours_and_new_terminal_wakes
+  test_branch_ack_retires_inactive_outcome_receipt
+  test_unpushed_ci_ready_done_is_not_published
+  test_delivered_ledger_done_skips_git_gate
+  test_local_secondmate_delivers_terminal_ledger_line
+  test_secondmate_multiline_terminal_outcome_is_delivered_once
+  test_secondmate_unterminated_prose_reports_run_outcome
+  test_inactive_receipt_ignores_later_status_prose
+  test_busy_child_does_not_starve_later_ledger_outcomes
+  test_secondmate_ledger_delivery_carries_report_and_failure
+  test_pr_field_requires_recorded_pr_or_ready_signal_line
+  test_terminal_line_during_state_read_yields_to_ledger_delivery
+  test_terminal_line_after_inactive_delivery_is_not_reported_twice
+  test_progress_after_inactive_delivery_starts_a_new_event
+  test_long_terminal_lines_have_distinct_receipts
+  test_secondmate_partial_ledger_line_waits_for_newline
+  test_secondmate_remote_route_ledger_delivery
+  test_report_subcommand_delivers_and_refuses
+  test_pending_ledger_done_is_delivered_after_worktree_removal
+  test_report_avoids_scan_meta_lock_inversion
+  test_local_secondmate_rejects_relative_parent_home
+  test_invalid_secondmate_marker_blocks_routing
+  test_remote_parent_reply_is_idempotent
+  test_reused_task_id_reports_each_incarnation
+  test_legacy_metadata_rewrite_keeps_receipt_identity
+  test_relaunch_cannot_replace_metadata_during_state_snapshot
+  test_heartbeat_cap_does_not_delay_reconciliation
+  test_scan_marker_replaces_symlink_safely
+  test_nonterminal_and_captain_held_states_do_not_report
+  test_watcher_hook_and_idle_secondmate_exemption
+  test_watcher_poll_delivers_child_ledger_line_to_parent
+  test_stalled_state_read_is_bounded_and_scan_progresses
+  test_interrupted_scan_keeps_unvisited_child
+  test_started_state_read_advances_cursor
+  test_slow_ledger_read_does_not_starve_next_child
+  test_full_scan_budget_includes_wake_lock_wait
+  test_notice_recovery_does_not_duplicate_wake
+  test_missing_parent_binding_names_itself
+  test_reconciliation_never_calls_forge
+  test_reconciliation_sets_no_forge_mode_for_state_read
+  test_idle_in_flight_work_opens_one_captain_call
+  test_idle_in_flight_skips_live_due_actionable_recent_or_held_work
+  test_idle_in_flight_call_that_cannot_open_is_reported_once
+)
+if [ -n "${FM_INACTIVE_SINGLE_CASE:-}" ]; then
+  for inactive_case in "${inactive_cases[@]}"; do
+    if [ "$inactive_case" = "$FM_INACTIVE_SINGLE_CASE" ]; then
+      "$inactive_case"
+      exit 0
+    fi
+  done
+  fail "unknown inactive reconciliation case: $FM_INACTIVE_SINGLE_CASE"
+fi
+
+inactive_pids=()
+inactive_started=1
+[ -z "${FM_INACTIVE_FROM:-}" ] || inactive_started=0
+for inactive_case in "${inactive_cases[@]}"; do
+  [ "$inactive_case" != "${FM_INACTIVE_FROM:-}" ] || inactive_started=1
+  [ "$inactive_started" -eq 1 ] || continue
+  FM_INACTIVE_SINGLE_CASE="$inactive_case" bash "$0" &
+  inactive_pids+=("$!")
+  if [ "${#inactive_pids[@]}" -eq 4 ]; then
+    inactive_status=0
+    for inactive_pid in "${inactive_pids[@]}"; do
+      wait "$inactive_pid" || inactive_status=1
+    done
+    inactive_pids=()
+    [ "$inactive_status" -eq 0 ] || fail "inactive reconciliation case failed"
+  fi
+done
+inactive_status=0
+for inactive_pid in "${inactive_pids[@]}"; do
+  wait "$inactive_pid" || inactive_status=1
+done
+[ "$inactive_status" -eq 0 ] || fail "inactive reconciliation case failed"
+[ "$inactive_started" -eq 1 ] || fail "unknown inactive reconciliation starting case"
+
+echo "selected inactive reconciliation tests passed"

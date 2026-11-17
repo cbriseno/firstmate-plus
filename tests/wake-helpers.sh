@@ -58,6 +58,8 @@ make_case() {
   dir="$TMP_ROOT/$name"
   fakebin="$dir/fakebin"
   mkdir -p "$dir/state" "$fakebin"
+  # These wake fixtures do not test host disk pressure or its hourly reminder.
+  date +%s > "$dir/state/.cleanup-low-disk"
   fm_test_track_watcher_state "$dir/state"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash

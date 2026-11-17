@@ -2,7 +2,7 @@
 # Lavish adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id>] [--agent-reply-file <path>]
+#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id>] [--review-task <task-id> --review-occurrence <id>] [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh classify <result-file>
 #   fm-procevent-lavish.sh terminal <result-file>
 #   fm-procevent-lavish.sh silent <result-file>
@@ -16,7 +16,7 @@
 #   fm-procevent-lavish.sh relisten <result-file>
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
-#            waiting, disconnected, missing, or unknown.
+#            waiting, disconnected, listener-active, missing, or unknown.
 # read       Print a structured presentation of one already-captured result so a
 #            handler consumes every queued item without grepping the raw file.
 #            It is read-only over the capture: it does not arm, poll, or change
@@ -73,8 +73,8 @@
 # Closing a review surface that carried nothing is the single most common Lavish
 # result: the captain reads a board, says nothing, and closes it. Announcing that
 # put a wake in front of the handler whose entire content was that nothing
-# happened. `silent` therefore holds two narrow, positively-determined shapes -
-# a session this adapter classifies `ended` that carries no queued content block
+# happened. `silent` therefore holds three positively-determined shapes -
+# a listener conflict, a session this adapter classifies `ended` that carries no queued content block
 # at all, or `browser_disconnected`, which carries no answer while the session
 # remains open - and every other result stays announced.
 #
@@ -84,7 +84,7 @@
 # is any `ended` result that still carries a `prompts` or `feedback` block, which
 # the published poll is not expected to produce but which must never be dropped
 # on that expectation. A `waiting` session, a `missing` one, an `unknown` or
-# unreadable result, and any error all stay announced, because none of them
+# unreadable result, and other errors all stay announced, because none of them
 # positively proves nothing was said. Silence is only ever an absence this
 # adapter can see in the result, never an absence it assumes.
 #
@@ -133,6 +133,11 @@
 #
 #   error: Lavish Editor poll response was interrupted
 #   code: SERVER_ERROR
+#
+# LISTENER_ACTIVE means another poll already serves this board. Keep this
+# listener waiting silently, with exponential retry delay capped at 60 seconds,
+# without taking over or capturing a round. The leading error code is the
+# protocol signal; its holder label and age are variable.
 #
 # The exact three-line startup failure (`Lavish Editor server did not start`,
 # `code: SERVER_ERROR`, and its port-specific `help[1]` server command) is
@@ -221,11 +226,17 @@ lavish_startup_error() {  # <captured-cli-output>
 }
 
 post_lavish_reply() {  # <artifact> <reply-file>
-  local output attempt=0 started delay
+  local output attempt=0 started delay arg
+  local -a metadata_arg=()
+  if [ -n "${FM_PROCEVENT_REPLY_TASK:-}" ] && lavish-axi reply --help 2>/dev/null | grep -q -- '--model'; then
+    while IFS= read -r -d '' arg; do metadata_arg+=("$arg"); done < <(
+      python3 "$SCRIPT_DIR/fm-lavish-metadata.py" "$STATE" "$FM_PROCEVENT_REPLY_TASK"
+    )
+  fi
   delay=$(poll_retry_delay) || return 1
   while :; do
     started=$(poll_iteration_started) || return 1
-    if output=$(lavish-axi reply "$1" --agent-reply-file "$2" 2>&1); then
+    if output=$(lavish-axi reply "$1" --agent-reply-file "$2" ${metadata_arg[@]+"${metadata_arg[@]}"} 2>&1); then
       return 0
     fi
     if lavish_startup_error "$output" && [ "$attempt" -lt "$REPLY_RETRY_LIMIT" ]; then
@@ -256,8 +267,8 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real listening
-  local -a listener=()
+  local artifact='' task='' review_task='' review_occurrence='' reply_file='' id real listening
+  local -a listener=() register_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --for)
@@ -270,6 +281,16 @@ cmd_arm() {
         reply_file=$2
         shift 2
         ;;
+      --review-task)
+        [ "$#" -ge 2 ] || usage
+        review_task=$2
+        shift 2
+        ;;
+      --review-occurrence)
+        [ "$#" -ge 2 ] || usage
+        review_occurrence=$2
+        shift 2
+        ;;
       --*) usage ;;
       *)
         [ -z "$artifact" ] || usage
@@ -280,6 +301,14 @@ cmd_arm() {
   done
   [ -n "$artifact" ] || usage
   [ -z "$reply_file" ] || [ -n "$task" ] || usage
+  if [ -n "$task" ] && [ -n "$review_occurrence" ]; then
+    [ -z "$review_task" ] || [ "$review_task" = "$task" ] || usage
+    review_task=$task
+  fi
+  if [ -n "$review_task" ] || [ -n "$review_occurrence" ]; then
+    fm_procevent_review_context_valid "$review_task" "$review_occurrence" \
+      || die "review task and occurrence must be supplied together with valid values"
+  fi
   command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
   poll_retry_delay >/dev/null
   id=$(cmd_source_id "$artifact") || exit 1
@@ -288,13 +317,21 @@ cmd_arm() {
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")
   if [ -n "$task" ]; then
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" -- \
+    register_args=()
+    [ -z "$review_occurrence" ] || register_args+=(--review-occurrence "$review_occurrence")
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" \
+      ${register_args[@]+"${register_args[@]}"} -- \
       "${listener[@]}" || exit 1
   else
     # This adapter's own listener command, which runs the plain blocking form
     # with no --timeout-ms so completion is a server event, and absorbs only
     # the exact transient interruption.
+    register_args=()
+    if [ -n "$review_task" ]; then
+      register_args+=(--review-task "$review_task" --review-occurrence "$review_occurrence")
+    fi
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register lavish "$id" \
+      ${register_args[@]+"${register_args[@]}"} \
       -- "${listener[@]}" || exit 1
   fi
   # Registration is not a running listener. Readiness is the process-event
@@ -341,7 +378,8 @@ POLL_RETRY_DELAY_DEFAULT=5
 POLL_RETRY_DELAY_MIN=1
 POLL_RETRY_DELAY_MAX=60
 
-# Match only the exact interruption or port-specific startup error. The whole
+# Match the listener-conflict code, exact interruption or startup error. For
+# server failures, the whole
 # response must have the expected bytes: whitespace variants,
 # a longer response that merely opens with them, and any other SERVER_ERROR are
 # genuine errors this adapter must never swallow.
@@ -354,13 +392,14 @@ poll_response_filter() {  # <response-file>
       "error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n",
       "error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port $port` to inspect server startup\n",
     );
-    my $limit = 1;
-    for (@expected) { $limit = length($_) + 1 if length($_) >= $limit; }
+    my $stage_limit = 1;
+    for (@expected) { $stage_limit = length($_) + 1 if length($_) >= $stage_limit; }
+    my $limit = 4096;
     open my $staged, ">", $stage or exit 2;
     binmode STDIN;
     binmode STDOUT;
     binmode $staged;
-    my ($candidate, $streaming) = ("", 0);
+    my ($candidate, $streaming, $conflict) = ("", 0, 0);
     sub write_all {
       my ($handle, $bytes) = @_;
       my $offset = 0;
@@ -374,6 +413,7 @@ poll_response_filter() {  # <response-file>
       my $count = sysread STDIN, my $chunk, 65536;
       exit 2 unless defined $count;
       last if $count == 0;
+      next if $conflict;
       if ($streaming) {
         write_all(*STDOUT, $chunk);
         next;
@@ -382,17 +422,27 @@ poll_response_filter() {  # <response-file>
       my $take = length($chunk) < $room ? length($chunk) : $room;
       my $prefix = substr($chunk, 0, $take);
       $candidate .= $prefix;
-      write_all($staged, $prefix);
+      my $keep = $stage_limit - tell($staged);
+      write_all($staged, substr($prefix, 0, $keep)) if $keep > 0;
+      if ($candidate =~ /\Aerror:[^\n]*\ncode: LISTENER_ACTIVE\n/) {
+        $conflict = 1;
+        next;
+      }
+      my (undef, $code_prefix) = split /\n/, $candidate, 2;
+      my $conflict_prefix = length($candidate) < $limit
+        && (index("error:", $candidate) == 0 || ($candidate =~ /\Aerror:/
+          && (!defined($code_prefix) || index("code: LISTENER_ACTIVE\n", $code_prefix) == 0)));
       my $matches_prefix = grep {
         length($candidate) <= length($_)
           && substr($_, 0, length($candidate)) eq $candidate
       } @expected;
-      if (!$matches_prefix) {
+      if (!$matches_prefix && !$conflict_prefix) {
         write_all(*STDOUT, $candidate);
         write_all(*STDOUT, substr($chunk, $take));
         $streaming = 1;
       }
     }
+    exit 11 if $conflict;
     exit 10 if !$streaming && grep { $candidate eq $_ } @expected;
     write_all(*STDOUT, $candidate) unless $streaming;
   ' "$1" "$LAVISH_AXI_PORT"
@@ -432,7 +482,7 @@ poll_iteration_floor_wait() {
 cmd_poll() {
   local artifact=${1-} delay response cleanup_command rc filter_rc iteration_started
   local pipeline_status reply_file=''
-  local reply_text='' reply_pending=0
+  local reply_text='' reply_pending=0 conflict_delay
   [ -n "$artifact" ] || usage
   if [ "$#" -eq 3 ] && [ "${2-}" = --agent-reply-file ]; then
     reply_file=$3
@@ -441,6 +491,7 @@ cmd_poll() {
   fi
   command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
   delay=$(poll_retry_delay) || exit 1
+  conflict_delay=$delay
   response=$(mktemp "${TMPDIR:-/tmp}/fm-lavish-poll.XXXXXX") || die "cannot stage the poll response"
   printf -v cleanup_command 'rm -f -- %q' "$response"
   # shellcheck disable=SC2064 # $cleanup_command must expand now, while the staged path is still set.
@@ -486,8 +537,15 @@ cmd_poll() {
     case "$filter_rc" in
       0) break ;;
       10)
+        conflict_delay=$delay
         poll_iteration_floor_wait "$iteration_started" "$delay" \
           || die "cannot enforce the poll rate governor"
+        ;;
+      11)
+        poll_iteration_floor_wait "$iteration_started" "$conflict_delay" \
+          || die "cannot wait for the active poll listener"
+        conflict_delay=$((conflict_delay * 2))
+        [ "$conflict_delay" -le "$POLL_RETRY_DELAY_MAX" ] || conflict_delay=$POLL_RETRY_DELAY_MAX
         ;;
       *) die "cannot classify the poll response" ;;
     esac
@@ -529,7 +587,9 @@ cmd_classify() {
       sub(/^code:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; exit }
     in_error { exit }
   ' "$file")
-  if [ "$error_code" = NOT_FOUND ] || [[ "$error_message" == "No active Lavish Editor session"* ]]; then
+  if [ "$error_code" = LISTENER_ACTIVE ]; then
+    printf 'listener-active\n'
+  elif [ "$error_code" = NOT_FOUND ] || [[ "$error_message" == "No active Lavish Editor session"* ]]; then
     printf 'missing\n'
   else
     printf 'unknown\n'
@@ -761,7 +821,7 @@ result_has_queued_content() {  # <result-file>
 
 # Whether a captured result is a routine no-op the runner should record without
 # announcing, for the generic runner's silence seam. Lavish's notion of "nothing
-# was said" lives here and nowhere else: an ended session carrying no queued
+# was said" lives here and nowhere else: a listener conflict or ended session carrying no queued
 # content block is a board the captain closed without saying anything, and the
 # handler learns nothing from being told. Anything else - a real answer, a
 # missing or waiting session, an unreadable result - is announced.
@@ -769,7 +829,9 @@ cmd_silent() {
   local file=${1-} content_rc
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  [ "$(cmd_classify "$file")" = disconnected ] && return 0
+  case "$(cmd_classify "$file")" in
+    disconnected|listener-active) return 0 ;;
+  esac
   [ "$(cmd_classify "$file")" = ended ] || return 1
   result_has_queued_content "$file"
   content_rc=$?
@@ -777,6 +839,57 @@ cmd_silent() {
   # silence; a check that could not complete announces, like every other
   # uncertainty here.
   [ "$content_rc" -eq 1 ]
+}
+
+cmd_capture_review_supported() { return 0; }
+
+# Apply the close to the exact report occurrence captured in the registration
+# when the review opened. Feedback is already durable before this runs, so a
+# failed or stale mark never consumes the captain's message.
+cmd_capture_review() {  # <source-id> <result-file>
+  local id=${1-} file=${2-} registration review_task review_occurrence kind content_rc ended
+  local current current_occurrence current_review payload applied
+  [ -n "$id" ] && [ -n "$file" ] || usage
+  fm_procevent_source_id_valid "$id" || die "source id is invalid: $id"
+  [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
+  registration="$STATE/procevent/$id.source"
+  [ -f "$registration" ] && [ ! -L "$registration" ] || return 0
+  review_task=$(sed -n 's/^review_task=//p' "$registration" | head -1)
+  review_occurrence=$(sed -n 's/^review_occurrence=//p' "$registration" | head -1)
+  [ -n "$review_task" ] || return 0
+  fm_procevent_review_context_valid "$review_task" "$review_occurrence" \
+    || die "registered report review context is invalid: $id"
+
+  kind=$(cmd_classify "$file") || return 0
+  case "$kind" in
+    ended)
+      result_has_queued_content "$file"
+      content_rc=$?
+      [ "$content_rc" -eq 1 ] || return 0
+      ;;
+    feedback)
+      ended=$(session_field "$file" session_ended)
+      case "$ended" in true|True|TRUE) ;; *) return 0 ;; esac
+      ;;
+    *) return 0 ;;
+  esac
+
+  current=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" presentation "$review_task" --json) || return 1
+  current_occurrence=$(printf '%s\n' "$current" | jq -r '.outcome_occurrence // empty') || return 1
+  current_review=$(printf '%s\n' "$current" | jq -r '.presentation.outcome.review // empty') || return 1
+  [ "$current_occurrence" = "$review_occurrence" ] || return 1
+  case "$current_review" in
+    done) return 0 ;;
+    needed) ;;
+    *) return 0 ;;
+  esac
+  payload=$(jq -cn --arg target "task:$review_task" --arg occurrence "$review_occurrence" \
+    '{target:$target,occurrence:$occurrence,review:"done",expected_review:"needed"}') || return 1
+  applied=$(printf '%s\n' "$payload" | FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" work outcome.review) || return 1
+  printf '%s\n' "$applied" | jq -e --arg occurrence "$review_occurrence" \
+    '.ok == true and .state == "applied" and .occurrence == $occurrence' >/dev/null
 }
 
 # Print `key<TAB>answer<TAB>label[<TAB>mode]` for each non-reconcile structured choice the
@@ -991,6 +1104,8 @@ case "${1-}" in
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;
   silent)    shift; cmd_silent "$@" ;;
+  capture-review-supported) shift; cmd_capture_review_supported "$@" ;;
+  capture-review) shift; cmd_capture_review "$@" ;;
   answers)   shift; cmd_answers "$@" ;;
   reconciles) shift; cmd_reconciles "$@" ;;
   read)      shift; cmd_read "$@" ;;

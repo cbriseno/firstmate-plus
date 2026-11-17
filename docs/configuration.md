@@ -519,10 +519,10 @@ The file holds exactly one directive line, with blank lines and `#` comment line
 | Directive | Effect |
 | --- | --- |
 | `user` | The default; identical to an absent file. |
-| `maintainer <host>/<owner>/<repo>` | This home may dispatch publishing work that targets the one named firstmate upstream. |
+| `maintainer <host>/<owner>/<repo>` | This home may dispatch work that pushes to the one named repository. |
 
-A scope names the publication target repository (where a pull request lands), normalized to lowercase for comparison, not a push destination.
-A fork maintainer contributing to the parent repository uses per-task consent rather than a second standing scope.
+A scope names the repository the task publishes to, normalized to lowercase for comparison.
+A fork maintainer's grant covers pushes to that fork; per-task consent covers a different push destination.
 Write the primary home's file by hand; firstmate never grants itself a role, and the file never travels through git.
 Supported secondmate propagation writes or removes the inherited copy as described below.
 A malformed, unreadable, or symlinked file - including one with a second directive anywhere - resolves to user/operator; the role fails closed rather than guessing.
@@ -532,7 +532,7 @@ Role is never inferred from GitHub identity, forge permissions, remotes, reposit
 `bin/fm-role.sh report` prints the resolved role with no network call, and the session-start digest shows it in the HOME ROLE subsection.
 
 `bin/fm-role-lib.sh` owns the fail-closed parser, self-repository detection, and the gate that `bin/fm-brief.sh`, `bin/fm-spawn.sh`, and `bin/fm-promote.sh` apply.
-The publication target is selected from the first configured remote whose `remote.<name>.gh-resolved` value is exactly `base`, including custom remote names, otherwise from the first configured remote in the order `upstream`, `github`, `origin`; selection is offline, and `bin/fm-role-lib.sh` owns URL and local-path normalization.
+The publication target is selected from the first push-enabled remote whose `remote.<name>.gh-resolved` value is exactly `base`, including custom remote names, otherwise from the first push-enabled remote in the order `upstream`, `github`, `origin`; a push URL exactly equal to `DISABLED` is skipped, selection is offline, and `bin/fm-role-lib.sh` owns URL and local-path normalization.
 An unreadable or URL-less marked remote is not replaced by a fallback remote, and an undeterminable target never authorizes a task, even under task consent.
 A task's project counts as the firstmate repository when it shares the code root's lineage - the same git common dir, or a root commit of the code root's history, which every fork, the parent, and any clone of either share - computed offline; undeterminable lineage (for example a shallow clone sharing no root commit) is refused, even under task consent.
 Secondmate homes inherit the primary's resolved role, never its raw file: a primary file that resolves to user for any reason propagates as revocation.
@@ -1110,6 +1110,11 @@ The relaunch checks the selected pin before stopping the current agent.
 Per-secondmate pins stay in the primary home and are not inherited or copied into the secondmate's home.
 A matching primary-side per-secondmate pin for a remote route refuses before remote launch, because its account must be configured on that host instead.
 
+## Deck report links (config/deck-url)
+
+The optional private `config/deck-url` contains the Deck's HTTP or HTTPS base address on one line.
+Ship and scout briefs pass it to report authors for the links described by the worker contract; without it, reports provide the manual review path.
+
 ## Lavish server address (config/lavish-axi-host)
 
 The optional local, gitignored `config/lavish-axi-host` contains one non-empty address without whitespace for the per-machine Lavish server.
@@ -1272,6 +1277,8 @@ This section is the single owner of the canonical schema and its per-field seman
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
+      "category": "<optional lowercase category>",
+      "reason_required": true,
       "approval": "captain",
       "min_confidence": 0.85,
       "floor": { "scope": "<quota-axi scope>", "min_percent": 20, "provider": "<quota-axi provider>" },
@@ -1296,6 +1303,12 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+| Rule `category` | Optional unique lowercase letters, digits, and hyphens; enabling any category requires worker briefs to declare the matching rule, or `default` when no rule matches. |
+| Rule `reason_required` | Optional boolean; when true the brief must include a nonempty dispatch rationale. |
+
+When categories are enabled, the resolved profile must match the declared category rule, including any effort specified by that profile.
+Pass the category and required rationale when scaffolding; `fm-brief.sh --help` owns the flags.
+`fm-spawn.sh` refuses missing or mismatched categories; its help owns the one-invocation bypass.
 
 **Fields applied only by typed resolution**
 
@@ -2197,15 +2210,17 @@ End the session with `lavish-axi end <artifact.html>` when its work is finished.
 
 **Discover unattended boards**
 
-The watcher's `bin/fm-lavish-watch.sh` sweep discovers saved boards under this home's `.lavish/` and `data/`, in recorded direct-task worktrees, and in this home's existing Lavish registrations, even when an agent never armed a source.
+At startup and each watcher cycle, `bin/fm-lavish-watch.sh` discovers saved boards under this home's `.lavish/` and `data/`, in recorded direct-task worktrees, and in this home's existing Lavish registrations, even when an agent never armed a source.
 It retains discovered ownership privately after task metadata is removed, so a board already observed in a worktree remains supervised after teardown.
 Boards outside those ownership boundaries are not adopted; artifacts outside the home must have task metadata or a home-owned registration before that evidence disappears.
 An owned open board also counts as supervision need through the shared primary guard predicate, including in an otherwise empty fleet.
 
-After 30 seconds of observed missing supervised coverage, plus the watcher cadence, the sweep queues an actionable recovery wake and repeats it every 300 seconds until coverage returns or the session ends without queued feedback.
+When the local server reports no listener or is absent, the sweep restores an absent registration with its recorded owner and immediately wakes the primary if feedback is queued.
+Reconciliation starts the restored source without acknowledging a captured round.
+After 30 seconds of observed missing supervised coverage, the sweep also queues an actionable recovery wake.
 An unacknowledged worker round receives the same bounded reminder to verify handling and eventual re-arm or terminal conclusion; it never authorizes automatic acknowledgement.
 Registered dead listeners still use process-event reconciliation, and a discovery failure itself queues a bounded diagnostic wake.
-The sweep is local and non-destructive: it never polls Lavish, consumes feedback, posts replies, reopens or ends a session, takes over a listener, or accepts an answer.
+The sweep checks local server health and does not itself consume feedback, post replies, reopen or end a session, take over a listener, or accept an answer.
 Its header owns the exact commands and private episode mechanics; `tests/fm-lavish-watch.test.sh` exercises discovery, ownership retention, reminders, restored coverage, and the watcher wake through executables without a network service.
 
 **Retry interrupted Lavish polls**
@@ -2242,6 +2257,7 @@ Re-arm acknowledges only the oldest open nonterminal round and registers the nex
 Re-arm never acquires, releases, or hands off the source claim.
 It may carry `--agent-reply-file <path>`.
 With lavish-axi 0.1.80 or newer, the reply is posted through `lavish-axi reply` under the source lock only after the arm passes its endpoint, ownership, and pending-round checks, and the server's acceptance is awaited before the listener is registered or armed.
+When the installed reply command supports reply metadata flags, Firstmate supplies available task metadata and the current launch's native chat identity; unavailable fields are omitted.
 An arm refused for endpoint, ownership, or pending-round eligibility never posts the reply, and a failed or timed-out reply stops the arm before it registers a listener or acknowledges the round, so the worker cannot hand the board back as ready and can retry the same arm.
 If Lavish accepts the reply but the local registration then fails, retrying the arm posts that reply again; this rare duplicate is a known, benign limitation.
 

@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-test-') as tmp:
         lavish=fakebin/'lavish-axi'
         lavish.write_text('''#!/usr/bin/env python3
 import hashlib,json,os,pathlib,sys,time
-if sys.argv[1]=='--version': print('0.1.80'); sys.exit(0)
+if sys.argv[1]=='--version': print('0.1.97'); sys.exit(0)
 artifact=pathlib.Path(sys.argv[2]).resolve()
 store=pathlib.Path(os.environ['LAVISH_AXI_STATE_DIR'])/'state.json'
 if sys.argv[1]=='--no-open':
@@ -45,6 +45,9 @@ if sys.argv[1]=='--no-open':
     value['sessions'][key]={'file':str(artifact),'status':'open','url':'http://127.0.0.1:14387/session/'+key}
     store.write_text(json.dumps(value)); sys.exit(0)
 if sys.argv[1]=='poll':
+    count_file=artifact.parent/'poll-count'
+    count=int(count_file.read_text()) if count_file.exists() else 0
+    count_file.write_text(str(count+1))
     trigger=artifact.parent/'feedback'
     deadline=time.monotonic()+180
     while not trigger.exists() and time.monotonic()<deadline: time.sleep(.05)
@@ -78,6 +81,10 @@ exec /bin/bash "$@"
         report.write_text('<!doctype html><html><title>Result</title><body>Read offline</body></html>')
         (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
         cli('add','a','Report','--repo','alpha',raw=True)
+        result_input=home/'result.json'
+        result_input.write_text(json.dumps(dict(summary='Result',outcome=dict(role='final',review='needed'))))
+        published=cli('presentation','a','--presentation-file',str(result_input))
+        occurrence=published['outcome_occurrence']
         check(cli('work','capabilities')['report_controls']==['report.review'], 'owner advertises connected review')
         check(not (home/'lavish').exists(), 'reading capabilities starts no review session')
         check(cli('work','report.review',payload={'target':'task:missing'})['code']=='unknown_target', 'unregistered task refuses')
@@ -89,25 +96,110 @@ exec /bin/bash "$@"
         try:
             first=cli('work','report.review',payload={'target':'task:a'})
             second=cli('work','report.review',payload={'target':'task:a'})
-            check(first.get('ok') is True and first.get('owner')=='primary' and first==second,
+            check(first.get('ok') is True and first.get('owner')=='primary'
+                  and second.get('ok') is True and second.get('owner')=='primary'
+                  and second.get('url')==first.get('url'),
                   'closed author designates primary; repeated click reuses session and releases work lock')
             store=json.loads((home/'lavish/state.json').read_text())
             check(len(store['sessions'])==1, 'one report creates one saved session')
             sources=list((home/'state/procevent').glob('*.source'))
             check(len(sources)==1, 'one report creates one listener registration')
             source=sources[0].stem
+            source_record=sources[0].read_text()
+            check('review_task=a\n' in source_record and ('review_occurrence='+occurrence+'\n') in source_record,
+                  'review registration keeps the result occurrence opened')
             listing=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'list'],env=env,text=True)
             check(any(line.split()[0]==source and line.split()[2]=='live' for line in listing.splitlines() if line.split()), 'returned URL has a supervised listener')
-            # A captured worker round is covered by its owner, never acknowledged by a click.
-            capture=home/'state/procevent-inbox'; capture.mkdir(exist_ok=True)
-            (capture/(source+'.1.result')).write_text('session:\n  status: feedback\n')
-            (capture/(source+'.1.adapter')).write_text('lavish\n')
-            (capture/(source+'.1.owner-task')).write_text('a\n')
-            check(cli('work','report.review',payload={'target':'task:a'})==first, 'click with open round reuses review')
+            # A nonterminal feedback round remains pending and does not mark its result.
+            trigger=report.parent/'feedback'
+            poll_count=report.parent/'poll-count'
+            def current_poll_count():
+                try: return int(poll_count.read_text())
+                except (OSError, ValueError): return 0
+            for _ in range(100):
+                if current_poll_count()==1: break
+                time.sleep(.1)
+            check(current_poll_count()==1, 'report review poller starts before the first close')
+            trigger.write_text('session:\n  status: browser_disconnected\n  session_ended: false\n')
+            for _ in range(300):
+                if current_poll_count()==2: break
+                time.sleep(.1)
+            check(current_poll_count()>=2,
+                  'a browser disconnect keeps the same review listener armed: polls=%s source=%s' %
+                  (current_poll_count(), sources[0].exists()))
+            check(cli('presentation','a','--json')['presentation']['outcome']['review']=='needed',
+                  'a browser disconnect does not mark the report reviewed')
+            trigger.write_text('session:\n  status: feedback\n  session_ended: false\nfeedback[1]{text}:\n  noted\n')
+            disconnect_capture=home/'state/procevent-inbox'/(source+'.1.result')
+            for _ in range(100):
+                if disconnect_capture.exists(): break
+                time.sleep(.1)
+            check(disconnect_capture.exists(), 'browser disconnect is durably captured')
             pending=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'pending-lavish'],env=env,text=True)
-            check(source+'.1.result' in pending, 'click preserves unacknowledged feedback')
-            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'handled',source,'1'],env=env,check=True,capture_output=True)
+            check(source+'.1.result' not in pending, 'silent disconnect is handled without a review mark')
+            first_capture=home/'state/procevent-inbox'/(source+'.2.result')
+            for _ in range(100):
+                if first_capture.exists(): break
+                time.sleep(.1)
+            check(first_capture.exists(), 'Lavish feedback reaches durable capture')
+            check(cli('presentation','a','--json')['presentation']['outcome']['review']=='needed',
+                  'nonterminal feedback leaves the report pending')
+            pending=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'pending-lavish'],env=env,text=True)
+            check(source+'.2.result' in pending, 'feedback remains pending for the primary to handle')
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'handled',source,'2'],env=env,check=True,capture_output=True)
+            rearmed=cli('work','report.review',payload={'target':'task:a'})
+            check(rearmed.get('ok') is True and rearmed.get('url')==first['url'],
+                  'handling feedback re-arms the same review board: rearmed=%r first=%r' % (rearmed, first))
+            # Send & End marks the version captured when the review opened.
+            trigger.write_text('session:\n  status: feedback\n  session_ended: true\n  ended_by: user\nfeedback[1]{text}:\n  reviewed\n')
+            second_capture=home/'state/procevent-inbox'/(source+'.3.result')
+            capture_deadline=time.monotonic()+180
+            terminal_capture=False
+            while time.monotonic()<capture_deadline:
+                if second_capture.exists():
+                    terminal_capture=subprocess.run(
+                        ['bash',str(root/'bin/fm-procevent-lavish.sh'),'terminal',str(second_capture)],
+                        env=env,check=False,capture_output=True).returncode==0
+                    if terminal_capture: break
+                time.sleep(.1)
+            check(terminal_capture, 'Send & End reaches terminal durable capture')
+            reviewed=None
+            review_deadline=time.monotonic()+10
+            while time.monotonic()<review_deadline:
+                reviewed=cli('presentation','a','--json')['presentation']['outcome']['review']
+                if reviewed=='done': break
+                time.sleep(.05)
+            check(reviewed=='done', 'Send & End marks the exact report occurrence reviewed: reviewed=%r source=%s' % (reviewed, source))
+            retire_deadline=time.monotonic()+180
+            while sources[0].exists() and time.monotonic()<retire_deadline:
+                time.sleep(.1)
+            check(not sources[0].exists(), 'terminal capture retires the primary-owned listener')
+            pending=subprocess.check_output(['bash',str(root/'bin/fm-procevent.sh'),'pending-lavish'],env=env,text=True)
+            check(source+'.3.result' in pending, 'retired terminal capture remains available to the primary')
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'handled',source,'3'],env=env,check=True,capture_output=True)
             subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'sweep-home'],env=env,check=True,capture_output=True)
+            reopened=cli('work','outcome.review',payload=dict(target='task:a',occurrence=occurrence,
+                                                              review='needed',expected_review='done'))
+            check(reopened.get('state')=='applied', 'review mark can be undone before a second review')
+            poll_count_before=current_poll_count()
+            empty_end=cli('work','report.review',payload={'target':'task:a'})
+            check(empty_end.get('ok') is True and empty_end.get('url')==first['url'], 'empty End reuses the same review session')
+            for _ in range(100):
+                if current_poll_count()>poll_count_before: break
+                time.sleep(.1)
+            check(current_poll_count()>poll_count_before, 'empty End listener is ready before the close')
+            trigger.write_text('session:\n  status: ended\n  session_ended: true\n')
+            empty_review_deadline=time.monotonic()+30
+            empty_review=None
+            while time.monotonic()<empty_review_deadline:
+                empty_review=cli('presentation','a','--json')['presentation']['outcome']['review']
+                if empty_review=='done': break
+                time.sleep(.1)
+            check(empty_review=='done', 'End without feedback marks the exact report occurrence reviewed')
+            retire_deadline=time.monotonic()+30
+            while sources[0].exists() and time.monotonic()<retire_deadline:
+                time.sleep(.1)
+            check(not sources[0].exists(), 'empty End retires the primary-owned listener')
             (home/'state/a.meta').write_text('window=fixture:fm-a\nworktree='+str(home)+'\nproject=alpha\nkind=scout\n')
             (home/'state/a.parked').write_text('park_phase=parked\n')
             env['REVIEW_FAIL_RESUME']='1'
@@ -117,7 +209,8 @@ exec /bin/bash "$@"
             resumed=cli('work','report.review',payload={'target':'task:a'})
             author=cli('work','report.review',payload={'target':'task:a'})
             check(resumed.get('owner')=='resumed' and author.get('owner')=='author'
-                  and resumed.get('url')==first['url']==author.get('url'), 'resumed author and later live author keep the same session')
+                  and resumed.get('url')==first['url']==author.get('url'),
+                  'resumed author and later live author keep the same session: resumed=%r author=%r first=%r' % (resumed, author, first))
             check((home/'resume-calls').read_text().splitlines()==['a resume','a resume'],
                   'resume uses the existing control exactly once per attempt and is not repeated for a live author')
         finally:

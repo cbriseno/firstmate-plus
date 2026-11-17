@@ -19,6 +19,8 @@
 #   fm-test-run.sh --lane portable-serial-<k>of<n>   (one CI serial shard)
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
+# A named or changed base script also selects sibling <name>-part<number>.test.sh
+# files; a numbered part inherits the base script's family.
 #
 # Inspection (no execution):
 #   fm-test-run.sh --list --all
@@ -283,6 +285,14 @@ cpu_count() {
 # is what lets `standalone` carry a concurrent proof while a brand-new test
 # lands in `unclassified` and stays serial until someone proves it.
 family_for_basename() {
+  local part_base
+  if [[ "$1" =~ ^(.+)-part[0-9]+\.test\.sh$ ]]; then
+    part_base=${BASH_REMATCH[1]}.test.sh
+    if [ -f "$ROOT/tests/$part_base" ]; then
+      family_for_basename "$part_base"
+      return
+    fi
+  fi
   case "$1" in
     fm-public-export.test.sh|fm-notification-command.test.sh|fm-redact-log.test.sh|fm-usage-recovery.test.sh|fm-platform.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
@@ -331,7 +341,7 @@ family_for_basename() {
     \
     fm-herdr-attached-viewer-live-e2e.test.sh|fm-herdr-session-cleanup-e2e.test.sh|\
     fm-backend-herdr-smoke.test.sh|fm-backend-herdr-workspace-per-home-e2e.test.sh|\
-    fm-control-herdr-smoke.test.sh)
+    fm-control-herdr-smoke.test.sh|fm-control-herdr-projection-e2e.test.sh)
       printf '%s\n' real-herdr-gated
       ;;
     fm-backlog-handoff.test.sh|fm-on.test.sh|fm-remote-backlog-handoff.test.sh|\
@@ -622,14 +632,12 @@ concurrent_safe_family_jobs_max() {
 # A script may run under --jobs when it is individually proven isolated or is
 # an exact repository member of a family carrying a recorded concurrent proof.
 script_allows_concurrency() {
-  local s=$1 family repo_script
+  local s=$1 family member
   is_proven_isolated_script "$s" && return 0
-  family=$(family_for_basename "$(basename "$s")")
+  family=$(family_for_basename "${s##*/}")
   family_is_concurrent_safe "$family" || return 1
-  while IFS= read -r repo_script; do
-    [ "$repo_script" = "$s" ] && return 0
-  done < <(all_repo_tests)
-  return 1
+  case "$s" in tests/*) member=${s#tests/} ;; *) return 1 ;; esac
+  case "$member" in ''|.*|*/*|*$'\n'*) return 1 ;; *.test.sh) [ -f "$s" ] ;; *) return 1 ;; esac
 }
 
 is_proven_isolated_script() {
@@ -646,17 +654,16 @@ is_proven_isolated_script() {
 # and other unproven work stays here. Derived rather than enumerated so a newly added test
 # lands here by default instead of falling out of every lane.
 list_portable_serial() {
-  local s base fam
+  local s base fam proven
+  proven=$(list_proven_isolated)
   while IFS= read -r s; do
     [ -n "$s" ] || continue
-    base=$(basename "$s")
+    base=${s##*/}
     fam=$(family_for_basename "$base")
     if [ "$fam" = "real-herdr-gated" ]; then
       continue
     fi
-    if is_proven_isolated_script "$s"; then
-      continue
-    fi
+    case $'\n'"$proven"$'\n' in *$'\n'"$s"$'\n'*) continue ;; esac
     printf '%s\n' "$s"
   done < <(all_repo_tests)
 }
@@ -929,10 +936,11 @@ portable_serial_assignments() {
     loads[best]=$((best_load + ms))
     printf '%s\t%s\n' "$best" "$script"
   done < <(
-    while IFS= read -r script; do
-      [ -n "$script" ] || continue
-      printf '%s\t%s\n' "$(portable_serial_weight_for "$script")" "$script"
-    done < <(list_portable_serial) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
+    awk -v fallback="$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS" '
+      NR == FNR { weight[$1] = $2; next }
+      NF { print (($0 in weight) ? weight[$0] : fallback) "\t" $0 }
+    ' <(portable_serial_weight_hints) <(list_portable_serial) \
+      | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
   )
 }
 
@@ -1052,19 +1060,20 @@ run_coverage_guard() {
   SCRIPTS=()
   select_lane portable-serial
   printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/serial"
+  portable_serial_assignments >"$tmp/serial_assignments"
   : >"$tmp/serial_shards_raw"
   shard=1
   while [ "$shard" -le "$PORTABLE_SERIAL_SHARDS" ]; do
-    SCRIPTS=()
-    select_lane "portable-serial-${shard}of${PORTABLE_SERIAL_SHARDS}"
-    if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+    awk -F '\t' -v shard="$shard" '$1 == shard { print $2 }' \
+      "$tmp/serial_assignments" >"$tmp/serial_shard"
+    if [ ! -s "$tmp/serial_shard" ]; then
       log "coverage guard: portable serial shard $shard of $PORTABLE_SERIAL_SHARDS is empty"
       SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
       rm -rf "$tmp"
       return 1
     fi
-    printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" >>"$tmp/serial_shards_raw"
-    serial_ms=$(printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | portable_serial_lane_weight)
+    cat "$tmp/serial_shard" >>"$tmp/serial_shards_raw"
+    serial_ms=$(portable_serial_lane_weight <"$tmp/serial_shard")
     [ "$serial_ms" -le "$serial_max_ms" ] || serial_max_ms=$serial_ms
     shard=$((shard + 1))
   done
@@ -1613,7 +1622,9 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
       ;;
-    .agents/skills/*/SKILL.md)
+    .agents/skills/*/*)
+      # Skill resources share the portable contract coverage of their owning
+      # skills, including non-shell assets that cannot be found by shell refs.
       printf '%s\n' pure-contract-unit
       ;;
     .github/workflows/ci.yml|.no-mistakes.yaml)
@@ -1916,7 +1927,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --proven-isolated)
       [ -z "$MODE" ] || die "only one selection mode is allowed"
-      MODE=proven-isolated
+      MODE="proven-isolated"
       shift
       ;;
     --changed)
@@ -2149,6 +2160,21 @@ case "${MODE:-}" in
     die "select with --all, --family <name>, --lane <name>, --proven-isolated, --changed, or one or more script paths (see --help)"
     ;;
 esac
+
+# A named or changed base suite includes its numbered parts. Lane and family
+# selections already enumerate their members and must keep their partitioning.
+if [ "$MODE" = scripts ] || [ "$MODE" = changed ]; then
+  raw=("${SCRIPTS[@]+"${SCRIPTS[@]}"}")
+  for s in "${raw[@]+"${raw[@]}"}"; do
+    [[ "$s" =~ -part[0-9]+\.test\.sh$ ]] && continue
+    case "$s" in *.test.sh) ;; *) continue ;; esac
+    for part in "${s%.test.sh}"-part[0-9]*.test.sh; do
+      [ -f "$part" ] || continue
+      [[ "$part" =~ -part[0-9]+\.test\.sh$ ]] || continue
+      add_script "$part"
+    done
+  done
+fi
 
 if [ "${FM_LIVE:-}" = 0 ]; then
   EXCLUDE_FAMILIES+=(real-herdr-gated)
@@ -2390,6 +2416,8 @@ declare -a WORKER_SCRIPTS=()
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
+  # A timed-out test can leave its fixture directories read-only.
+  find "$RUN_TMP" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   rm -rf "$RUN_TMP"
 }
 

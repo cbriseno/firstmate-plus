@@ -47,3 +47,31 @@ grep -q 'Rebase aborted' "$scratch/output"
 [ "$(git -C "$scratch/work" rev-parse local)" = "$before" ]
 [ -z "$(git -C "$scratch/work" status --porcelain)" ]
 printf 'fm-local-sync: all cases passed\n'
+
+# Auto-close and teardown share this content check; a squash must count as
+# integrated even though the worker's commits are not ancestors of main.
+# shellcheck source=bin/fm-local-branch-lib.sh
+. "$ROOT/bin/fm-local-branch-lib.sh"
+git init -q -b main "$scratch/content"
+git -C "$scratch/content" config user.name Test
+git -C "$scratch/content" config user.email test@example.invalid
+printf 'base\n' > "$scratch/content/file"
+git -C "$scratch/content" add file
+git -C "$scratch/content" commit -qm base
+git -C "$scratch/content" checkout -qb worker
+printf 'work\n' > "$scratch/content/file"
+git -C "$scratch/content" commit -qam work
+if fm_local_content_in_ref "$scratch/content" main; then fail 'unintegrated content was accepted'; fi
+git -C "$scratch/content" checkout -q main
+git -C "$scratch/content" merge --squash worker >/dev/null
+git -C "$scratch/content" commit -qm squash
+printf 'unrelated\n' > "$scratch/content/other"
+git -C "$scratch/content" add other
+git -C "$scratch/content" commit -qm unrelated
+git -C "$scratch/content" checkout -q worker
+if git -C "$scratch/content" merge-base --is-ancestor HEAD main; then fail 'squash fixture is vacuous'; fi
+fm_local_content_in_ref "$scratch/content" main || fail 'squashed content was not recognized'
+printf 'more work\n' >> "$scratch/content/file"
+git -C "$scratch/content" commit -qam more
+if fm_local_content_in_ref "$scratch/content" main; then fail 'extra unintegrated content was accepted'; fi
+printf 'integration content: unlanded refused, squash recognized, extra work refused\n'

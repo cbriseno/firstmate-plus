@@ -1363,9 +1363,13 @@ class Owner:
         # Detached listeners must not retain the caller's work mutation lock.
         env.pop('FM_WORK_OWNER_FD', None)
         def control(script, *args):
-            result = subprocess.run(['bash', str(BIN / script), *args], env=env,
-                                    text=True, capture_output=True,
-                                    timeout=90 if script == 'fm-control.sh' else 30)
+            # Local helpers own their condition-based bounds; an outer timeout can cut them off under load.
+            timeout = 90 if script == 'fm-control.sh' else None
+            command_env = env
+            if script == 'fm-procevent-lavish.sh' and args and args[0] == 'arm':
+                command_env = dict(env, FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS='90')
+            result = subprocess.run(['bash', str(BIN / script), *args], env=command_env,
+                                    text=True, capture_output=True, timeout=timeout)
             refuse(result.returncode != 0, 'owner_failed', result.stderr.strip()[:500]
                    or 'The review listener is unavailable.')
             return result.stdout
@@ -1392,6 +1396,9 @@ class Owner:
             r'https?://[^\s/?#@]+/session/[a-f0-9]{16}', url),
             'owner_failed', 'Lavish returned an invalid review URL.')
         source = control('fm-procevent-lavish.sh', 'source-id', artifact).strip()
+        result = self.presentations[task]
+        occurrence = result.get('outcome_occurrence')
+        outcome = (result.get('presentation') or {}).get('outcome') or {}
         registered = [line.split() for line in control('fm-procevent.sh', 'list').splitlines()
                       if line.split() and line.split()[0] == source]
         if registered:
@@ -1405,6 +1412,8 @@ class Owner:
             args = ['arm', artifact]
             if destination != 'primary':
                 args += ['--for', task]
+            if outcome.get('review') == 'needed' and isinstance(occurrence, str) and occurrence:
+                args += ['--review-task', task, '--review-occurrence', occurrence]
             control('fm-procevent-lavish.sh', *args)
         return dict(ok=True, url=url, owner=destination)
 

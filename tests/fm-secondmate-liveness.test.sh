@@ -370,6 +370,7 @@ add_sm_home() {
   printf 'charter\n' > "$home/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$home/.gitignore"
   git -C "$home" init -q -b main
+  fm_git_config_identity "$home"
   {
     printf 'window=%s\n' "$window"
     printf 'kind=secondmate\n'
@@ -380,7 +381,7 @@ add_sm_home() {
 
 run_bootstrap() {  # <fakebin> <home> <pane-cmd> <call-log> [extra env...] -> stdout
   local fb=$1 home=$2 cmd=$3 log=$4; shift 4
-  PATH="$fb:$BASE_PATH" TMUX='' FM_BACKEND=tmux FM_HOME="$home" \
+  PATH="$fb:$BASE_PATH" TMUX='' FM_BACKEND=tmux FM_HOME="$home" FM_BOOTSTRAP_NETWORK=only \
     FM_TEST_PANE_CMD="$cmd" FM_TMUX_CALL_LOG="$log" \
     env "$@" "$ROOT/bin/fm-bootstrap.sh" 2>&1
 }
@@ -392,7 +393,7 @@ test_sweep_respawns_confirmed_dead_secondmate() {
   fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
   log="$w/calls.log"; : > "$log"
 
-  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" FM_BOOTSTRAP_NETWORK=all)
 
   assert_not_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: respawned" \
     "a successfully respawned secondmate should be handled silently"
@@ -401,7 +402,7 @@ test_sweep_respawns_confirmed_dead_secondmate() {
   assert_contains "$(cat "$log")" "new-window" \
     "a confirmed-dead secondmate should actually be relaunched"
   assert_grep 'relaunched' "$w/home/state/.secondmate-relaunch-sm1" \
-    "the shared library did not leave the durable per-mate relaunch record"
+    "the shared library did not leave the durable per-mate relaunch record: $out"
   pass "sweep: a confirmed-dead secondmate endpoint is killed and respawned"
 }
 
@@ -603,7 +604,7 @@ test_sweep_never_acts_on_transient_unreadability() {
 test_sweep_reports_missing_endpoint_relaunch_failure() {
   local w fb tmuxfb log out
   w=$(new_world sweep-missing-failure)
-  add_sm_home "$w" sm1 firstmate:fm-sm1 pi
+  add_sm_home "$w" sm1 firstmate:fm-sm1 claude
   fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
   log="$w/calls.log"; : > "$log"
 
@@ -786,25 +787,36 @@ test_remote_poll_probe_unreachable_preserves_route() {
   pass "poll probe: unreachable or inconclusive remote reads preserve the route"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_tmux_agent_state_classifies
 test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_sweep_respawns_confirmed_dead_secondmate
 test_sweep_recovers_the_durable_secondmate_account
 test_sweep_serializes_distinct_secondmate_relaunches
 test_sweep_leaves_alive_secondmate_untouched
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_sweep_never_acts_on_ambiguous_existing_process
 test_sweep_never_acts_on_transient_unreadability
 test_sweep_reports_missing_endpoint_relaunch_failure
 test_sweep_never_acts_on_unverified_harness_dead_reading
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_sweep_converges_no_retouch_once_alive
 test_sweep_skipped_under_detect_only
 test_sweep_noop_with_no_secondmate_meta
 test_sweep_skips_mate_whose_liveness_lock_is_held
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_relaunch_waits_for_other_mates_relaunch_lock
 test_sweep_refuses_relaunch_on_ledger_errors
 test_remote_poll_probe_maps_states
 test_remote_poll_probe_unreachable_preserves_route
+fi
 
-echo "# all fm-secondmate-liveness tests passed"
+echo "# fm-secondmate-liveness part ${FM_TEST_SUITE_PART:-0} passed"

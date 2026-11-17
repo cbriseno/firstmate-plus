@@ -42,6 +42,8 @@
 # start's deferred worker. Each scan uses an aggregate
 # FM_INACTIVE_RECONCILE_BUDGET_SECS deadline (default 10, valid 1..30) and
 # resumes after its last visited child on the next scan.
+# The secondmate ledger pass resumes after its last attempted child and wraps
+# to retry it on a later poll if the bounded pass was interrupted.
 # The scan enforces that budget itself through a whole-second deadline, and the
 # first due child of every scan is always visited with at least a one-second
 # state-read bound: whole-second arithmetic can otherwise round a small budget
@@ -553,26 +555,42 @@ report_child_ledger_locked() { # <id> <meta>
   return 1
 }
 
-# Every direct child's ledger, under its meta lock. File reads, plus a local
-# git reachability check for a ship done: with no delivery record yet, so it
-# runs on every poll in a secondmate home; a delivery failure is already queued as a
-# notice and never fails the scan.
+# Every direct child's ledger, under its meta lock. Resume after the last
+# attempted child if the outer deadline stopped the previous pass.
 ledger_pass() {
-  local meta id lock
-  for meta in "$STATE"/*.meta; do
-    [ -f "$meta" ] || continue
-    id=$(basename "$meta" .meta)
-    valid_id "$id" || continue
-    [ "$(meta_field "$meta" kind)" != secondmate ] || continue
-    lock=$(fm_meta_lock_path "$meta") || continue
-    fm_lock_try_acquire "$lock" || continue
-    if [ ! -f "$meta" ] || [ -L "$meta" ] \
-      || [ "$(meta_field "$meta" kind)" = secondmate ]; then
+  local meta id lock cursor range marker_tmp
+  cursor=''
+  if [ -f "$STATE/.inactive-ledger-cursor" ] && [ ! -L "$STATE/.inactive-ledger-cursor" ]; then
+    cursor=$(sed -n '1p' "$STATE/.inactive-ledger-cursor" 2>/dev/null || true)
+  fi
+  valid_id "$cursor" || cursor=''
+  for range in after through; do
+    [ "$range" != through ] || [ -n "$cursor" ] || continue
+    for meta in "$STATE"/*.meta; do
+      [ -f "$meta" ] || continue
+      id=${meta##*/}; id=${id%.meta}
+      valid_id "$id" || continue
+      case "$range" in
+        after) [ -z "$cursor" ] || [[ "$id" > "$cursor" ]] || continue ;;
+        through) [[ "$id" > "$cursor" ]] && continue ;;
+      esac
+      [ "$(meta_field "$meta" kind)" != secondmate ] || continue
+      lock=$(fm_meta_lock_path "$meta") || continue
+      fm_lock_try_acquire "$lock" || continue
+      if [ ! -f "$meta" ] || [ -L "$meta" ] \
+        || [ "$(meta_field "$meta" kind)" = secondmate ]; then
+        fm_lock_release "$lock"
+        continue
+      fi
+      marker_tmp=$(mktemp "$STATE/.inactive-ledger-cursor.XXXXXX") || { fm_lock_release "$lock"; return 1; }
+      if ! printf '%s\n' "$id" > "$marker_tmp" || ! mv -f "$marker_tmp" "$STATE/.inactive-ledger-cursor"; then
+        rm -f "$marker_tmp"
+        fm_lock_release "$lock"
+        return 1
+      fi
+      report_child_ledger_locked "$id" "$meta" || true
       fm_lock_release "$lock"
-      continue
-    fi
-    report_child_ledger_locked "$id" "$meta" || true
-    fm_lock_release "$lock"
+    done
   done
 }
 
@@ -604,6 +622,8 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   fi
   age=$(last_activity_age "$meta" "$status" "$turn")
   [ "$age" -ge "$FM_INACTIVE_RECONCILE_SECS" ] || return 0
+  # A stalled state read counts as a visit so later children remain reachable.
+  write_scan_marker "$id" || return 1
   state_line=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE=1 \
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
@@ -746,8 +766,7 @@ reconcile_direct_child() { # <id> <meta> <secondmate-id-or-empty> <timeout>
 # SCAN_FIRST_VISIT_PENDING is armed by scan() before its passes. The deadline
 # below is whole-second arithmetic, so a small budget can quantize to zero
 # between the deadline computation and these checks; without the guaranteed
-# first visit, such a scan would return 3 having examined no child at all while
-# write_scan_marker had already advanced the cursor past the skipped child.
+# first visit, such a scan could return 3 without examining any child.
 scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
   local cursor=$1 range=$2 deadline=$3 self=${4:-} meta id remaining rc first
   for meta in "$STATE"/*.meta; do
@@ -766,17 +785,17 @@ scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
     if [ "$first" -eq 0 ]; then
       [ "$(date +%s)" -lt "$deadline" ] || return 3
     fi
-    write_scan_marker "$id" || return 1
     remaining=$((deadline - $(date +%s)))
     if [ "$first" -eq 1 ] && [ "$remaining" -lt 1 ]; then
       remaining=1
     fi
     [ "$remaining" -gt 0 ] || return 3
-    reconcile_direct_child "$id" "$meta" "$self" "$remaining" || {
-      rc=$?
-      [ "$rc" -eq 3 ] && return 3
-      return "$rc"
-    }
+    rc=0
+    reconcile_direct_child "$id" "$meta" "$self" "$remaining" || rc=$?
+    # Do not skip a child when the outer watchdog interrupts its visit.
+    [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || return "$rc"
+    write_scan_marker "$id" || return 1
+    [ "$rc" -eq 0 ] || return "$rc"
   done
 }
 

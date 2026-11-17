@@ -320,6 +320,22 @@ test_check_gh_resolved_base_selects_fork() {
   pass "fm-role.sh check: gh-resolved base selects the exact fork target, otherwise legacy precedence holds"
 }
 
+# A fetch-only parent remote must not be treated as the publication destination
+# when its push URL explicitly disables pushes and the fork remains pushable.
+test_check_pushable_remote_selected_over_fetch_only_parent() {
+  local fork home out rc
+  fork=$(make_lineage_root pushable-fork https://github.com/cbriseno/firstmate-plus)
+  git -C "$fork" remote add upstream https://github.com/kunchenguid/firstmate
+  git -C "$fork" config remote.upstream.pushurl DISABLED
+  home=$(make_role_home pushable-maint 'maintainer github.com/cbriseno/firstmate-plus')
+
+  out=$(check_as "$fork" "$home" "$fork"); rc=$?
+  expect_code 0 "$rc" "the maintainer scope for the pushable fork must authorize (got: $out)"
+  assert_contains "$out" "authorized: maintainer scope github.com/cbriseno/firstmate-plus" \
+    "the gate must authorize the repository that accepts pushes"
+  pass "fm-role.sh check: an explicitly disabled parent push URL does not shadow the pushable fork"
+}
+
 # Lineage that cannot be determined refuses, and a firstmate-lineage project
 # with no determinable publication target is refused even under consent.
 test_check_undeterminable_lineage_and_target_refuse() {
@@ -613,6 +629,20 @@ test_spawn_gate_on_self_repo() {
   pass "fm-spawn.sh: the launch gate refuses a user/operator home and passes a matching maintainer"
 }
 
+test_spawn_gate_uses_pushable_fork() {
+  local fork home out
+  fork=$(clone_with_origin "$ROOT" spawn-pushable-fork https://github.com/cbriseno/firstmate-plus)
+  git -C "$fork" remote add upstream https://github.com/kunchenguid/firstmate
+  git -C "$fork" config remote.upstream.pushurl DISABLED
+  home=$(make_role_home spawn-pushable-maint 'maintainer github.com/cbriseno/firstmate-plus')
+  write_ship_brief "$home" spawn-pushable-a1
+
+  out=$(run_spawn "$home" spawn-pushable-a1 "$fork" claude --mode no-mistakes --yolo off)
+  assert_not_contains "$out" "spawn refused" \
+    "fm-spawn must accept the maintainer scope for the pushable fork, not the fetch-only parent"
+  pass "fm-spawn.sh: the launch gate matches the push-enabled fork when upstream pushes are disabled"
+}
+
 test_spawn_consent_agreement() {
   local home out rc
   [ -n "$PUB_TARGET" ] || {
@@ -726,6 +756,7 @@ test_check_wrong_scope_and_remote_presence_do_not_authorize
 test_check_equivalent_remote_spellings_are_one_repo
 test_check_fork_lineage_reaches_the_gate
 test_check_gh_resolved_base_selects_fork
+test_check_pushable_remote_selected_over_fetch_only_parent
 test_check_undeterminable_lineage_and_target_refuse
 test_check_task_consent_authorizes_one_task
 test_secondmate_cannot_self_grant
@@ -735,6 +766,7 @@ test_dod_block_renders_and_bounds_consent
 test_brief_consent_flag_bounds
 test_brief_self_repo_pre_gate
 test_spawn_gate_on_self_repo
+test_spawn_gate_uses_pushable_fork
 test_spawn_consent_agreement
 test_promote_gate_on_self_repo
 test_secondmate_spawn_refuses_consent_flag

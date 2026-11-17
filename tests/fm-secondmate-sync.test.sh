@@ -470,7 +470,7 @@ test_bootstrap_nudge_send_uses_state_override() {
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_STATE_OVERRIDE="$override_state" FM_SEND_SETTLE=0 FM_FAKE_TMUX_LOG="$log" \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 
   assert_contains "$out" "BOOTSTRAP_INFO: nudged fm-sm-instr with" \
     "nudge send should resolve fm-sm-instr through the effective state dir"
@@ -510,7 +510,7 @@ test_bootstrap_nudge_retry_rejects_malformed_marker_id() {
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 FM_FAKE_TMUX_LOG="$log" \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 
   assert_contains "$out" "NUDGE_SECONDMATES: secondmate ../escape: send failed: retry marker has unsafe id" \
     "malformed retry marker id should be rejected before target resolution"
@@ -534,7 +534,7 @@ test_bootstrap_nudge_failure_records_retry_marker() {
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 
   assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed:" \
     "failed nudge send should be surfaced as actionable bootstrap output"
@@ -557,7 +557,7 @@ test_bootstrap_nudge_retry_is_idempotent() {
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed:" \
     "precondition: first nudge should fail"
   marker="$w/home/state/.secondmate-nudge-pending/sm-instr.pending"
@@ -565,13 +565,13 @@ test_bootstrap_nudge_retry_is_idempotent() {
 
   rm -f "$w/home/state/sm-instr.inbox"   # unblock: the steer record can be written again
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    FM_SEND_SETTLE=0 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_SEND_SETTLE=0 FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_contains "$out" "BOOTSTRAP_INFO: nudged fm-sm-instr with" \
     "retry should send the pending nudge once the endpoint works"
   assert_absent "$marker" "successful retry should clear the marker"
 
   out2=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    FM_SEND_SETTLE=0 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_SEND_SETTLE=0 FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   [ -z "$out2" ] || fail "idempotent retry should converge to silence, got: $out2"
   pass "T8d bootstrap nudge retry is idempotent after success"
 }
@@ -587,7 +587,7 @@ test_bootstrap_nudge_retry_refuses_changed_home() {
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed:" \
     "precondition: first nudge should fail"
   marker="$w/home/state/.secondmate-nudge-pending/sm-instr.pending"
@@ -601,7 +601,7 @@ test_bootstrap_nudge_retry_refuses_changed_home() {
   rm -f "$w/home/state/sm-instr.meta.bak"
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    FM_SEND_SETTLE=0 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_SEND_SETTLE=0 FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed: retry target home changed" \
     "retry must not infer a nudge target outside the recorded failed home"
   assert_present "$marker" "ambiguous retry should keep marker for operator inspection"
@@ -626,7 +626,7 @@ case "\$cmd \$sub" in
     ;;
   "pane get")
     if [ "\$arg" = "${stale#*:}" ]; then
-      printf '{"result":{"pane":{"pane_id":"${stale#*:}"}}}\n'
+      printf '{"error":{"code":"pane_not_found","message":"gone"}}\n'
     elif [ "\$arg" = "${fresh#*:}" ]; then
       printf '{"result":{"pane":{"pane_id":"${fresh#*:}"}}}\n'
     else
@@ -698,7 +698,7 @@ SH
   out=$(PATH="$herdrfb:$toolchain:$BASE_PATH" HERDR_ENV=1 FM_BACKEND=herdr \
     FM_SEND_SETTLE=0 \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 
   # The nudge now rides the durable inbox: a stale endpoint can only swallow
   # the best-effort doorbell, never the steer itself, so the nudge is SENT
@@ -711,7 +711,7 @@ SH
     "the nudge should be durably recorded despite the stale endpoint"
 
   window=$(grep '^window=' "$meta" | tail -1 | cut -d= -f2-)
-  [ "$window" = "$fresh" ] || fail "respawn stub did not rotate meta window to '$fresh' (got '$window')"
+  [ "$window" = "$fresh" ] || fail "respawn stub did not rotate meta window to '$fresh' (got '$window'): $out"
   marker="$w/home/state/.secondmate-nudge-pending/sm-instr.pending"
   assert_absent "$marker" "a durably enqueued nudge owes no retry marker"
 
@@ -745,7 +745,7 @@ test_bootstrap_sweep_surfaces_skipped_home() {
 
   fakebin=$(make_fake_toolchain "$w")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 
   skip_line=$(printf '%s\n' "$out" | grep '^SECONDMATE_SYNC: secondmate sm-dirty: skipped:' || true)
   [ -n "$skip_line" ] || fail "no SECONDMATE_SYNC skip line emitted (got: $out)"
@@ -1426,38 +1426,57 @@ test_remote_launch_does_not_retarget_host_copy() {
   pass "R9 a remote launch leaves the home on the parent's commit while an ordinary spawn follows its own checkout"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_ff_updated
 test_ff_current
 test_ff_dirty
 test_scratchpad2_does_not_dirty_home
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_ff_diverged
 test_ff_inflight_feature_branch
 test_no_fetch_in_local_path
 test_sweep_nudge_requires_instruction_change
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_bootstrap_sweep_nudges_only_instruction_change
 test_bootstrap_nudge_send_uses_state_override
 test_bootstrap_nudge_retry_rejects_malformed_marker_id
 test_bootstrap_nudge_failure_records_retry_marker
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_bootstrap_nudge_retry_is_idempotent
 test_bootstrap_nudge_retry_refuses_changed_home
 test_nudge_retry_uses_fresh_herdr_endpoint_after_respawn
 test_bootstrap_sweep_surfaces_skipped_home
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_spawn_fast_forwards_before_launch
 test_spawn_warns_when_sync_skipped_before_launch
 test_seed_marker_clean_when_gitignored
 test_seed_marker_converges_existing_home
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_seed_marker_does_not_mask_real_dirt
 test_remote_sync_targets_primary_not_host_copy
 test_remote_sync_reports_the_changed_instruction_surface
 test_remote_sync_imports_from_host_copy
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_remote_sync_imports_from_origin
 test_remote_sync_uses_present_objects
 test_remote_sync_skips_unimportable_target
 test_remote_sync_skips_dirty_diverged_and_feature_branch
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
 test_remote_sync_without_target_follows_host_copy
 test_bootstrap_syncs_remote_home_to_primary_commit
 test_bootstrap_reports_outdated_host_actionably
 test_bootstrap_nudges_remote_home_only_when_owed
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 8 ]; then
 test_remote_launch_does_not_retarget_host_copy
+fi
 
-echo "# all fm-secondmate-sync tests passed"
+echo "# fm-secondmate-sync part ${FM_TEST_SUITE_PART:-0} passed"

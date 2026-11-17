@@ -24,8 +24,8 @@
 # A version 2 journal can participate in replacing only its exact same-identity
 # endpoint after metadata, home, session, workspace, tab, pane, parent, shape,
 # focus, and agent-absence checks all agree under the session lock.
-# Every ambiguous recovered launch uses the default flat home workspace when
-# duplicate-agent risk is independently absent.
+# Ordinary spawn recovery may fall back flat after excluding duplicate agents.
+# Control-plane replacement restores a dedicated projection when enabled.
 # Target resolution stays parallel to the tmux adapter in both layouts.
 # Projected create, move, and cleanup operations capture the named session's
 # exact active workspace and tab. On Herdr 0.7.5, an explicit close that
@@ -567,8 +567,10 @@ fm_backend_herdr_projection_journal_path() {  # <state-dir> <task-id>
 # non-authoritative attempt journal before any projection workspace create.
 # A hard-link publication in the same state directory gives create-if-absent
 # semantics, so concurrent attempts cannot overwrite each other's token.
-fm_backend_herdr_projection_journal_create() {  # <state-dir> <task-id>
-  local state=$1 id=$2 journal token tmp
+fm_backend_herdr_projection_journal_create() {  # <state-dir> <task-id> [restart]
+  # restart is used only under the task and presentation locks after the
+  # caller has proven the recorded and token-matched endpoints agent-free.
+  local state=$1 id=$2 restart=${3:-} journal token tmp
   case "$id" in
     ''|.*|*[!A-Za-z0-9._-]*)
       echo "error: invalid task id for herdr presentation journal" >&2
@@ -577,7 +579,9 @@ fm_backend_herdr_projection_journal_create() {  # <state-dir> <task-id>
   esac
   mkdir -p "$state" || return 1
   journal=$(fm_backend_herdr_projection_journal_path "$state" "$id")
-  if [ -e "$journal" ] || [ -L "$journal" ]; then
+  if [ "$restart" = restart ]; then
+    fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
+  elif [ -e "$journal" ] || [ -L "$journal" ]; then
     echo "error: herdr presentation journal already exists for $id; refusing a concurrent or repeated projected create" >&2
     return 1
   fi
@@ -595,7 +599,9 @@ fm_backend_herdr_projection_journal_create() {  # <state-dir> <task-id>
     rm -f "$tmp"
     return 1
   fi
-  if ! ln "$tmp" "$journal" 2>/dev/null; then
+  if [ "$restart" = restart ]; then
+    mv -f "$tmp" "$journal" || return 1
+  elif ! ln "$tmp" "$journal" 2>/dev/null; then
     rm -f "$tmp"
     echo "error: herdr presentation journal appeared concurrently for $id; refusing projected create" >&2
     return 1
@@ -2984,7 +2990,7 @@ fm_backend_herdr_projection_recovery_allows_flat() {  # <session> <journal> <tas
     '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id' 2>/dev/null)
   count=$(printf '%s\n' "$wsids" | awk 'NF { n += 1 } END { print n + 0 }')
   if [ "$count" -eq 0 ]; then
-    echo "warning: no exact herdr presentation token match for $id; leaving any stale space untouched and spawning flat" >&2
+    echo "warning: no exact herdr presentation token match for $id; leaving any stale space untouched; no duplicate agent found" >&2
     return 0
   fi
   if [ "$count" -gt 1 ]; then
@@ -3017,7 +3023,7 @@ EOF
   done <<EOF
 $wsids
 EOF
-  echo "warning: quarantined herdr presentation for $id is dead or agent-free; exact bound reclaim may proceed, otherwise spawning flat" >&2
+  echo "warning: quarantined herdr presentation for $id is dead or agent-free; replacement launch may proceed" >&2
   return 0
 }
 

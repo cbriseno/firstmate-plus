@@ -132,9 +132,9 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   exit 1
 fi
 
-wip=$(git -C "$PROJ" log --format='%h %s' "$DEFAULT..$BRANCH" | awk 'index(substr($0, index($0, " ") + 1), "WIP") && !found { print $1; found=1 }')
+wip=$(git -C "$PROJ" log --format='%h %s' "$DEFAULT..$BRANCH" | awk '{ subject=substr($0, index($0, " ") + 1) } (index(subject, "WIP") || subject == "Save pending work before worker close") && !found { print $1; found=1 }')
 if [ -n "$wip" ]; then
-  echo "REFUSED: commit $wip has WIP in its subject; rewrite the unpublished branch and retry." >&2
+  echo "REFUSED: commit $wip has an unfinished-work subject; rewrite the unpublished branch and retry." >&2
   exit 1
 fi
 

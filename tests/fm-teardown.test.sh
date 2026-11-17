@@ -1137,6 +1137,51 @@ test_patch_equivalent_integration_safety() {
   pass "equivalent integration patches allow cleanup while different patches and dirt refuse"
 }
 
+# git cherry omits merges: prove the complete resulting tree landed while
+# retaining both unlanded conflict resolutions and subsequent local work.
+test_replayed_merge_integration_safety() {
+  local kind case_dir original rc expected
+  for kind in main local extra different dirty; do
+    case_dir=$(make_case "replayed-merge-$kind")
+    write_meta "$case_dir" local-only ship
+    wt_commit_file "$case_dir" feature.txt delivered
+    git -C "$case_dir/wt" checkout -qb side HEAD^
+    wt_commit_file "$case_dir" side.txt delivered
+    git -C "$case_dir/wt" checkout -q fm/task-x1
+    git -C "$case_dir/wt" merge -q --no-ff side -m 'merge side'
+    original=$(git -C "$case_dir/wt" rev-parse HEAD)
+    git -C "$case_dir/project" checkout -q -B local "$original^"
+    # Use only legitimate destinations, with a rewritten merge and extra
+    # upstream content so HEAD and the integration tree are not identical.
+    if [ "$kind" != local ]; then
+      git -C "$case_dir/project" checkout -q -B main "$original^"
+    fi
+    printf '%s\n' delivered > "$case_dir/project/side.txt"
+    [ "$kind" != different ] || printf '%s\n' different > "$case_dir/project/side.txt"
+    printf '%s\n' upstream > "$case_dir/project/upstream.txt"
+    git -C "$case_dir/project" add side.txt upstream.txt
+    git -C "$case_dir/project" commit -qm 'replay merge on integration branch'
+    [ "$original" != "$(git -C "$case_dir/project" rev-parse HEAD)" ] || fail 'merge SHA was not rewritten'
+    case "$kind" in
+      extra) wt_commit_file "$case_dir" private.txt unlanded ;;
+      dirty) printf '%s\n' private > "$case_dir/wt/feature.txt" ;;
+    esac
+    expected=1
+    case "$kind" in main|local) expected=0 ;; esac
+    rc=0
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code "$expected" "$rc" "replayed merge/$kind: $(cat "$case_dir/stderr")"
+    if [ "$expected" = 1 ]; then
+      assert_present "$case_dir/state/task-x1.meta" 'merge refusal removed metadata'
+      [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$original" ] || [ "$kind" = extra ] \
+        || fail 'merge refusal changed branch head'
+    else
+      assert_absent "$case_dir/state/task-x1.meta" 'integrated merge left task metadata'
+    fi
+  done
+  pass 'rewritten merges close only when the complete committed content landed and the copy is clean'
+}
+
 test_local_only_truly_unpushed_refuses() {
   local case_dir rc
   case_dir=$(make_case truly-unpushed)
@@ -1784,7 +1829,21 @@ prepare_scout_teardown() {
   local case_dir=$1
   mkdir -p "$case_dir/data/task-x1"
   printf '%s\n' 'Scout report.' > "$case_dir/data/task-x1/report.md"
+  printf '%s\n' '<!doctype html><title>Scout report</title>' > "$case_dir/data/task-x1/report.html"
   printf '%s\n' 'decisions_reviewed=1' >> "$case_dir/state/task-x1.meta"
+}
+
+test_scout_requires_html_report() {
+  local case_dir rc=0
+  case_dir=$(make_case scout-missing-html)
+  write_meta "$case_dir" local-only scout
+  prepare_scout_teardown "$case_dir"
+  rm "$case_dir/data/task-x1/report.html"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "scout without HTML must not close"
+  assert_grep 'report.html' "$case_dir/stderr" "missing HTML diagnostic"
+  assert_present "$case_dir/state/task-x1.meta" "missing HTML removed task records"
+  pass "scout cannot close without an HTML report"
 }
 
 # Clone a nested repository into the copy and add one plain scratch file.
@@ -6053,6 +6112,7 @@ test_preserving_close_saves_and_records_branch
 
 test_local_integration_branch_safety
 test_patch_equivalent_integration_safety
+test_replayed_merge_integration_safety
 test_status_archive_opt_in
 test_status_archive_nested_secondmate_children
 test_status_archive_missing_status_noop
@@ -6127,6 +6187,7 @@ test_dirty_worktree_refuses
 test_untracked_only_refusal_diagnostic
 test_tracked_edit_refusal_diagnostic
 test_mixed_refusal_diagnostic
+test_scout_requires_html_report
 test_scout_backup_restores_local_changes
 test_scout_backup_failure_preserves_worktree
 test_scout_nested_clone_returns_with_no_untracked_entries

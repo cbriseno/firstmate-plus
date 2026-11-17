@@ -16,6 +16,24 @@ set -u
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (the herdr adapter parses its JSON)"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found (plistlib parses the owned launch-agent contract)"; exit 0; }
 
+segment=${FM_REMOTE_DOCTOR_SEGMENT:-all}
+case "$segment" in
+  all)
+    pids=()
+    for part in launchd session linux; do
+      FM_TEST_SKIP_ORPHAN_REAP=1 FM_REMOTE_DOCTOR_SEGMENT="$part" bash "$0" &
+      pids+=("$!")
+    done
+    trap 'kill "${pids[@]}" 2>/dev/null || true; wait || true' EXIT
+    result=0
+    for pid in "${pids[@]}"; do wait "$pid" || result=1; done
+    trap - EXIT
+    exit "$result"
+    ;;
+  launchd|session|linux) ;;
+  *) echo "unknown remote-doctor segment: $segment" >&2; exit 64 ;;
+esac
+
 TMP_ROOT=$(fm_test_tmproot fm-remote-doctor)
 LABEL=dev.firstmate.herdr.fm-remote
 INTERACTIVE_LABEL=dev.firstmate.herdr
@@ -237,7 +255,17 @@ SH
 #!/usr/bin/env bash
 set -u
 [ "${FM_FAKE_DSCL_FAIL:-0}" != 1 ] || exit 1
-[ "${FM_FAKE_DSCL_HANG:-0}" != 1 ] || exec /bin/sleep 30
+if [ "${FM_FAKE_DSCL_HANG:-0}" = 1 ]; then
+  exec perl -e '
+    my $start = time;
+    $SIG{ALRM} = sub {
+      open my $fh, ">", "$ENV{FM_FAKE_STATE}/dscl-alarm" or die $!;
+      print $fh time - $start < 10 ? "bounded\n" : "late\n";
+      exit 124;
+    };
+    sleep 30;
+  '
+fi
 if [ "${1:-}" = . ] && [ "${2:-}" = -read ] && [ "${3:-}" = "/Users/$(id -un)" ] && [ "${4:-}" = UserShell ]; then
   count_file="$FM_FAKE_STATE/dscl-count"
   count=$(cat "$count_file" 2>/dev/null || printf 0)
@@ -406,6 +434,7 @@ assert_no_dangerous_calls() { # <msg>
 
 # --- a host with no herdr is never ready, and --fix cannot install one -------
 
+if [ "$segment" = launchd ]; then
 new_case Darwin no-herdr gui
 doctor
 expect_code 1 "$DOCTOR_RC" "a host without herdr was reported ready"
@@ -622,6 +651,8 @@ pass "launchd failures are reported and delayed server readiness is awaited"
 
 # --- a running session served outside the Aqua login session is not ready ---
 
+fi
+if [ "$segment" = session ]; then
 new_case Darwin with-herdr gui
 doctor --fix
 expect_code 0 "$DOCTOR_RC" "the Aqua-owner fixture could not be initialized"
@@ -747,11 +778,9 @@ new_case Darwin with-herdr gui /bin/sh
 CASE_RESOLVE_DSCL=1
 CASE_DSCL_HANG=1
 CASE_ENV_SHELL=/bin/sh
-SECONDS=0
 doctor --fix
-elapsed=$SECONDS
 expect_code 0 "$DOCTOR_RC" "--fix did not fall back after a stalled Directory Services lookup"
-[ "$elapsed" -lt 10 ] || fail "a stalled Directory Services lookup blocked doctor for ${elapsed}s"
+assert_equals bounded "$(cat "$CASE_STATE/dscl-alarm" 2>/dev/null)" "a stalled Directory Services lookup was not bounded"
 assert_herdr_launch_agent_contract "$CASE_PLIST" "$CASE_BIN/herdr" /bin/sh
 pass "shell resolution bounds Directory Services and uses executable SHELL and POSIX fallbacks"
 
@@ -776,6 +805,8 @@ pass "repeated repair reuses one resolved login shell and remains a no-op"
 
 # --- linux has no launch agent, and --fix starts the server directly ---------
 
+fi
+if [ "$segment" = linux ]; then
 new_case Linux with-herdr no-gui
 doctor
 expect_code 1 "$DOCTOR_RC" "a linux host with a stopped herdr server was reported ready"
@@ -894,4 +925,5 @@ assert_contains "$DOCTOR_OUT" 'check entrypoint-link=human:' "an operator-owned 
   || fail "--fix overwrote a file it did not create"
 unset FM_ROOT_OVERRIDE
 pass "the entrypoint symlink is recreated when absent and never overwritten when operator-owned"
+fi
 

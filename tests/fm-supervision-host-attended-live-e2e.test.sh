@@ -13,9 +13,9 @@
 #   2. a main-only status event passes through the host and leaves a live
 #      successor watcher, and the hook's rewake (ledger outcome=rewake, banner
 #      delivered) starts a primary turn that drains and acknowledges it;
-#   3. that turn's end arms onto the successor, and a second main-only event is
-#      delivered the same way; it closes that successor, so the successor's own
-#      close is read instead of left in an unread capture;
+#   3. that turn's end re-arms, taking over the successor when it owns it,
+#      and a second main-only event delivers a new watcher close through the
+#      hook, rather than leaving that close in an unread capture;
 #   4. a remote-reply listener, reading a local append-only log that stands in
 #      for a remote home, stays owned throughout and delivers a third event;
 #   5. a routine close on another task that the host accepts for the
@@ -333,7 +333,7 @@ decide_at_handoff() { # <lab> <status-file> <line>
 
 # Steps 2-5 on the host under test: every hand-off reaches the idle primary.
 run_positive() {
-  local lab e1 e2 e3 e4 successor listener_start pass line injector handoff
+  local lab e1 e2 e3 e4 successor listener_start pass line injector handoff delivery_before delivery watcher
   lab=$(make_lab positive)
   start_primary "$lab"
   listener_start=$(listener_pid "$lab")
@@ -357,21 +357,26 @@ run_positive() {
   wait_until "$TURN_POLLS" host_log_since "$lab" "$e1" '	start	gen=' >/dev/null \
     || fail "positive: the event 1 turn end did not arm again"$'\n'"$(diagnose "$lab")"
   wait_until 300 host_live "$lab" || fail "positive: no host parked after the event 1 turn"$'\n'"$(diagnose "$lab")"
-  [ "$(watcher_pid "$lab")" = "$successor" ] \
-    || fail "positive: the next arm did not attach to the pass-through's successor (lock $(watcher_pid "$lab"), successor $successor)"$'\n'"$(diagnose "$lab")"
-  evidence "positive step 3: turn end re-armed: $(host_log_since "$lab" "$e1" '	start	gen=' | tail -n 1 | cut -f1-3); still following successor $successor"
+  # The host may take over the detached successor, replacing its watcher.
+  wait_until 300 watcher_live "$lab" || fail "positive: the next arm left no live watcher"$'\n'"$(diagnose "$lab")"
+  evidence "positive step 3: turn end re-armed: $(host_log_since "$lab" "$e1" '	start	gen=' | tail -n 1 | cut -f1-3); handoff successor $successor; current watcher $(watcher_pid "$lab")"
 
   sleep 3
+  delivery_before=$(tail -n 1 "$lab/fm/state/.watch-deliveries.log")
   e2=$(fire "$lab" "$lab/fm/state/demo.status" lab-e2 'pick region east or west')
   evidence "positive step 3: event 2 appended at $e2"
   wait_until "$TURN_POLLS" acked_since "$lab" "$e2" \
     || fail "positive: the idle primary was not woken for event 2"$'\n'"$(diagnose "$lab")"
   [ -n "$(rewakes_since "$lab" "$e2")" ] || fail "positive: no Stop-hook rewake reached the transcript for event 2"
-  line=$(grep -F "watcher_pid=$successor	" "$lab/fm/state/.watch-cycle-exits.log" | tail -n 1)
-  # The turn end's arm follows the successor rather than owning it, so its
-  # delivery of the successor's close reads attached-delivered-wake.
-  case "$line" in *'reason=attached-delivered-wake'*) ;; *) fail "positive: the arm following successor $successor did not deliver its close on event 2: $line" ;; esac
-  evidence "positive step 3/4: successor $successor closed: $(printf '%s' "$line" | cut -f1-8 | tr '\t' ' ')"
+  # Follow the actual delivery, including a replacement started by take-over.
+  # A takeover row alone is not evidence of a wake: require a new delivery too.
+  delivery=$(tail -n 1 "$lab/fm/state/.watch-deliveries.log")
+  [ -n "$delivery" ] && [ "$delivery" != "$delivery_before" ] \
+    || fail "positive: event 2 has no new watcher delivery record"$'\n'"$(diagnose "$lab")"
+  watcher=$(printf '%s\n' "$delivery" | cut -f1)
+  line=$(grep -F "watcher_pid=$watcher	" "$lab/fm/state/.watch-cycle-exits.log" | tail -n 1)
+  [ -n "$line" ] || fail "positive: delivering watcher $watcher has no cycle close"
+  evidence "positive step 3/4: delivering watcher $watcher closed: $(printf '%s' "$line" | cut -f1-8 | tr '\t' ' ')"
   evidence "positive step 3/4: its close was delivered: rewake at $(rewakes_since "$lab" "$e2" | head -n 1); host log: $(host_log_since "$lab" "$e2" '	pass-through	' | head -n 1 | cut -f1-4)"
   listener_live "$lab" || fail "positive: the stand-in remote listener lost its owner by event 2"$'\n'"$(diagnose "$lab")"
   wait_until "$TURN_POLLS" turn_idle "$lab" "$e2" || fail "positive: the event 2 turn never ended"$'\n'"$(diagnose "$lab")"
@@ -398,8 +403,8 @@ run_positive() {
     "needs-decision [at=$(date +%s)] [key=lab-e4]: pick a rollout window" > "$lab/handoff.out" &
   injector=$!
   e4=$(date +%s)
-  printf 'working [at=%s]: rollout prep started\n' "$e4" >> "$lab/fm/state/demo2.status"
-  evidence "positive step 5: event 4, a routine working line on task demo2, appended at $e4"
+  printf 'done [at=%s]: rollout prep complete\n' "$e4" >> "$lab/fm/state/demo2.status"
+  evidence "positive step 5: event 4, a completion close on task demo2, appended at $e4"
   wait "$injector" \
     || fail "positive: the host never handed event 4 to the supervision session (the recovery marker never read handling)"$'\n'"$(diagnose "$lab")"
   handoff=$(cat "$lab/handoff.out")

@@ -3068,6 +3068,54 @@ spawn_deferred_tick() {
   return 0
 }
 
+# Batch each changed dispatch opportunity; admitted capacity is information, not a worker decision.
+ready_work_tick() {
+  local now capacity free ready snapshot ids signature marker reason
+  [ -f "$CONFIG/lane-capacity" ] || { rm -f -- "$STATE/.ready-work-wake"; return 0; }
+  now=$(date +%s)
+  [ "$((now - ${READY_WORK_PROBED_AT:-0}))" -ge 30 ] || return 0
+  READY_WORK_PROBED_AT=$now
+  marker="$STATE/.ready-work-wake"
+  capacity=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    bash "$SCRIPT_DIR/fm-capacity.sh" --json 2>/dev/null) || return 0
+  free=$(printf '%s' "$capacity" | jq -r 'if .verdict.admit then .verdict.free_lanes else 0 end') || return 0
+  [[ "$free" =~ ^[0-9]+$ ]] || return 0
+  if [ "$free" -eq 0 ]; then
+    rm -f -- "$marker"
+    return 0
+  fi
+  ready=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" ready 2>/dev/null) || return 0
+  snapshot=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" work snapshot 2>/dev/null) || return 0
+  ids=$(FM_READY_ROWS="$ready" python3 -c '
+import csv, json, os, sys
+lines = os.environ["FM_READY_ROWS"].splitlines()
+rows = []
+for i, line in enumerate(lines):
+    if line.startswith("ready["):
+        for row in lines[i + 1:]:
+            if not row.startswith("  "): break
+            rows.append(next(csv.reader([row.strip()]))[0])
+        break
+ready = set(rows)
+data = json.load(sys.stdin)
+if not isinstance(data.get("tasks"), list): sys.exit(1)
+tasks = data["tasks"]
+print(" ".join(sorted(t["key"][5:] for t in tasks if t["key"].startswith("task:")
+    and t["key"][5:] in ready and t["backlog_state"] == "queued" and t["state"] == "ready")))
+' <<< "$snapshot" 2>/dev/null) || return 0
+  if [ -z "$ids" ]; then
+    rm -f -- "$marker"
+    return 0
+  fi
+  signature="$free:$ids"
+  [ "$(cat "$marker" 2>/dev/null || true)" != "$signature" ] || return 0
+  reason="check: ready work with $free free lanes: review and dispatch eligible queued tasks ($ids)"
+  watch_info_record scheduling "$reason"
+  printf '%s\n' "$signature" > "$marker" || return 1
+}
+
 # Cheap disk probe only; the dispatched worker owns du and cleanup.
 cleanup_tick() {
   local now total free floor reason last marker
@@ -3634,6 +3682,7 @@ while :; do
     paused_until_resume "$(fm_meta_get "$parked" window)" "$task" "$(fm_meta_get "$parked" park_wait)"
   done
   spawn_deferred_tick || exit 1
+  ready_work_tick || exit 1
 
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.
@@ -3701,16 +3750,26 @@ while :; do
   fi
   # Publication without registration is invisible to the generic runner.
   # Discover only this home's boards, including those whose worker has gone,
-  # and wake for missing coverage without consuming or acknowledging feedback.
+  # restore missing registrations and wake for missing coverage without acknowledging feedback.
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-lavish-watch.sh" scan >/dev/null 2>&1; then
     if [ "$(age_of "$STATE/.lavish-watch-error")" -ge 300 ]; then
-      if fm_wake_append check "procevent:lavish-watch:unattended:unavailable-$(date +%s)-$RANDOM" \
+      if watch_event_append check "procevent:lavish-watch:unattended:unavailable-$(date +%s)-$RANDOM" \
         "check: unattended Lavish board coverage unavailable; run bin/fm-lavish-watch.sh scan to inspect the failure"; then
         touch "$STATE/.lavish-watch-error"
       fi
     fi
   else
     rm -f -- "$STATE/.lavish-watch-error"
+  fi
+  # Process-to-event liveness repair. This never discovers a result by polling:
+  # each registered source has its own child blocking on that source, and this
+  # only republishes results already captured durably and restarts a source
+  # whose owner is gone. It is a no-op with nothing registered.
+  if [ -d "$STATE/procevent" ]; then
+    if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1; then
+      watch_event_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
+        "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
+    fi
   fi
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
@@ -4092,39 +4151,17 @@ EOF
           esac
           continue
         fi
-        # Recheck endpoint liveness even when this pane hash was previously
-        # observed alive or unknown; the endpoint can die without pane output changing.
-        agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
-        case "$agent_state" in
-          dead|missing)
-            # Endpoint loss does not cancel a worker's declared wait.
-            if status_is_paused_or_captain_held "$last"; then
-              if ! afk_present; then
-                handle_paused_stale "$w" "$task" "$h"
-                printf '%s' "$h" > "$sf"
-                continue
-              fi
-              # The ordinary away-mode handoff below owns this declared wait.
-            else
-              wedge_dead_record "$w" "$ssf" stale 0 "$h" "$task" "$agent_state"
-              printf '%s' "$h" > "$sf"
-              continue
-            fi
-            ;;
-          *)
-            [ "$agent_state" != alive ] || rm -f "$STATE/.dead-reported-$key"
-            # An opted-in churn deferral needs its quiet-pane fallback even
-            # when this harness cannot provide recovery-grade liveness.
-            if { [ "$agent_state" != alive ] \
-              && { [ ! -e "$CONFIG/turnend-churn-absorb" ] || [ ! -e "$STATE/.churn-since-$key" ]; }; } \
-              || stale_is_terminal "$w" "$STATE" || status_is_paused_or_captain_held "$last"; then
-              printf '%s' "$h" > "$sf"
-              wedge_episode_end "$key"
-              clear_write_tracking "$key"
-              continue
-            fi
-            ;;
-        esac
+        # A verified idle turn can need supervision even when process-level
+        # liveness is unreadable. Unknown activity alone still proves no stop.
+        if { [ "$agent_state" != alive ] \
+          && [ "${WINDOW_BUSY_VERDICT%% *}" != idle ] \
+          && { [ ! -e "$CONFIG/turnend-churn-absorb" ] || [ ! -e "$STATE/.churn-since-$key" ]; }; } \
+          || stale_is_terminal "$w" "$STATE" || status_is_paused_or_captain_held "$last"; then
+          printf '%s' "$h" > "$sf"
+          wedge_episode_end "$key"
+          clear_write_tracking "$key"
+          continue
+        fi
         if afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before,
           # except that a captain-held pane is never handed over while the

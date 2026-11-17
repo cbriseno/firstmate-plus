@@ -263,6 +263,12 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ## Herdr
 
+### Replacement presentation
+
+On 2026-11-16, Linux and Herdr 0.9.5 passed the isolated real-backend replacement regression: a destroyed endpoint regained a dedicated space, a correctly projected endpoint retained its exact address, and an already-flat task regained a dedicated space.
+The fixture uses an inert harness; it proves endpoint placement without submitting a vendor prompt.
+`FM_TEST_HERDR_PROJECTION_RELAUNCH=1 bash bin/fm-test-run.sh tests/fm-control-herdr-projection-e2e.test.sh` refreshes this proof through the guarded named-session lab and verifies the unchanged default-session tripwire at cleanup.
+
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 

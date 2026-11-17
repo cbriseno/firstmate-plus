@@ -28,6 +28,8 @@ fm_git_identity fmtest fmtest@example.invalid
 make_repo() {
   local dir=$1
   git init -q -b main "$dir"
+  git -C "$dir" config user.name fmtest
+  git -C "$dir" config user.email fmtest@example.invalid
   git -C "$dir" commit -q --allow-empty -m init
   fm_git_add_origin "$dir" "$dir.origin.git"
   printf '%s\n' "$dir"
@@ -141,16 +143,14 @@ test_brief_assertion_precedes_branch() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/tangle-brief-cc3/brief.md"
   assert_present "$brief" "brief was not scaffolded"
-  # shellcheck disable=SC2016 # The generated instruction keeps the stamp literal.
-  assert_grep 'blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree' "$brief" \
-    "brief is missing the isolation blocked-status contract"
-  assert_grep "The path check is authoritative" "$brief" \
-    "brief must make the path check authoritative"
+  assert_grep 'pwd -P' "$brief" "brief must check the working directory"
+  assert_grep 'git rev-parse --show-toplevel' "$brief" "brief must check the worktree root"
+  assert_grep 'report blocked and stop before branching' "$brief" "brief must stop on an isolation failure"
   assert_no_grep "A reliable test that you are in a linked worktree" "$brief" \
     "brief must not present git-dir/common-dir as decisive"
   assert_no_grep "they are identical in the primary checkout" "$brief" \
     "brief must not claim the primary checkout has identical git dirs"
-  iso=$(grep -n 'launched in primary checkout, not an isolated worktree' "$brief" | head -1 | cut -d: -f1)
+  iso=$(grep -n 'report blocked and stop before branching' "$brief" | head -1 | cut -d: -f1)
   br=$(grep -n 'git checkout -b fm/' "$brief" | head -1 | cut -d: -f1)
   if [ -z "$iso" ] || [ -z "$br" ]; then
     fail "brief missing assertion ($iso) or branch step ($br)"
@@ -209,7 +209,7 @@ test_spawn_isolation_abort() {
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
-  expect_code 0 "$status" "spawn into a genuine isolated worktree should succeed"
+  expect_code 0 "$status" "spawn into a genuine isolated worktree should succeed: $out"
   assert_contains "$out" "spawned ok-isolated-ff6" "isolated spawn did not report success"
   assert_not_contains "$out" "isolated worktree" "isolated spawn wrongly tripped the guard"
   pass "fm-spawn: aborts unless the resolved worktree is a genuine, isolated worktree"

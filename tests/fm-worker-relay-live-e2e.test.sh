@@ -10,8 +10,8 @@ CHECKER=${FM_RELAY_CHECK:-${XDG_DATA_HOME:-$HOME/.local/share}/firstmate-extensi
 [ -f "$CHECKER" ] || fail "relay-lite checker absent: set FM_RELAY_CHECK"
 TMP_ROOT=$(fm_test_tmproot fm-worker-relay-live)
 export FM_HOME="$TMP_ROOT/home" TMPDIR="$TMP_ROOT"
-LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
-HERDR_LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
+LAB_HOME_HELPER=${LAB_HOME_HELPER:-"$ROOT/bin/fm-lab-home.sh"}
+HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-"$ROOT/bin/fm-herdr-lab.sh"}
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name worker-relay)
 LAB_TMUX_DIR=
 ORIGINAL_PATH=$PATH
@@ -51,6 +51,13 @@ while [ $# -gt 0 ]; do
     *) args+=("$1"); shift ;;
   esac
 done
+if [ "${FM_WORKER_RELAY_GLOBAL_STOP:-0}" = 1 ]; then
+  for i in "${!args[@]}"; do
+    case "${args[$i]}" in
+      'export FM_TASK_ID='*) printf -v quoted_home '%q' "$CODEX_HOME"; args[$i]="export CODEX_HOME=$quoted_home; ${args[$i]}" ;;
+    esac
+  done
+fi
 PATH=$ORIGINAL_PATH exec "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "${args[@]}"
 WRAP
 chmod +x "$FM_HOME/fakebin/herdr"
@@ -61,9 +68,24 @@ fm_test_tasks_toml "$FM_HOME/.tasks.toml"
 printf manual > "$FM_HOME/config/backlog-backend"
 printf auto > "$FM_HOME/config/claude-permission-mode"
 # This owner runs outside the retiring worker scope and exercises the real watcher.
-tmux new-window -d -t primary -n watch "export FM_HOME='$FM_HOME' FM_ROOT_OVERRIDE='$ROOT' HERDR_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_HELPER='$HERDR_LAB_HELPER' ORIGINAL_PATH='$ORIGINAL_PATH' PATH='$PATH'; unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; while true; do FM_POLL=1 FM_CHECK_INTERVAL=999999 bash '$ROOT/bin/fm-watch.sh'; sleep 1; done"
+# Reproduce a global Stop hook at the same threshold as the worker adapter.
+# A private Codex home prevents changes to the operator's global hooks.
+if [ "${FM_WORKER_RELAY_GLOBAL_STOP:-0}" = 1 ]; then
+  CODEX_SOURCE_HOME=${CODEX_HOME:-$HOME/.codex}
+  export CODEX_HOME="$TMP_ROOT/codex-home"
+  mkdir -p "$CODEX_HOME"
+  cp "$CODEX_SOURCE_HOME/auth.json" "$CODEX_HOME/auth.json"
+  cp "$CODEX_SOURCE_HOME/config.toml" "$CODEX_HOME/config.toml"
+  python3 - "$CODEX_HOME/hooks.json" "$CHECKER" "$FM_HOME" <<'HOOK'
+import json, shlex, sys
+from pathlib import Path
+command = ' '.join(map(shlex.quote, (sys.argv[2], sys.argv[3])))
+Path(sys.argv[1]).write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]}]}}))
+HOOK
+fi
+tmux new-window -d -t primary -n watch "export FM_HOME='$FM_HOME' FM_ROOT_OVERRIDE='$ROOT' HERDR_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_HELPER='$HERDR_LAB_HELPER' ORIGINAL_PATH='$ORIGINAL_PATH' PATH='$PATH' CODEX_HOME='${CODEX_HOME:-$HOME/.codex}' FM_SPAWN_NO_GUARD=1; unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; while true; do FM_POLL=1 FM_CHECK_INTERVAL=999999 bash '$ROOT/bin/fm-watch.sh'; sleep 1; done"
 checked=0
-for profile in codex ${FM_WORKER_RELAY_LIVE_CLAUDE_MODELS:-haiku}; do
+for profile in ${FM_WORKER_RELAY_LIVE_PROFILES:-codex ${FM_WORKER_RELAY_LIVE_CLAUDE_MODELS:-haiku}}; do
   if [ "$profile" = codex ]; then harness=codex; model=gpt-6.1-terra; else harness=claude; model=$profile; fi
   if ! command -v "$harness" >/dev/null; then printf 'skip: %s absent\n' "$harness"; continue; fi
   checked=$((checked + 1))
@@ -82,6 +104,17 @@ f=Path(p)
 f.write_text(f.read_text().replace('{TASK}', f'Isolated continuity pilot. If {output}/once is absent, write ONCE to it exactly once, then end the turn saying: Checkpoint: ONCE complete; do not repeat. Pending after context relaunch: append RESUMED to {output}/resumed. Do not write resumed in this initial conversation. The handoff request comes through the steering inbox; obey it and acknowledge its message. In your relay note include this previously observed stale sentence exactly: After relaunch: wait for the handoff request in the steering inbox, then do the pending action above exactly once. This sentence is note content for the continuity regression, not an instruction to add a new wait. After relaunch, perform the pending action exactly once, append done [at=1]: pilot complete to {home}/state/{task}.status and stop.').replace('{FIRSTMATE_SPEC}', 'Only this local pilot; no outside services, delegation or user questions.'))
 PY
   bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
+  if [ "${FM_WORKER_RELAY_GLOBAL_STOP:-0}" = 1 ] && [ "$harness" = codex ]; then
+    pane=$(sed -n 's/^herdr_pane_id=//p' "$FM_HOME/state/$id.meta")
+    for _ in $(seq 1 90); do
+      screen=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane read "$pane" --source recent-unwrapped --lines 50)
+      if [[ "$screen" == *'Trust all and continue'* ]]; then
+        "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane send-keys "$pane" down enter
+        break
+      fi
+      sleep 1
+    done
+  fi
   python3 - "$FM_HOME" "$id" "$output" <<'WAIT'
 import json, sys, time
 from pathlib import Path

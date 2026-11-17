@@ -6,6 +6,9 @@
 # Usage:
 #   fm-procevent.sh register <adapter> <source-id> -- <argv>...
 #   fm-procevent.sh register-task <adapter> <source-id> <task-id> -- <argv>...
+#   fm-procevent.sh recover-lavish <source-id> <task-id|-> <artifact>
+#   fm-procevent.sh register <adapter> <source-id> [--review-task <task-id> --review-occurrence <id>] -- <argv>...
+#   fm-procevent.sh register-task <adapter> <source-id> <task-id> [--review-occurrence <id>] -- <argv>...
 #   fm-procevent.sh register-extension <adapter> <source-id> --config-ref <reference>
 #   fm-procevent.sh start <source-id>
 #   fm-procevent.sh ensure-listening <source-id>
@@ -29,6 +32,9 @@
 #            executed directly, so there is no shell surface and no argument
 #            splitting. Built-in adapters register sources; nothing here parses
 #            user text.
+# recover-lavish
+#            Restore an absent Lavish registration with its recorded owner;
+#            never replace a source or claim and never acknowledge a round.
 # register-task
 #            Record a worker-owned built-in source. Its one source record
 #            persists across rounds, and re-registration by the same task
@@ -37,6 +43,8 @@
 #            staged `--agent-reply-file` is handed to the adapter's
 #            `deliver-reply` under the source lock once the task is eligible,
 #            so a refused arm never posts it and a failed post publishes no registration.
+#            Lavish may bind a report review with `--review-occurrence`; the
+#            exact task and occurrence are retained in the source registration.
 # register-extension
 #            Resolve an explicitly enabled home-local process-event-adapter/1
 #            binding, verify its package and handshake, and record the source
@@ -174,6 +182,9 @@
 # for re-announcement, so the handler still receives it exactly as before. This
 # runner still inspects nothing and still names no adapter-specific condition.
 # External bindings deliberately receive no autohandle operation.
+# A built-in may separately apply a capture-bound review mark before publication
+# by advertising `capture-review-supported` and implementing `capture-review`;
+# failure leaves the result available to its normal handler.
 #
 # Built-in announcement is adapter-owned through one more seam of the same kind. An
 # adapter that answers exit 0 to `bin/fm-procevent-<adapter>.sh self-announcing`
@@ -510,6 +521,17 @@ feed_reconcile_requests() {  # <adapter> <source-id> <result-file>
         --source-id "$id" --source "the captured result $id sequence $seq" >/dev/null 2>&1
 }
 
+# A capture may have an adapter-owned effect bound to the version reviewed when
+# its listener opened. Run it only after durable capture and before publication;
+# failures leave the captured result visible to its ordinary handler.
+adapter_capture_review() {  # <adapter> <source-id> <result-file>
+  local adapter=$1 id=$2 result=$3 script
+  script=$(adapter_script "$adapter")
+  [ -f "$script" ] && [ ! -L "$script" ] || return 2
+  "$script" capture-review-supported >/dev/null 2>&1 || return 2
+  "$script" capture-review "$id" "$result"
+}
+
 read_adapter() {  # <source-id>
   local f; f=$(source_file "$1")
   [ -f "$f" ] && [ ! -L "$f" ] || return 1
@@ -549,12 +571,24 @@ extension_registration_replacement_safe_locked() {  # <source-id>
 }
 
 cmd_register() {
-  local adapter=${1-} id=${2-} sep=${3-}
-  shift 3 2>/dev/null || usage
+  local adapter=${1-} id=${2-} sep review_task='' review_occurrence=''
+  shift 2 2>/dev/null || usage
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    case "$1" in
+      --review-task) [ "$#" -ge 2 ] || usage; review_task=$2; shift 2 ;;
+      --review-occurrence) [ "$#" -ge 2 ] || usage; review_occurrence=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || usage
+  sep=$1
+  shift
   fm_procevent_adapter_valid "$adapter" || die "adapter name must be lowercase alphanumeric or dash: $adapter"
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe and at most 64 characters: $id"
   [ "$sep" = -- ] || usage
   [ "$#" -ge 1 ] || die "register needs at least one argv element after --"
+  fm_procevent_review_context_valid "$review_task" "$review_occurrence" \
+    || die "review task and occurrence must be supplied together with valid values"
   local arg
   for arg in "$@"; do
     case "$arg" in *$'\n'*) die "argv elements cannot contain newlines" ;; esac
@@ -571,7 +605,8 @@ cmd_register() {
     fm_procevent_source_lock_release "$id"
     die "cannot replace extension registration while its prior runner remains active: $id"
   fi
-  if ! fm_procevent_registration_publish_locked "$STATE" "$adapter" "$id" "$@"; then
+  if ! fm_procevent_registration_publish_locked "$STATE" "$adapter" "$id" \
+      "$review_task" "$review_occurrence" "$@"; then
     fm_procevent_source_lock_release "$id"
     die "cannot publish the registration"
   fi
@@ -580,12 +615,49 @@ cmd_register() {
   printf 'registered: %s (%s)\n' "$id" "$adapter"
 }
 
+# Restore discovery's missing registration without acknowledging any round.
+# Existing registrations and claims always retain their current owner.
+cmd_recover_lavish() {
+  local id=${1-} task=${2-} artifact=${3-} actual
+  [ "$#" -eq 3 ] || usage
+  fm_procevent_source_id_valid "$id" || die "invalid source id"
+  [ "$task" = - ] || fm_pr_task_id_valid "$task" || die "invalid task id"
+  actual=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$artifact") || return 1
+  [ "$actual" = "$id" ] || die "artifact does not match source id"
+  state_root_bind create || die "cannot prepare process-event state"
+  fm_procevent_source_lock_acquire "$id" || return 1
+  if [ -e "$(source_file "$id")" ] || [ -L "$(source_file "$id")" ] \
+    || [ -e "$(fm_procevent_claim_path "$id")" ] || [ -L "$(fm_procevent_claim_path "$id")" ]; then
+    fm_procevent_source_lock_release "$id"
+    return 0
+  fi
+  if [ "$task" = - ]; then
+    fm_procevent_registration_publish_locked "$STATE" lavish "$id" '' '' \
+      "$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$artifact"
+  else
+    fm_procevent_task_registration_publish_locked "$STATE" lavish "$id" "$task" '' \
+      "$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$artifact"
+  fi
+  local rc=$?
+  fm_procevent_source_lock_release "$id"
+  return "$rc"
+}
+
 cmd_register_task() {
-  local adapter=${1-} id=${2-} task=${3-} sep=${4-} result pending pending_adapter
+  local adapter=${1-} id=${2-} task=${3-} sep review_occurrence='' result pending pending_adapter
   local reply_source='' reply_dest='' stale arg i adopting=0 pending_owner prior_record=''
   local pending_rounds=0 delivered
   local -a argv=() kept=()
-  shift 4 2>/dev/null || usage
+  shift 3 2>/dev/null || usage
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    case "$1" in
+      --review-occurrence) [ "$#" -ge 2 ] || usage; review_occurrence=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || usage
+  sep=$1
+  shift
   [ "$adapter" = lavish ] || die "register-task is reserved for the Lavish adapter"
   fm_procevent_adapter_valid "$adapter" || die "adapter name must be lowercase alphanumeric or dash: $adapter"
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe and at most 64 characters: $id"
@@ -677,7 +749,7 @@ cmd_register_task() {
   fi
   if [ -n "$reply_dest" ]; then
     delivered=0
-    "$(adapter_script "$adapter")" deliver-reply "${argv[@]:1}" || delivered=$?
+    FM_PROCEVENT_REPLY_TASK="$task" "$(adapter_script "$adapter")" deliver-reply "${argv[@]:1}" || delivered=$?
     if [ "$delivered" -eq 0 ]; then
       rm -f -- "$reply_dest"
       reply_dest=''
@@ -699,7 +771,8 @@ cmd_register_task() {
       die "cannot arm source $id: its staged reply was not delivered"
     fi
   fi
-  if ! fm_procevent_task_registration_publish_locked "$STATE" "$adapter" "$id" "$task" "${argv[@]}"; then
+  if ! fm_procevent_task_registration_publish_locked "$STATE" "$adapter" "$id" \
+      "$task" "$review_occurrence" "${argv[@]}"; then
     [ -z "$prior_record" ] || rm -f -- "$prior_record"
     [ -z "$reply_dest" ] || rm -f -- "$reply_dest"
     fm_procevent_source_lock_release "$id"
@@ -1062,7 +1135,7 @@ cmd_start_public() {
 
 cmd_start() {
   local id=${1-} adapter out rc claimed bound_rc published_capture=0 handled_capture=0 self_announcing=0 task_owner=''
-  local extension_owner=0 extension_load_state extension_sequence='' extension_request_id=''
+  local extension_owner=0 extension_load_state extension_sequence='' extension_request_id='' capture_review_rc
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   require_runner_group
   fm_procevent_source_lock_acquire "$id" || die "cannot lock source: $id"
@@ -1441,6 +1514,14 @@ EOF
     printf 'answers-fed: %s\n' "$id"
   fi
 
+  if [ "$extension_owner" -eq 0 ]; then
+    capture_review_rc=0
+    adapter_capture_review "$adapter" "$id" "$durable" || capture_review_rc=$?
+    if [ "$capture_review_rc" -ne 0 ] && [ "$capture_review_rc" -ne 2 ]; then
+      printf 'review-mark-not-applied: %s (captured result remains available to its handler)\n' "$id" >&2
+    fi
+  fi
+
   # A self-announcing adapter's autohandle announces through its own durable
   # downstream channel, so publication waits until after application and covers
   # only what remains unhandled; every other adapter keeps the strict
@@ -1493,7 +1574,7 @@ EOF
     fm_procevent_claim_capture_reservation_remove_locked || true
     exec 6<&-
   fi
-  if [ "$handled_capture" -eq 1 ] && adopt_relisten; then
+  if [ "$handled_capture" -eq 1 ] && adopt_relisten "$durable"; then
     continue
   fi
   if [ -n "$task_owner" ] && adopt_relisten "$durable"; then
@@ -2647,6 +2728,7 @@ unset FM_PROCEVENT_CAPTURE_PINNED_INBOX FM_PROCEVENT_CAPTURE_ABSOLUTE_INBOX \
 case "${1-}" in
   register)           shift; cmd_register "$@" ;;
   register-task)      shift; cmd_register_task "$@" ;;
+  recover-lavish)     shift; cmd_recover_lavish "$@" ;;
   register-extension) shift; cmd_register_extension "$@" ;;
   start)              shift; cmd_start_public "$@" ;;
   ensure-listening)   shift; cmd_ensure_listening "$@" ;;

@@ -203,11 +203,12 @@ test_registries_avoid_git_worktree_root() {
   # registries beside tracked files. A concurrent git add during a suite then
   # committed them (observed on the claim-walk CI fix round). The helper must
   # keep registries and fixture roots outside that root for the whole run.
-  local harness repo dirfile child_dir pid tries entry
+  local harness repo nested dirfile child_dir pid tries entry
   harness=$(fm_test_tmproot fm-test-cleanup-gitroot-harness)
   repo="$harness/repo"
+  nested="$repo/nested/tmp"
   dirfile="$harness/child-dir"
-  mkdir -p "$repo"
+  mkdir -p "$nested"
   git -C "$repo" init -q
   bash -c '
     export TMPDIR="$1"
@@ -217,7 +218,7 @@ test_registries_avoid_git_worktree_root() {
     printf "%s\n" "$d" > "$3"
     # Hold the suite open so a concurrent add would see any root-side leak.
     while :; do sleep 0.1; done
-  ' _ "$repo" "$LIB" "$dirfile" &
+  ' _ "$nested" "$LIB" "$dirfile" &
   pid=$!
   tries=0
   while [ "$tries" -lt 100 ]; do
@@ -227,7 +228,7 @@ test_registries_avoid_git_worktree_root() {
   done
   [ -s "$dirfile" ] || fail "the git-root TMPDIR child never published its fixture root"
   child_dir=$(cat "$dirfile")
-  assert_present "$child_dir" "the git-root TMPDIR child did not create a fixture root"
+  assert_present "$child_dir" "the nested git-root TMPDIR child did not create a fixture root"
   case "$child_dir" in
     "$repo"|"$repo"/*)
       fail "fm_test_tmproot placed a fixture root inside the git worktree root: $child_dir"
@@ -239,8 +240,8 @@ test_registries_avoid_git_worktree_root() {
   kill -TERM "$pid"
   wait "$pid" 2>/dev/null || true
   assert_absent "$child_dir" \
-    "the git-root TMPDIR child's fixture root survived SIGTERM"
-  pass "test registries and fixture roots stay out of a git worktree TMPDIR"
+    "the nested git-root TMPDIR child's fixture root survived SIGTERM"
+  pass "test registries and fixture roots stay outside every git-root TMPDIR ancestor"
 }
 
 test_fixture_root_gone_after_normal_exit

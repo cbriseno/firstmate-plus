@@ -477,8 +477,12 @@ test_worker_role_names_skill_without_home_path() {
   fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 >"$role_file"
   assert_grep "Do not use \`request_user_input\`, \`request_user_input_async\`, or native question selectors" "$role_file" \
     "worker launch contract allows a question selector invisible to firstmate"
-  assert_grep "write \`blocked\` using the task status command with the full question and all options" "$role_file" \
-    "worker launch contract does not route questions through status"
+  assert_grep 'Before asking firstmate, follow worker-contract' "$role_file" \
+    "worker launch contract must classify questions before escalating"
+  assert_grep 'report it with all options using that status and the task status command' "$role_file" \
+    "worker launch contract does not route unanswered questions through classified status"
+  assert_no_grep "When an answer is required, write \`blocked\`" "$role_file" \
+    "worker launch contract must not override decision/wait classification"
   assert_grep 'wait for the reply in your steering inbox' "$role_file" \
     "worker launch contract does not name the reply channel"
   assert_grep "\`CONTRIBUTING.md\` and \`firstmate-coding-guidelines\` for Firstmate changes" "$role_file" \

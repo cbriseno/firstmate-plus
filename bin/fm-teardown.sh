@@ -58,9 +58,8 @@
 # its base branch instead of the default branch.
 # Squash merges collapse the branch's commits, so per-commit patch ids against main
 # no longer match, and a pipeline rebase can leave the local worktree diverged from
-# the PR head. A diverged copy is not treated as landed: path-set coverage, git
-# cherry, and merge-tree containment each fail to prove content landed without also
-# accepting unlanded edits to the same paths. Teardown still accepts a merged PR
+# the PR head. Shared paths alone do not prove delivery when conflict resolution
+# changed their content. Teardown accepts a merged PR
 # whose head contains the current local work (ancestor or equivalent patch ids),
 # or a clean content-in-default tree match. Anything else refuses.
 # The PR itself is resolved from the task's recorded pr= when present, or - when
@@ -77,6 +76,8 @@
 # All modes also accept commits reachable from the local default branch or the
 # local integration branch declared by fm-local-branch-lib.sh, including patches
 # git cherry recognizes as equivalent on those branches or their remote copies.
+# A clean merge into an integration destination that leaves its tree unchanged
+# also proves delivery, including replayed merges that git cherry omits.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Changed scouts are backed up under data/<id>/worktree-backup.*
@@ -1720,9 +1721,16 @@ unlanded_commits() {
       case "$ref" in refs/remotes/*/"$branch") refs+=("$ref") ;; esac
     done <<< "$remote_refs"
   done
-  local existing=() ref
+  local existing=() ref tip
   for ref in "${refs[@]}"; do
-    git -C "$WT" show-ref --verify --quiet "$ref" && existing+=("$ref")
+    tip=$(git -C "$WT" rev-parse --verify "$ref^{commit}" 2>/dev/null) || continue
+    case " ${existing[*]-} " in *" $tip "*) continue ;; esac
+    existing+=("$tip")
+  done
+  # Check the net result before walking individual patches. This also handles
+  # merge commits, which git cherry does not list.
+  for ref in ${existing[@]+"${existing[@]}"}; do
+    content_in_ref "$ref" && return 0
   done
   local commits equivalent="" cherry line commit
   commits=$(commits_with_content "$@" HEAD --not --remotes ${existing[@]+"${existing[@]}"}) || return 1
@@ -1814,15 +1822,16 @@ pr_is_merged() {
   return 0
 }
 
-# Is the branch's content already present in the up-to-date default branch? Fetches
-# first, then 3-way merges the default branch with HEAD: when HEAD introduces nothing
-# the default branch does not already contain (e.g. its change landed via squash) the
-# merged tree equals the default branch's tree. This isolates branch-only changes, so
-# unrelated commits the default branch gained past the merge-base do not count as
-# "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
-# so the caller refuses rather than guesses.
+# A clean merge that introduces no change proves HEAD's content is in this
+# integration destination, even when its commits were rewritten or squashed.
+# Conflicts and inspection failures remain inconclusive.
+content_in_ref() {  # <integration-ref>
+  fm_local_content_in_ref "$WT" "$1"
+}
+
+# Refresh the default (or declared base) branch before the remote fallback.
 content_in_default() {
-  local name=${BASE_BRANCH:-} ref default_tree merged_tree
+  local name=${BASE_BRANCH:-} ref
   [ -n "$name" ] || name=$(default_branch) || return 1
   if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
@@ -1832,11 +1841,7 @@ content_in_default() {
   else
     return 1
   fi
-  default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
-  [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
-  merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
-  [ "$merged_tree" = "$default_tree" ]
+  content_in_ref "$ref"
 }
 
 # Has the worktree's committed work actually LANDED, though its commits are not
@@ -2315,7 +2320,7 @@ preserve_task_worktree() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
+  local dirty_raw dirty unpushed_raw unpushed DEFAULT branch
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   if [ "$PRESERVE" = 1 ]; then
@@ -2348,22 +2353,11 @@ validate_worktree_teardown_safety() {
 
   if [ -n "$unpushed" ] && [ "$MODE" = local-only ]; then
     DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; return 1; }
-    if ! unmerged_raw=$(unlanded_commits --oneline 2>/dev/null); then
-      if worktree_safety_blocked_by_lock "commits not on $DEFAULT"; then
-        return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
-      fi
-      echo "REFUSED: cannot inspect worktree $WT for commits not on $DEFAULT." >&2
-      echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
-      return 1
-    fi
-    unmerged=$(printf '%s\n' "$unmerged_raw" | head -5)
-    if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
-      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
-      [ -n "$dirty" ] && report_worktree_dirt "$dirty"
-      [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
-      echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
-      return 1
-    fi
+    echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+    [ -n "$dirty" ] && report_worktree_dirt "$dirty"
+    printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unpushed" >&2
+    echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+    return 1
   elif [ -n "$dirty" ]; then
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     report_worktree_dirt "$dirty"
@@ -3543,6 +3537,11 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ]; the
   if [ ! -f "$REPORT" ]; then
     echo "REFUSED: scout task $ID has no report at $REPORT." >&2
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
+    exit 1
+  fi
+  if [ ! -s "$DATA/$ID/report.html" ]; then
+    echo "REFUSED: scout task $ID has no nonempty HTML report at $DATA/$ID/report.html." >&2
+    echo "Have the crewmate deliver the HTML report before closing the scout." >&2
     exit 1
   fi
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \

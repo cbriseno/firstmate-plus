@@ -419,7 +419,7 @@ classify_signal() {  # <reason-after-colon> <state>
 # first sight of a non-terminal stale it returns "self" and the caller records a
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state> [<span-record> <span-status>]
-  local win=$1 state=$2 record=${3-} rc=${4-} task last declared event rest
+  local win=$1 state=$2 record=${3-} rc=${4-} task last declared event rest activity
   task=$(window_to_task "$win" "$state")
   if [ -z "$rc" ]; then
     record=$(status_span_first_actionable_record "$state/$task.status" \
@@ -447,6 +447,17 @@ classify_stale() {  # <window> <state> [<span-record> <span-status>]
     # daemon's existing status-log classification.
     printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "$declared"
     return
+  fi
+  # A verified completed turn needs supervision now, even when its notify
+  # callback was lost. Keep unknown activity on the persistence path.
+  activity=$(fm_busy_classify_meta "$state/$task.meta" "$task" "$state")
+  if [ "$(fm_meta_get "$state/$task.meta" kind)" != secondmate ] \
+    && ! status_is_captain_relevant "$last" \
+    && [ "${activity%% *}" = idle ]; then
+    if [ "$(FM_STATE_OVERRIDE="$state" crew_absorb_class "$task")" = none ]; then
+      printf 'escalate|worker idle without a result or declared wait: %s' "$win"
+      return
+    fi
   fi
   if [ -n "$last" ] && status_is_captain_relevant "$last"; then
     # Independent of free-text captain-relevant matching: a nonterminal progress

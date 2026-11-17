@@ -155,6 +155,9 @@ init_changed_fixture_repo() {
   printf '# .claude/settings.json\n# bin/lib/fm-branch-dispatch.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
   printf '# bin/lib/fm-branch-dispatch.ts\n' >>"$repo/tests/fm-watch-recovery-loop.test.sh"
+  mkdir -p "$repo/.agents/skills/worker-contract"
+  : >"$repo/.agents/skills/worker-contract/report-theme.html"
+  : >"$repo/.agents/skills/worker-contract/theme-tokens.json"
   mkdir -p \
     "$repo/.agents/skills/example" \
     "$repo/.agents/skills/harness-adapters/references/common" \
@@ -173,6 +176,50 @@ init_changed_fixture_repo() {
   git -C "$repo" init -q
   git -C "$repo" add .
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+}
+
+test_numbered_parts_follow_their_base_suite() {
+  local repo listed out
+  repo=$(fm_test_tmproot fm-part-selection)
+  init_changed_fixture_repo "$repo"
+  printf '#!/usr/bin/env bash\necho base-ran\n' > "$repo/tests/fm-secondmate-safety.test.sh"
+  printf '#!/usr/bin/env bash\necho part-ran\n' > "$repo/tests/fm-secondmate-safety-part01.test.sh"
+  chmod +x "$repo/tests/fm-secondmate-safety"*.test.sh
+  git -C "$repo" add tests/fm-secondmate-safety-part01.test.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm 'add part fixture'
+  listed=$("$repo/bin/fm-test-run.sh" --list tests/fm-secondmate-safety.test.sh)
+  assert_contains "$listed" 'tests/fm-secondmate-safety-part01.test.sh' "selecting a base omitted its part"
+  listed=$("$repo/bin/fm-test-run.sh" --list --family secondmate)
+  assert_contains "$listed" 'tests/fm-secondmate-safety-part01.test.sh' "a numbered part lost its base family"
+  listed=$("$repo/bin/fm-test-run.sh" --list --changed --base HEAD)
+  assert_contains "$listed" 'tests/fm-secondmate-safety-part01.test.sh' "a changed base omitted its part"
+  listed=$("$repo/bin/fm-test-run.sh" --list tests/fm-secondmate-safety-part01.test.sh)
+  [ "$listed" = 'tests/fm-secondmate-safety-part01.test.sh' ] || fail "selecting one part expanded the base suite"
+  out=$(FM_LIVE=0 "$repo/bin/fm-test-run.sh" tests/fm-secondmate-safety.test.sh) || fail "partitioned suite failed: $out"
+  assert_contains "$out" 'base-ran' "base suite did not run"
+  assert_contains "$out" 'part-ran' "numbered part did not run"
+  assert_contains "$out" 'FM_TEST_SUMMARY total=2 failed=0' "partitioned selection did not run exactly twice"
+  pass "numbered parts inherit their base family and run with a named base"
+}
+
+test_runner_removes_readonly_worker_roots() {
+  local repo out
+  repo=$(fm_test_tmproot fm-readonly-worker)
+  init_changed_fixture_repo "$repo"
+  mkdir -p "$repo/tmp"
+  cat > "$repo/tests/fm-secondmate-safety.test.sh" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$TMPDIR/readonly"
+: > "$TMPDIR/readonly/file"
+chmod 500 "$TMPDIR/readonly"
+SH
+  cp "$repo/tests/fm-secondmate-safety.test.sh" "$repo/tests/fm-secondmate-safety-part01.test.sh"
+  chmod +x "$repo/tests/fm-secondmate-safety"*.test.sh
+  out=$(TMPDIR="$repo/tmp" FM_LIVE=0 "$repo/bin/fm-test-run.sh" tests/fm-secondmate-safety.test.sh 2>&1) \
+    || fail "readonly worker fixture failed: $out"
+  [ -z "$(find "$repo/tmp" -maxdepth 1 -name 'fm-test-run.*' -print -quit)" ] \
+    || fail "runner left a read-only worker root behind: $out"
+  pass "runner removes read-only fixture directories from worker roots"
 }
 
 # Build a repository with a primary checkout and one linked worktree, each
@@ -373,6 +420,20 @@ test_changed_dependency_selection_and_unmapped_failure() {
   assert_contains "$listed" "tests/fm-harness-adapter-instructions-live-e2e.test.sh" "harness adapter router selects opt-in instruction coverage"
   git -C "$repo" add .agents/skills/harness-adapters/SKILL.md
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm harness-adapter-router-change
+
+  printf '\n' >>"$repo/.agents/skills/worker-contract/report-theme.html"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "a worker-contract report asset selects its brief contract coverage"
+  git -C "$repo" add .agents/skills/worker-contract/report-theme.html
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm worker-contract-report-asset-change
+
+  printf '\n' >>"$repo/.agents/skills/worker-contract/theme-tokens.json"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "a non-shell skill resource selects its portable contract coverage"
+  git -C "$repo" add .agents/skills/worker-contract/theme-tokens.json
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm worker-contract-nonshell-asset-change
 
   printf '\n' >>"$repo/bin/fm-procevent-quota.sh"
   printf '\n' >>"$repo/bin/fm-quota-choose.sh"
@@ -1263,13 +1324,19 @@ test_jobs_requires_proven_isolated() {
 # proof is admitted and actually scheduled, so the admission rule is two-sided
 # rather than a blanket refusal that happens to pass its negative cases.
 test_jobs_admits_a_concurrent_safe_family() {
-  local tmp rc external
+  local tmp repo runner rc external script
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs-admit.XXXXXX")
-  # --list exits before the admission guard, so this has to be a real run for
-  # the assertion to mean anything. Two cheap watcher-wake-lock scripts exercise
-  # admission and the concurrent scheduler for real.
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  runner="$repo/bin/fm-test-run.sh"
+  # The runner still exercises real process admission; the named fixture
+  # scripts avoid rerunning the subjects' entire behavior suites.
+  for script in fm-supervision-events.test.sh fm-session-lock-ancestry.test.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tests/$script"
+    chmod +x "$repo/tests/$script"
+  done
   set +e
-  "$RUNNER" --jobs 2 \
+  "$runner" --jobs 2 \
     tests/fm-supervision-events.test.sh tests/fm-session-lock-ancestry.test.sh \
     >"$tmp/out" 2>"$tmp/err"
   rc=$?
@@ -1279,7 +1346,7 @@ test_jobs_admits_a_concurrent_safe_family() {
     || fail "the admitted concurrent run did not report both scripts green: $(cat "$tmp/out")"
 
   set +e
-  "$RUNNER" --jobs 5 tests/fm-session-lock-ancestry.test.sh \
+  "$runner" --jobs 5 tests/fm-session-lock-ancestry.test.sh \
     >"$tmp/over-cap.out" 2>"$tmp/over-cap.err"
   rc=$?
   set -e
@@ -1289,11 +1356,18 @@ test_jobs_admits_a_concurrent_safe_family() {
   printf '#!/usr/bin/env bash\necho "ok - colliding external fixture"\n' >"$external"
   chmod +x "$external"
   set +e
-  "$RUNNER" --jobs 2 "$external" >"$tmp/external.out" 2>"$tmp/external.err"
+  "$runner" --jobs 2 "$external" >"$tmp/external.out" 2>"$tmp/external.err"
   rc=$?
   set -e
   [ "$rc" -eq 2 ] \
     || fail "an external script colliding with a proven family member must be refused, got $rc"
+  mkdir -p "$repo/tests/nested"
+  cp "$repo/tests/fm-session-lock-ancestry.test.sh" "$repo/tests/nested/fm-session-lock-ancestry.test.sh"
+  set +e
+  "$runner" --jobs 2 tests/nested/fm-session-lock-ancestry.test.sh >"$tmp/nested.out" 2>"$tmp/nested.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "a nested path colliding with a proven member must be refused, got $rc"
   rm -rf "$tmp"
   pass "--jobs admits and schedules a family with a recorded concurrent proof"
 }
@@ -1396,18 +1470,23 @@ test_changed_shared_fixture_selects_its_readers() {
 # Workers are handed scripts in order, so the slowest script must start first or
 # it runs alone at the tail and throws away most of the concurrency.
 test_concurrent_runs_are_ordered_longest_first() {
-  local tmp listed first
+  local tmp repo runner first script rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-order.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  runner="$repo/bin/fm-test-run.sh"
+  for script in fm-session-lock-ancestry.test.sh fm-task-inbox.test.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tests/$script"
+    chmod +x "$repo/tests/$script"
+  done
+  # The real scheduler reads its normal hints for these fixture names.
   set +e
-  "$RUNNER" --jobs 2 --family watcher-wake-lock --list >"$tmp/serial" 2>&1
-  set -e
-  # The scheduler reorders the real run, so assert on the begin-marker order of
-  # a real concurrent run over scripts whose hints differ by a wide margin.
-  set +e
-  "$RUNNER" --jobs 2 \
+  "$runner" --jobs 2 \
     tests/fm-session-lock-ancestry.test.sh tests/fm-task-inbox.test.sh \
     >"$tmp/out" 2>"$tmp/err"
+  rc=$?
   set -e
+  [ "$rc" -eq 0 ] || fail "concurrent ordering fixture failed: $(cat "$tmp/err")"
   first=$(grep -m1 '^FM_TEST_BEGIN' "$tmp/out" | awk '{print $3}')
   [ "$first" = tests/fm-task-inbox.test.sh ] \
     || fail "concurrent run did not start the longest script first, started: $first"
@@ -1965,44 +2044,68 @@ PYTEST
   pass "heavy sessions serialize across worktrees; bypass, nesting, stdin and exit release work"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_heavy_sessions
-
 test_host_test_slots
 test_list_all_exact_suite_coverage
 test_family_selection
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_single_script_selection
+test_numbered_parts_follow_their_base_suite
+test_runner_removes_readonly_worker_roots
 test_changed_file_selection_is_conservative
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_codex_activity_selects_its_subjects
 test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_script_list_uses_bounded_automatic_concurrency
 test_family_proofs_run_in_separate_concurrent_phases
 test_empty_selection_emits_summary
 test_timing_markers_and_json
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_aggregate_exit_behavior
 test_gate_skip_accounting
 test_gate_skip_reason_is_recorded
 test_a_run_that_ran_records_no_skip_reason
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_live_guards_expect_a_capability_skip_class
 test_fail_on_gate_skip_token
 test_live_zero_excludes_real_herdr
 test_exclude_family
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_contract
 test_portable_serial_shard_lane_refusals
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 8 ]; then
 test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family
 test_unmapped_new_test_never_inherits_family_concurrency
 test_changed_shared_fixture_selects_its_readers
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
 test_max_wall_ms_is_a_result_not_advice
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 10 ]; then
 test_jobs_parallel_scheduler_and_failure_propagation
 test_aggregate_json
+fi

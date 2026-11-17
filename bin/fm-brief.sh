@@ -60,6 +60,11 @@
 # standing per-project preference, and firstmate resolves it per task at intake
 # and passes the explicit flag. Refused on --scout and --secondmate: a scout
 # makes no branch and a charter is not a delivery contract.
+# --category <name> records the dispatch rule category; --rationale <line>
+#   records its reason. When configured rules declare categories, category is
+#   required for ship, scout, and host scaffolds; reason_required rules also
+#   require a rationale. Existing briefs without a category need the documented
+#   fm-spawn override or a recorded category before launch.
 # --base-branch <branch> starts the task from origin's <branch> instead of the
 # repository default, for work that belongs on a named integration, feature, or
 # release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
@@ -191,7 +196,7 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
    When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time; for your own background job or command with a timeout, that time is its start plus its timeout, rounded up to the minute.
    Follow the resolution rule below when the wait clears, then resume the task.
-   Use \`blocked:\` when you are stuck and need help.
+   Before declaring \`blocked\`, follow the obstacle classification referenced below.
 EOF
 
 resolve_directory_input() {
@@ -243,6 +248,8 @@ PROJECT_DIR=
 PROJECT_DIR_SET=0
 EFFECT=
 EFFECT_SET=0
+CATEGORY=
+RATIONALE=
 POS=()
 want_value=
 for a in "$@"; do
@@ -260,6 +267,8 @@ for a in "$@"; do
       upstream-consent) UPSTREAM_CONSENT=$a; UPSTREAM_CONSENT_SET=1 ;;
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
       effect) EFFECT=$a; EFFECT_SET=1 ;;
+      category) CATEGORY=$a ;;
+      rationale) RATIONALE=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -287,6 +296,10 @@ for a in "$@"; do
     --upstream-consent=*) UPSTREAM_CONSENT=${a#--upstream-consent=}; UPSTREAM_CONSENT_SET=1 ;;
     --project) want_value="project" ;;
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
+    --category) want_value=category ;;
+    --category=*) CATEGORY=${a#--category=} ;;
+    --rationale) want_value=rationale ;;
+    --rationale=*) RATIONALE=${a#--rationale=} ;;
     --effect) want_value=effect ;;
     --effect=*) EFFECT=${a#--effect=}; EFFECT_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
@@ -297,6 +310,27 @@ for a in "$@"; do
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
+
+# The scaffold records the operator's task classification, never infers it.
+if [ "$KIND" = secondmate ]; then
+  [ -z "$CATEGORY$RATIONALE" ] || { echo 'error: --category and --rationale apply only to worker briefs' >&2; exit 1; }
+else
+  case "$CATEGORY" in *[!a-z0-9-]*) echo 'error: --category requires lowercase letters, digits, or hyphens' >&2; exit 1 ;; esac
+  case "$RATIONALE" in *$'\n'*|*$'\r'*) echo 'error: --rationale must be one line' >&2; exit 1 ;; esac
+  [ -z "$RATIONALE" ] || [ -n "$CATEGORY" ] || { echo 'error: --rationale requires --category' >&2; exit 1; }
+  if [ -f "$CONFIG/crew-dispatch.json" ]; then
+    categories=$(jq -r 'if ((.rules // []) | type) != "array" then error("invalid rules") else any((.rules // [])[]; has("category")) end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || { echo 'error: invalid dispatch categories' >&2; exit 1; }
+    if [ "$categories" = true ]; then
+      if ! jq -e --arg category "$CATEGORY" --arg rationale "$RATIONALE" '
+        (if $category == "default" and has("default") then [{use: .default}] else [.rules[] | select(.category == $category)] end) as $rules |
+        ($category | test("^[a-z0-9-]+$")) and ($rules | length == 1) and
+        (($rules[0].reason_required // false) != true or ($rationale | test("[^[:space:]]")))
+      ' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+        echo 'error: choose a configured --category and supply --rationale when required' >&2; exit 1
+      fi
+    fi
+  fi
+fi
 
 # Ship delivery mode is an explicit per-task decision (AGENTS.md section 7). A
 # missing or invalid value stops the scaffold rather than silently defaulting.
@@ -470,11 +504,8 @@ shell_quote() {
 }
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
-# The worker's status command: the plain append always carries the line, then
-# the opt-in fleet ledger (docs/fleet-ledger.md) records it at once, costing one
-# file test when the flag is absent. A host without that flag, such as a remote
-# second mate's, runs only the append; the watcher capture is the backstop.
-STATUS_APPEND="echo \"{state} [at=<epoch>]: {one short line}\" >> $STATUS_FILE && { [ ! -e $(shell_quote "$CONFIG/fleet-ledger") ] || $(shell_quote "$FM_ROOT/bin/fm-fleet-ledger.sh") appended $(shell_quote "$CONFIG") $STATUS_FILE >/dev/null 2>&1 || true; }"
+# Status publication owns its immediate wake; a watcher is only the backstop.
+STATUS_APPEND="FM_HOME=$(shell_quote "$FM_HOME") FM_STATE_OVERRIDE=$(shell_quote "$STATE") FM_CONFIG_OVERRIDE=$(shell_quote "$CONFIG") bash $(shell_quote "$FM_ROOT/bin/fm-task-status.sh") $(shell_quote "$ID") '{state}' '{one short line}'"
 # The worker's card command: the card fields and their bounds are owned by
 # bin/fm-tasks-axi.sh presentation; the home is explicit because a worker's
 # environment need not carry it.
@@ -696,6 +727,12 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 For complex work, list the independent deliverables and how they integrate in this spec before dispatch.
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+if [ -n "$CATEGORY" ]; then
+  TASK_SECTION="$TASK_SECTION
+Dispatch category: $CATEGORY"
+  if [ -n "$RATIONALE" ]; then TASK_SECTION="$TASK_SECTION
+Dispatch rationale: $RATIONALE"; fi
+fi
 if [ "$EFFECT_SET" -eq 1 ]; then
   case "$KIND" in secondmate) echo "error: --effect applies only to ship, scout, and host briefs" >&2; exit 1 ;; esac
   case "$EFFECT" in ''|*$'\n'*|*$'\r'*) echo "error: --effect needs one line naming the exact outward action the task's own ask performs" >&2; exit 1 ;; esac
@@ -705,6 +742,14 @@ if [ "$EFFECT_SET" -eq 1 ]; then
 Outward effect: $EFFECT
 This task's own ask requires exactly this outward action: perform it as stated, through every gate the task names.
 The push, PR, publication, and remote-write prohibitions elsewhere in this brief do not apply to this one action; everything else they forbid stays forbidden."
+fi
+
+DECK_LINE='Deck address is not configured; use the manual report review path.'
+if [ -f "$CONFIG/deck-url" ] && [ ! -L "$CONFIG/deck-url" ]; then
+  DECK_URL=$(cat "$CONFIG/deck-url")
+  if [[ "$DECK_URL" =~ ^https?://[^[:space:]/?#]+(/[^[:space:]?#]*)?$ ]]; then
+    DECK_LINE="Deck address for report links: ${DECK_URL%/}"
+  fi
 fi
 
 WORK_OWNERSHIP_LINE='If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
@@ -719,17 +764,9 @@ else
   SIMPLICITY_LINE=''
 fi
 
-# A failed optional path must not
-# park independent authorized work, and escalation must name the action owner.
-IFS= read -r -d '' CREWMATE_OBSTACLE_INSTRUCTIONS <<'EOF' || true
-5. Apply any command-specific bounded recovery first; bin/fm-tasks-axi.sh --help owns work-lock contention recovery.
-   If the same obstacle persists after two attempts, stop retrying that path and append
-   `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`.
-   Continue independent authorized work that does not depend on that path; stop the whole task only when no such work remains.
-   Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
-   This does not relax safety gates, required validation, shared-infrastructure boundaries, or the ban on reporting done with unresolved required work.
-EOF
-CREWMATE_OBSTACLE_INSTRUCTIONS=${CREWMATE_OBSTACLE_INSTRUCTIONS%$'\n'}
+# Host tasks need the same classification as ship/scout workers without loading
+# the worker contract's project/worktree rules.
+CREWMATE_OBSTACLE_INSTRUCTIONS="Before escalating an obstacle or question, read and follow only the Obstacles and escalation section of \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`; it owns recovery and blocked classification for this host task."
 
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
@@ -785,7 +822,7 @@ if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
   LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: create or resume one board with lavish-axi --no-open <artifact.html>, give its URL once, reuse that session through feedback rounds, never launch its URL in a browser, and end it with lavish-axi end <artifact.html> when finished. Then arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
 else
-  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
+  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor); still deliver the required standalone HTML report, and ask firstmate to arrange any requested review.'
 fi
 cat > "$BRIEF" <<EOF
 You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
@@ -795,6 +832,7 @@ Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL
 
 $TASK_SECTION
 $SIMPLICITY_LINE
+$DECK_LINE
 
 $HERDR_SECTION
 
@@ -855,6 +893,7 @@ Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL
 
 $TASK_SECTION
 $SIMPLICITY_LINE
+$DECK_LINE
 
 $HERDR_SECTION
 

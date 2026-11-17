@@ -138,9 +138,13 @@
 # owner JSON state=rejected/code=busy identifies this pre-execution contention.
 # Preserve the exact command and input, wait one second and retry once without
 # reporting blocked or waiting for firstmate. On success, continue normally.
-# If still busy, report both failures, affected work and the action needed from
-# firstmate; continue independent authorized work. Do not apply this recovery
-# to unsafe lock errors, other refusals or failures with possible partial effects.
+# If still busy, preserve the input, report both failures as an unavailable
+# checkpoint through the task status log, and continue independent authorized work.
+# Retry publication at the next reporting checkpoint; never claim the rejected
+# checkpoint was published. Classify any escalation through worker-contract's
+# "Obstacles and escalation" procedure; contention alone requires no lock repair.
+# Do not apply this recovery to unsafe lock errors, other refusals or failures
+# with possible partial effects.
 # A successful presentation requires exit success, ok=true, state=published,
 # evidence.available=true and lifecycle.evidence.current=true, not just exit 0.
 # File input may include phase (investigation, implementation, rebase, validation,

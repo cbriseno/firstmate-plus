@@ -237,7 +237,7 @@ cmd_arm() {
   fi
 
   if ! fm_procevent_registration_publish_locked "$STATE" when "$sid" \
-    "$SCRIPT_DIR/fm-procevent-when.sh" run "$sid"; then
+    '' '' "$SCRIPT_DIR/fm-procevent-when.sh" run "$sid"; then
     rm -f -- "$(spec_file "$sid")" "$(trust_file "$sid")"
     die "cannot register the watch source"
   fi

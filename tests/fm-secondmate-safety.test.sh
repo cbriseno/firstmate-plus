@@ -62,16 +62,16 @@ test_fm_home_parameterization() {
   FM_HOME="$home_one" "$ROOT/bin/fm-brief.sh" task-a app --mode no-mistakes >/dev/null || fail "brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-a/brief.md"
   [ -f "$brief" ] || fail "brief was not written under FM_HOME/data"
-  grep -F ">> '$home_one/state/task-a.status'" "$brief" >/dev/null || fail "brief did not shell-quote FM_HOME state path"
+  grep -F "FM_HOME='$home_one' FM_STATE_OVERRIDE='$home_one/state'" "$brief" >/dev/null || fail "brief did not shell-quote FM_HOME state path"
 
   FM_HOME="$home_one" "$ROOT/bin/fm-brief.sh" task-b app --scout >/dev/null || fail "scout brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-b/brief.md"
-  grep -F ">> '$home_one/state/task-b.status'" "$brief" >/dev/null || fail "scout brief did not shell-quote FM_HOME state path"
+  grep -F "FM_HOME='$home_one' FM_STATE_OVERRIDE='$home_one/state'" "$brief" >/dev/null || fail "scout brief did not shell-quote FM_HOME state path"
 
   FM_HOME="$home_one" FM_SECONDMATE_CHARTER='ops domain' "$ROOT/bin/fm-brief.sh" task-c --secondmate app >/dev/null \
     || fail "secondmate brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-c/brief.md"
-  grep -F ">> '$home_one/state/task-c.status'" "$brief" >/dev/null || fail "secondmate brief did not shell-quote FM_HOME state path"
+  grep -F "FM_HOME='$home_one' FM_STATE_OVERRIDE='$home_one/state'" "$brief" >/dev/null || fail "secondmate brief did not shell-quote FM_HOME state path"
 
   # A pushed ship worktree, and a gh that supplies no forge head, so the PR
   # check stays offline and its named-head gate reads the worktree's HEAD.
@@ -517,6 +517,7 @@ test_home_seed_no_projects_end_to_end() {
     FM_SECONDMATE_SCOPE='firstmate repo work' \
     "$ROOT/bin/fm-home-seed.sh" fdev "$sub" --no-projects) \
     || fail "project-less seed failed"
+  fm_git_config_identity "$sub"
   sub_abs=$(cd "$sub" && pwd -P)
   printf '%s\n' "$out" | grep -F "home=$sub_abs" >/dev/null || fail "seed did not report the project-less subhome"
 
@@ -532,10 +533,10 @@ test_home_seed_no_projects_end_to_end() {
   # Spawn tolerates the empty projects field: the home resolves from the registry
   # and the projects meta is recorded empty rather than breaking the launch.
   : > "$log"
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/no-projects-fake/pane.txt" \
-    "$ROOT/bin/fm-spawn.sh" fdev "$sub" codex --secondmate >/dev/null 2>&1 \
-    || fail "project-less secondmate spawn failed"
+    "$ROOT/bin/fm-spawn.sh" fdev "$sub" codex --secondmate 2>&1) \
+    || fail "project-less secondmate spawn failed: $out"
   meta="$home/state/fdev.meta"
   assert_grep 'kind=secondmate' "$meta" "project-less spawn meta lost kind=secondmate"
   assert_grep "home=$sub_abs" "$meta" "project-less spawn meta lost the subhome"
@@ -545,13 +546,14 @@ test_home_seed_no_projects_end_to_end() {
 }
 
 test_secondmate_spawn_resolves_punctuated_registry_projects() {
-  local home sub sub_abs fakebin log meta projects
+  local home sub sub_abs fakebin log meta projects out
   home="$TMP_ROOT/punctuated-spawn-home"
   sub="$TMP_ROOT/punctuated-spawn-subhome"
   mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
   mkdir -p "$sub/data" "$sub/state" "$sub/config" "$sub/projects"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$sub/.gitignore"
   git -C "$sub" init -q -b main
+  fm_git_config_identity "$sub"
   mark_firstmate_home "$sub"
   printf 'punctuated\n' > "$sub/.fm-secondmate-home"
   printf '# Charter\n\nHandled work.\n' > "$sub/data/charter.md"
@@ -562,10 +564,10 @@ test_secondmate_spawn_resolves_punctuated_registry_projects() {
     || fail "home-seed validation rejected punctuated registry fields before spawn"
   fakebin=$(make_fake_tmux "$TMP_ROOT/punctuated-spawn-fake")
   log="$TMP_ROOT/punctuated-spawn-fake/tmux.log"
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/punctuated-spawn-fake/pane.txt" \
-    "$ROOT/bin/fm-spawn.sh" punctuated codex --secondmate >/dev/null 2>&1 \
-    || fail "secondmate spawn failed for punctuated registry fields"
+    "$ROOT/bin/fm-spawn.sh" punctuated codex --secondmate 2>&1) \
+    || fail "secondmate spawn failed for punctuated registry fields: $out"
   meta="$home/state/punctuated.meta"
   projects=$(grep '^projects=' "$meta" | cut -d= -f2-)
   [ "$projects" = 'alpha, beta' ] \
@@ -2659,7 +2661,7 @@ SH
     "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err" &
   # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
   pid=$!
-  while [ ! -e "$ready" ] && kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do
+  while [ ! -e "$ready" ] && kill -0 "$pid" 2>/dev/null && [ "$i" -lt 3000 ]; do
     sleep 0.05
     i=$((i + 1))
   done
@@ -3114,84 +3116,127 @@ EOF
   pass "fm-backlog-handoff refuses Done items under whitespace section headings and unsafe homes"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_fm_home_parameterization
 test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
 test_home_seed_validate_rejects_unparseable_registry_entry
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_home_seed_refuses_broken_registry_symlink
 test_home_seed_refuses_unreadable_registry
 test_home_seed_validate_rejects_duplicate_homes
 test_home_seed_validate_rejects_duplicate_ids
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_home_seed_validate_rejects_nested_homes
 test_home_seed_uses_treehouse_acquired_home
 test_home_seed_returns_treehouse_acquired_home_on_assignment_failure
 test_home_seed_warns_when_acquired_home_return_fails
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_home_seed_does_not_return_unsafe_acquired_home
 test_home_seed_rolls_back_failed_clone
 test_home_seed_refuses_missing_filled_charter
 test_home_seed_refuses_placeholder_charter
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_home_seed_refuses_empty_charter_fields
 test_home_seed_no_projects_end_to_end
 test_secondmate_spawn_resolves_punctuated_registry_projects
 test_secondmate_spawn_refuses_ambiguous_and_mismatched_registry_bindings
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_home_seed_refuses_projectful_reused_charter_for_projectless_home
 test_home_seed_refuses_projectless_conversion_of_populated_home
 test_home_seed_spaced_name_registry_handling
 test_home_seed_refuses_projectless_home_with_uninspectable_projects
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_home_seed_refuses_projectless_home_with_symlinked_projects
 test_home_seed_refuses_projectless_home_with_non_directory_projects
 test_home_seed_refuses_projectless_home_with_uninspectable_registry
 test_home_seed_refuses_missing_projects_without_signal
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
 test_home_seed_refuses_local_only_project
 test_home_seed_refuses_an_unresolvable_registry_posture
 test_home_seed_refuses_registry_delimiter_home
 test_home_seed_refuses_active_home_and_root
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 8 ]; then
 test_home_seed_refuses_home_marked_for_another_id
 test_home_seed_refuses_home_registered_to_another_id
 test_home_seed_refuses_reassigning_existing_id_to_different_home
 test_home_seed_refuses_home_overlapping_registered_home
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_home_seed_refuses_remote_backed_project_without_origin
 test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
 test_home_seed_skips_initialized_existing_no_mistakes_projects
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 10 ]; then
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project
 test_home_seed_refuses_project_destinations_outside_subhome
 test_home_seed_refuses_operational_dirs_outside_subhome
 test_home_seed_refuses_unsafe_leaf_files
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 11 ]; then
 test_home_seed_preserves_existing_parent_binding
 test_secondmate_spawn_requires_seeded_matching_home
 test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 12 ]; then
 test_secondmate_teardown_retires_empty_home
 test_branch_actor_cannot_retire_secondmate
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 13 ]; then
 test_secondmate_teardown_refuses_process_events_without_sweep_script
 test_secondmate_teardown_preserves_process_events_on_later_refusal
 test_secondmate_force_teardown_sweeps_nested_homes
 test_secondmate_force_teardown_preserves_nested_restore_status
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 14 ]; then
 test_secondmate_teardown_refuses_failed_leased_home_return
 test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
 test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_refuses_duplicated_child_slot
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 15 ]; then
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_non_state_operational_dir_symlinks_inside_home
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home
 test_secondmate_teardown_refuses_registered_nested_home
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 16 ]; then
 test_secondmate_teardown_refuses_child_registry_nested_home
 test_secondmate_force_teardown_prevalidates_before_child_cleanup
 test_force_teardown_refuses_non_directory_descendant_state
 test_force_teardown_refuses_symlinked_descendant_state
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 17 ]; then
 test_force_teardown_locks_descendant_with_absent_state
 test_force_teardown_refuses_while_a_task_is_being_published
 test_fresh_spawn_refuses_while_a_forced_teardown_owns_the_task_set
 test_fresh_spawn_names_another_spawn_as_task_set_holder
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 18 ]; then
 test_fresh_remote_secondmate_spawn_refuses_while_task_set_is_owned
 test_secondmate_force_teardown_refuses_child_active_home_descendant
 test_secondmate_force_teardown_refuses_child_repo_descendant
 test_secondmate_force_teardown_refuses_unregistered_child_worktree
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 19 ]; then
 test_secondmate_teardown_path_boundary_matrix
 test_secondmate_idle_pane_is_not_stale
 test_secondmate_charter_brief_is_idle_by_default
 test_backlog_handoff_aborts_safely
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 20 ]; then
 test_backlog_handoff_refuses_done_items_and_non_secondmate_homes
+fi

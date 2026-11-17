@@ -2615,6 +2615,29 @@ crew_absorb_class() {  # <id>
   printf 'none'
 }
 
+# A completed worker turn needs supervision when it left no result or wait and
+# has not resumed execution. Read only changed turn-end markers: working notes
+# alone remain routine, and the existing .seen-* marker bounds this to one wake.
+# Unknown activity is not execution proof, including on macOS adapters without
+# a verified busy source. Secondmates are expected to idle between requests.
+signal_worker_stopped() {  # <state-dir> <signal-file> ...
+  local state=$1 f task meta last
+  shift
+  for f in "$@"; do
+    case "$f" in *.turn-ended) ;; *) continue ;; esac
+    task=${f##*/}; task=${task%.turn-ended}
+    meta="$state/$task.meta"
+    [ -f "$meta" ] || continue
+    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
+    last=$(last_status_line "$state/$task.status")
+    status_is_captain_relevant "$last" && continue
+    [ -z "$(status_declared_wait_line "$state/$task.status")" ] || continue
+    [ "$(crew_absorb_class "$task")" = none ] || continue
+    return 0
+  done
+  return 1
+}
+
 # 0 if crew <id> shows POSITIVE evidence it is still working (crew_absorb_class
 # reports `working`). This is the "provably working" predicate at the heart of
 # absorb-only-on-positive-evidence. This is the sole proof for stale wakes and the

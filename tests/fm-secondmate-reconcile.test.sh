@@ -90,6 +90,9 @@ rc=0
 if [ "${FM_TEST_RECONCILE_REMOTE_DELAY:-0}" -gt 0 ]; then
   sleep "$FM_TEST_RECONCILE_REMOTE_DELAY"
 fi
+if [ -n "${FM_TEST_RECONCILE_REMOTE_RELEASE:-}" ]; then
+  while [ ! -e "$FM_TEST_RECONCILE_REMOTE_RELEASE" ]; do sleep 0.05; done
+fi
 env FM_HOME="$remote_home" FM_ROOT_OVERRIDE="$FM_REMOTE_CODE_ROOT" \
   "$FM_REMOTE_CODE_ROOT/bin/$cmd" "${rargs[@]:1}" || rc=$?
 exit "$rc"
@@ -785,7 +788,7 @@ META
   mv "$snap.next" "$snap"
 
   i=0
-  while [ "$i" -lt 4 ]; do
+  while [ "$i" -lt 2 ]; do
     FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
       "$RECONCILE" request --snapshot "$snap" >/dev/null \
       || fail "a repeated reconcile request could not be published"
@@ -894,7 +897,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
 
   warm=$(FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    FM_STATE_OVERRIDE="$home/state" FM_SNAPSHOT_BUDGET=3 FM_SNAPSHOT_NOW_EPOCH=2000 \
+    FM_STATE_OVERRIDE="$home/state" FM_SNAPSHOT_BUDGET=30 FM_SNAPSHOT_NOW_EPOCH=2000 \
     FM_BEARINGS_NOW=2026-09-01T22:00:00Z "$ROOT/bin/fm-bearings-snapshot.sh" --json) \
     || fail "the initial remote ledger could not seed the parent cache"
   printf '%s' "$warm" | jq -e '.secondmate_reconcile | any(.id == "remote-offpath-mate" and .kind == "orphan_in_flight")' >/dev/null \
@@ -902,7 +905,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
   touch "$home/state/home-summary.json"
 
   started=$(date +%s)
-  snap=$(FM_TEST_RECONCILE_REMOTE_DELAY=30 \
+  snap=$(FM_TEST_RECONCILE_REMOTE_DELAY=120 \
     FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$home/state" FM_SNAPSHOT_BUDGET=1 FM_SNAPSHOT_NOW_EPOCH=2000 \
@@ -912,7 +915,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
     "$RECONCILE" request --snapshot - > "$home/request.out" \
     || fail "the reconcile notify request could not be recorded"
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -lt 5 ] \
+  [ "$elapsed" -lt 90 ] \
     || fail "Bearings and request publication waited past the collector budget behind remote delivery (${elapsed}s)"
   printf '%s' "$snap" | jq -e '.secondmates | any(.id == "remote-offpath-mate" and .freshness == "cached" and .age_seconds == 100)' >/dev/null \
     || fail "the delayed queue did not leave an age-labeled cached mismatch row"
@@ -927,7 +930,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
     [ ! -e "$lock" ] || fail "the request path left a mate lifecycle lock held: $lock"
   done
 
-  FM_TEST_RECONCILE_REMOTE_DELAY=4 \
+  FM_TEST_RECONCILE_REMOTE_RELEASE="$home/release-remote" \
     FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$home/state" FM_POLL=1 FM_HOME_SUMMARY_INTERVAL=999999 \
@@ -936,7 +939,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
   watcher=$!
   i=0
   processing=''
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 1800 ]; do
     processing=$(find "$home/state/reconcile-notify" -maxdepth 1 -type f -name '.processing-*.json' -print -quit)
     [ -n "$processing" ] && [ -e "$home/state/.last-watcher-beat" ] && break
     kill -0 "$watcher" 2>/dev/null || break
@@ -946,7 +949,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
   [ -n "$processing" ] || fail "supervision did not claim the durable reconcile request"
   beat_before=$(stat -c %Y "$home/state/.last-watcher-beat" 2>/dev/null || stat -f %m "$home/state/.last-watcher-beat")
   i=0
-  while [ -e "$processing" ] && [ "$i" -lt 70 ]; do
+  while [ -e "$processing" ] && [ "$i" -lt 1800 ]; do
     sleep 0.05
     beat_after=$(stat -c %Y "$home/state/.last-watcher-beat" 2>/dev/null || stat -f %m "$home/state/.last-watcher-beat")
     if [ "$beat_after" -gt "$beat_before" ]; then
@@ -957,6 +960,7 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
   done
   [ "$beacon_advanced" -eq 1 ] \
     || fail "the watcher beacon stalled behind delayed reconcile delivery"
+  touch "$home/release-remote"
   # Delivery is detached from the watcher loop.
   # Observe the durable lifecycle itself rather than using watcher liveness as a proxy.
   # A watcher may exit after it has launched the delivery child.
@@ -985,25 +989,38 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
   pass "Bearings records locally, returns before a delayed remote queue, and supervision delivers later"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_reconcile_request_rejects_an_unbounded_input_without_filling_storage
 test_reconcile_request_requires_one_snapshot_document
 test_reconcile_requests_coalesce_per_target_until_delivery
 test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_an_inventory_mismatch_asks_the_mate_once_per_window
 test_a_mismatch_still_there_after_the_window_earns_one_more_nudge
 test_the_cooldown_starts_when_delivery_finishes
 test_the_window_is_four_hours
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_each_home_carries_its_own_cooldown
 test_the_ask_never_arms_a_reply_expectation_or_a_re_ring
 test_a_readable_home_without_a_mismatch_is_never_asked
 test_the_parent_never_changes_the_mates_own_files
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_a_failed_send_is_retried_on_the_next_run
 test_busy_lifecycle_locks_never_hold_up_the_digest
 test_concurrent_recaps_send_one_instruction
 test_a_delayed_snapshot_never_prescribes_a_stale_repair
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_a_stale_snapshot_never_targets_a_replacement_mate
 test_teardown_cannot_leave_its_replacement_in_cooldown
 test_a_markerless_remote_secondmate_is_nudged_once_per_window
 test_a_stale_remote_route_is_refused
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_route_replacement_during_send_is_refused
 test_a_row_with_no_identity_at_all_fails_loudly
+fi

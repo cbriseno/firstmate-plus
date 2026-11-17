@@ -371,7 +371,10 @@ set -e
 [ "$rc" -ne 0 ] || fail "the remote doctor passed with a missing required tool"
 assert_contains "$out" 'required herdr=MISSING' "the remote doctor did not mark a missing required tool"
 assert_contains "$out" 'required tasks-axi=MISSING' "the remote doctor did not mark every missing required tool"
-assert_contains "$out" 'required tools do not resolve on the remote runtime PATH: herdr tasks-axi treehouse harness' "the remote doctor did not name the missing tools"
+assert_contains "$out" 'required treehouse=MISSING' "the remote doctor did not mark the missing treehouse"
+assert_contains "$out" 'required harness=MISSING' "the remote doctor did not mark the missing harness"
+assert_contains "$out" 'required tools do not resolve on the remote runtime PATH:' "the remote doctor did not report missing tools"
+assert_contains "$out" 'herdr tasks-axi treehouse harness' "the remote doctor did not list the missing tools"
 assert_contains "$out" '.local/bin' "the remote doctor did not offer the wrapper escape hatch"
 ln -sf "$(command -v git)" "$DOCTOR_BIN/git"
 # The direct doctor fixture needs the complete required tool set. These stubs

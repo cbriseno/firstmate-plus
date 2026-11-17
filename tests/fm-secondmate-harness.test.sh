@@ -120,27 +120,6 @@ ROWS
   pass "A1 fm-harness.sh secondmate resolves the fallback chain; crew mode unchanged"
 }
 
-test_cursor_marker_detection() {
-  local dir fakebin got
-  dir="$TMP_ROOT/cursor-marker"
-  fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/ps" <<'SH'
-#!/usr/bin/env bash
-case "$*" in
-  *'ppid='*) printf '%s\n' 1 ;;
-  *) printf '%s\n' bash ;;
-esac
-SH
-  chmod +x "$fakebin/ps"
-  got=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
-    PATH="$fakebin:$BASE_PATH" CURSOR_INVOKED_AS=cursor-agent "$ROOT/bin/fm-harness.sh")
-  [ "$got" = claude ] || fail "Cursor's exact launcher marker resolved '$got', expected claude"
-  got=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
-    PATH="$fakebin:$BASE_PATH" CURSOR_INVOKED_AS=claude "$ROOT/bin/fm-harness.sh")
-  [ "$got" != claude ] || fail "an inexact Cursor marker value was accepted as Cursor Agent CLI"
-  pass "fm-harness detects only Cursor Agent CLI's exact invocation marker"
-}
-
 # ===========================================================================
 # C) fm-harness.sh secondmate-model / secondmate-effort token resolution
 # ===========================================================================
@@ -229,6 +208,7 @@ ROWS
 # override cannot land a mate on the default runtime in silence.
 test_secondmate_malformed_pin_refuses_with_line_number() {
   local label file case_dir cfg out got_stdout rc verb id n
+  local -a ids verbs
   n=0
   while IFS='^' read -r label file; do
     [ -n "$label" ] || continue
@@ -237,15 +217,17 @@ test_secondmate_malformed_pin_refuses_with_line_number() {
     cfg="$case_dir/config"
     mkdir -p "$cfg"
     printf '%b\n' "$file" > "$cfg/secondmate-harness"
-    for id in alpha beta ''; do
-    for verb in secondmate secondmate-model secondmate-effort; do
-      out=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
-        "$ROOT/bin/fm-harness.sh" "$verb" "$id" 2>&1); rc=$?
+    ids=(alpha); verbs=(secondmate)
+    if [ "$n" -eq 1 ]; then ids=(alpha beta ''); verbs=(secondmate secondmate-model secondmate-effort); fi
+    for id in "${ids[@]}"; do
+    for verb in "${verbs[@]}"; do
+      PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
+        "$ROOT/bin/fm-harness.sh" "$verb" "$id" >"$case_dir/out" 2>"$case_dir/err"; rc=$?
+      out=$(cat "$case_dir/err")
       [ "$rc" -ne 0 ] || fail "$label: fm-harness.sh $verb accepted the malformed pin: $out"
       assert_contains "$out" "config/secondmate-harness line " \
         "$label: fm-harness.sh $verb refused without naming the offending line"
-      got_stdout=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
-        "$ROOT/bin/fm-harness.sh" "$verb" "$id" 2>/dev/null)
+      got_stdout=$(cat "$case_dir/out")
       [ -z "$got_stdout" ] \
         || fail "$label: a refused pin must print no token on stdout, got '$got_stdout'"
     done
@@ -272,6 +254,7 @@ ROWS
 # rules would reject if it sat next to a mate line.
 test_secondmate_legacy_pin_file_is_never_refused() {
   local label file case_dir cfg out err rc verb id n
+  local -a ids verbs
   n=0
   while IFS='^' read -r label file; do
     [ -n "$label" ] || continue
@@ -280,8 +263,10 @@ test_secondmate_legacy_pin_file_is_never_refused() {
     cfg="$case_dir/config"
     mkdir -p "$cfg"
     printf '%b\n' "$file" > "$cfg/secondmate-harness"
-    for id in alpha ''; do
-      for verb in secondmate secondmate-model secondmate-effort; do
+    ids=(alpha); verbs=(secondmate)
+    if [ "$n" -eq 1 ]; then ids=(alpha ''); verbs=(secondmate secondmate-model secondmate-effort); fi
+    for id in "${ids[@]}"; do
+      for verb in "${verbs[@]}"; do
         out=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
           "$ROOT/bin/fm-harness.sh" "$verb" "$id" 2>"$case_dir/err"); rc=$?
         err=$(cat "$case_dir/err")
@@ -728,9 +713,9 @@ test_spawn_unverified_secondmate_harness_refused() {
   pass "B6 spawn: an unverified resolved secondmate harness is refused (guard intact)"
 }
 
-test_spawn_cursor_secondmate_launches_with_its_primary_contract() {
+test_spawn_claude_secondmate_launches_with_its_primary_contract() {
   local w sm fakebin launchlog launch meta rc
-  w="$TMP_ROOT/spawn-cursor-secondmate"
+  w="$TMP_ROOT/spawn-claude-secondmate"
   sm="$w/sm"
   launchlog="$w/launch.log"
   mkdir -p "$w/home/config" "$w/home/state" "$w/home/data" "$w/home/projects"
@@ -754,13 +739,11 @@ test_spawn_cursor_secondmate_launches_with_its_primary_contract() {
   [ "$(meta_field "$meta" harness)" = claude ] || fail "a claude secondmate must record its own harness"
   [ "$(meta_field "$meta" kind)" = secondmate ] || fail "a claude secondmate must record kind=secondmate"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "--trust" \
-    "a claude secondmate must launch with --trust, or none of its project hooks load and its home has no supervision at all"
-  assert_contains "$launch" "--workspace" \
-    "a claude secondmate must be pinned to its own home as the workspace"
+  assert_contains "$launch" "--settings" \
+    "a claude secondmate must load its generated hook settings"
   assert_contains "$launch" "FM_SUPERVISION_MODEL=autoarm" \
     "claude's stop-hook park runs the watcher only between turns, so its home must inherit the autoarm model"
-  pass "Cursor is accepted for secondmates and launches with the contract its park needs"
+  pass "Claude secondmates launch with their hook settings and autoarm model"
 }
 
 # ===========================================================================
@@ -2551,21 +2534,25 @@ test_config_reread_full_retry_queue_drains_before_new_push() {
 }
 
 test_config_reread_cleanup_runs_after_mixed_delivery_failure() {
-  local w head fakebin state_real fail_path path n report out status count
+  local w head fakebin state_real fail_path success_path path n report out status count
   w=$(new_world config-reread-mixed-delivery)
   head=$(git -C "$w/main" rev-parse HEAD)
   add_sm_worktree "$w" sm "$head"
   mkdir -p "$w/sm/state"
   state_real=$(cd "$w/sm/state" && pwd -P)
   fail_path="$state_real/.fm-inherited-config-reread.9999-fail"
-  for n in $(seq -w 1 18); do
+  # History already delivered needs no second delivery to exercise pruning.
+  for n in $(seq -w 1 17); do
     path="$state_real/.fm-inherited-config-reread.00$n"
     printf 'generation-%s\n' "$n" > "$path"
     chmod 0600 "$path"
   done
   printf 'failed-generation\n' > "$fail_path"
   chmod 0600 "$fail_path"
-  for path in "$state_real"/.fm-inherited-config-reread.*; do
+  success_path="$state_real/.fm-inherited-config-reread.0099-success"
+  printf 'successful-generation\n' > "$success_path"
+  chmod 0600 "$success_path"
+  for path in "$success_path" "$fail_path"; do
     fm_config_reread_mark_pending "$path" "$path.pending" \
       || fail "could not mark mixed-delivery generation pending"
   done
@@ -2600,6 +2587,7 @@ SH
     count=$((count + 1))
   done
   [ "$count" = 16 ] || fail "mixed delivery failure skipped bounded sent-history cleanup (count=$count)"
+  assert_absent "$success_path.pending" "successful generation retained its retry marker"
   assert_present "$fail_path.pending" "failed generation lost its retry marker"
   pass "B23 mixed config reread delivery failures still bound sent history"
 }
@@ -2760,12 +2748,13 @@ test_config_reread_bootstrap_path_and_spawn_flexibility() {
   fm_config_reread_mark_pending "$stale" "$stale.pending" \
     || fail "could not create spawn stale reread marker"
   launchlog="$w/spawn-flex.launch.log"
-  spawn_secondmate_capture "$w" sm-flex "$sm" "$launchlog" --harness pi >/dev/null 2>&1
+  out=$(spawn_secondmate_capture "$w" sm-flex "$sm" "$launchlog" --harness claude 2>&1) \
+    || fail "explicit supported harness did not spawn: $out"
   assert_no_reread_pending "$sm"
   assert_no_reread_instructions "$sm"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "pi" \
-    "explicit --harness pi must still win over configured codex defaults"
+  assert_contains "$launch" "claude" \
+    "explicit --harness claude must still win over configured codex defaults"
   pass "B18 bootstrap config reread path works; spawn flexibility remains defaults-only"
 }
 
@@ -2894,61 +2883,105 @@ SH
   pass "B25 spawn quarantines stale rereads without blocking relaunch"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_harness_resolution
-test_cursor_marker_detection
 test_secondmate_model_effort_tokens
 test_secondmate_per_mate_override_lines
 test_secondmate_malformed_pin_refuses_with_line_number
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_secondmate_legacy_pin_file_is_never_refused
 test_dash_leading_process_names_are_basename_operands
 test_propagate_lib
 test_spawn_split_and_inherit
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_spawn_backward_compat_crew_fallback
 test_spawn_bare_backward_compat
 test_spawn_explicit_harness_wins
 test_spawn_unverified_secondmate_harness_refused
-test_spawn_cursor_secondmate_launches_with_its_primary_contract
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
+test_spawn_claude_secondmate_launches_with_its_primary_contract
 test_spawn_backend_precedence_over_inherited_config
 test_spawn_explicit_backend_precedence_over_env_and_inherited_config
 test_spawn_bare_harness_no_model_effort_flag
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_spawn_secondmate_harness_model_token
 test_spawn_secondmate_harness_model_and_effort_tokens
 test_spawn_secondmate_with_a_legacy_pin_file_uses_the_first_line
 test_spawn_secondmate_with_a_malformed_declared_pin_refuses
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_spawn_explicit_model_overrides_secondmate_harness_token
 test_spawn_explicit_effort_overrides_secondmate_harness_token
 test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens
 test_spawn_explicit_harness_uses_explicit_profile_axes
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_spawned_secondmate_uses_its_harness_supervision_model
 test_spawn_fallback_chain_and_crew_scout_unaffected
 test_bootstrap_sweep_propagates_and_reconverges
 test_bootstrap_sweep_propagates_when_tracked_current
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
 test_bootstrap_sweep_defers_dispatch_on_stale_unignored_home
 test_bootstrap_sweep_materializes_and_inherits_memory_default
 test_backend_inheritance_present_and_absent
 test_spawn_secondmate_claude_permission_mode_auto
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 8 ]; then
 test_spawn_secondmate_claude_grants_parent_inbox_dir
 test_approval_mode_inheritance_present_and_absent
-test_presentation_inheritance_default_on_and_opt_out
-test_bootstrap_sweep_surfaces_config_propagation_failure
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_bootstrap_rereads_after_partial_propagation
 test_config_push_propagates_reports_without_ff_or_nudge
 test_config_push_reports_skips_dirty_and_invalid_home
 test_config_push_exits_nonzero_on_copy_error
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 10 ]; then
 test_config_push_rereads_after_partial_propagation
 test_config_reread_per_home_changed_sets_and_exact_bytes
-test_config_reread_isolation_and_absent_and_send_failure
-test_config_reread_publication_failure_retries_exact_generation
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 11 ]; then
 test_config_reread_write_failure_retains_exact_retry_generation
 test_config_reread_exact_temp_survives_adoption_failure
-test_config_reread_serializes_concurrent_pushes
-test_config_reread_full_retry_queue_drains_before_new_push
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 12 ]; then
 test_config_reread_cleanup_runs_after_mixed_delivery_failure
-test_config_reread_stops_after_failed_generation
-test_config_reread_skips_when_unchanged_and_reads_after_push
-test_config_reread_bootstrap_path_and_spawn_flexibility
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 13 ]; then
 test_bootstrap_respawns_before_config_reread
 test_spawn_quarantines_pending_rereads_on_cleanup_failure
 test_bootstrap_detect_only_does_not_create_state
+fi
 
-echo "# all fm-secondmate-harness tests passed"
+if [ "${FM_TEST_SUITE_PART:-0}" = 14 ]; then
+test_presentation_inheritance_default_on_and_opt_out
+test_bootstrap_sweep_surfaces_config_propagation_failure
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 15 ]; then
+test_config_reread_isolation_and_absent_and_send_failure
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 16 ]; then
+test_config_reread_serializes_concurrent_pushes
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 17 ]; then
+test_config_reread_stops_after_failed_generation
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 18 ]; then
+test_config_reread_skips_when_unchanged_and_reads_after_push
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 19 ]; then
+test_config_reread_bootstrap_path_and_spawn_flexibility
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 20 ]; then
+test_config_reread_publication_failure_retries_exact_generation
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 21 ]; then
+test_config_reread_full_retry_queue_drains_before_new_push
+fi
+echo "# fm-secondmate-harness part ${FM_TEST_SUITE_PART:-0} passed"

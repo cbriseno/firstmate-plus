@@ -45,18 +45,19 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
    When you know when the wait clears, include `until <YYYY-MM-DDTHH:MMZ>` (UTC) for a recheck at that time; for your own background job or command with a timeout, that time is its start plus its timeout, rounded up to the minute.
    Follow the resolution rule below when the wait clears, then resume the task.
    Fix the root cause, not the symptom, and fix it at its most general level: before adding a case, list or exception, ask what general mechanism produced this failure and correct that. Be critical of the request, the plan and your own fix; a growing list of hardcoded scenarios means the general problem is still open.
-   Question every block before escalating to the captain: if a prior rule or decision answers it, it is already authorized, it is reversible, or it contradicts what was asked, decide with your recommendation and record it. Quota and cost are reported, never a reason to wait. Interrupt the captain only for a real, critical block that needs the captain's judgment.
-   Use `blocked:` when you are stuck and need help from firstmate.
 
-5. Apply any command-specific bounded recovery first; bin/fm-tasks-axi.sh --help owns work-lock contention recovery.
-   If the same obstacle persists after two attempts, stop retrying that path and find another authorized way forward.
-   Continue independent authorized work that does not depend on that path; stop the whole task only when no such work remains.
-   When no authorized way forward remains and firstmate must act, append `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`.
-   Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
-   This does not relax safety gates, required validation, shared-infrastructure boundaries, or the ban on reporting done with unresolved required work.
+5. Before escalating an obstacle or question, follow [Obstacles and escalation](#obstacles-and-escalation).
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
    prepare the decision evidence required by AGENTS.md section 9 for firstmate before stopping; stop before the action that needs that decision.
    append `needs-decision [at=<epoch>]: {summary of options}` and stop. Firstmate will reply with the decision.
+
+   To request a separable front, instead append `needs-decision [key=dividir-<slug>] [at=<epoch>]: <front>; <source>; <acceptance>; <integrator>; <independent work continuing>`.
+   Quote the original request in the acceptance criteria and continue work that does not depend on the split.
+   Firstmate dispatches helpers and resolves the key; do not delegate directly.
+   While at least one separate front is open, the original task owner is the Task Lead (Responsable de tarea).
+   The Task Lead reviews and integrates helper results and owns the original task's board and replies; helpers do not operate that board.
+   When no independent work remains, use the declared external-wait status and resume when Firstmate delivers the result through the inbox.
+   When all separate fronts close, the owner returns to the ordinary worker role.
 
    A decision or blocker you opened stays open until a `resolved` line carrying its exact key lands; a later `done:` or `working:` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append `resolved [at=<epoch>]: {how it cleared}` yourself (same `[key=<slug>]` if you opened it with one) as you resume.
@@ -89,6 +90,31 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
    Pass this rule to every sub-agent you launch.
 
 
+## Obstacles and escalation
+
+Apply this procedure before declaring `blocked`, including after command-specific recovery is exhausted.
+
+1. Read the brief, applicable rules, steering replies, and existing evidence for the affected step.
+   If they already answer the question or authorize the action, act on them and record the reason; do not request the same authority again.
+   Interpret an external event by its documented session state and content; a connection or presence change with no new request or answer creates no new decision or blocker.
+2. Identify the unmet prerequisite and the smallest action that would let the affected work proceed.
+   Resolve reversible task-local setup and implementation problems yourself within the task's allowed paths and authority, including preparing an isolated test environment in task scratch.
+   For a timeout, distinguish unfinished work under the observed scheduling/load from a failed assertion; adjust task-local waiting bounds to the observed cost without weakening assertions or changing required acceptance limits.
+3. Apply the command's documented bounded recovery first; `bin/fm-tasks-axi.sh --help` owns work-lock contention recovery.
+   If the same obstacle persists after two attempts, stop retrying that path and find another authorized way forward.
+   A retry count, timeout, or temporary refusal alone does not establish a need for firstmate to act.
+4. Continue independent authorized work that does not depend on that path; stop the whole task only when no such work remains.
+   If the remaining prerequisite is expected to clear on its own, use the declared external-wait status with the condition that will let you resume, then follow the resolution rule when it clears.
+   While a review interaction remains open, keep its existing listener active through the adapter's documented recovery until a terminal or explicit review signal; a transport event does not end the review.
+5. Use `blocked` only when the affected work cannot proceed until an identified outside actor performs a necessary action you lack the authority or capability to perform.
+   Append `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`, naming that actor and action and why authorized local recovery cannot supply it.
+   For an unanswered decision above your scope, use `needs-decision` with the full question, options, and recommendation, and stop before the action that needs the answer.
+
+Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
+Quota and cost are reported, never a reason to wait.
+This does not relax safety gates, required validation, shared-infrastructure boundaries, or the ban on reporting done with unresolved required work.
+
+
 ## Inbox and progress
 
 Read and acknowledge messages in the task inbox in numeric order by moving each handled message to its `handled/` directory.
@@ -108,9 +134,18 @@ For visual review boards, follow the [crew-hosted board contract](../../../docs/
 ## Reports
 
 For a requested report, provide a self-contained `report.html` alongside any required machine-readable or Markdown record.
-Copy and adapt the inline [report theme](report-theme.html), preserving offline use, system light and dark modes, and a clear space for report actions, with the direct-file review instructions until the connected controls are available.
+Copy and adapt the inline [report theme](report-theme.html), preserving offline use and system light and dark modes.
+When publishing the HTML, declare `outcome.review=needed` in the task presentation, including for a partial result, and use the returned `outcome_occurrence` in the report's links.
+Each new result must be declared as a new occurrence before its links are written; changing the review mark does not close the task or answer a decision.
+When arming a Lavish review for that report, pass `--review-occurrence <outcome_occurrence>` so End and Send & End apply to the version opened; a browser disconnect never marks it reviewed.
+Use the Deck address in the brief, if present, to build ordinary links to `/?task=<id>&view=delivery&item=<occurrence>&do=reviewed` and `do=lavish`, URL-encoding each value.
+For approval or independent decisions, link each existing captain call as `/?task=<call>&view=call&option=<id>` for each offered option; the Deck confirms the action, and unanswered calls remain open.
+Choose the actions from what the report asks: review and Lavish for an informational report; approve, request changes and Lavish for approval; options for each independent decision and Lavish for decisions.
+When the Deck address or network is unavailable, offer to arrange review through firstmate; do not ask the reader to run commands.
+For a list of independent choices, include every relevant item, identify unverified items as needing investigation, and offer a single submit control that preserves each chosen item as its own decision.
 Start with the result, its significance, and the next action in plain, friendly language for the reader, never agent-to-agent prose.
 Spell out names rather than presenting unexplained IDs or version labels.
+When a report mentions a Deck task, write its name in words and link the task ID to its card.
 Explain a flow with a step-by-step diagram and a concrete end-to-end example; present data in tables or charts instead of paragraphs.
 Adapt the visuals to the subject, and put supporting data, methods, technical verification, and other technical detail in expandable sections or a separate record.
 Keep the initially visible report to at most 300 words and one screen; put the remaining detail in closed expandable sections.
@@ -119,7 +154,7 @@ It counts rendered HTML and SVG text, including headings, table cells and closed
 Record the visible word count and actual diagram count with the result, and do not deliver until the count is at most 300, at least one flow diagram is visible, and the opening screen includes a complete end-to-end example and data in tables.
 Check the screen visually as well: a word count alone cannot prove it fits, and a graphic count cannot establish that a diagram explains the flow.
 Show the generation date and time in the reader's local time, never UTC, plus relative age that refreshes locally when JavaScript is available; the absolute local time must remain visible without it.
-Name the model and reasoning effort of the report author only; if either is unknown, say so rather than guessing.
+Name the model and reasoning effort of the report author only; obtain them from this task's runtime metadata, and if either is absent say so rather than guessing.
 Include the evidence needed to read the report offline without a CDN, external fonts, agent interface, or required service.
 Give firstmate the full report link and a one- or two-sentence outcome.
 Keep the existing result/review declaration current.

@@ -164,11 +164,11 @@ fm_test_launch_command() {  # <launch>
 
 # fm_test_tmpdir: directory used for registries and fixture roots.
 # Resolves absolute or relative TMPDIR to an existing physical directory,
-# falling back to /tmp if resolution fails or the directory contains .git.
+# falling back to /tmp if resolution fails or any ancestor contains .git.
 # Keep registries out of git worktree roots so concurrent git add -A cannot
 # accidentally stage live test state.
 fm_test_tmpdir() {
-  local base=${TMPDIR:-/tmp} physical
+  local base=${TMPDIR:-/tmp} physical candidate ancestor safe
   base=${base%/}
   [ -n "$base" ] || base=/tmp
   case "$base" in
@@ -186,11 +186,25 @@ fm_test_tmpdir() {
   else
     base=/tmp
   fi
-  if [ -e "$base/.git" ]; then
-    printf '%s\n' /tmp
-    return 0
-  fi
-  printf '%s\n' "$base"
+  for candidate in "$base" /var/tmp; do
+    safe=1
+    ancestor=$candidate
+    while :; do
+      if [ -e "$ancestor/.git" ]; then
+        safe=0
+        break
+      fi
+      [ "$ancestor" = / ] && break
+      ancestor=${ancestor%/*}
+      [ -n "$ancestor" ] || ancestor=/
+    done
+    if [ "$safe" -eq 1 ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' 'no safe test temporary directory found outside Git projects' >&2
+  return 1
 }
 
 FM_TEST_TMPDIR=$(fm_test_tmpdir) || return 1

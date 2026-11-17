@@ -33,7 +33,7 @@ fm_git_identity fmtest fmtest@example.com
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-restart)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
-trap 'rm -rf -- "$TMP_ROOT"' EXIT
+trap 'chmod -R u+w "$TMP_ROOT"; rm -rf -- "$TMP_ROOT"' EXIT
 
 # A session-provider stub that models the two things this pass depends on: the
 # harness exit command stops the agent, a launch brief starts the replacement,
@@ -339,7 +339,7 @@ set -u
 /bin/mv "$@" || exit $?
 target=${!#}
 case "$target" in
-  "${FM_FAKE_DIR%/fake}"/srv/state/pending-replies/*)
+  "${FM_FAKE_DIR%/fake}"/home/state/pending-replies/*)
     if [ ! -e "$FM_FAKE_DIR/answer-after-scan" ] \
       && grep -q '^parent_status_scan_signature=.' "$target"; then
       : > "$FM_FAKE_DIR/answer-after-scan"
@@ -461,6 +461,16 @@ case "${rargs[1]:-}" in
         /bin/sleep 2
         : > "$FM_FAKE_DIR/remote-relaunch-end"
         ;;
+      overlap-relaunch)
+        : > "$FM_FAKE_DIR/remote-relaunch-start"
+        i=0
+        while [ ! -e "$FM_FAKE_DIR/local-relaunch-during-remote" ] && [ "$i" -lt 6000 ]; do
+          /bin/sleep 0.05
+          i=$((i + 1))
+        done
+        [ -e "$FM_FAKE_DIR/local-relaunch-during-remote" ] || exit 1
+        : > "$FM_FAKE_DIR/remote-relaunch-end"
+        ;;
     esac
     printf 'relaunched %s harness=%s from=claude model=%s effort=%s backend=herdr endpoint=fm-remote:2ndmate-%s worktree=/srv/fm\n' \
       "${rargs[2]}" "${rargs[3]}" "${rargs[4]}" "${rargs[5]}" "${rargs[2]}"
@@ -517,14 +527,14 @@ test_remote_restart_lands_on_the_per_mate_pin() {
   dir=$(new_case matepin)
   setup_remote_case "$dir" sm2 ok
   export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
-  printf 'codex big-model high\nmate sm2: pi mate-model max\n' > "$dir/home/config/secondmate-harness"
+  printf 'codex big-model high\nmate sm2: claude mate-model max\n' > "$dir/home/config/secondmate-harness"
 
   out=$(run_restart "$dir" sm2); rc=$?
   unset FM_FAKE_ANSWER_STATUS
 
   expect_code 0 "$rc" "a mate with its own override should restart onto it"$'\n'"$out"
   relaunch_line=$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1)
-  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 pi mate-model max" ] \
+  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 claude mate-model max" ] \
     || fail "the mate's own override did not reach the host relaunch: $relaunch_line\n$out"
   pass "T6a a remote mate with a per-mate override restarts onto that override, not the default pin"
 }
@@ -621,34 +631,6 @@ test_local_restart_uses_the_home_pin_and_reports_what_ran() {
   pass "T8 a local restart re-resolves this home's pin and reports the runtime that came up"
 }
 
-test_native_ultra_restart_keeps_local_and_remote_profiles() {
-  local dir out rc relaunch_line
-  dir=$(new_case native-local)
-  add_local_mate "$dir" sm1
-  arm_answer "$dir" sm1
-  printf 'pi codex-native/gpt-6-astra ultra\n' > "$dir/home/config/secondmate-harness"
-  printf 'pi' > "$dir/fake/becomes"
-  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
-  chmod +x "$dir/fakebin/pi"
-  out=$(run_restart "$dir" sm1); rc=$?
-  expect_code 0 "$rc" "native local restart failed: $out"
-  assert_contains "$out" "restarted: sm1 (pi)" "native local restart did not complete"
-  assert_contains "$(cat "$dir/home/state/sm1.meta")" "effort=ultra" "local restart dropped native effort"
-  assert_contains "$(cat "$dir/fake/literal")" "--codex-effort 'ultra'" "local restart dropped native launch flag"
-
-  dir=$(new_case native-remote)
-  setup_remote_case "$dir" sm2 ok
-  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
-  printf 'pi-signed codex-native/gpt-6-astra ultra\n' > "$dir/home/config/secondmate-harness"
-  out=$(run_restart "$dir" sm2); rc=$?
-  unset FM_FAKE_ANSWER_STATUS
-  expect_code 0 "$rc" "native remote restart failed: $out"
-  relaunch_line=$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1)
-  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 pi-signed codex-native/gpt-6-astra ultra" ] \
-    || fail "remote restart dropped native profile: $relaunch_line"
-  pass "native Ultra survives local restart and the remote restart transport"
-}
-
 # --- T9: an unrelated concurrent reply cannot release the persist gate -------
 test_concurrent_reply_cannot_release_persist_gate() {
   local dir out rc state corr rec
@@ -722,16 +704,26 @@ test_post_stop_failure_is_reported_unreached() {
 
 # --- T12: relaunch work does not stop polling other persist answers ----------
 test_relaunches_do_not_block_persist_polling() {
-  local dir out rc
+  local dir out rc responder
   dir=$(new_case relaunch-polling)
-  setup_remote_case "$dir" sm1 slow-relaunch
+  setup_remote_case "$dir" sm1 overlap-relaunch
   add_local_mate "$dir" sm2
   printf -- '- sm2 - local domain (home: %s; scope: things; projects: p; added 2026-09-03)\n' \
     "$dir/sm2-home" >> "$dir/home/data/secondmates.md"
   export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm1.status"
-  arm_answer "$dir" sm2
+  # Release the second answer only after the first relaunch is in progress.
+  # The remote stub then waits for the second relaunch, proving overlap without
+  # relying on either process reaching its next step within a fixed two seconds.
+  (
+    while [ ! -e "$dir/fake/remote-relaunch-start" ]; do /bin/sleep 0.05; done
+    corr=$(grep -oE 'corr=[0-9a-f]{16}' "$dir/home/state/sm2.inbox"/*.msg | head -1)
+    printf 'done [%s]: open records written down\n' "$corr" >> "$dir/home/state/sm2.status"
+  ) &
+  responder=$!
 
-  out=$(FM_TEST_PERSIST_WAIT=5 run_restart "$dir" sm1 sm2); rc=$?
+  out=$(FM_TEST_PERSIST_WAIT=300 run_restart "$dir" sm1 sm2); rc=$?
+  kill "$responder" 2>/dev/null || true
+  wait "$responder" 2>/dev/null || true
   unset FM_FAKE_ANSWER_STATUS
 
   expect_code 0 "$rc" "both confirmed mates should restart independently"$'\n'"$out"
@@ -757,7 +749,7 @@ test_unpublished_worker_result_is_accounted_for() {
   driver=$!
   result_dir=
   i=0
-  while [ "$i" -lt 200 ]; do
+  while [ "$i" -lt 6000 ]; do
     result_dir=$(find "$dir/home/state" -maxdepth 1 -type d -name '.secondmate-restart.*' -print -quit)
     [ -e "$dir/fake/remote-relaunch-start" ] && [ -n "$result_dir" ] && break
     /bin/sleep 0.01
@@ -766,7 +758,7 @@ test_unpublished_worker_result_is_accounted_for() {
   [ -n "$result_dir" ] || { kill "$driver" 2>/dev/null || true; fail "restart result directory never appeared"; }
   rm -rf -- "$result_dir"
   i=0
-  while kill -0 "$driver" 2>/dev/null && [ "$i" -lt 400 ]; do
+  while kill -0 "$driver" 2>/dev/null && [ "$i" -lt 6000 ]; do
     /bin/sleep 0.01
     i=$((i + 1))
   done
@@ -845,9 +837,14 @@ test_already_current_mate_restarts_end_to_end() {
   assert_contains "$out" "nudge-secondmates: none" \
     "a mate named for restart must not also be steered"
 
+  # The fixture is the update's code root; provide the real launch tools there
+  # without making its tracked checkout dirty.
+  cp -a "$ROOT/bin/." "$dir/fmrepo/bin/" || fail "could not install launch tools in fixture"
+  printf '/bin/*\n' >> "$dir/fmrepo/.git/info/exclude"
+  fm_git_config_identity "$dir/fmrepo"
   ids=${restart_line#restart-secondmates: }
   # shellcheck disable=SC2086
-  out=$(run_restart "$dir" $ids); rc=$?
+  out=$(FM_ROOT_OVERRIDE="$dir/fmrepo" run_restart "$dir" $ids); rc=$?
 
   expect_code 0 "$rc" "the mate named by the update pass did not restart"$'\n'"$out"
   assert_contains "$out" "restarted: sm1" "an already-current mate must actually be replaced"
@@ -868,26 +865,42 @@ test_already_current_mate_restarts_end_to_end() {
   pass "T15 an already-current live mate is named by the update pass and genuinely restarted"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_persist_gates_and_asks_only_for_open_records
 test_persist_precedes_restart
 test_arrived_answer_precedes_deadline_check
 test_answer_between_resolution_and_timeout_wins
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_unknown_mate_is_accounted_for
 test_refused_restart_falls_back_without_claiming_a_reload
 test_local_restart_uses_the_home_pin_and_reports_what_ran
-test_native_ultra_restart_keeps_local_and_remote_profiles
 test_remote_mate_restarts_over_the_transport_hop
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_remote_restart_lands_on_the_per_mate_pin
 test_remote_restart_uses_the_default_for_an_unpinned_mate
 test_remote_restart_with_a_legacy_pin_file_uses_the_first_line
 test_remote_restart_refuses_an_unreadable_per_mate_pin
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_unreachable_host_is_reported_unknown
 test_concurrent_reply_cannot_release_persist_gate
 test_persist_waits_are_polled_together
 test_post_stop_failure_is_reported_unreached
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_relaunches_do_not_block_persist_polling
-test_unpublished_worker_result_is_accounted_for
-test_result_published_while_reaping_is_honored
-test_already_current_mate_restarts_end_to_end
+fi
 
-echo "# all fm-secondmate-restart tests passed"
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
+test_unpublished_worker_result_is_accounted_for
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
+test_result_published_while_reaping_is_honored
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
+test_already_current_mate_restarts_end_to_end
+fi
+echo "# fm-secondmate-restart part ${FM_TEST_SUITE_PART:-0} passed"

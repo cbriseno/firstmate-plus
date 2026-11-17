@@ -17,11 +17,11 @@
 # Role file: one directive line in config/firstmate-role (blank lines and
 # full-line # comments ignored), either
 #   user                                 - the default; may be omitted
-#   maintainer <host>/<owner>/<repo>     - this home develops firstmate for the
-#                                          named upstream
-# A scope names the publication target repository (where a PR lands), not a push
-# destination. In a secondmate home (marked by .fm-secondmate-home) a role file
-# authorizes nothing on its own: it is trusted only when the existing
+#   maintainer <host>/<owner>/<repo>     - this home publishes firstmate work to
+#                                          the named repository
+# A scope names the repository this task publishes to. In a secondmate home
+# (marked by .fm-secondmate-home), a role file authorizes nothing on its own:
+# it is trusted only when the existing
 # config-inheritance receipt config/.fm-inherit-firstmate-role.generation proves
 # the exact bytes the parent last published there, so a stale or unproven grant
 # is dead on arrival. The parent publishes its resolved role
@@ -37,9 +37,10 @@
 # of the code root's history covers any fork, the parent, and any clone of
 # either. Lineage that cannot be determined (no code root history, or a shallow
 # side sharing no root) refuses rather than permits. The publication target is
-# compared only against a maintainer scope or task consent: the first remote
-# whose remote.<name>.gh-resolved is base, otherwise the first remote named
-# upstream, github, or origin, reduced to lowercase host/owner/repo; a local-path remote
+# compared only against a maintainer scope or task consent: the first
+# push-enabled remote whose remote.<name>.gh-resolved is base, otherwise the
+# first push-enabled remote named upstream, github, or origin, reduced to
+# lowercase host/owner/repo; a local-path remote
 # is resolved one hop through that repository's own origin, and left as
 # path:<abs> when unreadable. An unknown target never permits.
 #
@@ -221,31 +222,31 @@ fm_role_git_common_dir() {
   (CDPATH='' cd -- "$common" 2>/dev/null && pwd -P) || printf '%s\n' "$common"
 }
 
-# fm_role_publication_target <git-dir> - the repository a default publication
-# (gh pr/issue, a no-mistakes PR) would reach: the first remote whose
-# remote.<name>.gh-resolved is base, otherwise the first configured upstream,
-# github, or origin, normalized to host/owner/repo or path:<abs>. Empty when
-# the selected remote is unreadable or the repo has no such remote. Resolution
-# is entirely offline.
+# fm_role_publication_target <git-dir> - the repository that accepts pushes:
+# the first remote whose remote.<name>.gh-resolved is base and whose push URL
+# is enabled, otherwise the first push-enabled upstream, github, or origin,
+# normalized to host/owner/repo or path:<abs>. Empty when the selected remote
+# is unreadable or the repo has no such remote. Resolution is entirely offline.
 fm_role_publication_target() {
   local dir=$1 remote remotes url=
   remotes=$(git -C "$dir" remote 2>/dev/null) || return 0
   while IFS= read -r remote; do
     [ -n "$remote" ] || continue
     if [ "$(git -C "$dir" config --get "remote.$remote.gh-resolved" 2>/dev/null)" = base ]; then
-      url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 0
-      fm_role_remote_identity "$url" "$dir"
-      return
+      url=$(git -C "$dir" remote get-url --push "$remote" 2>/dev/null) || return 0
+      if [ -n "$url" ] && [ "$url" != DISABLED ]; then
+        fm_role_remote_identity "$url" "$dir"
+        return
+      fi
     fi
   done <<< "$remotes"
   for remote in upstream github origin; do
-    if url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) && [ -n "$url" ]; then
-      break
+    if url=$(git -C "$dir" remote get-url --push "$remote" 2>/dev/null) && [ -n "$url" ] && [ "$url" != DISABLED ]; then
+      fm_role_remote_identity "$url" "$dir"
+      return
     fi
-    url=
   done
-  [ -n "$url" ] || return 0
-  fm_role_remote_identity "$url" "$dir"
+  return 0
 }
 
 # fm_role_shallow <dir> - 0 when <dir> is a shallow git repository.
@@ -525,7 +526,7 @@ fm_role_gate_self_publish() {
   fi
   if [ -z "$FM_ROLE_PUB_TARGET" ]; then
     # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
-    FM_ROLE_PUB_DENIAL="this task targets firstmate's own repository but no publication target can be determined (no upstream, github, or origin remote on $proj)"
+    FM_ROLE_PUB_DENIAL="this task targets firstmate's own repository but no publication target can be determined (no push-enabled remote on $proj)"
     return 1
   fi
   if [ -n "$consent" ] && [ "$consent" = "$FM_ROLE_PUB_TARGET" ]; then

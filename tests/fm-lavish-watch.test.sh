@@ -133,7 +133,7 @@ try:
     # A genuinely live lock holder must remain untouched. Reconciliation must
     # time out, reject concurrent work, and let discovery report uncertainty.
     live_holder = sp.Popen(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; '
-        'fm_lock_try_acquire "$2" || exit 1; touch "$3"; '
+        'fm_lock_acquire_wait "$2" || exit 1; touch "$3"; '
         'while [ ! -e "$4" ]; do sleep .1; done; fm_lock_release "$2"',
         "_", str(root), str(lab / "claims/zombie-recovery.lock"),
         str(lab / "held"), str(lab / "unlock")], env=env)
@@ -222,6 +222,7 @@ pass "zombie locks and zombie-only groups recover and deliver captured feedback"
   SW="$TMP_ROOT/lavish discovery"
   mkdir -p "$SW/home/.lavish" "$SW/home/data/host" "$SW/home/state" "$SW/bin" \
     "$SW/worktree space" "$SW/foreign/.lavish" "$SW/sessions"
+  # shellcheck disable=SC2030 # Each fixture intentionally scopes its state store.
   export LAVISH_AXI_STATE_DIR="$SW/sessions"
   export SCAN_CLOCK="$SW/clock"
   date +%s > "$SCAN_CLOCK"
@@ -232,6 +233,9 @@ pass "zombie locks and zombie-only groups recover and deliver captured feedback"
 if [ "${1-}" = +%s ]; then cat "$SCAN_CLOCK"; else exec "$SCAN_DATE" "$@"; fi
 SH
   chmod +x "$SW/bin/date"
+  # This section exercises the coverage warning when server presence is unknown.
+  printf '#!/usr/bin/env bash\nexit 28\n' > "$SW/bin/curl"
+  chmod +x "$SW/bin/curl"
   scan() { PATH="$SW/bin:$PATH" FM_HOME="$SW/home" "$ROOT/bin/fm-lavish-watch.sh" scan; }
   needs_scan() { FM_HOME="$SW/home" FM_STATE_OVERRIDE="$SW/home/state" "$ROOT/bin/fm-lavish-watch.sh" needed; }
   scan_count() { grep -c 'unattended Lavish board:' "$SW/home/state/.wake-queue" 2>/dev/null || true; }
@@ -292,6 +296,10 @@ SH
   touch "$SW/feedback"
   pe "$SW/home" reconcile >/dev/null
   wait_for "$SW/home/state/procevent-inbox/$scan_id.1.result" || fail "discovery fixture did not capture a worker round"
+  pe "$SW/home" recover-lavish "$scan_id" host "$first_board" >/dev/null \
+    || fail "recovery refused an existing task source"
+  [ ! -e "$SW/home/state/procevent-inbox/$scan_id.1.handled" ] || fail "recovery acknowledged a captured round"
+  assert_contains "$(cat "$SW/home/state/procevent/$scan_id.source")" 'owner_task=host' "recovery changed captured round ownership"
   cat > "$SW/bin/crew-state" <<'SH'
 #!/usr/bin/env bash
 cat "$SCAN_CREW_STATE"
@@ -349,7 +357,7 @@ SH
   # home-summary producer whose inherited output keeps command capture open.
   printf '{}\n' > "$SW/home/state/home-summary.json"
   touch "$SW/home/state/.last-check"
-  watcher_out=$(FM_HOME="$SW/home" FM_POLL=1 FM_HEARTBEAT=999999 FM_HOME_SUMMARY_INTERVAL=999999 \
+  watcher_out=$(PATH="$SW/bin:$PATH" FM_HOME="$SW/home" FM_POLL=1 FM_HEARTBEAT=999999 FM_HOME_SUMMARY_INTERVAL=999999 \
     fm_exec_timed 60 2 "$ROOT/bin/fm-watch.sh" 2>&1) || fail "watcher did not finish its discovery wake within the bound"
   assert_contains "$watcher_out" 'unattended Lavish board:' "watcher did not surface discovery wakes"
   assert_not_contains "$watcher_out" 'result captured: procevent:lavish-' "watcher labeled missing coverage as captured feedback"
@@ -361,11 +369,76 @@ SH
   [ "$bad_status" = 2 ] || fail "corrupt discovery data did not report a distinct error"
   FM_HOME="$SW/home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$SW/home" \
     || fail "corrupt discovery data silently disabled supervision"
-  watcher_out=$(FM_HOME="$SW/home" FM_POLL=1 FM_HEARTBEAT=999999 FM_HOME_SUMMARY_INTERVAL=999999 \
+  watcher_out=$(PATH="$SW/bin:$PATH" FM_HOME="$SW/home" FM_POLL=1 FM_HEARTBEAT=999999 FM_HOME_SUMMARY_INTERVAL=999999 \
     fm_exec_timed 60 2 "$ROOT/bin/fm-watch.sh" 2>&1) || fail "watcher did not finish its discovery-error wake within the bound"
   assert_contains "$watcher_out" 'unavailable-' "watcher hid a failed discovery sweep"
   assert_contains "$(cat "$SW/home/state/.wake-queue")" 'coverage unavailable' "discovery failure had no durable recovery wake"
   pass "discovery errors retain supervision and wake instead of silently losing coverage"
 ) || fail "Lavish discovery regression failed"
+
+# An unregistered worker board must be adopted without acknowledging its round.
+(
+  RW="$TMP_ROOT/recovery"
+  mkdir -p "$RW/home/data/host" "$RW/home/state" "$RW/sessions" "$RW/bin" "$RW/foreign"
+  # shellcheck disable=SC2031 # This fixture installs its own state store.
+  export LAVISH_AXI_STATE_DIR="$RW/sessions"
+  board="$RW/home/data/host/review.html"
+  foreign="$RW/foreign/review.html"
+  active="$RW/home/data/host/active.html"
+  printf '<h1>review</h1>\n' > "$board"
+  printf '<h1>foreign</h1>\n' > "$foreign"
+  printf '<h1>active</h1>\n' > "$active"
+  printf 'worktree=%s\n' "$RW/worktree" > "$RW/home/state/host.meta"
+  lavish_session "$board"
+  lavish_session "$foreign"
+  lavish_session "$active"
+  orphan="$RW/home/data/host/deleted.html"
+  printf '<h1>deleted</h1>\n' > "$orphan"
+  lavish_session "$orphan"
+  rm -- "$orphan"
+  active_id=$(bash "$ROOT/bin/fm-procevent-lavish.sh" source-id "$active")
+  id=$(bash "$ROOT/bin/fm-procevent-lavish.sh" source-id "$board")
+  mkdir -p "$RW/home/state/lavish-watch"
+  printf '%s 0 123-456\n' "$(($(date +%s) - 31))" > "$RW/home/state/lavish-watch/$id.unattended"
+  export ACTIVE_KEY=${active_id#lavish-}
+  perl -MJSON::PP -e '
+    my $p = shift; open my $f, "<", $p or die $!; local $/; my $s = decode_json(<$f>);
+    $_->{pending_prompts} = 1 for values %{$s->{sessions}};
+    open my $o, ">", $p or die $!; print $o encode_json($s);
+  ' "$LAVISH_AXI_STATE_DIR/state.json"
+  cat > "$RW/bin/curl" <<'SH'
+#!/usr/bin/env bash
+printf '{"app":"lavish-axi","state_dir":"%s","listeners":[{"key":"%s"}]}\n' "$LAVISH_AXI_STATE_DIR" "$ACTIVE_KEY"
+SH
+  cat > "$RW/bin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+exec sleep 120
+SH
+  chmod +x "$RW/bin/curl" "$RW/bin/lavish-axi"
+  fm_test_track_procevent_home "$RW/home"
+  PATH="$RW/bin:$PATH" FM_HOME="$RW/home" bash "$ROOT/bin/fm-lavish-watch.sh" scan >/dev/null \
+    || fail "missing board was not recovered"
+  PATH="$RW/bin:$PATH" FM_HOME="$RW/home" bash "$ROOT/bin/fm-procevent.sh" reconcile >/dev/null \
+    || fail "recovered board did not start"
+  id=$(bash "$ROOT/bin/fm-procevent-lavish.sh" source-id "$board")
+  other=$(bash "$ROOT/bin/fm-procevent-lavish.sh" source-id "$foreign")
+  assert_contains "$(cat "$RW/home/state/procevent/$id.source")" 'owner_task=host' "recovery lost task ownership"
+  [ ! -e "$RW/home/state/procevent/$other.source" ] || fail "recovery adopted foreign board"
+  [ ! -e "$RW/home/state/procevent/$active_id.source" ] || fail "recovery displaced an active listener"
+  assert_contains "$(cat "$RW/home/state/.wake-queue")" 'queued feedback and no listener' "pending feedback did not wake immediately"
+  assert_contains "$(cat "$RW/home/state/.wake-queue")" "$orphan" "deleted board feedback was ignored"
+  [ "$(wc -l < "$RW/home/state/.wake-queue" | tr -d ' ')" = 2 ] || fail "pending losses produced duplicate wakes"
+  wake_count=$(grep -c 'queued feedback and no listener' "$RW/home/state/.wake-queue")
+  PATH="$RW/bin:$PATH" FM_HOME="$RW/home" bash "$ROOT/bin/fm-lavish-watch.sh" scan >/dev/null \
+    || fail "repeat discovery failed"
+  [ "$(grep -c 'queued feedback and no listener' "$RW/home/state/.wake-queue")" = "$wake_count" ] \
+    || fail "one pending episode produced duplicate wakes"
+  [ ! -e "$RW/home/state/procevent-inbox/$id.1.handled" ] || fail "recovery acknowledged feedback"
+  before=$(cat "$RW/home/state/procevent/$id.source")
+  FM_HOME="$RW/home" bash "$ROOT/bin/fm-procevent.sh" recover-lavish "$id" other "$board" \
+    || fail "idempotent recovery failed"
+  [ "$(cat "$RW/home/state/procevent/$id.source")" = "$before" ] || fail "recovery replaced an owner"
+  pass "missing task board is restored with ownership and immediate feedback wake"
+) || fail "Lavish recovery regression failed"
 
 printf '\nall Lavish discovery tests passed\n'

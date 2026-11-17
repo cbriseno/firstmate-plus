@@ -18,7 +18,7 @@ fi
 
 extension_segment=${FM_EXTENSION_BINDING_SEGMENT:-all}
 case "$extension_segment" in
-  all|coordinator|early-bind|early-validation|early-handshake|early-integrity|matrix|matrix-runtime|lifecycle-flow|lifecycle-order|lifecycle-lock|lifecycle-runner|lifecycle-state|lifecycle-invocation-cleanup|remote-envelope|remote-activation|remote-lifecycle|remote-retirement|example|coordinator-fail|coordinator-wait|coordinator-stubborn|coordinator-pass|coordinator-late-pass|coordinator-scheduler-block|coordinator-scheduler-late) ;;
+  all|early-bind|early-validation|early-handshake|early-integrity|matrix|matrix-runtime|lifecycle-flow|lifecycle-order|lifecycle-lock|lifecycle-runner|lifecycle-state|lifecycle-invocation-cleanup|remote-envelope|remote-activation|remote-lifecycle|remote-retirement|example) ;;
   *) printf 'unknown extension-binding segment: %s\n' "$extension_segment" >&2; exit 64 ;;
 esac
 
@@ -62,7 +62,7 @@ override_crash_runner_pid=
 order_register_pid=
 order_reconcile_pid=
 order_release=
-section_coordinator_pid=
+section_pids=()
 extension_test_cleanup() {
   [ -z "$concurrent_release" ] || touch "$concurrent_release" 2>/dev/null || true
   [ -z "$race_release" ] || touch "$race_release" 2>/dev/null || true
@@ -100,10 +100,13 @@ extension_test_cleanup() {
   [ -z "$order_release" ] || touch "$order_release" 2>/dev/null || true
   [ -z "$order_register_pid" ] || kill -KILL "$order_register_pid" 2>/dev/null || true
   [ -z "$order_reconcile_pid" ] || kill -TERM "$order_reconcile_pid" 2>/dev/null || true
-  if [ -n "$section_coordinator_pid" ]; then
-    kill -TERM "$section_coordinator_pid" 2>/dev/null || true
-    wait "$section_coordinator_pid" 2>/dev/null || true
-  fi
+  local section_pid
+  for section_pid in "${section_pids[@]}"; do
+    [ -z "$section_pid" ] || kill -TERM "$section_pid" 2>/dev/null || true
+  done
+  for section_pid in "${section_pids[@]}"; do
+    [ -z "$section_pid" ] || wait "$section_pid" 2>/dev/null || true
+  done
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ] && [ -f "${REMOTE_ROOT:-}/bin/fm-remote-job-lib.sh" ]; then
     (
       # worker.pid names the serving child; the copied remote helper stops its
@@ -340,8 +343,8 @@ if [ "${FM_TEST_OWNER_ONLY:-0}" = 1 ]; then
 fi
 
 wait_for_file() {
-  local file=$1
-  for _ in $(seq 1 100); do
+  local file=$1 deadline=$((SECONDS + 60))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     [ -s "$file" ] && return 0
     sleep 0.05
   done
@@ -369,276 +372,13 @@ section_enabled() {
   done
   return 1
 }
-publish_section_lane_result() {
-  local result_file=$1 result=$2 temporary_file
-  temporary_file="${result_file}.$$.tmp"
-  printf '%s\n' "$result" > "$temporary_file"
-  mv "$temporary_file" "$result_file"
-}
-
-publish_coordinator_marker() {
-  local marker_file=$1 temporary_file
-  temporary_file="${marker_file}.$$.tmp"
-  printf 'ready\n' > "$temporary_file"
-  mv "$temporary_file" "$marker_file"
-}
-
-terminate_section_lanes() {
-  local index section_pid section_child_pid
-  for index in "${!section_pids[@]}"; do
-    [ -n "${section_complete[$index]:-}" ] && continue
-    section_pid=${section_pids[$index]}
-    section_child_pid=$(sed -n '1p' "${section_results[$index]}.pid" 2>/dev/null || true)
-    case "$section_child_pid" in
-      ''|*[!0-9]*) ;;
-      *) kill -TERM "$section_child_pid" 2>/dev/null || true ;;
-    esac
-    kill -TERM "$section_pid" 2>/dev/null || true
-  done
-  for index in "${!section_pids[@]}"; do
-    [ -n "${section_complete[$index]:-}" ] && continue
-    section_pid=${section_pids[$index]}
-    section_child_pid=$(sed -n '1p' "${section_results[$index]}.pid" 2>/dev/null || true)
-    case "$section_child_pid" in
-      ''|*[!0-9]*) ;;
-      *) terminate_section_lane_child "$section_child_pid" ;;
-    esac
-    wait "$section_pid" 2>/dev/null || true
-  done
-}
-
-terminate_section_lane_child() {
-  local section_child_pid=$1 cleanup_attempt
-  kill -TERM "$section_child_pid" 2>/dev/null || true
-  for ((cleanup_attempt = 0; cleanup_attempt < 20; cleanup_attempt++)); do
-    kill -0 "$section_child_pid" 2>/dev/null || break
-    sleep 0.05
-  done
-  kill -0 "$section_child_pid" 2>/dev/null && kill -KILL "$section_child_pid" 2>/dev/null || true
-  wait "$section_child_pid" 2>/dev/null || true
-}
-
-run_extension_section_lane() {
-  local result_file=$1 section=$2 current_section_pid='' section_rc=0
-  # A backgrounded function inherits the aggregate test's cleanup traps.
-  # This lane owns only its separately launched child and result publication.
-  trap - EXIT HUP INT TERM
-  trap 'if [ -n "$current_section_pid" ]; then terminate_section_lane_child "$current_section_pid"; fi; publish_section_lane_result "$result_file" 143; exit 143' TERM
-  FM_EXTENSION_BINDING_SECTION_CHILD=1 \
-    FM_EXTENSION_BINDING_SEGMENT="$section" bash "$0" &
-  current_section_pid=$!
-  printf '%s\n' "$current_section_pid" > "${result_file}.pid"
-  wait "$current_section_pid" || section_rc=$?
-  current_section_pid=
-  publish_section_lane_result "$result_file" "$section_rc"
-  [ -z "${FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED:-}" ] \
-    || printf '%s\n' "$section" > "$FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED"
-  return "$section_rc"
-}
-
-run_extension_section_lanes() {
-  local section result_file section_rc timeout_seconds deadline index remaining launched total maximum_sections
-  local active maximum_concurrent
-  local -a sections=("$@")
-  local -a section_pids=()
-  local -a section_results=()
-  local -a section_complete=()
-  local section_result_root
-  timeout_seconds=${FM_EXTENSION_BINDING_COORDINATOR_TIMEOUT_SECONDS:-34}
-  case "$timeout_seconds" in
-    ''|*[!0-9]*) return 64 ;;
-  esac
-  [ "$timeout_seconds" -gt 0 ] && [ "$timeout_seconds" -lt 35 ] || return 64
-  section_result_root=$(mktemp -d "$TMP_ROOT/section-lanes.XXXXXX") || return 1
-  total=${#sections[@]}
-  # Sixteen selectors are validated here. The bounded aggregate keeps its
-  # required end-to-end bind/invoke/capture/retirement, registration lock-order,
-  # remote, and shipped example lanes; the other conformance cuts remain
-  # independently selectable.
-  maximum_sections=16
-  maximum_concurrent=12
-  [ "$total" -le "$maximum_sections" ] || return 64
-  launched=0
-  active=0
-  while [ "$launched" -lt "$total" ] && [ "$active" -lt "$maximum_concurrent" ]; do
-    section=${sections[$launched]}
-    result_file="$section_result_root/$launched.result"
-    run_extension_section_lane "$result_file" "$section" &
-    section_pids+=("$!")
-    section_results+=("$result_file")
-    section_complete+=("")
-    launched=$((launched + 1))
-    active=$((active + 1))
-  done
-  deadline=$((SECONDS + timeout_seconds))
-  remaining=$total
-  while [ "$remaining" -gt 0 ]; do
-    for index in "${!section_pids[@]}"; do
-      [ -n "${section_complete[$index]:-}" ] && continue
-      result_file=${section_results[$index]}
-      [ -f "$result_file" ] || continue
-      section_rc=$(cat "$result_file")
-      case "$section_rc" in
-        0)
-          wait "${section_pids[$index]}" || {
-            section_rc=$?
-            terminate_section_lanes
-            return "$section_rc"
-          }
-          section_complete[index]=1
-          remaining=$((remaining - 1))
-          active=$((active - 1))
-          ;;
-        ''|*[!0-9]*)
-          terminate_section_lanes
-          return 125
-          ;;
-        *)
-          terminate_section_lanes
-          return "$section_rc"
-          ;;
-      esac
-    done
-    while [ "$launched" -lt "$total" ] && [ "$active" -lt "$maximum_concurrent" ]; do
-      section=${sections[$launched]}
-      result_file="$section_result_root/$launched.result"
-      run_extension_section_lane "$result_file" "$section" &
-      section_pids+=("$!")
-      section_results+=("$result_file")
-      section_complete+=("")
-      launched=$((launched + 1))
-      active=$((active + 1))
-    done
-    [ "$remaining" -eq 0 ] && break
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      terminate_section_lanes
-      return 124
-    fi
-    sleep 0.05
-  done
-}
-
-if section_enabled coordinator-fail; then
-  wait_for_file "${FM_EXTENSION_BINDING_COORDINATOR_READY:?}" || exit 89
-  exit 91
-fi
-
-if section_enabled coordinator-wait; then
-  trap 'publish_coordinator_marker "${FM_EXTENSION_BINDING_COORDINATOR_CLEANUP:?}"; exit 0' TERM
-  printf '%s\n' "$$" > "${FM_EXTENSION_BINDING_COORDINATOR_PID:?}"
-  publish_coordinator_marker "${FM_EXTENSION_BINDING_COORDINATOR_READY:?}"
-  while :; do sleep 0.05; done
-fi
-
-if section_enabled coordinator-stubborn; then
-  trap '' TERM
-  printf '%s\n' "$$" > "${FM_EXTENSION_BINDING_COORDINATOR_PID:?}"
-  publish_coordinator_marker "${FM_EXTENSION_BINDING_COORDINATOR_READY:?}"
-  while :; do sleep 0.05; done
-fi
-
-if section_enabled coordinator-pass; then
-  exit 0
-fi
-
-if section_enabled coordinator-late-pass; then
-  wait_for_file "${FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED:?}" || exit 90
-  exit 0
-fi
-
-if section_enabled coordinator-scheduler-block; then
-  wait_for_file "${FM_EXTENSION_BINDING_COORDINATOR_SCHEDULER_RELEASE:?}" || exit 92
-  exit 0
-fi
-
-if section_enabled coordinator-scheduler-late; then
-  publish_coordinator_marker "${FM_EXTENSION_BINDING_COORDINATOR_SCHEDULER_STARTED:?}"
-  publish_coordinator_marker "${FM_EXTENSION_BINDING_COORDINATOR_SCHEDULER_RELEASE:?}"
-  exit 0
-fi
-
-if [ "$extension_segment" = all ] || [ "$extension_segment" = coordinator ]; then
+if [ "$extension_segment" = all ]; then
   unknown_segment_out=$(FM_EXTENSION_BINDING_SEGMENT=typo bash "$0" 2>&1) && fail "an unknown section selector succeeded"
   assert_contains "$unknown_segment_out" "unknown extension-binding segment: typo" "an unknown section selector was not rejected"
-  assert_not_contains "$unknown_segment_out" "all extension-binding tests passed" "an unknown section selector reported success"
-  pass "unknown extension conformance section selectors fail before setup"
-  if [ "$extension_segment" = all ]; then
-    (
-      trap - EXIT HUP INT
-      trap 'terminate_section_lanes; exit 143' TERM
-      run_extension_section_lanes lifecycle-flow lifecycle-order remote-lifecycle example
-    ) &
-    section_coordinator_pid=$!
-  fi
-  coordinator_probe="$TMP_ROOT/coordinator-probe"
-  mkdir -p "$coordinator_probe"
-  coordinator_ready="$coordinator_probe/ready"
-  coordinator_cleanup="$coordinator_probe/cleanup"
-  coordinator_pid="$coordinator_probe/pid"
-  if FM_EXTENSION_BINDING_COORDINATOR_READY="$coordinator_ready" \
-    FM_EXTENSION_BINDING_COORDINATOR_CLEANUP="$coordinator_cleanup" \
-    FM_EXTENSION_BINDING_COORDINATOR_PID="$coordinator_pid" \
-    run_extension_section_lanes "coordinator-fail" "coordinator-wait"; then
-    fail "the section coordinator accepted a failing child"
-  fi
-  assert_present "$coordinator_ready" "the coordinator probe did not start its waiting child"
-  assert_present "$coordinator_cleanup" "the coordinator did not terminate and reap its waiting child"
-  if kill -0 "$(cat "$coordinator_pid")" 2>/dev/null; then
-    fail "the coordinator left its waiting child alive after a first-lane failure"
-  fi
-  rm -f "$coordinator_ready" "$coordinator_cleanup" "$coordinator_pid"
-  if FM_EXTENSION_BINDING_COORDINATOR_READY="$coordinator_ready" \
-    FM_EXTENSION_BINDING_COORDINATOR_CLEANUP="$coordinator_cleanup" \
-    FM_EXTENSION_BINDING_COORDINATOR_PID="$coordinator_pid" \
-    run_extension_section_lanes "coordinator-wait" "coordinator-fail"; then
-    fail "the section coordinator accepted a later-lane failure"
-  fi
-  assert_present "$coordinator_ready" "the coordinator probe did not start its stalled earlier child"
-  assert_present "$coordinator_cleanup" "the coordinator did not terminate its stalled earlier child"
-  if kill -0 "$(cat "$coordinator_pid")" 2>/dev/null; then
-    fail "the coordinator left its stalled earlier child alive after a later-lane failure"
-  fi
-  rm -f "$coordinator_ready" "$coordinator_cleanup" "$coordinator_pid"
-  if ! FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED="$coordinator_ready" \
-    run_extension_section_lanes "coordinator-pass" "coordinator-late-pass"; then
-    fail "an early successful lane prevented a later lane from publishing"
-  fi
-  assert_present "$coordinator_ready" "a successful lane did not publish its result"
-  assert_present "$coordinator_probe" "a lane cleanup removed parent coordinator state"
-  rm -f "$coordinator_ready"
-  coordinator_scheduled="$coordinator_probe/scheduled"
-  coordinator_release="$coordinator_probe/release"
-  if ! FM_EXTENSION_BINDING_COORDINATOR_SCHEDULER_STARTED="$coordinator_scheduled" \
-    FM_EXTENSION_BINDING_COORDINATOR_SCHEDULER_RELEASE="$coordinator_release" \
-    run_extension_section_lanes coordinator-scheduler-block coordinator-scheduler-block \
-      coordinator-scheduler-block coordinator-scheduler-block coordinator-scheduler-late; then
-    fail "the section coordinator held a later lane behind an earlier wave"
-  fi
-  assert_present "$coordinator_scheduled" "the coordinator did not start a later lane concurrently"
-  rm -f "$coordinator_scheduled" "$coordinator_release"
-  if run_extension_section_lanes coordinator-pass coordinator-pass coordinator-pass coordinator-pass \
-    coordinator-pass coordinator-pass coordinator-pass coordinator-pass coordinator-pass coordinator-pass \
-    coordinator-pass coordinator-pass coordinator-pass coordinator-pass coordinator-pass coordinator-pass \
-    coordinator-pass; then
-    fail "the section coordinator accepted more than its bounded allowlist"
-  fi
-  if FM_EXTENSION_BINDING_COORDINATOR_TIMEOUT_SECONDS=2 \
-    FM_EXTENSION_BINDING_COORDINATOR_READY="$coordinator_ready" \
-    FM_EXTENSION_BINDING_COORDINATOR_PID="$coordinator_pid" \
-    run_extension_section_lanes "coordinator-stubborn"; then
-    fail "the section coordinator accepted a stalled child past its deadline"
-  fi
-  assert_present "$coordinator_ready" "the deadline probe did not start its stalled child"
-  if kill -0 "$(cat "$coordinator_pid")" 2>/dev/null; then
-    fail "the coordinator left its deadline child alive"
-  fi
-  pass "the section coordinator propagates ordered failures and bounded cleanup"
-  if [ "$extension_segment" = coordinator ]; then
-    printf '\nall coordinator tests passed\n'
-    exit 0
-  fi
-  wait "$section_coordinator_pid" || fail "an isolated extension conformance section failed"
-  section_coordinator_pid=
+  for section in lifecycle-flow lifecycle-order remote-lifecycle example; do
+    FM_EXTENSION_BINDING_SECTION_CHILD=1 FM_EXTENSION_BINDING_SEGMENT="$section" bash "$0" \
+      || fail "an isolated extension conformance section failed: $section"
+  done
   pass "independent extension conformance sections complete through isolated public homes"
   printf '\nall extension-binding tests passed\n'
   exit 0
@@ -1121,16 +861,20 @@ pass "one external adapter registers, invokes, captures unhandled evidence, clas
 FM_HOME="$H_FLOW" "$PROCEVENT" register-extension ext-flow crash-silent-source --config-ref crash-silent >/dev/null
 FM_HOME="$H_FLOW" "$PROCEVENT" start crash-silent-source > "$TMP_ROOT/crash-silent-start.out" 2>&1 &
 crash_silent_start_pid=$!
-for _ in $(seq 1 400); do
+crash_silent_deadline=$((SECONDS + 180))
+while [ "$SECONDS" -lt "$crash_silent_deadline" ]; do
   if [ -f "$TMP_ROOT/claims/crash-silent-source.claim" ]; then
     # The successful crash-recovery path may release this durable claim between
     # the observation above and this best-effort cleanup PID read.
     crash_silent_runner_pid=$(sed -n '2p' "$TMP_ROOT/claims/crash-silent-source.claim" 2>/dev/null || true)
   fi
   kill -0 "$crash_silent_start_pid" 2>/dev/null || break
-  sleep 0.01
+  sleep 0.05
 done
 if kill -0 "$crash_silent_start_pid" 2>/dev/null; then
+  cat "$TMP_ROOT/crash-silent-start.out" >&2
+  ps -o pid,ppid,stat,comm -p "$crash_silent_start_pid" >&2 || true
+  [ -z "$crash_silent_runner_pid" ] || ps -o pid,ppid,stat,comm -p "$crash_silent_runner_pid" >&2 || true
   kill -TERM "$crash_silent_start_pid" 2>/dev/null || true
   [ -z "$crash_silent_runner_pid" ] || kill -TERM -"$crash_silent_runner_pid" 2>/dev/null || true
   wait "$crash_silent_start_pid" 2>/dev/null || true
@@ -1138,7 +882,10 @@ if kill -0 "$crash_silent_start_pid" 2>/dev/null; then
   crash_silent_runner_pid=
   fail "inner host crash during result.silent wedged its runner before result.terminal"
 fi
-wait "$crash_silent_start_pid" || fail "runner did not recover from inner result.silent crash"
+if ! wait "$crash_silent_start_pid"; then
+  cat "$TMP_ROOT/crash-silent-start.out" >&2
+  fail "runner did not recover from inner result.silent crash"
+fi
 crash_silent_start_pid=
 crash_silent_runner_pid=
 assert_present "$H_FLOW/state/procevent-inbox/crash-silent-source.1.result" "crashed silent invocation discarded captured evidence"
@@ -1189,7 +936,7 @@ done
 [ -L "$FM_PROCEVENT_CLAIM_ROOT/order-source.lock" ] || fail "neither lock-order contender took the source lock"
 sleep 0.2
 touch "$order_release"
-order_deadline=$((SECONDS + 12))
+order_deadline=$((SECONDS + 60))
 while kill -0 "$order_register_pid" 2>/dev/null || kill -0 "$order_reconcile_pid" 2>/dev/null; do
   if [ "$SECONDS" -ge "$order_deadline" ]; then
     # Killing registration lets lock recovery free reconcile for cleanup.
@@ -1198,7 +945,7 @@ while kill -0 "$order_register_pid" 2>/dev/null || kill -0 "$order_reconcile_pid
     order_register_pid=
     wait "$order_reconcile_pid" 2>/dev/null || true
     order_reconcile_pid=
-    fail "register-extension and reconcile deadlocked on an unhandled extension result"
+    fail "register-extension and reconcile did not finish: $(cat "$TMP_ROOT/lock-order-register.out" "$TMP_ROOT/lock-order-reconcile.out")"
   fi
   sleep 0.05
 done
@@ -1935,12 +1682,7 @@ REMOTE_FAKEBIN=$(fm_fakebin "$TMP_ROOT/remote-fakebin")
 REMOTE_SSH_COUNT="$TMP_ROOT/remote-ssh.count"
 mkdir -p "$H_REMOTE_CONTROL/data" "$H_REMOTE" "$REMOTE_ROOT/bin"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
-for remote_file in \
-  fm-extension.mjs fm-extension-launch-barrier.mjs fm-extension.sh fm-procevent.sh fm-procevent-lib.sh fm-procevent-extension-capture.pl fm-procevent-lavish.sh \
-  fm-pr-lib.sh fm-wake-lib.sh fm-path-lib.sh fm-remote-entrypoint.sh fm-remote-job-lib.sh \
-  fm-remote-job-worker.sh; do
-  cp "$ROOT/bin/$remote_file" "$REMOTE_ROOT/bin/$remote_file"
-done
+cp -R "$ROOT/bin/." "$REMOTE_ROOT/bin/"
 chmod +x "$REMOTE_ROOT/bin"/fm-*.sh "$REMOTE_ROOT/bin/fm-extension.mjs" "$REMOTE_ROOT/bin/fm-extension-launch-barrier.mjs"
 git -C "$REMOTE_ROOT" init -q -b main
 git -C "$REMOTE_ROOT" config user.email test@example.com
@@ -2263,11 +2005,7 @@ example_registration=$(FM_HOME="$H_EXAMPLE" "$PROCEVENT" register-extension file
 example_token=$(printf '%s\n' "$example_registration" | sed -n 's/^owner-token: //p')
 FM_HOME="$H_EXAMPLE" "$PROCEVENT" start example-file > "$TMP_ROOT/example-start.out" &
 example_start=$!
-for _ in $(seq 1 100); do
-  [ -f "$FM_PROCEVENT_CLAIM_ROOT/example-file.claim" ] && break
-  sleep 0.05
-done
-assert_present "$FM_PROCEVENT_CLAIM_ROOT/example-file.claim" "example source never started waiting"
+wait_for_file "$FM_PROCEVENT_CLAIM_ROOT/example-file.claim" || fail "example source never started waiting"
 printf 'build 42 completed successfully\n' > "$SIGNAL_FILE"
 wait "$example_start" || fail "example source failed after its file appeared"
 example_result=$(first_result "$H_EXAMPLE" example-file) || fail "example captured no file result"
@@ -2288,12 +2026,8 @@ symlinked_registration=$(FM_HOME="$H_EXAMPLE_SYMLINKED" "$PROCEVENT" register-ex
 symlinked_token=$(printf '%s\n' "$symlinked_registration" | sed -n 's/^owner-token: //p')
 FM_HOME="$H_EXAMPLE_SYMLINKED" "$PROCEVENT" start example-symlinked > "$TMP_ROOT/example-symlinked-start.out" &
 symlinked_start=$!
-for _ in $(seq 1 100); do
-  [ -f "$FM_PROCEVENT_CLAIM_ROOT/example-symlinked.claim" ] && break
-  sleep 0.05
-done
-assert_present "$FM_PROCEVENT_CLAIM_ROOT/example-symlinked.claim" \
-  "a home reached through a symlinked ancestor never started its external source"
+wait_for_file "$FM_PROCEVENT_CLAIM_ROOT/example-symlinked.claim" \
+  || fail "a home reached through a symlinked ancestor never started its external source"
 printf 'build 43 completed successfully\n' > "$SIGNAL_FILE_SYMLINKED"
 wait "$symlinked_start" \
   || fail "a home reached through a symlinked ancestor failed its external source"

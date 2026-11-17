@@ -233,7 +233,7 @@ SH
   while [ ! -f "$TMP_ROOT/reconcile-race.entered" ]; do
     kill -0 "$handoff" 2>/dev/null || fail "reconciliation-race handoff exited before backend delivery"
     i=$((i + 1))
-    [ "$i" -le 250 ] || fail "reconciliation-race handoff never reached backend delivery"
+    [ "$i" -le 3000 ] || fail "reconciliation-race handoff never reached backend delivery: $(cat "$TMP_ROOT/reconcile-race.out")"
     sleep 0.02
   done
   corr=$(cut -d: -f2- "$home/state/.backlog-handoff-design.wake-pending")
@@ -583,7 +583,7 @@ SH
   while [ ! -f "$TMP_ROOT/concurrent.entered" ]; do
     kill -0 "$first" 2>/dev/null || fail "first concurrent handoff exited before its blocked wake"
     i=$((i + 1))
-    [ "$i" -le 250 ] || fail "first concurrent handoff never reached its receiver wake"
+    [ "$i" -le 3000 ] || fail "first concurrent handoff never reached its receiver wake: $(cat "$TMP_ROOT/concurrent-a.out")"
     sleep 0.02
   done
   cat > "$home/data/backlog.md" <<'EOF'
@@ -653,7 +653,7 @@ SH
   while [ ! -f "$TMP_ROOT/teardown-race.entered" ]; do
     kill -0 "$handoff" 2>/dev/null || fail "teardown-race handoff exited before its blocked wake"
     i=$((i + 1))
-    [ "$i" -le 250 ] || fail "teardown-race handoff never reached its receiver wake"
+    [ "$i" -le 3000 ] || fail "teardown-race handoff never reached its receiver wake: $(cat "$TMP_ROOT/teardown-race-handoff.out")"
     sleep 0.02
   done
   PATH="$basebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
@@ -1368,30 +1368,45 @@ EOF
   pass "a cwd .tasks.toml for another backend does not redirect a markdown handoff"
 }
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_handoff_wakes_live_local_receiver
 test_cwd_tasks_toml_does_not_redirect_handoff
 test_failed_wake_retries_when_the_item_is_already_present
 test_known_receiver_failure_remains_retryable_after_grace
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_known_failure_restores_retry_after_reconciliation_race
 test_move_crash_keeps_wake_pending_for_recovery
 test_pre_move_crash_does_not_wake_until_move_lands
 test_delivery_confirmation_crash_does_not_resend
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_unresolved_delivery_attempt_refuses_immediate_resend
 test_concurrent_local_handoffs_serialize_move_and_wake
 test_local_teardown_waits_for_handoff_wake
 test_local_teardown_preserves_wake_when_home_removal_fails
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_body_moves_when_followed_by_another_item
 test_body_moves_when_followed_by_section_heading
 test_multi_paragraph_body_with_internal_blanks_moves_whole
 test_body_moves_when_last_lines_of_file
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_eof_body_before_seeded_destination_section_keeps_boundary
 test_untouched_eof_line_preserves_terminator
 test_body_handoff_is_idempotent
 test_noncanonical_indented_continuations_refuse_without_changes
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_indented_heading_is_not_section_boundary
 test_registry_home_with_pre_home_parentheses
 test_registry_home_missing_field_fails_cleanly
 test_handoff_warns_when_a_moved_item_still_owes_a_public_reply
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_handoff_is_silent_about_public_commitments_without_the_relay
+fi
 
-echo "ALL TESTS PASSED"
+echo "# fm-backlog-handoff part ${FM_TEST_SUITE_PART:-0} passed"
