@@ -15,6 +15,8 @@ retired generation. The hook publishes state/ID.relay-ready; the owning watcher
 uses --dispatch HOME STATE to start control outside the retiring worker scope.
 It waits for the hook to exit, then publishes ID.relay-result for the watcher's
 event classification. Success is informative; failure wakes supervision.
+A safe-point note with unavailable activity emits one actionable failure per
+verdict through the existing request marker; busy waits, idle recovers.
 Replacement spawn retires only obsolete automatic relay inbox requests.
 sessions.jsonl owns history. Internal --request/--control
 PID modes continue after the native callback exits, without reevaluating usage.
@@ -94,6 +96,23 @@ def main():
                 ready = Path(state) / (task + '.relay-ready')
                 if not ready.exists():
                     ready.write_text(json.dumps([gen, '', 0]))
+            elif probe.returncode != 0 or not probe.stdout.startswith('busy '):
+                message = ('failed: worker context relay ' + task + ' incomplete; activity=' +
+                           (probe.stdout.strip() or 'probe-failed') + '; note=' + str(note))
+                # Reuse the request lock and marker to report this verdict once.
+                with (data / ('relay-request-' + gen)).open('r+') as request:
+                    try:
+                        fcntl.flock(request, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue
+                    if (Path(state) / (task + '.relay-ready')).exists():
+                        continue  # A completed native callback already supplied the safe point.
+                    if request.read().strip() != message:
+                        request.seek(0)
+                        request.truncate()
+                        request.write(message + '\n')
+                        (Path(state) / (task + '.relay-result')).write_text(message)
+                        event(dict(os.environ, FM_HOME=home), task, 'incomplete', 'activity-unavailable')
         for ready in Path(state).glob('*.relay-ready'):
             task = ready.name[:-len('.relay-ready')]
             gen, checker, pid = json.loads(ready.read_text())

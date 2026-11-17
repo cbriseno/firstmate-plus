@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Opt-in real Codex/Claude completed-turn -> note -> owner relaunch -> continuation.
 # FM_WORKER_RELAY_LIVE=1 FM_RELAY_CHECK=/installed/relay-check bin/fm-test-run.sh tests/fm-worker-relay-live-e2e.test.sh
+# FM_WORKER_RELAY_DROP_CALLBACK=1 FM_WORKER_RELAY_LIVE_PROFILES=codex exercises lost-callback recovery.
 # FM_WORKER_RELAY_LIVE_CLAUDE_MODELS="claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5" selects explicit Claude coverage.
 set -eu
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 fm_live_gate opt-in FM_WORKER_RELAY_LIVE herdr tmux python3 jq tasks-axi
+if [ "${FM_WORKER_RELAY_DROP_CALLBACK:-0}" = 1 ]; then
+  [ "${FM_WORKER_RELAY_LIVE_PROFILES:-}" = codex ] || fail 'lost-callback pilot requires FM_WORKER_RELAY_LIVE_PROFILES=codex'
+fi
 CHECKER=${FM_RELAY_CHECK:-${XDG_DATA_HOME:-$HOME/.local/share}/firstmate-extensions/runtime/context-relay-lite/relay-check}
 [ -f "$CHECKER" ] || fail "relay-lite checker absent: set FM_RELAY_CHECK"
 TMP_ROOT=$(fm_test_tmproot fm-worker-relay-live)
@@ -38,7 +42,7 @@ TMUX=$(tmux display-message -p '#{socket_path},#{pid},0')
 "$HERDR_LAB_HELPER" viewer start "$HERDR_LAB_SESSION"
 "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status
 # Route backend calls through the same guarded lab helper as direct probes.
-export ORIGINAL_PATH HERDR_LAB_HELPER HERDR_LAB_SESSION
+export ORIGINAL_PATH HERDR_LAB_HELPER HERDR_LAB_SESSION ROOT
 mkdir "$FM_HOME/fakebin"
 cat > "$FM_HOME/fakebin/herdr" <<'WRAP'
 #!/usr/bin/env bash
@@ -51,6 +55,20 @@ while [ $# -gt 0 ]; do
     *) args+=("$1"); shift ;;
   esac
 done
+if [ "${FM_WORKER_RELAY_DROP_CALLBACK:-0}" = 1 ]; then
+  relay_root=${FM_ROOT_OVERRIDE:-$ROOT}
+  python3 - "$FM_HOME" "$relay_root/bin/fm-worker-relay.py" "${args[@]}" <<'DROP'
+from pathlib import Path
+import shlex
+import sys
+home, adapter = sys.argv[1:3]
+for arg in sys.argv[3:]:
+    if arg.startswith('. '):
+        launch = Path(shlex.split(arg)[1])
+        assert Path(home).parent in launch.parents and launch.name.startswith('launch.')
+        launch.write_text(launch.read_text().replace(adapter, home+'/relay-callback.py'))
+DROP
+fi
 if [ "${FM_WORKER_RELAY_GLOBAL_STOP:-0}" = 1 ]; then
   for i in "${!args[@]}"; do
     case "${args[$i]}" in
@@ -60,6 +78,23 @@ if [ "${FM_WORKER_RELAY_GLOBAL_STOP:-0}" = 1 ]; then
 fi
 PATH=$ORIGINAL_PATH exec "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "${args[@]}"
 WRAP
+# Omit only the native safe-point callback; dispatch still runs the real adapter.
+python3 - "$FM_HOME/relay-callback.py" "$ROOT/bin/fm-worker-relay.py" <<'CALLBACK'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_text('REAL_RELAY = '+repr(sys.argv[2])+'''
+import runpy
+import sys
+from pathlib import Path
+if len(sys.argv) == 6:
+    home, state, task, gen = sys.argv[1:5]
+    data = Path(home)/'data'/task
+    if (data/('relay-note-'+gen+'.md')).exists():
+        (data/'callback-suppressed').write_text(gen)
+        sys.exit(0)
+runpy.run_path(REAL_RELAY, run_name='__main__')
+''')
+CALLBACK
 chmod +x "$FM_HOME/fakebin/herdr"
 export PATH="$FM_HOME/fakebin:$PATH"
 unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
@@ -116,7 +151,7 @@ PY
     done
   fi
   python3 - "$FM_HOME" "$id" "$output" <<'WAIT'
-import json, sys, time
+import json, os, subprocess, sys, time
 from pathlib import Path
 home, task, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 data = home/'data'/task
@@ -127,12 +162,24 @@ for milestone in ('initial', 'note', 'replacement', 'continuation', 'notice'):
         if status.exists() and 'context relay incomplete' in status.read_text():
             for log in data.glob('relay-control-*.log'): print(log.read_text())
             raise AssertionError('relay incomplete: '+task)
+        # The omitted native callback is a test-only proof of the safe point.
+        # Unknown activity must wake the owner before an explicit manual recovery.
+        if (data/'callback-suppressed').exists() and not (output/'manual-recovery').exists():
+            failures = [p.read_text().strip() for p in data.glob('relay-request-*')
+                        if p.read_text().startswith('failed:')]
+            queue = home/'state/.wake-queue'
+            if failures and queue.exists() and failures[0] in queue.read_text():
+                assert queue.read_text().count(failures[0]) == 1
+                subprocess.run(['bash', os.environ['ROOT']+'/bin/fm-control.sh', task,
+                                'relaunch', '--note-file', str(next(data.glob('relay-note-*.md')))], check=True)
+                (output/'manual-recovery').write_text(failures[0])
+                print('PASS unavailable activity: owner notified once; manual recovery from native safe point', flush=True)
         rows=[json.loads(s) for s in (data/'sessions.jsonl').read_text().splitlines()]
         observed = {'initial': (output/'once').exists(),
                     'note': bool(list(data.glob('relay-note-*.md'))),
                     'replacement': len(rows)==2 and bool(rows[-1].get('session')),
                     'continuation': (output/'resumed').exists(),
-                    'notice': (home/'state/.wake-queue').exists() and 'worker context relay '+task+' replacement launched; session history=' in (home/'state/.wake-queue').read_text()}[milestone]
+                    'notice': (output/'manual-recovery').exists() or (home/'state/.watch-triage.log').exists() and 'worker context relay '+task+' replacement launched; session history=' in (home/'state/.watch-triage.log').read_text()}[milestone]
         if observed:
             if milestone == 'initial':
                 (output/'initial-bytes').write_bytes((output/'once').read_bytes())
@@ -167,7 +214,10 @@ if rows[-1]['harness']=='claude':
     assert window and native['session_id'] and native['transcript_path']==rows[-1]['session'],native
     print('PASS native Claude window',native['model']['id'],window)
 assert len(list((home/'state'/(task+'.inbox')/'handled').glob('*.msg')))==1
-assert 'worker context relay '+task+' replacement launched; session history=' in (home/'state/.wake-queue').read_text()
+if (output/'manual-recovery').exists():
+    assert (output/'manual-recovery').read_text() in (home/'state/.wake-queue').read_text()
+else:
+    assert 'worker context relay '+task+' replacement launched; session history=' in (home/'state/.watch-triage.log').read_text()
 for row in rows:
     for line in Path(row['session']).read_text().splitlines():
         item=json.loads(line)
@@ -176,8 +226,12 @@ for row in rows:
             if body.get('role','assistant')=='assistant' and isinstance(body.get('content'),list):
                 text='\n'.join(p.get('text','') for p in body['content'] if isinstance(p,dict))
                 if text: print('DECISIVE ASSISTANT:',text)
-print('PASS automatic relay',task,'new transcript; same profile; one acknowledged request; one continuation')
+print('PASS manual relay' if (output/'manual-recovery').exists() else 'PASS automatic relay',task,'new transcript; same profile; one acknowledged request; one continuation')
 PY
+  if [ "${FM_WORKER_RELAY_DROP_CALLBACK:-0}" = 1 ]; then
+    [ -s "$FM_HOME/data/$id/callback-suppressed" ] || fail 'safe-point callback was not omitted'
+    printf 'PASS lost callback: recovered automatically or reported unavailable activity before manual recovery\n'
+  fi
   bash "$ROOT/bin/fm-control.sh" "$id" exit
   printf 'done [at=%s]: pilot verified\n' "$(date +%s)" >> "$FM_HOME/state/$id.status"
 done

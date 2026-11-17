@@ -60,6 +60,14 @@ PASS automatic relay relay-claude-1896968 new transcript; same profile; one ackn
 ```
 
 The guard closed its private tmux server and named Herdr session and verified the default session unchanged.
+
+The lost-callback variant uses `FM_WORKER_RELAY_DROP_CALLBACK=1 FM_WORKER_RELAY_LIVE_PROFILES=codex` with the same live command above.
+It replaces only the disposable native callback and requires evidence that the safe-point callback was omitted; the watcher still runs the production adapter against the real Codex activity source.
+When that source is unavailable, the guard requires an actionable owner notification before using its native-callback safe-point evidence for an explicit manual relaunch.
+On 2026-11-17, Linux with Herdr 0.9.5 and codex-cli 0.169.0 repeated the normal automatic continuation, then exercised this unavailable-activity path.
+The classifier intentionally returned `unknown codex-unverified` because its activity qualification remains pinned to 0.166.0; this verification does not expand that qualification.
+The unavailable verdict reached the owner's queue once and preserved the note for manual recovery, rather than remaining silently at handoff requested.
+A successful relay is observed in the watcher information log rather than requiring an immediate wake-queue entry.
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` covers unknown checker results, replayed callbacks, retired generations, profile/note preservation, control failure, terminal tasks and teardown of relay signals.
 macOS was inspected but not executed; the adapter passed Python 3.9 grammar parsing and uses only the standard library.
 These pilots do not calibrate production thresholds or enable workers in an operator home.

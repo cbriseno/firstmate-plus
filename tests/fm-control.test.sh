@@ -1084,10 +1084,6 @@ test_fm_send_still_marks_the_same_secondmate_task() {
 # relaunch stays a fresh session exactly as it does today.
 
 
-if [ -n "${FM_TEST_ONLY:-}" ]; then
-  "$FM_TEST_ONLY"
-  exit $?
-fi
 
 test_relay_generation_and_lost_callback() {
   local dir gen
@@ -1106,6 +1102,15 @@ test_relay_generation_and_lost_callback() {
   PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
   [ ! -e "$dir/home/data/t1/relay-control-$gen.log" ] || fail 'busy worker was relaunched'
+  bash "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" t1 unknown --gen "$gen" --source claude-hook --event stop >/dev/null
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
+  grep -F 'incomplete; activity=unknown' "$dir/home/state/t1.relay-result" >/dev/null || fail 'unknown activity silently waited'
+  rm "$dir/home/state/t1.relay-result"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
+  [ ! -e "$dir/home/state/t1.relay-result" ] || fail 'same unavailable verdict was reported twice'
+  [ ! -e "$dir/home/data/t1/relay-control-$gen.log" ] || fail 'unknown activity was relaunched'
   bash "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" t1 idle --gen "$gen" --source claude-hook --event stop >/dev/null
   PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
@@ -1164,6 +1169,11 @@ finally:
 PY
   pass 'explicit task job advances after conversation exit and completes once'
 }
+
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit $?
+fi
 
 test_relay_generation_and_lost_callback
 test_task_job_survives_worker_scope
