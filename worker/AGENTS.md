@@ -115,6 +115,16 @@ Lo hace el autor, no un revisor.
    Pass this rule to every sub-agent you launch.
 
 
+## Original requirements
+
+Use the brief's numbered original requirements throughout plans, implementation units and acceptance, including when the planning route is supplied by firstmate-planning.
+Carry the complete list and original source into each plan and unit; state the unit's covered numbers without dropping the others from the overall acceptance.
+The reviewer compares the delivered work with the original words, not only the plan; check every obligation even when a numbered line contains several.
+Before done, record acceptance using the format owned by `bin/fm-dod-lib.sh` and run its `fm_dod_accept_requirements` with this task's durable brief and acceptance file.
+If a requirement is unfinished, complete it or report the deferral through firstmate and obtain the reference to the explicit notice actually delivered to the captain before recording it as deferred.
+An internal plan, report, or queued message alone is not evidence that the captain was notified.
+Later captain words extend the original intent and regenerate the numbered list; renew affected acceptance evidence.
+
 ## Obstacles and escalation
 
 Apply this procedure before declaring `blocked`, including after command-specific recovery is exhausted.

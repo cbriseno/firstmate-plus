@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# --requirements <brief> prints the numbered original intent for insertion into
+# ## Captain's requirements after filling the task. Regenerate on added asks.
+# Acceptance format and semantics are owned by bin/fm-dod-lib.sh.
 # Scaffold a crewmate brief or persistent secondmate charter at
 # data/<task-id>/brief.md under the active firstmate home.
 # Ship, scout, and host briefs carry only task-specific facts; fm-spawn.sh hands
@@ -164,6 +167,13 @@
 # anything is written. Secondmate charters never take it.
 # Refuses to overwrite an existing brief.
 set -eu
+if [ "${1:-}" = --requirements ]; then
+  [ "$#" = 2 ] || { echo 'usage: fm-brief.sh --requirements <brief>' >&2; exit 2; }
+  # shellcheck source=bin/fm-dod-lib.sh
+  . "$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)/fm-dod-lib.sh"
+  fm_brief_requirements "$2"
+  exit
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -720,8 +730,12 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 ## Captain's intent
 {TASK}
 
+## Captain's requirements
+{CAPTAIN_REQUIREMENTS}
+
 ## Firstmate spec
 {FIRSTMATE_SPEC}
+After filling intent, replace the requirements placeholder with the output of `fm-brief.sh --requirements <this-brief>`; bin/fm-dod-lib.sh owns acceptance.
 For complex work, list the independent deliverables and how they integrate in this spec before dispatch.
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}

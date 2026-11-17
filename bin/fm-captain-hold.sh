@@ -389,6 +389,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
@@ -2823,6 +2825,7 @@ command_complete() {
   local resolved_how attested_by_prefix='' origin_state unrecorded_origin=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
+  fm_dod_accept_requirements "$DATA/$origin/brief.md" "$DATA/$origin/acceptance.json" || return 1
   shift
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] && has_meta=1
@@ -2909,6 +2912,7 @@ command_verify() {
   local origin=${1:-} meta reviewed keys entry key open resolved
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
+  fm_dod_accept_requirements "$DATA/$origin/brief.md" "$DATA/$origin/acceptance.json" || return 1
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
   require_tasks_axi

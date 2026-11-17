@@ -14,6 +14,7 @@ Once the report is relayed and the shared completion gate below passes, close th
 When the captain asks to review or continue a closed scout, have a worker restore its backup into a new copy using the recovery command printed by `bin/fm-teardown.sh`, then inspect or continue the preserved changes instead of repeating the investigation.
 Route unresolved work from the report through `SUPERVISOR.md` section 7, reusing the originating task when promotion fits.
 A report supplies evidence and grants no new implementation authority.
+Compare the report with the brief's original numbered requirements under `bin/fm-dod-lib.sh` before accepting completion or promoting; retain that list in the plan and unit briefs, and require acceptance for every original requirement rather than only the reduced plan.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 For a Lavish review or iterative discussion, retain the scout as host under `SUPERVISOR.md` section 9 and the crew-hosted Lavish board contract in `docs/configuration.md`; it creates, hosts, and iterates the artifact and returns the resulting decision.
 When existing or newly granted authority covers implementation, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.

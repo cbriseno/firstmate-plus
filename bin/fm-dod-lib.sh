@@ -131,6 +131,62 @@
 # shellcheck source=bin/fm-external-review-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-external-review-lib.sh"
 
+# Requirements contract: the brief keeps the original intent and a numbered,
+# verbatim copy of every nonempty intent line under ## Captain's requirements.
+# fm-brief.sh --requirements <brief> prints that copy for insertion, without
+# interpreting or shortening prose. Each line can contain multiple obligations;
+# reviewers must check all of them against the original, never only the plan.
+# data/<id>/acceptance.json is {"requirements": [{"text": <original line>,
+# "status": "fulfilled"|"deferred", "evidence": <verification reference>,
+# "notice": <reference to explicit notice delivered to captain, if deferred>}]}.
+# Rows follow the same order. Evidence and notice are truthful attestations,
+# not automatically verified external communications. A worker cannot invent
+# notice: firstmate supplies the actual delivered message reference.
+# Missing definitions on legacy briefs warn and continue; a defined list fails
+# closed if it differs from the original, or its acceptance is missing/stale.
+fm_brief_requirements() {  # <brief>
+  [ -f "$1" ] || { printf 'brief not found: %s\n' "$1" >&2; return 1; }
+  fm_brief_task_heading_body "$1" "## Captain's intent" | awk '
+    NF { sub(/\r$/, ""); printf "%d. %s\n", ++n, $0 }
+  '
+}
+
+fm_dod_accept_requirements() {  # <brief> <acceptance.json>
+  local brief=$1 acceptance=$2 original listed
+  if ! fm_brief_task_heading_present "$brief" "## Captain's requirements"; then
+    printf '%s\n' "warning: requirements list undefined in $brief; continuing legacy task" >&2
+    return 0
+  fi
+  original=$(fm_brief_requirements "$brief")
+  listed=$(fm_brief_task_heading_body "$brief" "## Captain's requirements")
+  python3 - "$original" "$listed" "$acceptance" <<'PYREQ'
+import json
+import sys
+original, listed, path = sys.argv[1:]
+try:
+    expected = original.splitlines()
+    actual = [line for line in listed.splitlines() if line.strip()]
+    if not expected or expected != actual:
+        raise ValueError("numbered requirements must preserve every original intent line; regenerate with fm-brief.sh --requirements")
+    with open(path, encoding="utf-8") as stream:
+        rows = json.load(stream)["requirements"]
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        raise ValueError("acceptance must cover every numbered requirement")
+    for number, (line, row) in enumerate(zip(expected, rows), 1):
+        if row.get("text") != line.split(". ", 1)[1]:
+            raise ValueError(f"requirement {number}: acceptance text differs from original")
+        if row.get("status") not in ("fulfilled", "deferred"):
+            raise ValueError(f"requirement {number}: still unmet")
+        if not isinstance(row.get("evidence"), str) or not row["evidence"].strip():
+            raise ValueError(f"requirement {number}: verification evidence missing")
+        if row["status"] == "deferred" and (not isinstance(row.get("notice"), str) or not row["notice"].strip()):
+            raise ValueError(f"requirement {number}: explicit notice to captain missing")
+except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    print(f"requirements acceptance refused: {error}; complete the acceptance or disclose deferral through firstmate")
+    sys.exit(1)
+PYREQ
+}
+
 fm_brief_worker_role() {  # <state-dir> <task-id> <code-root>
   local state=$1 task_id=$2 root=$3
   printf '# Current worker role contract\n'
@@ -258,6 +314,7 @@ fm_brief_task_placeholders_present() {  # <file>
   spec=$(fm_brief_task_heading_body "$file" "## Firstmate spec")
   [ "$(printf '%s' "$intent" | tr -d '[:space:]')" = '{TASK}' ] && return 0
   [ "$(printf '%s' "$spec" | tr -d '[:space:]')" = '{FIRSTMATE_SPEC}' ] && return 0
+  fm_brief_task_heading_body "$file" "## Captain's requirements" | grep -qF '{CAPTAIN_REQUIREMENTS}' && return 0
   return 1
 }
 
@@ -858,6 +915,9 @@ fm_dod_named_head_reachable_outside_worktree() {  # <worktree> <project> <mode> 
 # (bin/fm-fleet-snapshot.sh), so the marker is read from <state>.
 fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state> <id> <meta>]
   local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url sha gerrit
+  if [ "$(status_line_verb "$line")" = "done" ] && [ -n "$state" ] && [ -n "$id" ]; then
+    fm_dod_accept_requirements "${FM_DATA_OVERRIDE:-${DATA:-${FM_HOME:-${state%/*}}/data}}/$id/brief.md" "${FM_DATA_OVERRIDE:-${DATA:-${FM_HOME:-${state%/*}}/data}}/$id/acceptance.json" || return 1
+  fi
   fm_dod_should_gate_ship_done "$kind" "$mode" "$line" || return 0
   if [ -n "$meta" ] && [ "$(fm_dod_meta_value "$meta" forge)" = external ]; then
     fm_dod_accept_external_review_done "$wt" "$project" "$line" "$meta"

@@ -220,6 +220,8 @@ Treat file or subsystem overlap as a risk signal rather than an automatic reason
 A project's declared machine capacity (`config/project-capacity`) still bounds that dispatch: a spawn beyond it exits 75 without launching, and its item stays queued rather than blocked.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
+Preserve the original request as numbered verbatim requirements through planning, unit briefs and acceptance; `bin/fm-dod-lib.sh` owns the format and completion gate.
+Review coverage against the original words, and disclose every deferral explicitly to the captain before accepting done.
 Fill the task subsections according to section 11.
 
 ### Dispatch and supervision handoff

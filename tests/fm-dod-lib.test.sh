@@ -618,4 +618,73 @@ test_publishing_contracts_route_a_forbidden_path_to_firstmate() {
 
 test_publishing_contracts_route_a_forbidden_path_to_firstmate
 
+
+# Reproduce the observed loss: a plan deferred an original ask, but done had
+# no requirement-level evidence and no delivered notice to the requester.
+test_original_requirements_acceptance() {
+  local dir="$TMP_ROOT/requirements" reason
+  mkdir -p "$dir"
+  cat > "$dir/brief.md" <<'BRIEF'
+# Task
+## Captain's intent
+Preserva todos los reportes.
+Permite elegir por fila y enviar.
+
+## Captain's requirements
+1. Preserva todos los reportes.
+2. Permite elegir por fila y enviar.
+
+## Firstmate spec
+Un piloto no reduce el encargo original.
+BRIEF
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'missing original acceptance was accepted'
+  python3 - "$dir/acceptance.json" <<'PYREQ'
+import json, sys
+json.dump({'requirements': [
+    {'text': 'Preserva todos los reportes.', 'status': 'fulfilled', 'evidence': 'reporte persistente comprobado'},
+    {'text': 'Permite elegir por fila y enviar.', 'status': 'deferred', 'evidence': 'pendiente del siguiente cambio'}
+]}, open(sys.argv[1], 'w'))
+PYREQ
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'silent deferral was accepted'
+  assert_contains "$reason" 'explicit notice to captain missing' 'deferral refusal must name missing notice'
+  python3 - "$dir/acceptance.json" <<'PYREQ'
+import json, sys
+p = sys.argv[1]
+v = json.load(open(p))
+v['requirements'][1]['notice'] = 'firstmate: mensaje entregado sobre el aplazamiento'
+json.dump(v, open(p, 'w'))
+PYREQ
+  fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json" || fail 'disclosed deferral refused'
+  python3 - "$dir/acceptance.json" <<'PYREQ'
+import json, sys
+p = sys.argv[1]
+v = json.load(open(p))
+v['requirements'][1]['status'] = 'fulfilled'
+v['requirements'][1].pop('notice')
+json.dump(v, open(p, 'w'))
+PYREQ
+  fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json" || fail 'fulfilled requirements refused'
+  # Prove the real done gate checks requirements before accepting delivery.
+  mv "$dir/acceptance.json" "$dir/saved.json"
+  reason=$(FM_DATA_OVERRIDE="$TMP_ROOT" fm_dod_accept_ship_done ship local-only '' '' 'done: ready in branch fm/requirements' "$TMP_ROOT/state" requirements) \
+    && fail 'ship done bypassed missing requirement acceptance'
+  assert_contains "$reason" 'requirements acceptance refused' 'ship done did not run acceptance'
+  mv "$dir/saved.json" "$dir/acceptance.json"
+  # A new original ask, inserted before the next Task subsection, invalidates
+  # both the old list and its otherwise complete acceptance.
+  python3 - "$dir/brief.md" <<'PYREQ'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace("## Captain's requirements", "Incluye los resultados activos.\n\n## Captain's requirements"))
+PYREQ
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'changed original intent accepted with stale requirements'
+  assert_contains "$reason" 'preserve every original intent line' 'omission refusal must name original source'
+  pass 'original requirements: missing acceptance, silent deferral and reduced intent refused; disclosed deferral accepted'
+}
+test_original_requirements_acceptance
+
 echo "all fm-dod-lib tests passed"
