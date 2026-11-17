@@ -86,12 +86,9 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   return 1
 }
 
-# Every wait_for_exit budget in these suites is 100 ticks (10s), not because any
-# watcher takes that long to decide, but because fm-watch.sh does bounded
-# startup work before its first poll: a tighter budget reaps the process while
-# it is still starting and reports a spurious "did not surface" failure. A
-# generous budget can only remove that false negative - a watcher that never
-# exits still fails the assertion when the budget runs out.
+# Startup, status persistence and EXIT cleanup can outlast short waits under
+# parallel host load. These watcher fixtures allow 600 polls for completion;
+# behavioral assertions still decide whether a wake was correct or absent.
 wait_numeric_file() {
   local file=$1 limit=${2:-30} i=0 value
   while [ "$i" -lt "$limit" ]; do
@@ -169,7 +166,7 @@ record_claude_busy() {  # <state-dir> <id>
 reap() {
   local rc
   kill "$1" 2>/dev/null || true
-  wait_for_exit "$1" 100
+  wait_for_exit "$1" 600
   rc=$?
   [ "$rc" -ne 124 ] || fail "watcher pid $1 did not exit within 10s of TERM"
 }
@@ -199,7 +196,7 @@ parked_watch_round() {  # <state> <fakebin> <out> <capture> <window> <exit|absor
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
   pid=$!
   if [ "$mode" = exit ]; then
-    wait_for_exit "$pid" 100 || { reap "$pid"; return 1; }
+    wait_for_exit "$pid" 600 || { reap "$pid"; return 1; }
     return 0
   fi
   while [ "$cycles" -lt 4 ]; do

@@ -46,6 +46,31 @@ OUT=$(FM_HOME="$TASK_HOME" HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" TMU
 [ "$(cat "$TARGET")" = preserve ] || fail 'teardown changed host target'
 pass 'first host assignment launches and tears down without a project or commit'
 
+# A status publication must wake its owner without relying on a running watcher
+# or a later turn-end. Routine appends cannot requeue an already published span.
+publish_status() {
+  FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" \
+    FM_CONFIG_OVERRIDE="$TASK_HOME/config" bash "$ROOT/bin/fm-task-status.sh" "$@"
+}
+publish_status instant working setup
+[ ! -s "$TASK_HOME/state/.wake-queue" ] || fail 'routine setup queued a wake'
+for event in needs-decision blocked 'done' failed; do
+  publish_status instant "$event" "event $event"
+  count=$(wc -l < "$TASK_HOME/state/.wake-queue")
+  publish_status instant working cleanup
+  [ "$(wc -l < "$TASK_HOME/state/.wake-queue")" = "$count" ] \
+    || fail 'routine progress requeued an old event'
+done
+[ "$(wc -l < "$TASK_HOME/state/.wake-queue")" -eq 4 ] || fail 'missing immediate status wake'
+grep -F 'needs-decision:' "$TASK_HOME/state/.wake-queue" >/dev/null \
+  || fail 'waiting status lost its decision routing'
+grep -Eq '^done \[at=[0-9]+\]: event done$' "$TASK_HOME/state/instant.status" \
+  || fail 'publication lost the timestamp or status text'
+count=$(wc -l < "$TASK_HOME/state/.wake-queue")
+publish_status instant paused 'intentional wait'
+[ "$(wc -l < "$TASK_HOME/state/.wake-queue")" = "$count" ] || fail 'a pause queued an immediate wake'
+pass 'decisions and terminal statuses queue immediately; progress and pauses stay informational'
+
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'

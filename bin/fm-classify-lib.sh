@@ -701,7 +701,7 @@ status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
     word=${word#*:}
     if status_note_waits_for_main "$word" || _fm_classify_matches "$word" \
       '(^|[^[:alnum:]_])(waiting|awaiting|esperando|espera)[[:space:]]+((for|on|a)[[:space:]]+)?(firstmate|primary)([^[:alnum:]_-]|$)'; then
-      out=needs-decision
+      out='needs-decision'
     fi
   fi
   if [ "$#" -gt 1 ]; then printf -v "$2" '%s' "$out"; else printf '%s' "$out"; fi
@@ -2455,9 +2455,10 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
   printf '%s' "$origins"
 }
 
-status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var] [include-pauses]
-  local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file result
-  local line verb key origins='' folded=0 rc=1 failed=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
+status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var] [error-var] [immediate-var]
+  local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} error_var=${5-} size ident cur_ident scratch chunk_file result
+  local immediate_var=${6-} _fm_span_immediate=0
+  local line verb key origins='' folded=0 rc=1 failed=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0 _fm_span_error=0
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
   ident=$(_fm_open_decisions_file_ident "$f") || return 2
@@ -2471,6 +2472,8 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
     if [ -n "$output_var" ]; then
       printf -v "$output_var" '%s' "$result"
       [ -z "$needs_var" ] || printf -v "$needs_var" '%s' 0
+      [ -z "$error_var" ] || printf -v "$error_var" '%s' 0
+      [ -z "$immediate_var" ] || printf -v "$immediate_var" '%s' 0
     else
       printf '%s' "$result"
     fi
@@ -2495,12 +2498,12 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
       _fm_span_needs_decision=1
       continue
     fi
-    # A new wait is a one-time signal, not a terminal or stale classification.
-    { [ "${5:-0}" = 1 ] && status_is_paused "$line"; } || status_is_captain_relevant "$line" || continue
+    status_is_captain_relevant "$line" || continue
     verb=$(status_line_verb "$line")
     case "$verb" in
       needs-decision|blocked)
         key=$(_fm_decision_key "$line") || {
+          _fm_span_error=1
           [ -n "$events" ] && events="${events} ; "
           events="${events}${line}"
           [ "$verb" = needs-decision ] && _fm_span_needs_decision=1
@@ -2508,6 +2511,7 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
           continue
         }
         _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" || {
+          _fm_span_error=1
           [ -n "$events" ] && events="${events} ; "
           events="${events}reconciliation-required: ${line}"
           [ "$verb" = needs-decision ] && _fm_span_needs_decision=1
@@ -2527,6 +2531,7 @@ EOF
         [ -n "$live_line" ] && [ "$line_number" -eq "$live_line" ] || continue
         [ -n "$events" ] && events="${events} ; "
         events="${events}${line}"
+        [ "$verb" != blocked ] || _fm_span_immediate=1
         if [ "$verb" = needs-decision ] || { [ "$verb" = blocked ] &&
           _fm_is_pending_reply_escalation "$key" "$(status_line_note "$line")"; }; then
           _fm_span_needs_decision=1
@@ -2534,6 +2539,7 @@ EOF
         rc=0
         ;;
       *)
+        [ "$verb" = 'done' ] || _fm_span_immediate=1
         [ -n "$events" ] && events="${events} ; "
         events="${events}${line}"
         rc=0
@@ -2546,10 +2552,22 @@ EOF
   if [ -n "$output_var" ]; then
     printf -v "$output_var" '%s' "$result"
     [ -z "$needs_var" ] || printf -v "$needs_var" '%s' "$_fm_span_needs_decision"
+    [ -z "$error_var" ] || printf -v "$error_var" '%s' "$_fm_span_error"
+    [ -z "$immediate_var" ] || printf -v "$immediate_var" '%s' "$_fm_span_immediate"
   else
     printf '%s' "$result"
   fi
   return "$rc"
+}
+
+# Ordinary results and questions wait for the fleet batch. Open blockers,
+# failures, rejected transitions and unreadable/unknown events remain immediate.
+status_span_requires_immediate_action() {  # <status-file> <start-offset>
+  local record error immediate rc=0
+  [ -f "$1" ] && [ -r "$1" ] && [ ! -L "$1" ] || return 0
+  status_span_first_actionable_record "$1" "$2" record '' error immediate || rc=$?
+  [ "$rc" != 2 ] || return 0
+  [ "${error:-0}" = 1 ] || [ "${immediate:-0}" = 1 ]
 }
 
 status_span_first_actionable() {  # <status-file> <start-offset>

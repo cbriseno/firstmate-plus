@@ -1,184 +1,30 @@
 #!/usr/bin/env bash
 # Firstmate watcher.
-# Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
-# and keeps blocking; it queues and exits only for actionable wakes.
-# Status wakes require a captain-relevant event or parent-directed secondmate
-# content. A worker's turn-end also wakes once when it has neither a result,
-# a declared wait nor execution proof.
-# Routine progress and healthy secondmate turn-ends stay silent. Stale
-# panes wake when the recorded endpoint is confirmed dead or missing, or an idle
-# worker's deadline-free pause has no active validation run to explain its wait.
-# While state/.afk exists, the daemon owns triage for eligible durable wakes.
-# Printed reason lines:
-#   signal: <file>...      a new status event or an undeclared worker stop
-#   stale: <window>        a confirmed dead/missing endpoint needing recovery,
-#                          or a bounded idle-pause recheck (paused_idle_recheck).
-#                          Other live, quiet, or unknown endpoints stay silent.
-#                          A dead endpoint is reported once per pane state; it is
-#                          never interrupted or restarted automatically.
-#                          The remaining detail below describes wedge bounds and
-#                          declared-wait deferrals for eligible dead endpoints.
-#                          A dead endpoint past the wedge threshold also surfaces
-#                          with an "escalation N" count in the reason; at
-#                          FM_WEDGE_DEMAND_INSPECT_COUNT
-#                          consecutive escalations on the SAME pane, the reason
-#                          also carries a "demand-deep-inspection" marker so the
-#                          wake payload itself, not just repetition, forces a
-#                          closer look instead of another routine supervision
-#                          resume. Where FM_WEDGE_MAX_ESCALATIONS is set above 0,
-#                          the escalation at that count carries an extra
-#                          "PERMANENTLY-WEDGED" clause and is the last wedge
-#                          escalation for that WINDOW while its cap marker
-#                          stands: until the next episode-ending reset,
-#                          FM_CAP_HORIZON_SECS elapses, or the operator removes
-#                          the marker (wedge_timer_check owns that opt-in).
-#                          When the pane shows the Claude background-task
-#                          exit picker, that same parenthetical ends with
-#                          "blocked-on-prompt:" and the picker's name, after the
-#                          demand-deep-inspection clause when that clause is
-#                          present; a plain stale reason gains the parenthetical
-#                          to carry the name, and no other reason carries it: the
-#                          deferral, dead-record and declared-wait recheck
-#                          reasons below keep their wording.
-#                          Unless afk is active. A pane about to escalate
-#                          that can account for its quiet - a `paused:` external
-#                          wait or a verified `captain-held` transfer its worker
-#                          declared, a backlog captain hold on its task, or,
-#                          where config/wedge-defer-worker-wait arms it, its own
-#                          still-open newest `blocked:` or `needs-decision:`
-#                          line, or, where config/wedge-defer-parked-gate
-#                          arms it, a validation gate of its own awaiting a
-#                          supervisor decision nobody has answered yet - is
-#                          deferred to that same long recheck cadence instead
-#                          (wedge_wait_evidence), and a pane whose own task
-#                          worktree was written during the quiet window is
-#                          deferred rather than escalated (wedge_defer_writing),
-#                          because files appearing there are liveness the pane and
-#                          the run step cannot show; that deferral still
-#                          re-surfaces once per PAUSE_RESURFACE_SECS, and a pane
-#                          that writes nothing keeps the unchanged schedule.
-#                          Where config/wedge-defer-validating arms it, a
-#                          pane whose crew's attributed no-mistakes run is
-#                          running or fixing is not a wedge candidate: the
-#                          worker is idle behind its own drive call, so it is
-#                          deferred to the same long recheck cadence
-#                          (wedge_defer_validating), while a parked, terminal,
-#                          ci-monitoring, absent or unreadable run, or a home
-#                          without that flag, escalates unchanged.
-#                          A pane whose recorded endpoint holds no agent at all is
-#                          not a wedge and is reported ONCE instead of escalating
-#                          on that cadence forever (wedge_dead_record); only the
-#                          two recovery-grade verdicts license it, and every other
-#                          verdict escalates unchanged.
-#                          Where config/wedge-evidence-guards lists operator
-#                          guards, a live pane about to escalate whose guard
-#                          answers CRITICAL defers a bounded run of windows
-#                          (wedge_guard_evidence, wedge_defer_guard) and the
-#                          escalation that ends the run names the guard.
-#                          A genuinely busy pane
-#                          (window_is_busy true) is exempt from the above, but
-#                          only up to BUSY_TURN_MAX_SECS with no completed turn
-#                          (state/<id>.turn-ended, or the spawn record before any
-#                          turn completes). Past that bound, a declared external
-#                          wait or verified captain-held transfer uses the long
-#                          pause recheck cadence; under daemon-backed afk an
-#                          external wait is instead handed to the daemon as this
-#                          plain reason once per declaration, while captain-held
-#                          work stays silent until return
-#                          (busy_turn_bound_check owns that split);
-#                          every other pane goes through the same wedge timer,
-#                          the dead-record probe above included, and surfaces
-#                          with the identical "stale: ..." reason, escalation
-#                          count, and demand-deep-inspection marker for a live
-#                          agent, for human inspection only - never an automatic
-#                          interrupt, signal, or restart of the worker or its
-#                          tool process.
-#   stale: <window> (unread firstmate instruction: ...)
-#   stale: <window> (steering-inbox ladder bookkeeping unwritable: ...)
-#   stale: <window> (steering-inbox busy bookkeeping unwritable: ...)
-#                          steering-inbox recovery; bin/fm-task-inbox-lib.sh owns
-#                          delivery-attempt, busy-deferral, and unavailable-endpoint policy
-#   check: <script>: <out> authenticated check output, always actionable
-#   check: process-event result captured: <keys>
-#                          a durably captured process-to-event result is queued
-#                          and has not been surfaced yet; reported once per
-#                          captured generation, never again while that record
-#                          stays queued and never once it is acknowledged
-#   check: process-event source stranded: <keys>
-#                          a registered process-to-event source has a claim
-#                          reconcile will not displace and nothing collecting
-#                          for it (bin/fm-procevent.sh reconcile queues it
-#                          once per stranded claim generation); the queued
-#                          payload names what clears it
-#   check: process-event source failed to start: <keys>
-#                          a registered process-to-event source was launched by
-#                          reconcile and did not prove it took the claim within
-#                          the confirm window, so nothing is confirmed to be
-#                          collecting for it and every cycle will relaunch it
-#                          (bin/fm-procevent.sh reconcile queues it once per
-#                          failure episode, and a later cycle that finds the
-#                          source owned closes that episode); the queued
-#                          payload names what to check. These three kinds are
-#                          joined with `;` when more than one surfaces in a cycle
-#   check: rejected unauthenticated state checks: <paths>
-#                          unsafe state checks were refused without execution
-#   check: rejected unauthenticated PR poll retirement receipts: <paths>
-#                          invalid pending retirements were preserved without
-#                          running a check or removing poll artifacts
-#   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
-#                          status, unless afk is active
-#   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
-#                          inactive terminal outcome that still lacks its durable
-#                          upstream receipt
-#   check: secondmate wake-loop stalled: mate=<id> row=<seq> idle=<seconds>s
-#                          an actionable row in an endpoint-recorded local
-#                          secondmate home's durable wake queue did not advance
-#                          between observations for FM_SECONDMATE_WAKE_STALL_SECS
-#                          while the mate was not in an active turn (a busy mate
-#                          is exempt only until the queue has been frozen for
-#                          BUSY_TURN_MAX_SECS); declared external-wait pause
-#                          rows do not feed this escalation; a mate whose
-#                          semantic busy class is exactly idle, whose agent is
-#                          alive, and whose composer is not pending is rung
-#                          once so its own home can drain, and the parent
-#                          notification is withheld until that same row stays
-#                          frozen for another stall interval; unknown or
-#                          ring-unsafe panes keep the parent alarm; empty
-#                          inbox and a fresh child beacon are not idle proof;
-#                          the foreign queue itself stays read-only, and one
-#                          parent notification covers each no-progress episode
-#   check: secondmate <id> auto-relaunched after <cause> (<where>)
-#                          the liveness tick probed a registered secondmate's
-#                          recorded endpoint, got the recovery-grade `dead` or
-#                          `missing` verdict, and relaunched it through the
-#                          same guarded fm-spawn.sh --secondmate path the
-#                          session-start sweep uses; one wake per relaunch, and
-#                          state/.secondmate-relaunch-<id> keeps the durable
-#                          per-mate count (bin/fm-secondmate-liveness-lib.sh)
-#   check: secondmate <id> auto-relaunch failed after <cause>: <detail>
-#                          the same verdict authorized recovery but the
-#                          relaunch itself failed; the attempt is ledgered and
-#                          counts toward the bound below
-#   check: secondmate <id> auto-relaunch paused after <n> attempts in <s>s; ...
-#                          a mate that kept dying exceeded its bounded relaunch
-#                          budget and is parked until a probe reads it live
-#                          again (FM_SECONDMATE_LIVENESS_MAX_ATTEMPTS and
-#                          FM_SECONDMATE_LIVENESS_WINDOW_SECS)
-# For normal supervision, resume the session-start primary-harness protocol
-# after each printed reason. Direct duplicate invocations of this script still
-# no-op through the watcher singleton lock. A live holder whose beacon is stale
-# past the grace (FM_WATCHER_STALE_GRACE, default max(300, FM_POLL+60)) is
-# refused with "lock held by live pid ... but heartbeat is stale"; one stale past
-# the hard bound FM_WATCHER_STALL_BOUND (default 3x that grace) is instead
-# evicted with TERM after its recorded identity is re-verified, and this arm
-# starts in its place, printing "watcher: replaced stalled pid <N> (...)". A
-# holder that survives TERM keeps the refusal and the nonzero exit.
-# Once per poll the watcher also checks that its home (when it existed at
-# start), its state directory, and its own bin directory still exist; when one
-# is gone it logs "watcher: exiting - <what> no longer exists: <path>" to stderr
-# and exits 1, so a watcher whose temporary home or disposable checkout was
-# deleted stops itself instead of running on as an orphan. That check is scoped
-# to this process alone and never signals another watcher.
+# Usage: FM_HOME=<home> [FM_STATE_OVERRIDE=<state>] bash bin/fm-watch.sh
+# The poll loop and native transition path share one delivery gate: wake the
+# primary only while a durable event still requires action from that actor.
+# Blockers, failures, captured messages and actual endpoint or delivery failures
+# retain immediate delivery. Ordinary decisions and results share the hourly
+# delivery deadline with information, while remaining queued. Declared waits, routine
+# progress, healthy heartbeat/re-arm/relay events, successful automatic closes,
+# scheduling and maintenance observations share the fleet-wide batch owned by
+# fm-push-transition-lib.sh. That owner also defines FM_INFO_SUMMARY_SECS.
+# Unknown or unreadable events remain actionable; notification never consumes
+# queue rows, whose sequence-bound acknowledgement belongs to fm-wake-drain.sh.
+#
+# Printed reason prefixes remain signal:, stale:, check:, and heartbeat.
+# The watcher queues before advancing its status/transition suppression marker.
+# No wake automatically interrupts, discards, or restarts ordinary worker work.
+# Steering-inbox retry/recovery is owned by fm-task-inbox-lib.sh; secondmate
+# recovery by fm-secondmate-liveness-lib.sh; process capture by fm-procevent.sh.
+# Below, each producer owns the evidence for its event, not a second wake policy.
+# The existing wedge/declaration probes retain their own tuning and markers.
+#
+# The singleton permits one watcher per home. A live holder past the shared
+# hard stall bound is identity-verified before TERM/replacement; a surviving
+# holder refuses takeover. Removed home, state or bin directories end this
+# process only. Watcher continuity and actor ownership are documented in
+# docs/watcher-continuity.md. Runtime tunables are declared beside their defaults.
 set -u
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
@@ -332,25 +178,7 @@ TURNEND_CHURN_ABSORB_SECS=${FM_TURNEND_CHURN_ABSORB_SECS:-900}  # longest a task
 # Busy state is decided by the semantic contract in bin/fm-busy-lib.sh, which
 # is the single owner of per-harness sources, source attribution, and the one
 # remaining rendered-text fallback (Grok only).
-# Always-on wake triage: most wakes during a long crew validation are benign (a
-# working: note or turn-end while a pipeline runs, a no-change heartbeat). Rather
-# than wake firstmate's LLM for each, this watcher classifies every wake in bash
-# and ABSORBS the benign majority - it advances the suppression marker, logs to a
-# debug log, and keeps blocking WITHOUT enqueuing or exiting. The no-verb signal
-# / stale path is absorb-only-on-positive-evidence. The shared proof is an actively
-# running no-mistakes step or a busy pane via crew_is_provably_working over
-# fm-crew-state.sh; where config/turnend-churn-absorb opts in, a bare turn-end alone
-# may also use bounded pane churn since the previous poll.
-# Every other crew that stopped its turn is SURFACED, so a finish reported
-# only through interactive pane menus (no done: status) is never swallowed. An
-# ACTIONABLE wake (a captain-relevant signal, a no-verb signal without either
-# eligible proof, any check, a stale pane whose crew is not provably working, a
-# provably-working stale past the threshold, or anything unknown) is written to
-# the durable queue and exits. That wakes the LLM through the background-task
-# completion. The same classifier
-# (fm-classify-lib.sh) backs the away-mode daemon; while state/.afk exists the
-# daemon owns triage, so this watcher reverts to one-shot (enqueue + exit on every
-# wake) and never double-triages - and never runs the costly provably-working read.
+# Every publisher uses watch_event_append; wake rechecks the same live predicate.
 STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provably-working stale escalates as a possible wedge
 # A busy pane is unconditional proof of liveness with no built-in duration bound,
 # so a hung foreground call can remain hidden even while its rendered busy
@@ -536,7 +364,7 @@ inbox_steer_escalate_unavailable() {  # <window> <task> <record>
     fm_task_inbox_due_action "$STATE" "$task" >/dev/null || true
     return 0
   fi
-  fm_wake_append stale "$w" "$reason" || exit 1
+  watch_event_append stale "$w" "$reason" || exit 1
   if ! fm_task_inbox_record_escalated "$STATE" "$task" "$rec"; then
     echo "error: stale wake was queued for $task but its inbox escalation marker could not be written" >&2
     exit 1
@@ -611,7 +439,7 @@ inbox_steer_check() {  # <window> <task>
         fi
         if [ -d "${rec%/*}" ]; then
           reason="stale: $w (steering-inbox ladder bookkeeping unwritable: ${rec%/*}/.ring-state cannot be written while $rec stays unhandled; the doorbell cannot advance toward escalation - inspect the inbox directory)"
-          fm_wake_append stale "$w" "$reason" || exit 1
+          watch_event_append stale "$w" "$reason" || exit 1
           wake "$reason"
         fi
       fi
@@ -622,7 +450,7 @@ inbox_steer_check() {  # <window> <task>
       fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
       if ! fm_task_inbox_clear_retry "$STATE" "$task" "$rec" && [ -f "$rec" ]; then
         reason="stale: $w (steering-inbox retry mark unremovable: ${rec%/*}/.retry-ring cannot be removed, so $rec would ring on every poll - inspect the inbox directory)"
-        fm_wake_append stale "$w" "$reason" || exit 1
+        watch_event_append stale "$w" "$reason" || exit 1
         wake "$reason"
       fi
       triage_log "steer-inbox retry ring: $task ${rec##*/} result=$ring_rc"
@@ -633,7 +461,7 @@ inbox_steer_check() {  # <window> <task>
         fm_task_inbox_due_action "$STATE" "$task" >/dev/null || true
         return 0
       fi
-      fm_wake_append stale "$w" "$reason" || exit 1
+      watch_event_append stale "$w" "$reason" || exit 1
       if ! fm_task_inbox_record_escalated "$STATE" "$task" "$rec"; then
         echo "error: stale wake was queued for $task but its inbox escalation marker could not be written" >&2
         exit 1
@@ -666,30 +494,6 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   else
     triage_log "timed-pause resume failed: $win"
   fi
-}
-
-# A deadline-free pause can outlive the worker's own background command without
-# another turn-end event. Once past the ordinary stale threshold, exact semantic
-# idle and no executing validation run warrant a recheck, even on a live pane.
-# This does not claim that idle proves process absence: firstmate checks the job
-# and resumes the worker. Reuse the pause throttle, with a distinct scope so an
-# earlier generic pause alert cannot hide this condition for another four hours.
-paused_idle_recheck() {  # <window> <task> <declared-wait-line> <activity-verdict>
-  local win=$1 task=$2 last=$3 activity=$4 age declaration key
-  status_is_paused "$last" || return 0
-  [ "${activity%% *}" = idle ] || return 0
-  status_paused_until "$last" >/dev/null && return 0
-  age=$(age_of "$STATE/$task.status")
-  [ "$age" -ge "$STALE_ESCALATE_SECS" ] || return 0
-  key=$(window_key "$win")
-  declaration="idle:$(stale_wait_declaration "$task")"
-  stale_wait_throttled "$key" "$declaration" && return 0
-  [ "$(crew_absorb_class "$task")" != working ] || return 0
-  # Dead endpoints retain the declared-wait cadence below, with its own scope.
-  [ "$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null)" = alive ] || return 0
-  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" \
-    "stale: $win (paused worker idle without a deadline or active validation run; check finished background work and resume if the wait cleared)" \
-    "$declaration" "$STALE_ESCALATE_SECS"
 }
 
 # 0 (benign/absorb) if EVERY task in a no-verb "signal:" wake has positive work
@@ -1159,7 +963,7 @@ EOF
     reason="check: secondmate wake-loop stalled: mate=$task row=$seq idle=${idle}s"
     queued=$(fm_wake_queued_keys check)
     if ! printf '%s\n' "$queued" | grep -Fx "$notify_key" >/dev/null 2>&1; then
-      fm_wake_append check "$notify_key" "$reason" || return 1
+      watch_event_append check "$notify_key" "$reason" || return 1
     fi
     fm_wake_secondmate_stall_receipt_write "$task" "$row_key" || return 1
     fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
@@ -1243,7 +1047,7 @@ secondmate_liveness_tick() {
     if [ -n "$reason" ]; then
       queued=$(fm_wake_queued_keys check)
       if printf '%s\n' "$queued" | grep -Fx "$notify_key" >/dev/null 2>&1 \
-        || fm_wake_append check "$notify_key" "$reason"; then
+        || watch_event_append check "$notify_key" "$reason"; then
         [ -n "$first_reason" ] || first_reason=$reason
       else
         err="check wake row could not be queued: $reason"
@@ -1470,12 +1274,12 @@ _wedge_cap_terminal_append() {
     triage_log "wedge cap for $_win could not record its episode terminal marker; duplicate suppression falls back to the queue check alone for this window"
   fi
   if [ "$_had" -eq 1 ] || [ "$_degraded" -eq 1 ]; then
-    if fm_wake_queued_carries_locked stale "$_win" PERMANENTLY-WEDGED; then
+    if fm_wake_queued_carries_locked check "$_win" PERMANENTLY-WEDGED; then
       fm_lock_release "$FM_WAKE_QUEUE_LOCK" || return 4
       return 3
     fi
   fi
-  fm_wake_append_locked stale "$_win" "$_reason" || _status=$?
+  fm_wake_append_locked check "$_win" "$_reason" || _status=$?
   if [ "$_status" -ne 0 ]; then
     rm -f "$_queued"
   fi
@@ -1513,20 +1317,10 @@ _wedge_cap_rollback() {
   return 1
 }
 
-# One bounded re-surface for a pane the watcher is deliberately absorbing, so no
-# absorb can rot invisibly. <age> is how long the current absorb has held and
-# <throttle> is the per-window marker whose mtime records the last re-surface, so
-# once past PAUSE_RESURFACE_SECS the pane wakes once per window rather than every
-# poll. An optional <scope> binds that cadence to its current declaration; callers
-# without a scoped declaration keep the timestamp body. Shared by the
-# declared-pause absorb and the wedge deferrals so their cadences cannot drift
-# apart; each caller owns its own marker and reason.
-# A scoped recheck already pending for the same declaration is not appended again.
-# Returns without waking while either the absorb or the throttle is inside the
-# window; wake() itself exits the cycle, exactly as it does inline. An optional
-# <min-age> replaces the cadence as the absorb-age gate for one call (0 lets a
-# declared `until` time that has just passed re-surface at once), while the
-# throttle keeps the cadence between repeats.
+# Record an absorbed pane's periodic recheck in the fleet-wide batch. Its
+# existing per-window cadence bounds logging; only the common summary cadence
+# can wake for this information. A scope distinguishes changed declarations;
+# min-age permits recording an elapsed declared deadline immediately.
 resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age]
   local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS}
   # Keep one pending recheck per declaration; acknowledgement permits its long cadence again.
@@ -1539,9 +1333,8 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min
     [ "$age" -ge "$min_age" ] || return 0
     [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
   fi
-  fm_wake_append stale "$win" "$reason" || exit 1
+  watch_info_record wait "$reason"
   if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
-  wake "$reason"
 }
 
 # Defer ONE wedge escalation for a pane that went quiet while its own task
@@ -1929,7 +1722,7 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   # written ahead of a failed append outlives it, and the next sighting would then
   # absorb the retry - the one way this bound could swallow the report outright
   # rather than deliver it once.
-  fm_wake_append stale "$win" "$reason" || exit 1
+  watch_event_append stale "$win" "$reason" || exit 1
   stale_wait_record "$key"
   printf '%s %s' "$agent_state" "$id" > "$marker"
   clear_write_tracking "$key"
@@ -2255,7 +2048,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
             triage_log "wedge cap could not hold the wake-queue append lock for $win, no cap marker written (next poll will retry)"
             exit 1
           elif [ "$_wrb_cap_status" -ne 0 ]; then
-            triage_log "wedge fm_wake_append FAILED for cap on $win, no cap marker written (next poll will retry)"
+            triage_log "wedge watch_event_append FAILED for cap on $win, no cap marker written (next poll will retry)"
             exit 1
           fi
           fm_epoch_seconds_to _wrb_cap_ts
@@ -2292,7 +2085,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           return 0
         fi
         reason=$(stale_reason_naming_dialog "$reason" "$dialog")
-        fm_wake_append stale "$win" "$reason" || exit 1
+        watch_event_append check "$win" "$reason" || exit 1
         # The ladder's own step, not an episode end: this pane is still wedged,
         # so the idle timer restarts for the next rung of the same escalation
         # count and the cap that fired stays exactly where it is.
@@ -2318,129 +2111,28 @@ busy_turn_over_age() {  # <task>
   [ "$(age_of "$f")" -ge "$BUSY_TURN_MAX_SECS" ]
 }
 
-# Absorb a stale pane under a declared external-wait pause (paused:) or a
-# dead-agent captain-held transfer, and re-surface it once every
-# PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
-# stale poll once pause_state_class permits the bounded cadence, so it must be
-# cheap: it NEVER re-reads crew state. The re-surface age is anchored on the
-# status file mtime, not a per-hash marker, so a churny idle pane (a ticking
-# clock, a token counter) cannot keep resetting the cadence the way a hash-tied
-# timer would. The bounded re-surface itself is the shared resurface_absorbed
-# above, throttled by this window's own .paused-resurfaced-<key> marker. Advances
-# the stale suppressor to <hash> and flags the key paused.
-#
-# The recheck distinguishes the declared dependency from a captain decision:
-# the legacy external-wait wording for paused: (bin/fm-classify-lib.sh), and the
-# captain themself for a verified hold. Only the captain-held verb takes the second
-# wording; a caller that reached the bounded cadence off pause tracking alone, with
-# no declaring verb left on the log, keeps the external-wait wording it always had.
+# A declared dependency explains waiting in every harness and posture. Keep its
+# existing per-declaration logging cadence; only the fleet-wide batch may wake.
+# Timed resumption belongs to paused_until_resume, not to a model reminder.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age
+  local win=$1 task=$2 h=$3 key age declaration last
   key=$(window_key "$win")
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
   wedge_episode_end "$key"
   clear_write_tracking "$key"
-  statusf="$STATE/$task.status"
-  mtime=$(stat_mtime "$statusf")
-  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
-  now=$(date +%s)
-  age=$(( now - mtime ))
-  last=$(status_declared_wait_line "$statusf")
-  min_age=$PAUSE_RESURFACE_SECS
-  declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
-  if status_is_captain_held "$last"; then
-    if away_record_present; then
-      triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $win"
-      return 0
-    fi
-    detail="captain-held, awaiting the captain"
-    reason="captain-held ${age}s, awaiting the captain - verified hold transfer, rechecked on a long cadence not a wedge; answer the held decision or release the hold"
-  elif until=$(status_paused_until "$last"); then
-    if [ "$now" -lt "$until" ] && [ "$age" -lt "$PAUSE_RESURFACE_SECS" ]; then
-      triage_log "absorbed stale (paused until $(( until - now ))s from now, declared time not reached): $win"
-      return 0
-    elif [ "$now" -lt "$until" ]; then
-      detail="paused, declared time beyond recheck cadence"
-      reason="paused ${age}s, awaiting external - the declared time is beyond the recheck cadence; confirm the wait still holds"
-    else
-      # The declared time has passed: recheck now, once per declaration, then
-      # hold the cadence.
-      detail="paused, declared time reached"
-      reason="paused ${age}s, awaiting external - the declared clearing time has passed, rechecked on a long cadence not a wedge; confirm the wait cleared"
-      declaration="$declaration:due"
-      min_age=0
-    fi
-  else
-    detail="paused, awaiting external"
-    reason="paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds"
-  fi
-  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age"
-  triage_log "absorbed stale ($detail, age ${age}s): $win"
+  age=$(age_of "$STATE/$task.status")
+  last=$(status_declared_wait_line "$STATE/$task.status")
+  declaration="declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
+  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" \
+    "declared wait: $win; $last" "$declaration"
 }
 
-# Apply the busy-pane completed-turn bound to a window whose bound has already
-# crossed, honoring the worker's OWN declared external wait. Prints/queues
-# nothing itself; it only chooses which absorber owns the crossed bound.
-# 0 when the declared-pause cadence took the pane, 1 when the wedge timer did.
-#
-# A busy pane past BUSY_TURN_MAX_SECS is normally a wedge suspect because a hung
-# foreground call can hide behind a busy signature. A `paused:` declaration or
-# verified captain-held transfer instead identifies that live foreground call as
-# the expected external wait. The caller has already confirmed liveness through
-# the busy verdict, so this exception does not suppress undeclared wedges or
-# alter the separate non-busy classification. handle_paused_stale keeps the
-# exception bounded by re-surfacing it once per PAUSE_RESURFACE_SECS.
-# A pane that declared nothing falls through to the shared wedge timer, which,
-# in a home that armed config/wedge-defer-parked-gate, applies the same rule to
-# the one wait a busy pane cannot declare: a validation gate of its own awaiting
-# a supervisor decision that is still open also takes the bounded recheck rather
-# than the ladder, because who owes that answer does not depend on what the pane
-# is rendering, and the recheck names that supervisor and the action that clears
-# it. An unconfigured home keeps the unchanged ladder there.
-# Away mode remains daemon-owned and receives the undecorated wake identity for
-# its own classification, which is why the declaration is read before the afk
-# branch rather than after it.
+# A busy pane's declared dependency is the same informational wait as an idle
+# pane's. Undeclared work retains the existing wedge/recovery path.
 busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-file> [dialog-name]
-  local win=$1 task=$2 h=$3 since_file=$4 escalation_file=$5 dialog=${6-} key statusf declared
-  statusf="$STATE/$task.status"
-  if status_is_paused_or_captain_held "$(status_declared_wait_line "$statusf")"; then
-    if afk_present; then
-      # Away mode is daemon-owned, so this bound hands off the PLAIN wake identity
-      # and lets the daemon classify the declaration itself - the undecorated
-      # identity the rest of this function's contract promises. Running the wedge
-      # timer here instead would decorate the wake as a possible wedge, and that
-      # decoration overrides the daemon's own pause verdict for the pane: the
-      # ladder then climbs on every re-arm, escalating a crew that declared the
-      # wait itself once per FM_STALE_ESCALATE_SECS for as long as the wait lasts.
-      # The one-shot is keyed on the DECLARATION (the status log's signature),
-      # never on the pane hash: a busy pane's harness footer ticks on every
-      # capture, so a hash-keyed one-shot would re-fire on every poll and the
-      # daemon, which relaunches the watcher after each handled wake, would be
-      # woken in a loop for the whole declared wait. The suppressor therefore
-      # advances to the declaration rather than the hash, and the daemon is woken
-      # once per distinct declaration. The wedge timer, escalation count and
-      # deferral chains are cleared exactly as handle_paused_stale clears
-      # them, so an undeclared busy phase that had already started the timer does
-      # not resume its count the moment the declaration is lifted. Normal-mode
-      # pause tracking stays unwritten here, exactly as the idle away-mode handoff
-      # leaves it, because the daemon owns that bookkeeping.
-      key=$(window_key "$win")
-      wedge_episode_end "$key"
-      clear_write_tracking "$key"
-      declared="declared:$(fm_wake_signal_sig "$statusf" || true)"
-      if captain_held_silenced "$(status_declared_wait_line "$statusf")"; then
-        printf '%s' "$declared" > "$STATE/.stale-$key"
-        triage_log "absorbed busy over-age pane (captain-held, never rechecked while the away-posture record exists): $win"
-        return 0
-      fi
-      if [ "$(cat "$STATE/.stale-$key" 2>/dev/null || true)" != "$declared" ]; then
-        fm_wake_append stale "$win" "stale: $win" || exit 1
-        printf '%s' "$declared" > "$STATE/.stale-$key"
-        wake "stale: $win"
-      fi
-      return 0
-    fi
+  local win=$1 task=$2 h=$3 since_file=$4 escalation_file=$5 dialog=${6-}
+  if status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$task.status")"; then
     handle_paused_stale "$win" "$task" "$h"
     return 0
   fi
@@ -2730,7 +2422,11 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   fi
   if [ "$throttled" -ne 0 ]; then
     reason=$(stale_reason_naming_dialog "stale: $win" "$dialog")
-    fm_wake_append stale "$win" "$reason" || exit 1
+    if [ -n "$dialog" ]; then
+      watch_event_append check "native-transition:$win" "$reason" || exit 1
+    else
+      watch_event_append stale "$win" "$reason" || exit 1
+    fi
     stale_wait_record "$key"
   fi
   printf '%s' "$h" > "$STATE/.stale-$key"
@@ -2865,6 +2561,20 @@ procevent_surfaced_marker() {  # <queue-key>
   printf '%s/.seen-procevent-%s' "$STATE" "$(printf '%s' "$1" | LC_ALL=C od -An -tx1 | tr -d ' \n')"
 }
 
+# Reuse the process-event owner's delivered marker on every delivery path.
+# Only a captured result that is still unhandled can become due again.
+procevent_queue_key_due() {  # <key>
+  local marker id seq result
+  marker=$(procevent_surfaced_marker "$1")
+  [ -e "$marker" ] || return 0
+  id=${1#procevent:}; seq=${id##*:}; id=${id%:*}
+  case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  fm_procevent_source_id_valid "$id" || return 1
+  result="$STATE/procevent-inbox/$id.$seq.result"
+  [ -f "$result" ] && [ ! -e "${result%.result}.handled" ] \
+    && [ "$(age_of "$marker")" -ge 300 ]
+}
+
 procevent_surface_after_output() {
   local output_status=$1 key marker tmp status=0
   if [ "$output_status" -eq 0 ]; then
@@ -2907,19 +2617,7 @@ procevent_surface_queued() {
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
   while IFS= read -r key; do
     case "$key" in procevent:*) ;; *) continue ;; esac
-    marker=$(procevent_surfaced_marker "$key")
-    if [ -e "$marker" ]; then
-      # A delivered wake is not proof that its result was handled. Retry only
-      # actual pending results, at most once per five minutes per result.
-      id=${key#procevent:}
-      seq=${id##*:}
-      id=${id%:*}
-      case "$seq" in ''|*[!0-9]*) continue ;; esac
-      fm_procevent_source_id_valid "$id" || continue
-      result="$STATE/procevent-inbox/$id.$seq.result"
-      [ -f "$result" ] && [ ! -e "${result%.result}.handled" ] || continue
-      [ "$(age_of "$marker")" -ge 300 ] || continue
-    fi
+    procevent_queue_key_due "$key" || continue
     PROCEVENT_SURFACED="$PROCEVENT_SURFACED $key"
     # A stranded source or one whose launch never proved itself is the opposite
     # of a captured result: nothing is collecting for it. Headlining either as
@@ -3131,7 +2829,7 @@ EOF
 # hiding the `needs-decision`, `blocked`, `failed`, or `done` event that arrived
 # just before it: the .seen-* marker advances either way, so an event absorbed
 # here is never re-read. Non-.status arguments (.turn-ended markers, which carry
-# no verb) are skipped; signal_worker_stopped handles their undeclared stops.
+# no verb) are skipped; only explicit status events establish action.
 # Also populates FM_SIGNAL_NEEDS_DECISION_FILES (space-separated status-file
 # paths) with exactly the files whose newly classified span carries one of the
 # decision-owned classes defined by the status-span contract, so the caller can
@@ -3139,16 +2837,18 @@ EOF
 # (docs/supervision-branch.md). Stale and heartbeat rows retain their existing
 # eligibility rules.
 signal_files_actionable() {  # <status-file> ...
-  local f task record rest endpoint ident needs_decision rc found=1
+  local f task record rest endpoint ident needs_decision status_error rc found=1
   FM_SIGNAL_SURFACE_ENDPOINTS=''
   FM_SIGNAL_NEEDS_DECISION_FILES=''
+  FM_SIGNAL_ACTIONABLE_FILES=''
+  FM_SIGNAL_ERROR_FILES=''
   for f in "$@"; do
     case "$f" in *.status) ;; *) continue ;; esac
     [ -e "$f" ] || [ -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
-    record=''; needs_decision=0
+    record=''; needs_decision=0; status_error=0
     status_span_first_actionable_record "$f" \
-      "$(fm_wake_signal_seen_size "$STATE" "$f")" record needs_decision 1
+      "$(fm_wake_signal_seen_size "$STATE" "$f")" record needs_decision status_error
     rc=$?
     [ "$rc" -eq 1 ] && [ -z "$record" ] && continue
     if [ "$rc" -eq 2 ]; then
@@ -3157,8 +2857,10 @@ signal_files_actionable() {  # <status-file> ...
       # again once it is readable. The wake signature still advances, which is
       # what bounds this to one report per distinct file state.
       found=0
+      FM_SIGNAL_ACTIONABLE_FILES="$FM_SIGNAL_ACTIONABLE_FILES $f"
       continue
     fi
+    [ "$status_error" = 0 ] || FM_SIGNAL_ERROR_FILES="$FM_SIGNAL_ERROR_FILES $f"
     endpoint=${record%%$'\t'*}; rest=${record#*$'\t'}; ident=${rest%%$'\t'*}
     FM_SIGNAL_SURFACE_ENDPOINTS="${FM_SIGNAL_SURFACE_ENDPOINTS}${f}"$'\t'"${endpoint}"$'\t'"${ident}"$'\n'
     if [ "$needs_decision" -eq 1 ]; then
@@ -3168,31 +2870,37 @@ signal_files_actionable() {  # <status-file> ...
       || { [ "$(_fm_status_kind "$f")" = secondmate ] \
         && ! _fm_secondmate_status_new_lines_routine "$f" "$STATE"; }; then
       found=0
+      FM_SIGNAL_ACTIONABLE_FILES="$FM_SIGNAL_ACTIONABLE_FILES $f"
     fi
   done
   return "$found"
 }
 
-# A completed worker turn needs supervision when it left no result or wait and
-# has not resumed execution. Read only changed turn-end markers: working notes
-# alone remain routine, and the existing .seen-* marker bounds this to one wake.
-# Unknown activity is not execution proof, including on macOS adapters without
-# a verified busy source. Secondmates are expected to idle between requests.
-signal_worker_stopped() {  # <signal-file> ...
-  local f task meta last
-  for f in "$@"; do
-    case "$f" in *.turn-ended) ;; *) continue ;; esac
-    task=${f##*/}; task=${task%.turn-ended}
-    meta="$STATE/$task.meta"
-    [ -f "$meta" ] || continue
-    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
-    last=$(last_status_line "$STATE/$task.status")
-    status_is_captain_relevant "$last" && continue
-    [ -z "$(status_declared_wait_line "$STATE/$task.status")" ] || continue
-    [ "$(crew_absorb_class "$task")" = none ] || continue
-    return 0
-  done
-  return 1
+# Waiting workers take priority over slow checks and signal coalescing. Older
+# briefs still append directly; new briefs queue through fm-task-status.sh.
+worker_wait_signal_tick() {
+  local pending sf sig f record rest endpoint ident rc reason status_error needs_decision
+  pending=$(scan_signals)
+  while IFS=$'\t' read -r sf sig f; do
+    case "$f" in *.status) ;; *) continue ;; esac
+    record=''; status_error=0; needs_decision=0
+    status_span_first_actionable_record "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")" record needs_decision status_error
+    rc=$?
+    [ "$rc" = 0 ] || continue
+    printf '%s\n' "${record#*$'\t'*$'\t'}" | grep -Eq '(^| ; )(needs-decision|blocked)( |:)' || continue
+    if [ "$needs_decision" = 1 ]; then
+      reason="needs-decision: $f"
+    else
+      reason="signal: $f"
+    fi
+    [ "$status_error" = 0 ] || reason="needs-decision: status-error: $f"
+    watch_event_append signal "${f##*/}" "$reason" || exit 1
+    endpoint=${record%%$'\t'*}; rest=${record#*$'\t'}; ident=${rest%%$'\t'*}
+    fm_wake_status_seen_commit "$STATE" "$f" "$endpoint" "$ident" || true
+    wake "signal: $f"
+  done <<EOF
+$pending
+EOF
 }
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
@@ -3235,7 +2943,7 @@ heartbeat_scan_finds_actionable() {
     [ -e "$f" ] || [ -L "$f" ] || continue
     [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
-    record=$(status_span_first_actionable_record "$f" "$(hb_surfaced_offset "$task")" '' '' 1)
+    record=$(status_span_first_actionable_record "$f" "$(hb_surfaced_offset "$task")" '' '')
     rc=$?
     [ "$rc" -eq 1 ] && [ -z "$record" ] && continue
     if [ "$rc" -eq 2 ]; then
@@ -3352,11 +3060,10 @@ spawn_deferred_tick() {
       [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -lt "$FM_PROJECT_CAPACITY" ] || continue
     fi
     reason="check: capacity available: retry deferred task $id"
-    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
+    watch_info_record scheduling "$reason"
     rm -f -- "$marker" || return 1
     [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
-    wake "$reason"
   done
   return 0
 }
@@ -3378,9 +3085,8 @@ cleanup_tick() {
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
   [ "$((now - last))" -ge "$([ "$reason" = low-disk ] && echo 3600 || echo 604800)" ] || return 0
   reason="check: disk cleanup ($reason): $free KiB free of $total; dispatch a cleanup worker to run fm-cleanup.sh --dry-run then --apply for safe candidates; report other disk use to the user"
-  fm_wake_append check disk-cleanup "$reason" || return 1
+  watch_info_record maintenance "$reason"
   printf '%s\n' "$now" > "$marker" || return 1
-  wake "$reason"
 }
 
 # Surface a dated future hold once after its date, including across watcher restarts.
@@ -3393,7 +3099,7 @@ future_hold_tick() {
     marker="$STATE/.future-hold-$id"
     [ "$(cat "$marker" 2>/dev/null || true)" != "$until" ] || continue
     reason="check: future hold due: $id (until $until); review ready work"
-    fm_wake_append check "future-hold-$id" "$reason" || return 1
+    watch_event_append check "future-hold-$id" "$reason" || return 1
     printf '%s' "$until" > "$marker" || return 1
     wake "$reason"
   done < <(printf '%s\n' "$rows" | python3 -c '
@@ -3409,6 +3115,126 @@ for line in lines:
             and until <= datetime.date.today().isoformat() and blocked in ("none", "-")):
         print(task, until)
 ')
+}
+
+# fm-control.sh owns the per-task lifecycle lock. A live owner is changing the
+# endpoint deliberately, so its transient absence is not recovery evidence.
+task_lifecycle_busy() {  # <task>
+  local owner
+  owner=$(cat "$STATE/.control-$1.lock/pid" 2>/dev/null) || return 1
+  fm_pid_alive "$owner"
+}
+
+# Re-read decision state at delivery, not just at publication. A queue row is
+# notification history: a later answer can make it informational before we run.
+# Terminal results and unknown/unreadable events keep their immediate delivery.
+watch_queued_event_actionable() {  # <kind> <key> <payload>
+  local kind=$1 key=$2 payload=$3 task file open last pending alive meta
+  case "$kind" in
+    check)
+      case "$key" in procevent:*) procevent_queue_key_due "$key"; return ;; esac
+      # An endpoint timer is an observation, just like a stale pane. Neither
+      # establishes pending work for the primary. Explicit native input and
+      # operational checks have their own keys and retain immediate delivery.
+      meta=$(fm_backend_meta_for_window "$key" "$STATE") || return 0
+      [ -n "$meta" ] || return 0
+      task=${meta##*/}; task=${task%.meta}
+      ;;
+    heartbeat)
+      [ "${FM_HEARTBEAT_ACTIONABLE:-0}" = 1 ] || heartbeat_scan_finds_actionable
+      return ;;
+    signal)
+      case "$key" in *.turn-ended) return 1 ;; esac
+      case "$key:$payload" in *.status:needs-decision:*) ;; *) return 0 ;; esac
+      # A rejected status transition is an immutable error, not a question
+      # that a later answer can retire. Only the span classifier emits this type.
+      case "$payload" in 'needs-decision: status-error: '*) return 0 ;; esac
+      task=${key%.status}; file="$STATE/$task.status"
+      [ -f "$file" ] && [ -r "$file" ] && [ ! -L "$file" ] || return 0
+      open=$(status_open_decisions_incremental "$file") || return 0
+      [ -n "$open" ] && return 0
+      last=$(last_status_line "$file")
+      status_is_captain_held "$last" && return 0
+      status_is_captain_relevant "$last" && return 0
+      return 1
+      ;;
+    stale) task=$(window_to_task "$key" "$STATE"); [ -n "$task" ] || return 0 ;;
+    *) return 0 ;;
+  esac
+  pending=$(find "$STATE/$task.inbox" -maxdepth 1 -name '*.msg' -print -quit 2>/dev/null)
+  [ -z "$pending" ] || return 0
+  alive=$(fm_backend_agent_state "$(window_backend "$key")" "$key" 2>/dev/null) || alive=unknown
+  case "$alive" in dead|missing) return 0 ;; esac
+  # Live decisions and native input have their own authoritative events.
+  return 1
+}
+
+main_has_eligible_queued_row() {  # [immediate]
+  local queued epoch seq kind key payload file immediate exclude
+  queued=$(fm_wake_actor_pending_count main) || return 1
+  [[ "$queued" =~ ^[0-9]+$ ]] && [ "$queued" -gt 0 ] || return 1
+  [ -r "$FM_WAKE_QUEUE" ] || return 0
+  while IFS=$'\t' read -r epoch seq kind key payload; do
+    if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner" \
+      && grep -Fxq "$seq" "$STATE/.branch-eligible-rows"; then continue; fi
+    watch_queued_event_actionable "$kind" "$key" "$payload" || continue
+    if [ "${1-}" = immediate ]; then
+      case "$kind:$key" in
+        signal:*.status)
+          file="$STATE/$key"
+          status_span_requires_immediate_action "$file" "$(hb_surfaced_offset "${key%.status}")" || continue
+          ;;
+        heartbeat:*)
+          immediate=0
+          exclude=$(status_scan_parent_channel_exclude "$STATE")
+          for file in "$STATE"/*.status; do
+            [ -e "$file" ] || [ -L "$file" ] || continue
+            [ "$file" != "$exclude" ] || continue
+            key=${file##*/}; key=${key%.status}
+            if status_span_requires_immediate_action "$file" "$(hb_surfaced_offset "$key")"; then immediate=1; break; fi
+          done
+          [ "$immediate" = 1 ] || continue
+          ;;
+      esac
+    fi
+    return 0
+  done < "$FM_WAKE_QUEUE"
+  return 1
+}
+
+# Capture only main-owned status rows represented by this delivery. Commit their
+# heartbeat position after output succeeds; a later append remains unread.
+queued_status_surface_snapshot() {
+  local epoch seq kind key payload file endpoint ident meta window
+  [ -r "$FM_WAKE_QUEUE" ] || return 0
+  while IFS=$'\t' read -r epoch seq kind key payload; do
+    if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner" \
+      && grep -Fxq "$seq" "$STATE/.branch-eligible-rows"; then continue; fi
+    if [ "$kind" = heartbeat ]; then
+      heartbeat_scan_finds_actionable || true
+      printf '%s' "$FM_HEARTBEAT_SURFACE_ENDPOINTS"
+      continue
+    fi
+    case "$kind" in
+      signal)
+        fm_wake_status_key_map "$key" || continue
+        file="$STATE/$FM_WAKE_STATUS_KEY"
+        ;;
+      stale|check)
+        window=${key#native-transition:}
+        meta=$(fm_backend_meta_for_window "$window" "$STATE") || continue
+        [ -n "$meta" ] || continue
+        file="${meta%.meta}.status"
+        ;;
+      *) continue ;;
+    esac
+    watch_queued_event_actionable "$kind" "$key" "$payload" || continue
+    [ -f "$file" ] && [ -r "$file" ] && [ ! -L "$file" ] || continue
+    ident=$(_fm_open_decisions_file_ident "$file") || continue
+    endpoint=$(_fm_status_file_size "$file") || continue
+    [ "$ident" = "$(_fm_open_decisions_file_ident "$file")" ] || continue
+    printf '%s\t%s\t%s\n' "$file" "$endpoint" "$ident"
+  done < "$FM_WAKE_QUEUE"
 }
 
 # --- Main entry: the runtime below runs only when this file is executed as a
@@ -3486,11 +3312,6 @@ done
 if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
-main_has_eligible_queued_row() {
-  local queued
-  queued=$(fm_wake_actor_pending_count main) || return 1
-  [[ "$queued" =~ ^[0-9]+$ ]] && [ "$queued" -gt 0 ]
-}
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
@@ -3652,7 +3473,7 @@ printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/
 # Finish only identity-bound retirement receipts before any check can run.
 if ! fm_pr_poll_retirement_recover_all "$STATE" "$SCRIPT_DIR/fm-pr-poll.sh"; then
   reason="check: rejected unauthenticated PR poll retirement receipts:$FM_PR_POLL_RETIREMENT_REJECTED"
-  fm_wake_append check pr-poll-retirement "$reason" || exit 1
+  watch_event_append check pr-poll-retirement "$reason" || exit 1
   touch "$STATE/.last-check"
   wake "$reason"
 fi
@@ -3744,12 +3565,14 @@ resurface_after_downtime() {
       echo "watcher: recovery state could not be consumed safely" >&2
       exit 1
     fi
-    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
+    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || main_has_eligible_queued_row || return 0
   fi
-  # A downtime episode can contain an open decision or a lost watcher even
-  # with no queued rows. Its generation bounds recovery to one announcement.
   procevent_surface_queued
-  wake "check: rearm-resurface"
+  if main_has_eligible_queued_row; then
+    wake "check: rearm-resurface"
+  fi
+  watch_info_record recovery "watcher rearmed; no immediate queued event delivered"
+  WATCHER_RECOVERY_PENDING=0
 }
 
 while :; do
@@ -3768,6 +3591,16 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+  FM_HEARTBEAT_ACTIONABLE=0
+
+  worker_wait_signal_tick
+  # Status publishers have already committed their span after queueing it.
+  # Surface those rows now; other queued checks keep their ordinary owners.
+  if [ -s "$FM_WAKE_QUEUE" ] && awk -F '\t' '
+      $3 == "signal" && $4 ~ /\.status$/ { found=1; exit }
+      END { exit !found }' "$FM_WAKE_QUEUE"; then
+    resurface_after_downtime
+  fi
 
   cleanup_tick || exit 1
 
@@ -3780,10 +3613,15 @@ while :; do
   done
   for relay_result in "$STATE"/*.relay-result; do
     [ -f "$relay_result" ] || continue
-    reason="check: $(cat "$relay_result")"
-    fm_wake_append check "$relay_result" "$reason" || exit 1
+    relay_message=$(cat "$relay_result")
+    if status_is_captain_relevant "$relay_message"; then
+      reason="check: $relay_message"
+      watch_event_append check "$relay_result" "$reason" || exit 1
+      rm -f -- "$relay_result"
+      wake "$reason"
+    fi
+    watch_info_record relay "$relay_message"
     rm -f -- "$relay_result"
-    wake "$reason"
   done
 
   login_expiry_tick
@@ -3857,7 +3695,7 @@ while :; do
   # whose owner is gone. It is a no-op with nothing registered.
   if [ -d "$STATE/procevent" ]; then
     if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1; then
-      fm_wake_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
+      watch_event_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
         "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
     fi
   fi
@@ -4021,7 +3859,7 @@ EOF
           wake "$reason"
         fi
         pr_poll_control_release || exit 1
-        fm_wake_append check "$c" "$reason" || exit 1
+        watch_event_append check "$c" "$reason" || exit 1
         touch "$STATE/.last-check"
         wake "$reason"
       fi
@@ -4029,7 +3867,7 @@ EOF
     done
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
-      fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
+      watch_event_append check unauthenticated-state-checks "$reason" || exit 1
       touch "$STATE/.last-check"
       wake "$reason"
     fi
@@ -4062,8 +3900,8 @@ EOF
 $pending
 EOF
     reason="signal:$files"
-    # Status events and undeclared worker stops need supervision. Routine
-    # progress still advances its markers without creating a model turn.
+    # Only classified status requests/results enter the action queue. Routine
+    # progress and raw turn ends advance their markers without a model turn.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
@@ -4080,15 +3918,19 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if [ "$signal_actionable" -eq 0 ] \
-      || { signal_worker_stopped $files && ! signal_turnend_panes_churned $files; }; then
+    if [ "$signal_actionable" -eq 0 ]; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
+        case " $FM_SIGNAL_ACTIONABLE_FILES " in
+          *" $f "*) ;;
+          *) watch_info_record signal "$f"; continue ;;
+        esac
         file_reason="$reason"
         progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
         case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+        case " $FM_SIGNAL_ERROR_FILES " in *" $f "*) file_reason="needs-decision: status-error: $f" ;; esac
         [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
-        fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
+        watch_event_append signal "$(basename "$f")" "$file_reason" || exit 1
       done <<EOF
 $pending
 EOF
@@ -4112,7 +3954,6 @@ EOF
       while IFS=$(printf '\t') read -r f surface_end surface_ident; do
         [ -n "$f" ] || continue
         fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
-        mark_surfaced "$f" "$surface_end" "$surface_ident"
       done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
@@ -4135,13 +3976,13 @@ EOF
       if [ "$signal_commit_error" -ne 0 ]; then
         while IFS=$(printf '\t') read -r sf sig f; do
           [ -n "$sf" ] || continue
-          fm_wake_append signal "$(basename "$f")" "$reason" || exit 1
+          watch_event_append check status-bookkeeping "check: status bookkeeping failed: $f" || exit 1
         done <<EOF
 $pending
 EOF
-        wake "$reason"
+        wake "check: status bookkeeping failed"
       fi
-      triage_log "absorbed benign $reason"
+      watch_info_record signal "$reason"
     fi
   fi
 
@@ -4157,6 +3998,24 @@ EOF
   while IFS= read -r w; do
     kind=$(window_kind "$w")
     task=$(window_to_task "$w" "$STATE")
+    [ -n "$task" ] || continue
+    if task_lifecycle_busy "$task" || [ -f "$STATE/$task.parked" ]; then
+      watch_info_record lifecycle "$task: endpoint observation deferred to its current lifecycle owner"
+      continue
+    fi
+    observed_gen=$(fm_meta_get "$STATE/$task.meta" busy_gen)
+    agent_state=unknown
+    if [ "$kind" != secondmate ]; then
+      agent_state=$(fm_backend_agent_state "$(window_backend "$w")" "$w" 2>/dev/null) || agent_state=unknown
+    fi
+    # Do not publish a probe spanning a launch/park/close. Re-read only the
+    # endpoint's existing ownership/generation, not unrelated metadata fields.
+    if task_lifecycle_busy "$task" || [ -f "$STATE/$task.parked" ] \
+      || [ "$(window_to_task "$w" "$STATE")" != "$task" ] \
+      || [ "$(fm_meta_get "$STATE/$task.meta" busy_gen)" != "$observed_gen" ]; then
+      watch_info_record lifecycle "$task: endpoint changed while being observed"
+      continue
+    fi
     # Steering-inbox loss detection runs before the secondmate stale
     # exemption below, because a mate's steers land in an inbox too.
     [ -z "$task" ] || inbox_steer_check "$w" "$task"
@@ -4174,6 +4033,26 @@ EOF
     # this guard: reaching it would require backlog reads for windows this gate
     # deliberately skips, putting that read on the ordinary poll hot path.
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
+      continue
+    fi
+    # Endpoint loss is independent of rendering: a removed panel cannot be
+    # captured, and a dead agent can leave a busy-looking or changing display.
+    # Probe the recorded endpoint before capture or any pane-hash/busy gate.
+    if [ "$kind" != secondmate ]; then
+      case "$agent_state" in
+        dead|missing)
+          h=$(cat "$STATE/.hash-$key" 2>/dev/null || printf '%s' "$agent_state")
+          wedge_dead_record "$w" "$STATE/.stale-since-$key" stale 0 "$h" "$task" "$agent_state"
+          continue
+          ;;
+        alive) rm -f "$STATE/.dead-reported-$key" ;;
+      esac
+    fi
+    # The declaration explains waiting without inspecting rendered busy text,
+    # elapsed idle time, harness, or away posture. Actual loss was checked above.
+    if status_is_paused_or_captain_held "$last"; then
+      h=$(cat "$STATE/.hash-$key" 2>/dev/null || printf 'declared-wait')
+      handle_paused_stale "$w" "$task" "$h"
       continue
     fi
     watcher_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" || continue
@@ -4195,9 +4074,12 @@ EOF
     # harness renders its busy indicator) so busy-looking strings in displayed
     # content cannot suppress stale detection. Read once per window per poll and
     # reused below so a busy verdict is consistent within one cycle.
-    if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
-    if [ "$kind" != secondmate ]; then
-      paused_idle_recheck "$w" "$task" "$last" "$WINDOW_BUSY_VERDICT"
+    if window_is_busy "$w" "$tail40"; then
+      busy_now=0
+      # Execution starts a new interval even if its display bytes never change.
+      rm -f "$sf"
+    else
+      busy_now=1
     fi
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
@@ -4252,7 +4134,7 @@ EOF
             triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $w"
           elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             stale_reason=$(stale_reason_naming_dialog "stale: $w" "$dialog")
-            fm_wake_append stale "$w" "$stale_reason" || exit 1
+            watch_event_append stale "$w" "$stale_reason" || exit 1
             printf '%s' "$h" > "$sf"
             _wedge_cap_markers_clear "$key"
             wake "$stale_reason"
@@ -4295,19 +4177,12 @@ EOF
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
             else
               stale_reason=$(stale_reason_naming_dialog "stale: $w" "$dialog")
-              fm_wake_append stale "$w" "$stale_reason" || exit 1
+              watch_event_append stale "$w" "$stale_reason" || exit 1
               stale_wait_record "$key"
               printf '%s' "$h" > "$sf"
               # Pre-cap shape kept the count here (keep-count contract).
               wedge_episode_end "$key" 0 1
               clear_write_tracking "$key"
-              stale_status="$STATE/$(window_to_task "$w" "$STATE").status"
-              stale_record=$(status_span_first_actionable_record "$stale_status" 0)
-              case $? in
-                0|1) stale_end=${stale_record%%$'\t'*}; stale_rest=${stale_record#*$'\t'}; stale_ident=${stale_rest%%$'\t'*} ;;
-                *) stale_end=''; stale_ident='' ;;
-              esac
-              mark_surfaced "$stale_status" "$stale_end" "$stale_ident"
               wake "$stale_reason"
             fi
           elif [ -e "$ssf" ] \
@@ -4451,25 +4326,26 @@ EOF
     # no-change case (advance the schedule and back off exactly as wake() would,
     # without exiting), including while the away-mode daemon owns the queue.
     if heartbeat_scan_finds_actionable; then
+      FM_HEARTBEAT_ACTIONABLE=1
       # Backstop: a captain-relevant event the per-wake path absorbed by mistake.
-      # Enqueue first, then record every status log surfaced through its end so the
-      # next heartbeat does not re-fire it (enqueue-before-suppress preserved);
-      # this wake sends firstmate to the whole fleet, so every log is read.
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      # Delivery commits only its captured snapshots after successful output;
+      # an ordinary question may remain queued until the shared deadline.
+      watch_event_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
-      mark_all_captain_relevant_surfaced || true
       wake "heartbeat"
     else
       if ! mark_all_captain_relevant_surfaced; then
-        fm_wake_append heartbeat heartbeat heartbeat || exit 1
+        watch_event_append heartbeat heartbeat heartbeat || exit 1
         touch "$STATE/.last-heartbeat"
         wake "heartbeat"
       fi
       touch "$STATE/.last-heartbeat"
       echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
-      triage_log "absorbed heartbeat (no captain-relevant change)"
+      watch_info_record heartbeat "no captain-relevant change"
     fi
   fi
+
+  watch_info_summary_tick
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.

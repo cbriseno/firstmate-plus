@@ -14,7 +14,8 @@ relaunch with the recorded profile. Never act on terminal/held/parked work or a
 retired generation. The hook publishes state/ID.relay-ready; the owning watcher
 uses --dispatch HOME STATE to start control outside the retiring worker scope.
 It waits for the hook to exit, then publishes ID.relay-result for the watcher's
-existing check wake. sessions.jsonl owns history. Internal --request/--control
+event classification. Success is informative; failure wakes supervision.
+sessions.jsonl owns history. Internal --request/--control
 PID modes continue after the native callback exits, without reevaluating usage.
 """
 import fcntl
@@ -53,8 +54,8 @@ def event(env, task, result, reason):
 
 
 def status(state, task, message):
-    with (state / (task + '.status')).open('a') as stream:
-        stream.write('working [at=%d]: context relay %s\n' % (time.time(), message))
+    # Session mechanics do not change the worker's declared intent or wait.
+    (state / (task + '.relay-result')).write_text('working: context relay ' + message)
 
 
 def main():
@@ -160,11 +161,11 @@ def main():
                        input=control.stdout + control.stderr, text=True, stdout=stream, check=True)
     if control.returncode:
         status(state, task, 'incomplete; work and note preserved; diagnostic=' + str(log))
-        (state / (task + '.relay-result')).write_text('worker context relay ' + task + ' incomplete; diagnostic=' + str(log))
+        (state / (task + '.relay-result')).write_text('failed: worker context relay ' + task + ' incomplete; diagnostic=' + str(log))
         event(env, task, 'incomplete', 'control-relaunch-failed')
         return
     status(state, task, 'replacement launched; session history=' + record['sessions_file'])
-    (state / (task + '.relay-result')).write_text('worker context relay ' + task + ' replacement launched; session history=' + record['sessions_file'])
+    (state / (task + '.relay-result')).write_text('working: worker context relay ' + task + ' replacement launched; session history=' + record['sessions_file'])
     event(env, task, 'launched', 'safe-point')
 
 

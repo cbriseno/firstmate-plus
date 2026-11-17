@@ -123,6 +123,14 @@ The next Stop then re-arms as before.
 
 ### Durable queue and turn-end backstop
 
+Every watcher delivery checks whether the queued event still requires action.
+Answered decisions and declared waits remain recorded without opening an individual model turn.
+An elapsed endpoint timer follows the same observation rule as a stale pane; a live endpoint alone establishes no action, while endpoint loss, undelivered instructions and explicit native input retain immediate delivery.
+Ordinary completion and decision events stay queued until the same fleet-wide hourly deadline as informational summaries, owned by `bin/fm-push-transition-lib.sh`.
+Successful primary delivery starts the next shared interval; open blockers, failures, direct human messages, native input and operational errors bypass it.
+`tests/fm-watch-triage.test.sh` exercises paused and active fleet-hours, durable deferred actions, real acknowledgement and urgent failures.
+Watcher downtime alone does not create an action when supervision has resumed and no actionable row remains.
+
 The durable wake queue preserves actionable events between a watcher close and the next drain.
 The bounded turn-end guard enforces recovery at Stop when no watcher is live and no open generation claim is still deciding.
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
@@ -136,7 +144,7 @@ Once those rows are acknowledged, a later append that repeats one byte for byte 
 Notification never consumes rows; sequence-bound, per-actor acknowledgement remains the owner of consumption.
 After the supervision host finishes a handled turn, it settles the successor handoff under the durable-queue and recovery-marker locks.
 Any row left for main then becomes a recoverable downtime episode, including one appended after the predecessor closed but before the successor initialized or the host confirmed its handoff.
-The successor closes once with the recovery wake only while that row is still queued; this is how a captain inbox note reaches main during handling-successor startup or while the host is parked on the handled wake's successor.
+The successor closes once with the recovery wake only while that row is still queued and actionable; this is how a captain inbox note reaches main during handling-successor startup or while the host is parked on the handled wake's successor.
 When the host instead hands the accepted close back to main and leaves that successor running, it republishes the episode as announced downtime, because the close it hands back is that episode's delivery; the successor therefore does not announce it again, while a later durable append still opens a pending episode it recovers.
 
 ### Manual recovery and other harnesses

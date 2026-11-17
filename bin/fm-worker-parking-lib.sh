@@ -151,6 +151,5 @@ do_resume() {
   NOTE_SET=1
   do_relaunch || return 1
   rm -f "$saved" "$STATE/$ID.resume-reason"
-  printf 'working [at=%s]: resumed parked worker chat=%s reason=%s\n' "$(date +%s)" "${RESUME_SESSION:-fresh-with-progress-note}" "$reason" >> "$STATE/$ID.status"
-  echo "resumed $ID chat=${RESUME_SESSION:-fresh-with-progress-note}"
+  echo "resumed $ID chat=${RESUME_SESSION:-fresh-with-progress-note} reason=$reason"
 }

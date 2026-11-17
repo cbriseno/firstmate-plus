@@ -88,9 +88,88 @@ triage_log() {
   fi
 }
 
+# Information, ordinary completions and questions share one fleet-wide deadline.
+# Default one hour; FM_INFO_SUMMARY_SECS can lengthen it or shorten it to 15 min.
+# The existing .last-info-summary records every successful primary delivery;
+# urgent events can bypass the deadline and start a new interval.
+watch_batch_interval() {
+  local interval=${FM_INFO_SUMMARY_SECS:-3600}
+  case "$interval" in ''|*[!0-9]*) interval=3600 ;; esac
+  [ "$interval" -ge 900 ] || interval=900
+  printf '%s\n' "$interval"
+}
+
+watch_attention_batch_due() {
+  local last first now
+  now=$(date +%s)
+  last=$(cat "$STATE/.last-info-summary" 2>/dev/null || true)
+  case "$last" in
+    ''|*[!0-9]*)
+      first=$(awk -F '\t' '$1 ~ /^[0-9]+$/ && (!first || $1 < first) { first=$1 } END { print first }' \
+        "$STATE/.watch-info" "$FM_WAKE_QUEUE" 2>/dev/null)
+      case "$first" in ''|*[!0-9]*) return 1 ;; esac
+      last=$first
+      ;;
+  esac
+  [ "$((now - last))" -ge "$(watch_batch_interval)" ]
+}
+
+# Keep informational detail outside the queue until the shared batch is due.
+watch_info_record() {  # <category> <detail>
+  triage_log "absorbed benign $2"
+  printf '%s\t%s\n' "$(date +%s)" "$1" >> "$STATE/.watch-info"
+}
+
+# Classify before publishing; recheck at delivery because an intervening answer
+# can resolve a previously actionable event. Both use the same predicate.
+watch_event_append() {  # <kind> <key> <payload>
+  if declare -F watch_queued_event_actionable >/dev/null \
+    && ! watch_queued_event_actionable "$@"; then
+    watch_info_record "$1" "$3"
+    return 0
+  fi
+  fm_wake_append "$@"
+}
+
+watch_info_summary_tick() {
+  local now summary reason
+  [ -s "$STATE/.watch-info" ] || return 0
+  watch_attention_batch_due || return 0
+  now=$(date +%s)
+  summary=$(awk -F '\t' '{ n[$2]++ } END { for (k in n) print k "=" n[k] }' \
+    "$STATE/.watch-info" | LC_ALL=C sort | tr '\n' ' ')
+  reason="check: informational summary: $summary; details=$TRIAGE_LOG"
+  fm_wake_append check informational-summary "$reason" || exit 1
+  printf '%s\n' "$now" > "$STATE/.last-info-summary"
+  : > "$STATE/.watch-info"
+  wake "$reason"
+}
+
 # Exit after reporting one actionable wake. Tests override this callback.
 wake() {
-  local output_status=0
+  local output_status=0 surfaced='' f endpoint ident deferred=0
+  # Every producer goes through the same delivery decision, including the
+  # away-mode handoff and recovery paths. Queued history is not current work.
+  if declare -F main_has_eligible_queued_row >/dev/null; then
+    if ! main_has_eligible_queued_row; then
+      watch_info_record deferred "$1"
+      deferred=1
+    elif ! watch_attention_batch_due && ! main_has_eligible_queued_row immediate; then
+      # The pending rows already record these actions. Do not consume them or
+      # manufacture another informational record on every poll.
+      deferred=1
+    fi
+  fi
+  if [ "$deferred" = 1 ]; then
+    if [ -n "$FM_WAKE_POST_OUTPUT_ACTION" ]; then
+      "$FM_WAKE_POST_OUTPUT_ACTION" 1 || true
+      FM_WAKE_POST_OUTPUT_ACTION=
+    fi
+    return 0
+  fi
+  if declare -F queued_status_surface_snapshot >/dev/null; then
+    surfaced=$(queued_status_surface_snapshot)
+  fi
   case "$1" in
     heartbeat*) echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak" ;;
     *) echo 0 > "$STATE/.heartbeat-streak" ;;
@@ -99,7 +178,18 @@ wake() {
   [ -z "$FM_WAKE_POST_OUTPUT_ACTION" ] || trap '' PIPE
   if echo "$1"; then
     output_status=0
+    while IFS=$'\t' read -r f endpoint ident; do
+      [ -n "$f" ] || continue
+      if [ "$endpoint" = ERROR ]; then
+        mark_surface_reported "$f" "$ident" || true
+      else
+        mark_surfaced "$f" "$endpoint" "$ident" || true
+      fi
+    done <<EOF
+$surfaced
+EOF
     watch_delivery_publish "$1" || true
+    printf '%s\n' "$(date +%s)" > "$STATE/.last-info-summary"
     # shellcheck disable=SC2034 # Read by bin/fm-watch.sh's EXIT cleanup.
     FM_WATCH_DELIVERED_REASON=$1
   else
@@ -144,7 +234,7 @@ mark_surface_reported() {  # <status-file> <reported-signature>
 
 # Act on a fresh actionable transition from a push-capable backend.
 handle_push_transition() {  # <backend> <session> <record>
-  local backend=$1 session=$2 record=$3 pane_id to detail window task reason span_record rest surface_end='' surface_ident=''
+  local backend=$1 session=$2 record=$3 pane_id to detail window task reason
   pane_id=$(fm_transition_pane_id "$record")
   to=$(fm_transition_to_status "$record")
   detail=$(fm_transition_detail "$record")
@@ -160,14 +250,8 @@ handle_push_transition() {  # <backend> <session> <record>
     fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
     return
   fi
-  span_record=$(status_span_first_actionable_record "$STATE/$task.status" \
-    "$(hb_surfaced_offset "$task")")
-  case $? in
-    0|1) surface_end=${span_record%%$'\t'*}; rest=${span_record#*$'\t'}; surface_ident=${rest%%$'\t'*} ;;
-  esac
   reason="stale: $window ($backend: agent $to${detail:+ ($detail)} - waiting on human, escalated immediately, not via wedge timer)"
-  fm_wake_append stale "$window" "$reason" || exit 1
+  fm_wake_append check "native-transition:$window" "$reason" || exit 1
   fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
-  mark_surfaced "$STATE/$task.status" "$surface_end" "$surface_ident"
   wake "$reason"
 }

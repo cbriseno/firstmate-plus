@@ -362,11 +362,15 @@ _collapse_newlines() {  # <text>
 classify_signal() {  # <reason-after-colon> <state>
   local reason=$1 state=$2 f last event record rest endpoint ident rc distilled="" rel="" seen_rel="" task sig marker
   for f in $reason; do
-    case "$f" in *.status) ;; *) continue ;; esac
+    case "$f" in
+      *.turn-ended) continue ;;
+      *.status) ;;
+      *) continue ;;
+    esac
     [ -e "$f" ] || [ -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     record=$(status_span_first_actionable_record "$f" \
-      "$(status_seen_offset "$state" "$task")" '' '' 1)
+      "$(status_seen_offset "$state" "$task")")
     rc=$?
     [ "$rc" -eq 1 ] && [ -z "$record" ] && continue
     if [ "$rc" -eq 2 ]; then
@@ -1283,10 +1287,10 @@ housekeeping() {  # <state>
   # (2b) pause re-surface recheck. A declared wait is waiting, not wedged (fm-classify-lib.sh's
   # status_is_paused_or_captain_held owns which declarations qualify), so it is
   # rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS) and never
-  # escalated as one - but it MUST re-surface, so neither a forgotten pause nor a
-  # forgotten captain hold can rot invisibly. Past the window: gone -> drop; still
-  # declaring the wait -> escalate a recheck digest and reset the marker so the window
-  # repeats. The digest names WHICH human the wait is on, because the captain is the
+  # escalated as one. Past the window: gone -> drop; still declaring the wait ->
+  # record an informational recheck and reset its logging cadence. The watcher
+  # owns the shared informational batch; housekeeping never adds a model wake
+  # for the same unchanged declaration. The record names the dependency; the captain is the
   # one reading it: an external dependency for a paused: declaration, and the captain
   # themself for a verified hold transfer.
   # Pane busy state does NOT end the wait. A declared wait can legitimately hold a
@@ -1341,20 +1345,18 @@ housekeeping() {  # <state>
       *)
         last=$(status_declared_wait_line "$state/$task.status")
         if [ -n "$last" ] && status_is_captain_held "$last"; then
-          if escalate_add "$state" "captain-held ${age}s (awaiting the captain, answer the held decision or release the hold): $win"; then
-            _now > "$marker"
-          fi
+          log "informational declared wait: $win; $last" || true
+          _now > "$marker"
         elif [ -n "$last" ] && status_is_paused "$last"; then
           if [ "$bounded_until" -eq 1 ]; then
             pause_reason="paused ${age}s (awaiting external, the declared time is beyond the recheck cadence; confirm the wait still holds): $win"
           else
             pause_reason="paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
           fi
-          if escalate_add "$state" "$pause_reason"; then
-            _now > "$marker"
-            if [ -n "$until" ] && [ "$now" -ge "$until" ]; then
-              printf '%s\n' "$until" > "$due"
-            fi
+          log "informational $pause_reason" || true
+          _now > "$marker"
+          if [ -n "$until" ] && [ "$now" -ge "$until" ]; then
+            printf '%s\n' "$until" > "$due"
           fi
         else
           rm -f "$marker"
@@ -1382,7 +1384,7 @@ housekeeping() {  # <state>
       [ "$f" = "$exclude" ] && continue
       task=$(basename "$f"); task="${task%.status}"
       record=$(status_span_first_actionable_record "$f" \
-        "$(status_seen_offset "$state" "$task")" '' '' 1)
+        "$(status_seen_offset "$state" "$task")")
       rc=$?
       if [ "$rc" -eq 2 ]; then
         ident=$(status_observed_signature "$f")
@@ -1599,7 +1601,7 @@ handle_wake() {  # <reason> <state>
               decision=$(FM_STATUS_SPAN_ENDPOINT_FILE="$capture" classify_signal "$arg" "$state") ;;
     # These watcher checks already established a condition needing firstmate;
     # the worker's paused status must not absorb them again.
-    stale:*" (unread firstmate instruction: stuck-busy "*|stale:*" (steering-inbox busy bookkeeping unwritable: "*|stale:*" (paused worker idle without a deadline "*)
+    stale:*" (unread firstmate instruction: stuck-busy "*|stale:*" (steering-inbox busy bookkeeping unwritable: "*|stale:*" (paused worker idle without a deadline "*|stale:*" (idle "*", agent dead - "*|stale:*" (idle "*", agent missing - "*)
               decision="escalate|${reason#stale: }" ;;
     stale:*)  kind=stale; arg="${reason#stale: }"; stale_detail="${arg#"$arg"}"
               case "$arg" in *" ("*) stale_detail="${arg#*" ("}"; arg="${arg%% \(*}" ;; esac
