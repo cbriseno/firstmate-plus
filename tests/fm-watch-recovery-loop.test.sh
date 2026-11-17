@@ -43,7 +43,8 @@ test_handling_successor_does_not_go_blind() {
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$child" ] \
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not take the watcher lock"; }
   sleep 0.4
-  printf 'done: crew finished its task\n' >> "$state/crew.status"
+  # Continuity needs an immediate event; ordinary completions share the fleet batch.
+  printf 'blocked: crew needs its missing input\n' >> "$state/crew.status"
   event_start=$(date +%s)
   now=0
   while [ "$now" -lt 300 ]; do
@@ -156,52 +157,65 @@ test_handling_successor_resurfaces_a_row_appended_during_startup() {
   pass "a handling successor resurfaces a row appended during startup"
 }
 
-# A real watcher should surface ready work whenever configured capacity admits it.
+# A dispatch opportunity is work for the primary, even just after another delivery.
 test_ready_work_wakes_once() {
-  local dir home state fakebin out child i
+  local dir home state fakebin out child i id
   dir=$(make_case ready-capacity)
   home="$dir/home"; state="$home/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
   mkdir -p "$home/data" "$home/config" "$state"
   fm_test_track_watcher_state "$state"
   date +%s > "$state/.cleanup-low-disk"
+  date +%s > "$state/.last-info-summary"
+  printf '2:demo\n' > "$state/.ready-work-wake"
   printf 'backend = "markdown"\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
   printf '# Tasks\n\n## In flight\n\n## Queued\n\n- [ ] demo - Ready work (repo: firstmate)\n\n## Done\n' > "$home/data/backlog.md"
   printf '2\nmax-load1 1000\n' > "$home/config/lane-capacity"
-  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add held 'Held work' --repo firstmate >/dev/null 2>&1 || { fail "fixture: add held"; }
-  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold held --kind external --reason waiting >/dev/null 2>&1 || { fail "fixture: hold"; }
-  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add dependent 'Dependent work' --repo firstmate --blocked-by demo >/dev/null 2>&1 || { fail "fixture: dependency"; }
+  for id in held grouped missing; do
+    FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add "$id" "$id work" --repo firstmate >/dev/null 2>&1 || fail "fixture: add $id"
+  done
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold held --kind external --reason waiting >/dev/null 2>&1 || fail "fixture: hold"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add dependent 'Dependent work' --repo firstmate --blocked-by demo >/dev/null 2>&1 || fail "fixture: dependency"
+  for id in demo held dependent grouped; do
+    mkdir -p "$home/data/$id"
+    printf '# Brief\n' > "$home/data/$id/brief.md"
+  done
+  printf '%s\n' '- firstmate [local-only] - Fixture project' > "$home/data/projects.md"
+  python3 - "$home" <<'PYFIX'
+import json, pathlib, sys
+home = pathlib.Path(sys.argv[1])
+(home/'data/work-structure.json').write_text(json.dumps(dict(schema='fm-work-structure.v1',
+    groups={'subproject:firstmate/paused': dict(kind='subproject', repo='firstmate', label='Paused',
+        pause=dict(kind='parked', reason='Captain pause'), blocked_by=[])},
+    membership={'grouped': 'subproject:firstmate/paused'}, order=[], edge_meta={})))
+PYFIX
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" work dispatch-check --task demo >/dev/null || fail "fixture: demo dispatch"
+  if FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" work dispatch-check --task grouped >/dev/null; then
+    fail "fixture: group pause was not active"
+  fi
+  for id in held grouped; do
+    printf '%s\n' "$home" > "$state/$id.spawn-deferred"
+  done
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
     bash "$WATCH" > "$out" 2>&1 &
   child=$!
-  for ((i=0; i<200; i++)); do
-    [ -s "$state/.watch-info" ] && break
-    kill -0 "$child" 2>/dev/null || break
-    sleep 0.1
-  done
-  if ! kill -0 "$child" 2>/dev/null; then
-    fail "ready work woke individually: $(cat "$out")"
-  fi
-  grep -F 'check: ready work' "$state/.watch-triage.log" >/dev/null || { kill -TERM "$child"; fail "ready work was not recorded"; }
-  if grep -E 'held|dependent' "$state/.watch-triage.log" >/dev/null; then
-    kill -TERM "$child"
-    fail "held or dependent work was included"
-  fi
-  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add second 'Another task' --repo firstmate >/dev/null 2>&1
-  # The triage line is written before the batch record; wait for the record.
   for ((i=0; i<600; i++)); do
-    [ "$(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info" 2>/dev/null)" -ge 2 ] && break
     kill -0 "$child" 2>/dev/null || break
     sleep 0.1
   done
-  if ! kill -0 "$child" 2>/dev/null; then fail "new ready work woke individually: $(cat "$out")"; fi
-  kill -TERM "$child" 2>/dev/null || true
+  if kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child"; wait "$child" 2>/dev/null || true
+    fail "eligible dispatch waited for the information batch: $(cat "$out")"
+  fi
   wait "$child" 2>/dev/null || true
-  grep -F 'second' "$state/.watch-triage.log" >/dev/null || fail "new dispatch opportunity was not recorded"
-  [ ! -s "$state/.wake-queue" ] || fail "scheduling information queued an individual wake"
-  [ "$(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info")" -eq 2 ] \
-    || fail "expected two scheduling records in the batch, got $(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info")"
-  pass "dispatch opportunities are recorded once per change and share the informational batch"
+  grep -F 'check: ready work' "$out" | grep -F '(demo)' >/dev/null || fail "wrong dispatch candidates: $(cat "$out")"
+  [ "$(awk -F '\t' '$3=="check" && $4=="ready-work"{n++} END{print n+0}' "$state/.wake-queue")" -eq 1 ] \
+    || fail "dispatch wake was not queued exactly once"
+  for id in held grouped; do
+    [ -f "$state/$id.spawn-deferred" ] || fail "paused retry reminder was retired: $id"
+  done
+  grep -Fx "$(cat "$out")" "$state/.ready-work-wake" >/dev/null || fail "published dispatch reason was not preserved"
+  pass "ready work bypasses the information batch and excludes holds, group pauses, dependencies and missing briefs"
 }
 
 test_ready_work_wakes_once

@@ -4,10 +4,11 @@
 # The poll loop and native transition path share one delivery gate: wake the
 # primary only while a durable event still requires action from that actor.
 # Blockers, failures, captured messages and actual endpoint or delivery failures
-# retain immediate delivery. Ordinary decisions and results share the hourly
+# and eligible dispatch opportunities retain immediate delivery. Ordinary decisions
+# and results share the hourly
 # delivery deadline with information, while remaining queued. Declared waits, routine
 # progress, healthy heartbeat/re-arm/relay events, successful automatic closes,
-# scheduling and maintenance observations share the fleet-wide batch owned by
+# maintenance observations share the fleet-wide batch owned by
 # fm-push-transition-lib.sh. That owner also defines FM_INFO_SUMMARY_SECS.
 # Unknown or unreadable events remain actionable; notification never consumes
 # queue rows, whose sequence-bound acknowledgement belongs to fm-wake-drain.sh.
@@ -3200,9 +3201,36 @@ event_wait_or_sleep() {
   esac
 }
 
+# Follow the same queued/hold and group-control owners as a manual dispatch.
+# Briefs are required before asking the primary to launch any task.
+dispatch_ready_ids() {
+  local ready id
+  ready=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" ready 2>/dev/null) || return 1
+  while IFS= read -r id; do
+    [ -f "${FM_DATA_OVERRIDE:-$FM_HOME/data}/$id/brief.md" ] || continue
+    # Explicit deferrals belong to spawn_deferred_tick and its full admission check.
+    [ "${1-}" != new ] || [ ! -f "$STATE/$id.spawn-deferred" ] || continue
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      bash "$SCRIPT_DIR/fm-tasks-axi.sh" work dispatch-check --task "$id" >/dev/null 2>&1 || continue
+    printf '%s\n' "$id"
+  done < <(python3 -c '
+import csv, re, sys
+rows = False
+for line in sys.stdin:
+    if line.startswith("ready["):
+        rows = True
+    elif rows:
+        if not line.startswith("  "): break
+        task = next(csv.reader([line.strip()]))[0]
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task): print(task)
+' <<< "$ready")
+}
+
 # Admission reminders are owned by bin/fm-spawn.sh's capacity contract.
 spawn_deferred_tick() {
-  local marker id project capacity_config project_lock reason
+  local marker id project capacity_config project_lock reason ready
+  ready=
   for marker in "$STATE"/*.spawn-deferred; do
     [ -f "$marker" ] || continue
     id=$(basename "$marker" .spawn-deferred)
@@ -3212,6 +3240,8 @@ spawn_deferred_tick() {
     fi
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
       bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice >/dev/null 2>&1 || return 0
+    if [ -z "$ready" ]; then ready=$(dispatch_ready_ids) || return 0; fi
+    printf '%s\n' "$ready" | grep -Fxq "$id" || continue
     project=$(cat "$marker") || continue
     [ -d "$project" ] || continue
     capacity_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || continue
@@ -3222,17 +3252,18 @@ spawn_deferred_tick() {
       [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -lt "$FM_PROJECT_CAPACITY" ] || continue
     fi
     reason="check: capacity available: retry deferred task $id"
-    watch_info_record scheduling "$reason"
+    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
     rm -f -- "$marker" || return 1
     [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
+    wake "$reason"
   done
   return 0
 }
 
-# Batch each changed dispatch opportunity; admitted capacity is information, not a worker decision.
+# Queue each changed eligible dispatch opportunity before suppressing duplicates.
 ready_work_tick() {
-  local now capacity free ready snapshot ids signature marker reason
+  local now capacity free ids marker reason
   [ -f "$CONFIG/lane-capacity" ] || { rm -f -- "$STATE/.ready-work-wake"; return 0; }
   now=$(date +%s)
   [ "$((now - ${READY_WORK_PROBED_AT:-0}))" -ge 30 ] || return 0
@@ -3246,36 +3277,17 @@ ready_work_tick() {
     rm -f -- "$marker"
     return 0
   fi
-  ready=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    bash "$SCRIPT_DIR/fm-tasks-axi.sh" ready 2>/dev/null) || return 0
-  snapshot=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    bash "$SCRIPT_DIR/fm-tasks-axi.sh" work snapshot 2>/dev/null) || return 0
-  ids=$(FM_READY_ROWS="$ready" python3 -c '
-import csv, json, os, sys
-lines = os.environ["FM_READY_ROWS"].splitlines()
-rows = []
-for i, line in enumerate(lines):
-    if line.startswith("ready["):
-        for row in lines[i + 1:]:
-            if not row.startswith("  "): break
-            rows.append(next(csv.reader([row.strip()]))[0])
-        break
-ready = set(rows)
-data = json.load(sys.stdin)
-if not isinstance(data.get("tasks"), list): sys.exit(1)
-tasks = data["tasks"]
-print(" ".join(sorted(t["key"][5:] for t in tasks if t["key"].startswith("task:")
-    and t["key"][5:] in ready and t["backlog_state"] == "queued" and t["state"] == "ready")))
-' <<< "$snapshot" 2>/dev/null) || return 0
+  ids=$(dispatch_ready_ids new | LC_ALL=C sort | tr '\n' ' ') || return 0
+  ids=${ids% }
   if [ -z "$ids" ]; then
     rm -f -- "$marker"
     return 0
   fi
-  signature="$free:$ids"
-  [ "$(cat "$marker" 2>/dev/null || true)" != "$signature" ] || return 0
   reason="check: ready work with $free free lanes: review and dispatch eligible queued tasks ($ids)"
-  watch_info_record scheduling "$reason"
-  printf '%s\n' "$signature" > "$marker" || return 1
+  [ "$(cat "$marker" 2>/dev/null || true)" != "$reason" ] || return 0
+  fm_wake_append check ready-work "$reason" || return 1
+  printf '%s\n' "$reason" > "$marker" || return 1
+  wake "$reason"
 }
 
 # Cheap disk probe only; the dispatched worker owns du and cleanup.
