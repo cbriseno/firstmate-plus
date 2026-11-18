@@ -67,6 +67,10 @@ The watcher retains dated-pause rechecks while excluding intentionally absent pa
 A tmux resume requires the same live socket saved before parking; an ordinary missing tmux record still refuses recovery across an unknown socket.
 Relaunch remains the fresh-chat operation for ordinary recovery.
 
+**Delivered workers close on their own unless a live board needs them, and a batch view shows which.**
+The watcher keeps a delivered worker open, once explained, while it owns an open review board (`bin/fm-lavish-watch.sh owned`) or when that list cannot be read.
+`bin/fm-close-delivered.sh list` shows each worker's result, pane, board owner and a `safe` or `keep: <reason>` verdict together; `close <task-id>... | --all-safe` closes the safe ones with one progress line each, through teardown and then park, so unlanded work is kept and nothing is discarded.
+
 A parked worker's automatic resume checks current usage policy. A changed harness opens a captain hold with two choices: continue the original worker or take over using the current harness (recommended). The parked record and pending message remain; no agent launches before the choice. A uniform dispatch harness takes precedence over `crew-harness`; mixed dispatch profiles require Firstmate to select the applicable rule/profile instead of guessing.
 
 After recording the answer through `fm-captain-hold.sh answer --release-in-flight`, Firstmate calls `fm-control.sh <id> resume --harness <chosen> [--model <model>] [--effort <effort>]`. The explicit profile applies that answer: the original harness can reopen its native chat, while another harness starts fresh with the saved note. Do not resend the pending inbox message. A direct `relaunch` remains a deliberate fresh-chat recovery operation.

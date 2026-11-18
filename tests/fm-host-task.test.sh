@@ -145,6 +145,46 @@ run_completion_tick >/dev/null
 rm -f "$TASK_HOME/state/waiting.meta" "$TASK_HOME/state/waiting.status"
 pass 'a worker idle 30 minutes on an open decision is parked, never one pausing for its own short job'
 
+# A delivered worker that owns an open review board stays open until the board ends.
+export LAVISH_AXI_STATE_DIR="$TMP_ROOT/lavish-store"
+mkdir -p "$LAVISH_AXI_STATE_DIR" "$TASK_HOME/data/hosting"
+: > "$TASK_HOME/data/hosting/report.html"
+printf 'kind=host\n' > "$TASK_HOME/state/hosting.meta"
+printf 'done: finished\n' > "$TASK_HOME/state/hosting.status"
+jq -n --arg f "$(realpath "$TASK_HOME/data/hosting/report.html")" \
+  '{sessions:{one:{key:"one",file:$f,status:"open",url:"http://127.0.0.1:1/session/0123456789abcdef"}}}' \
+  > "$LAVISH_AXI_STATE_DIR/state.json"
+run_completion_tick >/dev/null
+run_completion_tick >/dev/null
+[ "$(grep -c 'worker done but kept open: hosting; it owns an open review board' "$TASK_HOME/state/.watch-triage.log")" = 1 ] \
+  || fail 'a done worker owning an open board was not explained exactly once'
+[ -e "$TASK_HOME/state/hosting.meta" ] || fail 'a worker owning an open board was closed'
+rm -f "$TASK_HOME/state/hosting.meta" "$TASK_HOME/state/hosting.status" "$LAVISH_AXI_STATE_DIR/state.json"
+unset LAVISH_AXI_STATE_DIR
+pass 'a done worker that owns an open review board stays open and is explained once'
+
+# The batch close runs the real snapshot, board list and teardown on a delivered host.
+run_brief batch-close --host --path "$TARGET" >/dev/null
+python3 - "$TASK_HOME/data/batch-close/brief.md" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close in a batch.'))
+PY
+OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/batch-close/work" "$FAKEBIN" batch-close --host --harness 'printf fixture' --backend tmux) || fail "batch-close spawn failed: $OUT"
+publish_status batch-close 'done' verified
+run_batch() {
+  FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" FM_DATA_OVERRIDE="$TASK_HOME/data" \
+    FM_CONFIG_OVERRIDE="$TASK_HOME/config" FM_PROJECTS_OVERRIDE="$TASK_HOME/projects" \
+    HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" TMUX=fake,1,0 bash "$ROOT/bin/fm-close-delivered.sh" "$@"
+}
+OUT=$(run_batch list 2>&1) || fail "close list failed: $OUT"
+assert_contains "$OUT" 'batch-close | host | delivered' 'the view lists the delivered host'
+OUT=$(run_batch close batch-close 2>&1) || fail "batch close failed: $OUT"
+assert_contains "$OUT" '[1/1] batch-close: closed' 'the batch close reports progress'
+[ ! -e "$TASK_HOME/state/batch-close.meta" ] || fail 'the batch close left the worker open'
+[ "$(cat "$TARGET")" = preserve ] || fail 'the batch close changed the host target'
+pass 'the batch close closes a delivered host through the real snapshot and teardown'
+
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'

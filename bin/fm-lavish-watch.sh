@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Discover and recover unattended, home-owned Lavish boards.
-# Usage: fm-lavish-watch.sh scan|needed
+# Usage: fm-lavish-watch.sh scan|needed|owned
 # needed is read-only: exit 0 for an owned open board, 1 for none, 2 on error.
+# owned is read-only too: it prints one tab-separated line per open board
+# (task, artifact, status, pending prompts) - task is - for a home board no task
+# owns - and exits 0 even for none, so closing a delivered worker can tell that
+# a live board still needs its owner; any error exits 2 with nothing printed.
 #
 # Called every fm-watch cycle, even when no process-event registry exists.
 # Reads saved sessions, local server health, and this home's task metadata.
@@ -29,12 +33,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 case "${1-}" in
-  scan|needed) [ "$#" -eq 1 ] || exit 2 ;;
+  scan|needed|owned) [ "$#" -eq 1 ] || exit 2 ;;
   *) sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
 
 store="${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json"
-[ -e "$store" ] || { [ "$1" = scan ]; exit $?; }
+[ -e "$store" ] || { [ "$1" != needed ]; exit $?; }
 watch_dir="$STATE/lavish-watch"
 if [ "$1" = scan ]; then
   # shellcheck source=bin/fm-pr-lib.sh
@@ -139,7 +143,7 @@ perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -MEncode=encode,decode -
     my $status = ($session->{status} // "") eq "ended" ? "ended" : "open";
     print "$id\t$task\t$file\t$status\t$pending\t$port\n";
   }
-  exit 0 if $mode eq "needed";
+  exit 0 if $mode ne "scan";
   my $tmp = "$index.$$";
   -e $tmp || -l $tmp and die "ownership staging collision\n";
   open my $out, ">", $tmp or die "$tmp: $!\n";
@@ -152,6 +156,10 @@ perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -MEncode=encode,decode -
 if [ "$mode" = needed ]; then
   [ -s "$rows" ]
   exit $?
+fi
+if [ "$mode" = owned ]; then
+  awk -F'\t' '{ print $2 "\t" $3 "\t" $4 "\t" $5 }' "$rows"
+  exit 0
 fi
 
 sources=''

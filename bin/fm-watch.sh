@@ -2941,7 +2941,7 @@ worker_wait_park() {  # <task> <current-status-line>
 }
 
 worker_completion_tick() {
-  local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason kept finished parked
+  local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason kept finished parked boards='' boards_state='' board
   # shellcheck source=bin/fm-local-branch-lib.sh
   . "$SCRIPT_DIR/fm-local-branch-lib.sh"
   # shellcheck source=bin/fm-tangle-lib.sh
@@ -2974,6 +2974,24 @@ worker_completion_tick() {
       if [ -n "$kept" ]; then
         rm -f -- "$marker"
         if [ "$finished" = 0 ]; then worker_wait_park "$task" "$last"; else worker_kept_open_record "$task" "$kept"; fi
+        continue
+      fi
+    fi
+    if [ "$finished" = 1 ]; then
+      # A live review board still needs its owner; the board list is read once
+      # per tick, and an unreadable list keeps the worker open rather than guess.
+      if [ -z "$boards_state" ]; then
+        boards=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-lavish-watch.sh" owned 2>/dev/null) \
+          && boards_state=ok || boards_state=error
+      fi
+      board=
+      [ "$boards_state" = error ] || board=$(printf '%s\n' "$boards" | awk -F'\t' -v t="$task" '$1 == t { print $2; exit }')
+      kept=
+      [ "$boards_state" != error ] || kept='board ownership could not be read'
+      [ -z "$board" ] || kept="it owns an open review board: $board"
+      if [ -n "$kept" ]; then
+        rm -f -- "$marker"
+        worker_kept_open_record "$task" "$kept"
         continue
       fi
     fi
