@@ -76,6 +76,7 @@ fm_diag_schema() {  # <event> -> FM_DIAG_FIELDS
     wake.ack) FM_DIAG_FIELDS='kind age_s' ;;
     work.snapshot) FM_DIAG_FIELDS='caller ms lock_ms result tasks' ;;
     worker.procs) FM_DIAG_FIELDS='task harness procs zombies rss_mb' ;;
+    context.relay) FM_DIAG_FIELDS='task result reason' ;;
     session.link) FM_DIAG_FIELDS='task harness result reason' ;;
     *) return 1 ;;
   esac

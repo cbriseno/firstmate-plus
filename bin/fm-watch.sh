@@ -2829,7 +2829,7 @@ EOF
 # hiding the `needs-decision`, `blocked`, `failed`, or `done` event that arrived
 # just before it: the .seen-* marker advances either way, so an event absorbed
 # here is never re-read. Non-.status arguments (.turn-ended markers, which carry
-# no verb) are skipped; only explicit status events establish action.
+# no verb) are skipped; signal_worker_stopped handles their undeclared stops.
 # Also populates FM_SIGNAL_NEEDS_DECISION_FILES (space-separated status-file
 # paths) with exactly the files whose newly classified span carries one of the
 # decision-owned classes defined by the status-span contract, so the caller can
@@ -2901,6 +2901,72 @@ worker_wait_signal_tick() {
   done <<EOF
 $pending
 EOF
+}
+
+# A completed worker is closed only after its turn finishes. Teardown remains
+# the authority for preservation, report/decision gates and landed-work safety.
+# Failures are retried on the ordinary check cadence and reported for review.
+worker_completion_tick() {
+  local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason
+  # shellcheck source=bin/fm-local-branch-lib.sh
+  . "$SCRIPT_DIR/fm-local-branch-lib.sh"
+  # shellcheck source=bin/fm-tangle-lib.sh
+  . "$SCRIPT_DIR/fm-tangle-lib.sh"
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    kind=$(fm_meta_get "$meta" kind)
+    case "$kind" in host|scout|ship) ;; *) continue ;; esac
+    task=${meta##*/}; task=${task%.meta}
+    last=$(status_current_line "$STATE/$task.status" "$kind")
+    [ ! -e "$STATE/$task.parked" ] || continue
+    activity=$(fm_busy_classify_meta "$meta" "$task" "$STATE")
+    marker="$STATE/.worker-idle-$task"
+    if [ "${activity%% *}" != idle ] \
+      || [ -n "$(status_declared_wait_line "$STATE/$task.status")" ] \
+      || [ -n "$(status_own_open_decisions "$STATE/$task.status" "$kind")" ]; then
+      rm -f -- "$marker"
+      continue
+    fi
+    if [ "$(status_line_verb "$last")" != 'done' ]; then
+      [ -e "$marker" ] || touch "$marker"
+      if [ "$(age_of "$marker")" -ge 1800 ] && ! crew_is_provably_working "$task"; then
+        reason="check: worker idle without a result or declared wait for over 30 minutes: $task; inspect or close with fm-teardown.sh --preserve"
+        watch_info_record idle "$reason"
+        touch "$marker"
+      fi
+      continue
+    fi
+    pending=$(find "$STATE/$task.inbox" -maxdepth 1 -name '*.msg' -print -quit 2>/dev/null)
+    [ -z "$pending" ] || continue
+    if [ "$kind" = ship ]; then
+      # A published branch awaiting integration must remain available. Accept
+      # only content in an integration target, never merely a pushed task
+      # branch. Use teardown's same content check, including squash landings.
+      project=$(fm_meta_get "$meta" project); wt=$(fm_meta_get "$meta" worktree)
+      base=$(fm_meta_get "$meta" base_branch)
+      [ -n "$base" ] || base=$(fm_default_branch "$project")
+      overlay=$(fm_local_integration_branch "$project")
+      integrated=1
+      for ref in "refs/heads/$base" "refs/remotes/origin/$base" "refs/heads/$overlay"; do
+        if fm_local_content_in_ref "$wt" "$ref"; then integrated=0; break; fi
+      done
+      [ "$integrated" = 0 ] || continue
+    fi
+    marker="$STATE/.worker-close-$task"
+    [ "$(age_of "$marker")" -ge "$CHECK_INTERVAL" ] || continue
+    touch "$marker"
+    rc=0
+    output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-teardown.sh" "$task" 2>&1) || rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 4 ]; then
+      rm -f -- "$marker" "$STATE/.worker-idle-$task"
+      watch_info_record completion "worker automatically closed: $task; $last; report=${FM_DATA_OVERRIDE:-$FM_HOME/data}/$task/report.md"
+      continue
+    else
+      reason="check: worker automatic close refused: $task; $(printf '%s\n' "$output" | tail -3 | tr '\n' ' ')"
+    fi
+    watch_event_append check "worker-close:$task" "$reason" || exit 1
+    wake "$reason"
+  done
 }
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
@@ -3649,16 +3715,14 @@ while :; do
       END { exit !found }' "$FM_WAKE_QUEUE"; then
     resurface_after_downtime
   fi
+  worker_completion_tick
 
   cleanup_tick || exit 1
 
   # Worker Stop publishes the safe point; lifecycle control must run outside
   # the retiring worker's process scope (which reaps all of its descendants).
-  for relay_ready in "$STATE"/*.relay-ready; do
-    [ -f "$relay_ready" ] || continue
-    python3 "$SCRIPT_DIR/fm-worker-relay.py" --dispatch "$FM_HOME" "$STATE"
-    break
-  done
+  python3 "$SCRIPT_DIR/fm-task-job.py" --dispatch "$STATE"
+  python3 "$SCRIPT_DIR/fm-worker-relay.py" --dispatch "$FM_HOME" "$STATE"
   for relay_result in "$STATE"/*.relay-result; do
     [ -f "$relay_result" ] || continue
     relay_message=$(cat "$relay_result")
@@ -3738,16 +3802,6 @@ while :; do
     exit 1
   }
 
-  # Process-to-event liveness repair. This never discovers a result by polling:
-  # each registered source has its own child blocking on that source, and this
-  # only republishes results already captured durably and restarts a source
-  # whose owner is gone. It is a no-op with nothing registered.
-  if [ -d "$STATE/procevent" ]; then
-    if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1; then
-      watch_event_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
-        "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
-    fi
-  fi
   # Publication without registration is invisible to the generic runner.
   # Discover only this home's boards, including those whose worker has gone,
   # restore missing registrations and wake for missing coverage without acknowledging feedback.

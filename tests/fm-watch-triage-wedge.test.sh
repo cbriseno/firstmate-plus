@@ -1017,7 +1017,11 @@ test_live_and_unproven_endpoints_stay_informational() {
       || fail "an elapsed $verdict observation woke without pending action: $(cat "$out")"
     [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
       || fail "an elapsed $verdict observation queued a recovery request"
-    [ -s "$state/.watch-info" ] || fail "the $verdict observation was not retained for the fleet batch"
+    # An unproven endpoint can be absorbed before a timer event is produced.
+    # The verified live endpoint must exercise publication and the batch.
+    if [ "$verdict" = alive ]; then
+      [ -s "$state/.watch-info" ] || fail "the live timer was not retained for the fleet batch"
+    fi
     unset FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
   done
   pass "elapsed live-operation timers and unproven observations remain informational"
@@ -1230,7 +1234,7 @@ test_gone_report_rearms_when_the_endpoint_comes_back() {
   ack_stopped_cycle "$state" || fail "could not acknowledge the first gone report"
 
   # A replacement is launched into the same window and then wedges for real.
-  FM_TEST_PANE_COMMAND=grok FM_TEST_TMUX_WINDOWS=fm-wedge
+  FM_TEST_PANE_COMMAND=claude FM_TEST_TMUX_WINDOWS=fm-wedge
   : > "$out"
   wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
     || fail "a replacement agent's wedge was swallowed by the earlier gone report: $(cat "$out")"
@@ -1280,23 +1284,23 @@ test_second_death_after_a_same_window_relaunch_reports_in_full() {
   ack_stopped_cycle "$state" || fail "could not acknowledge the first death report"
 
   # A replacement launches: the pane churns and the bookkeeping resets, but the
-  # round ends before the fresh timer could reach a threshold, so no probe runs
-  # and the once-record survives the churn untouched.
-  FM_TEST_PANE_COMMAND=grok FM_TEST_TMUX_WINDOWS=fm-wedge
+  # round ends before the fresh timer could reach a threshold. The ordinary
+  # liveness probe now observes the replacement and retires the death record.
+  FM_TEST_PANE_COMMAND=claude FM_TEST_TMUX_WINDOWS=fm-wedge
   printf '%s\n' 'waiting on the build queue' > "$capture"
   : > "$out"
   FM_TEST_STALE_ESCALATE=999 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
     || fail "a replacement launch churned the pane without absorbing: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "the relaunch round escalated before its fresh window elapsed: $(cat "$out")"
-  [ -s "$state/.dead-reported-$key" ] \
-    || fail "the relaunch churn dropped the first death's once-record"
+  [ ! -e "$state/.dead-reported-$key" ] \
+    || fail "the live replacement retained the first death's once-record"
   [ ! -e "$state/.wedge-escalations-$key" ] \
     || fail "the relaunch churn left a wedge escalation count behind"
   [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
     || fail "the relaunch churn queued a wake: $(cat "$state/.wake-queue")"
 
-  # The replacement dies too, without any intervening probe reading it alive:
+  # The replacement dies too:
   # the second death must still produce its own detailed report naming the
   # verdict, and must not be absorbed by the first death's record.
   gone_endpoint_env missing
@@ -1321,7 +1325,7 @@ test_second_death_after_a_same_window_relaunch_reports_in_full() {
   [ ! -e "$state/.wedge-escalations-$key" ] \
     || fail "an unchanged dead pane advanced the escalation count"
   unset FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
-  pass "a second death after a same-window relaunch reports in full without a live probe, and an unchanged dead pane stays silent"
+  pass "a second death after a live same-window relaunch reports in full, and an unchanged dead pane stays silent"
 }
 
 # The collision the pane-hash discriminator cannot see: a successor whose dead
@@ -1357,18 +1361,10 @@ test_identical_dead_display_of_a_successor_still_reports() {
     || fail "the first death queued $(wedge_stale_wakes "$state" "$window") wakes instead of one"
   ack_stopped_cycle "$state" || fail "could not acknowledge the first death report"
 
-  # A successor occupies the lane: the relaunch re-arms the busy incarnation
-  # through the real writer, and the successor stays quiet under the threshold
-  # for a round, so no probe reads it alive and the pane never churns - the
-  # display captured here and in the death rounds is byte-identical throughout.
+  # Re-arm the successor through the real writer. It dies before any probe
+  # observes it alive, leaving the display byte-identical to the first death.
   "$ROOT/bin/fm-busy-event.sh" arm "$state" wedge >/dev/null \
     || fail "could not re-arm the successor's busy incarnation"
-  : > "$out"
-  FM_TEST_STALE_ESCALATE=999 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$failed" absorb \
-    || fail "the successor's quiet round was never absorbed: $(cat "$out")"
-  [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
-    || fail "the successor's quiet round queued a wake: $(cat "$state/.wake-queue")"
-
   # The successor dies into the same byte-identical display. A pane-hash marker
   # absorbs this death silently; the incarnation half must report it in full.
   : > "$out"

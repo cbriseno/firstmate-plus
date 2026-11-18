@@ -1130,11 +1130,15 @@ fm_remote_job_recorded_owner_alive() { # <dir>
   FM_REMOTE_JOB_RECORDED_PID=$pid
 }
 
+fm_remote_job_lock_owner_matches_prepared() {
+  fm_remote_job_recorded_owner_alive "$(fm_remote_job_worker_lock_path)" || return 1
+  FM_REMOTE_JOB_OWNER_PID=$FM_REMOTE_JOB_RECORDED_PID
+}
+
 fm_remote_job_lock_owner_matches_process() {
   local account_home=$1
   fm_remote_job_prepare_state "$account_home" || return 1
-  fm_remote_job_recorded_owner_alive "$(fm_remote_job_worker_lock_path)" || return 1
-  FM_REMOTE_JOB_OWNER_PID=$FM_REMOTE_JOB_RECORDED_PID
+  fm_remote_job_lock_owner_matches_prepared
 }
 
 fm_remote_job_worker_owned_alive() {
@@ -1149,8 +1153,8 @@ fm_remote_job_worker_owned_alive() {
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   identity_file=$(fm_remote_job_worker_identity_path)
   fm_remote_job_regular_bounded "$identity_file" 256 || return 1
-  fm_remote_job_probe "$account_home" || return 1
-  if fm_remote_job_lock_owner_matches_process "$account_home"; then
+  fm_remote_job_probe_prepared || return 1
+  if fm_remote_job_lock_owner_matches_prepared; then
     [ "$pid" = "$FM_REMOTE_JOB_OWNER_PID" ] || return 1
     return 0
   fi
@@ -1202,10 +1206,8 @@ fm_remote_job_worker_alive() { # <account-home>
   kill -0 "$pid" 2>/dev/null
 }
 
-fm_remote_job_probe() { # <account-home>; require a fresh heartbeat outside an active job
-  local account_home=$1 ready lock mtime now
-  [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] && return 0
-  fm_remote_job_prepare_state "$account_home" || return 1
+fm_remote_job_probe_prepared() { # require a fresh heartbeat in a prepared state
+  local ready lock mtime now
   lock=$(fm_remote_job_worker_lock_path)
   [ ! -e "$lock/quarantine" ] && [ ! -L "$lock/quarantine" ] || return 1
   ready=$(fm_remote_job_worker_ready_path)
@@ -1214,6 +1216,13 @@ fm_remote_job_probe() { # <account-home>; require a fresh heartbeat outside an a
   case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
   now=$(date +%s)
   [ $((now - mtime)) -le 10 ]
+}
+
+fm_remote_job_probe() { # <account-home>; require a fresh heartbeat outside an active job
+  local account_home=$1
+  [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] && return 0
+  fm_remote_job_prepare_state "$account_home" || return 1
+  fm_remote_job_probe_prepared
 }
 
 fm_remote_job_wait_for_probe() { # <remote-root> <account-home>

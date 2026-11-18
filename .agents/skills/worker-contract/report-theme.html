@@ -15,6 +15,14 @@ h2 { margin-top:0; } p { max-width:75ch; } a { color:var(--accent); } .eyebrow, 
 .overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%, 17rem),1fr)); gap:1rem; margin:1.5rem 0; }
 .card, details { background:var(--panel); border:1px solid var(--line); border-radius:.8rem; padding:1.2rem; min-width:0; }
 .card p:last-child { margin-bottom:0; } .highlight { background:var(--soft); } .number { display:block; font-size:clamp(2rem,4vw,3rem); line-height:1.1; font-weight:750; color:var(--accent); }
+.report-actions { display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; margin:1rem 0; }
+.report-actions a, .report-actions button { display:inline-block; padding:.65rem 1rem; border:1px solid var(--accent); border-radius:.5rem; background:var(--soft); text-decoration:none; font-weight:650; overflow-wrap:anywhere; }
+.report-actions :focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+.report-actions small { flex-basis:100%; color:var(--muted); }
+.report-actions form { flex-basis:100%; display:grid; gap:.7rem; }
+.report-actions label { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:1rem; align-items:center; }
+.report-actions select { max-width:100%; min-width:0; padding:.6rem; font:inherit; } .report-actions button { justify-self:start; color:var(--accent); font:inherit; cursor:pointer; }
+@media (max-width:40rem) { .report-actions label { grid-template-columns:minmax(0,1fr); gap:.2rem; } }
 section, details { margin:1.5rem 0; } summary { cursor:pointer; font-weight:700; } details > :last-child { margin-bottom:0; }
 table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto; } th, td { border-bottom:1px solid var(--line); padding:.65rem; text-align:left; vertical-align:top; } pre, code { white-space:pre-wrap; overflow-wrap:anywhere; }
 </style>
@@ -25,14 +33,17 @@ table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto
 <h1>La conclusión va primero</h1>
 <p>Una frase clara explica qué pasó y por qué importa, sin obligar a abrir los detalles.</p>
 <p class="meta">Generado: <time datetime="2026-11-15T16:00:00Z" data-relative>15 nov 2026, 10:00 (hora local)</time> · <span data-age-for="2026-11-15T16:00:00Z"></span><br>Autor del informe: modelo y esfuerzo por indicar</p>
-<details class="report-actions"><summary>Opciones para revisar</summary><p>El autor coloca aquí enlaces al Deck según lo que pide el informe: «Revisado» y «Revisar en Lavish», o las opciones de aprobación o de cada decisión independiente. Cada enlace abre el Deck para confirmar la acción.</p><p>En Deck, abre este resultado y elige «Revisar en Lavish» para iniciar o retomar la revisión. Si abriste el archivo directamente, ejecuta <code>lavish-axi --no-open "&lt;ruta-del-informe.html&gt;"</code> y abre la dirección que aparece.</p><p>Si el Deck no está disponible, pide a Firstmate que organice la revisión.</p></details>
-<p class="meta">Ejemplo de tarea mencionada: Referencia de informes HTML: tema claro/oscuro, tono, fecha y autor (<a href="DECK_URL/?home=HOME_ID&amp;task=report-theme-ref-20261115&amp;view=delivery">report-theme-ref-20261115</a>; sustituye DECK_URL y HOME_ID por los valores del Deck local).</p>
+<nav class="report-actions" aria-label="Acciones del informe"><p>Para marcar revisado, aprobar, pedir más investigación o discutir en Lavish, pide a Firstmate que organice la revisión.</p></nav>
+<p class="meta">Ejemplo de tarea mencionada: <a href="DECK_URL/?home=HOME_ID&amp;task=report-theme-ref-20261115&amp;view=delivery">Referencia de informes HTML: tema claro/oscuro, tono, fecha y autor</a> (sustituye DECK_URL y HOME_ID por los valores del Deck local).</p>
 </header>
 <main>
+<section id="en-1-minuto"><h2>En 1 minuto</h2>
 <div class="overview">
-<section class="card highlight"><h2>Resultado</h2><span class="number">3 de 4</span><p>Una cifra con contexto ayuda a entender el hallazgo de un vistazo.</p></section>
-<section class="card"><h2>Qué sigue</h2><p>Una acción concreta, con sus límites cuando hagan falta.</p></section>
+<div class="card highlight"><h3>¿Qué pasó?</h3><p>Tres de cuatro pendientes quedaron resueltos; el cuarto sigue abierto.</p></div>
+<div class="card"><h3>¿Qué significa para ti?</h3><p>El trabajo puede avanzar, salvo la parte que depende del pendiente abierto.</p></div>
+<div class="card"><h3>¿Qué necesito de ti?</h3><p>Una decisión, que tomas con los botones de abajo. Si el informe no pide nada, aquí dice: nada, solo informativo.</p></div>
 </div>
+</section>
 <section><h2>Así funciona</h2>
 <div class="overview" aria-label="Pasos del ejemplo">
 <div class="card"><strong>1. Revisar</strong><p>La medición muestra cuatro pendientes.</p></div>
@@ -40,7 +51,7 @@ table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto
 <div class="card"><strong>3. Decidir</strong><p>Se asigna el pendiente restante.</p></div>
 </div>
 <table><thead><tr><th>Resultado del ejemplo</th><th>Cantidad</th></tr></thead><tbody><tr><td>Atendidos</td><td>3</td></tr><tr><td>Pendientes</td><td>1</td></tr></tbody></table></section>
-<details><summary>Datos y método</summary><p>Aquí van la evidencia, las limitaciones y los detalles técnicos que respaldan el resultado.</p></details>
+<details><summary>Detalle técnico</summary><p>Aquí va el detalle en prosa clara, con frases completas, una tabla y un diagrama; los hashes y las rutas van solo en el registro Markdown.</p></details>
 </main>
 <script>
 // Keep the absolute timestamp visible even if scripting is disabled.

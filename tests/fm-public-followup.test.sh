@@ -1456,7 +1456,7 @@ test_session_start_surfaces_only_when_owed() {
   off=$(make_home startup-off relay-off)
   out=$(PATH="$off/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$off" \
     FM_STATE_OVERRIDE="$off/state" FM_DATA_OVERRIDE="$off/data" \
-    FM_CONFIG_OVERRIDE="$off/config" "$SESSION_START" 2>&1)
+    FM_CONFIG_OVERRIDE="$off/config" FM_SESSION_START_TIMEOUT=300 "$SESSION_START" 2>&1)
   assert_not_contains "$out" "Public commitments" \
     "a relay-disabled home must not gain a public-commitments section at startup"
 
@@ -1464,7 +1464,7 @@ test_session_start_surfaces_only_when_owed() {
   seed_commitment "$on" pf-start req-start discord main work-start
   out=$(PATH="$on/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$on" \
     FM_STATE_OVERRIDE="$on/state" FM_DATA_OVERRIDE="$on/data" \
-    FM_CONFIG_OVERRIDE="$on/config" "$SESSION_START" 2>&1)
+    FM_CONFIG_OVERRIDE="$on/config" FM_SESSION_START_TIMEOUT=300 "$SESSION_START" 2>&1)
   assert_contains "$out" "Public commitments" \
     "an unresolved commitment must be surfaced at startup"
   assert_contains "$out" "unresolved pf-start state=pending-work platform=discord" \
@@ -1637,7 +1637,7 @@ SH
 }
 
 test_rechain_resumes_after_partial_add() {
-  local home log real_tasks marker out count
+  local home log real_tasks real_entry marker out count
   home=$(make_home rechain-resume)
   log="$home/curl.log"; : > "$log"
   seed_repro_commitment "$home" public-final-resume-a req-resume main scout-resume
@@ -1650,6 +1650,10 @@ test_rechain_resumes_after_partial_add() {
     || fail "deliver failed"
 
   real_tasks=$(command -v tasks-axi)
+  real_entry=$(perl -MCwd=realpath -e 'print realpath($ARGV[0]) // exit 1' "$real_tasks") \
+    || fail "could not resolve the real tasks-axi installation"
+  ln -s "$(dirname "$(dirname "$real_entry")")/src" "$home/src" \
+    || fail "could not expose the canonical reader beside the wrapper"
   marker="$home/rechain-bind-failed"
   cat > "$home/fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
@@ -2453,6 +2457,7 @@ entry=$2
 shift 2
 [ "$host" = remote-mac ] || exit 91
 [ "$entry" = fm-remote-entrypoint.sh ] || exit 92
+[ -z "${FM_FAKE_SSH_STAGE_LOG:-}" ] || date +%s >> "$FM_FAKE_SSH_STAGE_LOG"
 case "${FM_FAKE_SSH_MODE:-normal}" in
   unreachable) exit 255 ;;
   *) exec "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" ;;
@@ -2763,22 +2768,30 @@ test_remote_retire_refuses_unacquirable_lock_without_hanging() {
   mkdir -p "$lock"
   printf '%s\n' "$holder" > "$lock/pid"
 
+  # Test the bounded lock wait directly, without charging remote job startup
+  # and transport scheduling against the lock's own 30-second harness bound.
   started=$(date +%s)
   rc=0
-  EXPECT_OUT=$(run_pf_remote_timed 30 "$home" retire pf-remote-lock --reason "lock held" --force 2>&1) || rc=$?
+  EXPECT_OUT=$(fm_run_timed 30 env FM_HOME="$remote" FM_STATE_OVERRIDE="$remote/state" \
+    FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-x-followup.sh" --clear work-lock \
+    --expect-request req-remote-lock 2>&1) || rc=$?
   elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 124 ] && [ "$rc" -ne 0 ] && [ "$elapsed" -lt 30 ] \
+    || fail "the guarded clear did not refuse the held lock within 30s: rc=$rc elapsed=$elapsed"
+  assert_grep 'x_request=req-remote-lock' "$meta" \
+    "the bounded local refusal must leave the link untouched"
+
+  rc=0
+  EXPECT_OUT=$(FM_FAKE_SSH_STAGE_LOG="$home/remote-lock-ssh-starts" \
+    run_pf_remote_timed 120 "$home" retire pf-remote-lock --reason "lock held" --force 2>&1) || rc=$?
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   PF_TEST_LOCK_HOLDER=
   rm -rf "$lock"
 
   [ "$rc" -ne 124 ] \
-    || fail "the guarded clear exceeded the test harness deadline"
+    || fail "the remote clear exceeded the test harness deadline; remote-starts=$(cat "$home/remote-lock-ssh-starts" 2>/dev/null || true) output=$EXPECT_OUT"
   [ "$rc" -ne 0 ] || fail "retire must refuse when the metadata lock cannot be acquired"
-  # The bound is what this case exists to prove. An unbounded wait reaches the
-  # independent harness deadline instead of this observable refusal.
-  [ "$elapsed" -lt 30 ] \
-    || fail "the guarded clear did not return promptly; it waited ${elapsed}s for an unacquirable lock"
   assert_contains "$EXPECT_OUT" "could not clear the legacy X link" \
     "an unacquirable lock must use the retained reconciliation refusal"
   assert_present "$home/state/public-followup/registry/pf-remote-lock" \
@@ -3452,7 +3465,7 @@ pad_run() {
 }
 
 test_emit_rules_agree_with_tasks_axi() {
-  local home n=0 expected required outcome deliverables verdict mode
+  local home n=0 selected=0 expected required outcome deliverables verdict mode
   local emit_verdict axi_verdict obligation out pair key pad staging registry
   local -a emit_args emit_destination
   home=$(make_home emit-agreement)
@@ -3464,6 +3477,10 @@ test_emit_rules_agree_with_tasks_axi() {
   while IFS='|' read -r expected required outcome deliverables verdict mode; do
     [ -n "$expected" ] || continue
     n=$((n + 1))
+    if [ -n "${FM_AGREE_PART:-}" ] && [ "$(( (n - 1) % 10 ))" -ne "$FM_AGREE_PART" ]; then
+      continue
+    fi
+    selected=$((selected + 1))
     obligation="pf-agree-$n"
     while :; do
       case "$deliverables" in
@@ -3602,8 +3619,9 @@ report-ready|[]|report-ready|{}|accept|stage-in
 report-ready|["report_path"]|report-ready|{"report_path":"/abs/data/work-a/report.md"}|reject|stage-in
 failure-outcome|["error_code"]|failed|{}|reject|stage-in
 CASES
-  [ "$n" -ge 74 ] || fail "the agreement table ran only $n cases"
-  pass "the emitter's work-event rules agree with the real tasks-axi consumer on $n cases"
+  [ "$n" -ge 74 ] || fail "the agreement table contains only $n cases"
+  [ "$selected" -gt 0 ] || fail "the agreement part selected no cases"
+  pass "the emitter's work-event rules agree with the real tasks-axi consumer on $selected cases"
 }
 
 # The reported failure, third part: consume quarantined the event with only
@@ -3919,6 +3937,8 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
   exit 0
 fi
 
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10|11|12|13|24|25|26|27|28|29|30) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_ambient_tasks_axi_env_never_reaches_a_real_backlog
 test_outcome_text_is_bounded_without_corrupting_characters
 test_restart_e2e_delivers_exactly_once
@@ -3927,6 +3947,8 @@ test_duplicate_event_and_replay_are_noops
 test_invalid_events_are_refused_and_quarantined
 test_relay_failure_holds_without_false_completion
 test_dry_run_does_not_close_commitment
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_late_receipt_closes_the_exact_attempt_without_reposting
 test_typed_terminal_clear_only_removes_legacy_link
 test_interrupted_delivery_refuses_to_repost
@@ -3935,14 +3957,20 @@ test_delivery_requires_registration_before_posting
 test_secondmate_teardown_requires_parent_binding
 test_local_secondmate_seed_publishes_parent_before_identity
 test_secondmate_teardown_resolves_parent_from_durable_record_when_env_lost
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_secondmate_teardown_durable_record_missing_parent_registration_still_refuses
 test_secondmate_teardown_durable_record_with_unknown_field_succeeds
 test_secondmate_teardown_rejects_conflicting_live_and_durable_parent_bindings
 test_secondmate_teardown_rejects_unsafe_durable_parent_records
 test_secondmate_teardown_rejects_nul_bearing_durable_parent_record
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 12 ]; then
 test_relay_disabled_unmarked_teardown_skips_public_path
 test_relay_disabled_parent_allows_marked_child_teardown
 test_secondmate_parent_binding_matches_literal_id
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
 test_traversal_registration_is_refused_before_delivery
 test_pending_rejects_malformed_listing
 test_private_context_survives_inbox_cleanup
@@ -3951,38 +3979,64 @@ test_relay_disabled_home_pays_nothing
 test_relay_enabled_empty_state_makes_no_calls
 test_exhausted_binding_is_not_retried
 test_relay_poll_stays_inert_and_surfaces_once
-test_session_start_surfaces_only_when_owed
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
 test_typed_records_exclude_raw_public_material
 test_dropped_baton_now_surfaces_open_loop
 test_control_registered_followon_is_guarded
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 25 ]; then
+test_session_start_surfaces_only_when_owed
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 24 ]; then
 test_rechain_delivers_second_post_on_same_thread
 test_rechain_resumes_after_partial_add
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 30 ]; then
 test_rechain_claims_delivered_source_once
 test_failed_rechain_retirement_keeps_source_claimed
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
 test_first_register_succeeds_with_empty_lock_list_under_bash32
 test_registration_replay_preserves_delivery_and_retirement
 test_redelivery_does_not_report_retired_loop_open
 test_retire_after_secondmate_home_removal
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 27 ]; then
 test_retire_refuses_unbound_existing_secondmate
 test_retire_refuses_reassigned_secondmate_home
 test_rechain_refuses_unclaimed_existing_destination
 test_pending_skips_concurrent_retirement
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 6 ]; then
 test_retire_reason_closes_the_open_loop
 test_retention_creates_no_false_teardown_refusal
 test_expiry_escalation_uses_now_override
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 26 ]; then
 test_brief_fails_without_typed_deliverable_keys
 test_prechange_registration_is_open_and_unrechainable
 test_x_request_teardown_warns_when_final_unposted
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 13 ]; then
 test_secondmate_promotion_uses_teardown_parent_resolution
 test_remote_secondmate_loop_delivers_and_retires
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 7 ]; then
 test_delivered_remote_registration_skips_offline_route
 test_remote_retire_force_semantics_unchanged
 test_remote_retire_refuses_reassigned_route
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 28 ]; then
 test_remote_retire_refuses_unreadable_state
 test_remote_retire_refuses_nonwritable_state
 test_remote_retire_accepts_nonwritable_absence
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 29 ]; then
 test_remote_retire_refuses_unacquirable_lock_without_hanging
 test_remote_unconfirmed_clear_is_unknown_completion
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 8 ]; then
 test_remote_work_home_emit_reaches_owning_home
 test_remote_promise_without_deliverables_is_briefable
 test_remote_collection_transport_failure_is_loud
@@ -3991,6 +4045,8 @@ test_invalid_registration_fails_remote_collection
 test_unsafe_registration_entry_fails_remote_collection
 test_remote_route_loss_fails_brief_and_collection
 test_empty_remote_collection_is_healthy
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_remote_brief_rejects_traversal_route_paths
 test_local_work_home_emit_path_is_unchanged
 test_remote_collection_is_idempotent
@@ -3999,7 +4055,8 @@ test_brief_prefills_known_deliverables_and_states_formats
 test_emit_refuses_a_deliverable_tasks_axi_would_reject
 test_emit_refuses_a_repeated_deliverable_key
 test_emit_refuses_a_missing_required_deliverable
-test_emit_rules_agree_with_tasks_axi
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 10 ]; then
 test_rejected_event_wakes_owning_home_with_specific_reason
 test_remote_rejected_event_wakes_owning_home
 test_emit_requires_promised_deliverable_under_any_successful_outcome
@@ -4007,5 +4064,8 @@ test_emit_requires_error_code_on_a_failure_promise
 test_rejection_is_retried_until_its_wake_is_recorded
 test_rejection_wake_survives_a_poll_that_cannot_write
 test_rejection_wake_survives_a_poll_that_cannot_read
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 11 ]; then
 test_an_undroppable_wake_repeats_the_same_refusal
 test_a_retained_refusal_repeats_its_wake_rather_than_a_new_one
+fi

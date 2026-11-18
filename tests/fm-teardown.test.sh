@@ -1846,6 +1846,41 @@ test_scout_requires_html_report() {
   pass "scout cannot close without an HTML report"
 }
 
+test_scout_requires_report_actions() {
+  local case_dir rc=0
+  case_dir=$(make_case scout-missing-actions)
+  write_meta "$case_dir" local-only scout
+  prepare_scout_teardown "$case_dir"
+  printf '%s\n' 'https://deck.example' > "$case_dir/config/deck-url"
+  printf '%s\n' '{"outcome_occurrence":"result-v1"}' > "$case_dir/data/task-x1/presentation.json"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "scout without visible review actions must not close"
+  assert_grep 'missing visible review actions' "$case_dir/stderr" "missing action diagnostic"
+  assert_present "$case_dir/state/task-x1.meta" "missing actions removed task records"
+  pass "scout cannot close without visible report actions"
+}
+
+test_ship_and_host_require_report_actions() {
+  local case_dir kind rc
+  for kind in ship host; do
+    case_dir=$(make_case "$kind-missing-actions")
+    write_meta "$case_dir" local-only "$kind"
+    prepare_scout_teardown "$case_dir"
+    if [ "$kind" = host ]; then
+      mkdir -p "$case_dir/data/task-x1/work"
+      write_meta "$case_dir" '' host "$case_dir/data/task-x1/work"
+    fi
+    printf '%s\n' 'https://deck.example' > "$case_dir/config/deck-url"
+    printf '%s\n' '{"outcome_occurrence":"result-v1"}' > "$case_dir/data/task-x1/presentation.json"
+    rc=0
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code 1 "$rc" "$kind without visible review actions must not close"
+    assert_grep 'missing visible review actions' "$case_dir/stderr" "$kind action diagnostic"
+    assert_present "$case_dir/state/task-x1.meta" "$kind lost task records"
+  done
+  pass "ship and host reports require visible review actions"
+}
+
 # Clone a nested repository into the copy and add one plain scratch file.
 seed_nested_clone_and_scratch() {
   local case_dir=$1 wt=$2
@@ -6188,6 +6223,8 @@ test_untracked_only_refusal_diagnostic
 test_tracked_edit_refusal_diagnostic
 test_mixed_refusal_diagnostic
 test_scout_requires_html_report
+test_scout_requires_report_actions
+test_ship_and_host_require_report_actions
 test_scout_backup_restores_local_changes
 test_scout_backup_failure_preserves_worktree
 test_scout_nested_clone_returns_with_no_untracked_entries

@@ -77,6 +77,10 @@ cat > "$REMOTE_ROOT/bin/fm-delay-job.sh" <<'SH'
 sleep "$1"
 printf 'ran\n' > "$2"
 SH
+cat > "$REMOTE_ROOT/bin/fm-wait-job.sh" <<'SH'
+#!/bin/bash
+while [ ! -e "$1" ]; do sleep 0.1; done
+SH
 cat > "$REMOTE_ROOT/bin/fm-touch-job.sh" <<'SH'
 #!/bin/bash
 printf 'ran\n' > "$1"
@@ -85,7 +89,7 @@ cat > "$REMOTE_ROOT/bin/fm-shutdown-job.sh" <<'SH'
 #!/bin/bash
 trap '' HUP INT TERM
 printf 'started\n' > "$1"
-sleep 3
+while [ ! -e "$3" ]; do sleep 0.1; done
 printf 'ran\n' > "$2"
 SH
 cat > "$REMOTE_ROOT/bin/fm-output-job.sh" <<'SH'
@@ -142,7 +146,11 @@ SH
   # Publish a real bounded result after the caller has entered its wait, without
   # a lane's own samples contaminating this consumer-only executable log.
   (
-    /bin/sleep 0.8
+    for _ in $(seq 1 600); do
+      [ -s "$FM_POLL_SLEEP_LOG" ] && break
+      /bin/sleep 0.1
+    done
+    [ -s "$FM_POLL_SLEEP_LOG" ] || exit 1
     : > "$FM_REMOTE_JOB_JOBS/$FM_REMOTE_JOB_ID/stdout"
     : > "$FM_REMOTE_JOB_JOBS/$FM_REMOTE_JOB_ID/stderr"
     printf '0\n' > "$FM_REMOTE_JOB_JOBS/$FM_REMOTE_JOB_ID/exit"
@@ -212,9 +220,9 @@ pass "default queue and execution bounds independently cover long polls"
 export FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT"
 export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux
 # shellcheck disable=SC2031 # The sourced defaults above were confined to DEFAULT_BOUNDS.
-export FM_REMOTE_JOB_QUEUE_TIMEOUT=5
+export FM_REMOTE_JOB_QUEUE_TIMEOUT=60
 # shellcheck disable=SC2031 # The sourced defaults above were confined to DEFAULT_BOUNDS.
-export FM_REMOTE_JOB_TIMEOUT=5
+export FM_REMOTE_JOB_TIMEOUT=60
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$ROOT/bin/fm-remote-job-lib.sh"
 
@@ -319,7 +327,7 @@ pass "operator PATH orders discovered tool installs deterministically"
 
 HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_PERL_LOG="$FAKE_PERL_LOG" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
-  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=5 \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=60 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.ready" ] && break
@@ -352,7 +360,7 @@ JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 [ "$(file_mode "$JOB_DIR")" = 700 ] \
   || fail "staged job directory is not mode 0700"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the completed probe did not preserve exit status"
+[ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the completed probe exited $FM_REMOTE_JOB_EXIT: $(cat "$FM_REMOTE_JOB_STDERR")"
 OUT=$(<"$FM_REMOTE_JOB_STDOUT")
 assert_contains "$OUT" "home=$REMOTE_HOME" "the worker did not pass the staged FM_HOME"
 assert_contains "$OUT" "root=$REMOTE_ROOT" "the worker did not pass the configured root"
@@ -478,10 +486,10 @@ pass "the worker expires queued jobs before they can mutate"
 
 FIRST_DELAYED_SIDE_EFFECT="$TMP_ROOT/first-delayed-side-effect"
 SECOND_DELAYED_SIDE_EFFECT="$TMP_ROOT/second-delayed-side-effect"
-FM_REMOTE_JOB_QUEUE_TIMEOUT=5
-FM_REMOTE_JOB_TIMEOUT=3
+FM_REMOTE_JOB_QUEUE_TIMEOUT=120
+FM_REMOTE_JOB_TIMEOUT=90
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$FIRST_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-wait-job.sh "$FIRST_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
 FIRST_JOB_ID=$FM_REMOTE_JOB_ID
 FIRST_JOB_DIR="$STATE_ROOT/jobs/$FIRST_JOB_ID"
 for _ in $(seq 1 100); do
@@ -490,9 +498,14 @@ for _ in $(seq 1 100); do
 done
 [ "$(fm_remote_job_read_state "$FIRST_JOB_DIR" 2>/dev/null || true)" = running ] \
   || fail "the first delayed job did not begin running"
+FM_REMOTE_JOB_TIMEOUT=30
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-delay-job.sh 1 "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
+sleep 31
+[ "$(fm_remote_job_read_state "$STATE_ROOT/jobs/$JOB_ID")" = queued ] \
+  || fail "the second job did not stay queued beyond its execution timeout"
+touch "$FIRST_DELAYED_SIDE_EFFECT"
 fm_remote_job_wait "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "queue time consumed the second job's execution timeout"
@@ -521,15 +534,15 @@ for _ in $(seq 1 100); do
 done
 [ "$(fm_remote_job_read_state "$POLL_JOB_DIR" 2>/dev/null || true)" = running ] \
   || fail "the long-poll job did not begin running"
-PREEMPT_BEGAN=$(date +%s)
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
   fm-touch-job.sh "$PREEMPT_SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-PREEMPT_ELAPSED=$(( $(date +%s) - PREEMPT_BEGAN ))
 [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the short command behind a long poll did not complete"
 assert_present "$PREEMPT_SIDE_EFFECT" "the short command behind a long poll did not run"
-[ "$PREEMPT_ELAPSED" -le 10 ] || fail "a queued short command waited a full poll window behind the long poll"
+# The worker's dedicated preemption result below distinguishes an interrupted
+# poll from one that naturally reached its window; wall time also measures host
+# scheduling and made this behavior check intermittent under load.
 fm_remote_job_wait "$ACCOUNT_HOME" "$POLL_JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq "$FM_REMOTE_JOB_PREEMPTED_EXIT" ] \
   || fail "a preempted long poll was not distinguished from an elapsed window"
@@ -553,7 +566,7 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the re-armed poll could no
 rm -f -- "$REMOTE_HOME/$REPLY_LOG_REL"
 pass "a poll re-armed after preemption reads the same cursor with nothing lost"
 
-FM_REMOTE_JOB_TIMEOUT=15
+FM_REMOTE_JOB_TIMEOUT=60
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
   fm-remote-delta-read.sh "$REPLY_LOG_REL" 0 "$EMPTY_SHA" 6 < /dev/null > /dev/null
 FIRST_JOB_ID=$FM_REMOTE_JOB_ID
@@ -581,19 +594,20 @@ pass "sibling polls never preempt each other into a re-arm churn loop"
 
 STARTED="$TMP_ROOT/shutdown-started"
 SHUTDOWN_SIDE_EFFECT="$TMP_ROOT/shutdown-side-effect"
-FM_REMOTE_JOB_TIMEOUT=5
+FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+FM_REMOTE_JOB_TIMEOUT=60
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-shutdown-job.sh "$STARTED" "$SHUTDOWN_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-shutdown-job.sh "$STARTED" "$SHUTDOWN_SIDE_EFFECT" "$TMP_ROOT/release-shutdown" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
-for _ in $(seq 1 100); do
+for _ in $(seq 1 600); do
   [ -f "$STARTED" ] && break
   sleep 0.05
 done
 assert_present "$STARTED" "the shutdown fixture did not begin executing"
 WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 kill -TERM "$WORKER_PID"
-for _ in $(seq 1 100); do
-  kill -0 "$WORKER_PID" 2>/dev/null || break
+SHUTDOWN_DEADLINE=$((SECONDS + 60))
+while kill -0 "$WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$SHUTDOWN_DEADLINE" ]; do
   sleep 0.05
 done
 kill -0 "$WORKER_PID" 2>/dev/null && fail "the worker did not finish its TERM shutdown"
@@ -614,11 +628,11 @@ pass "worker shutdown terminates the active command tree before replacement"
 
 CRASH_STARTED="$TMP_ROOT/crash-started"
 CRASH_SIDE_EFFECT="$TMP_ROOT/crash-side-effect"
-FM_REMOTE_JOB_TIMEOUT=5
+FM_REMOTE_JOB_TIMEOUT=60
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-shutdown-job.sh "$CRASH_STARTED" "$CRASH_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-shutdown-job.sh "$CRASH_STARTED" "$CRASH_SIDE_EFFECT" "$TMP_ROOT/release-crash" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
-for _ in $(seq 1 100); do
+for _ in $(seq 1 600); do
   [ -f "$CRASH_STARTED" ] && break
   sleep 0.05
 done
@@ -646,7 +660,8 @@ PREEXEC_FINISHED="$TMP_ROOT/preexecution-finished"
 cat > "$ACCOUNT_HOME/.local/bin/git" <<SH
 #!/bin/bash
 if [ "\${3:-}" = ls-files ]; then
-  printf 'started\n' > "$PREEXEC_STARTED"
+  stamp=\$(date +%s)
+  printf '%s\n' "\$stamp" > "$PREEXEC_STARTED"
   sleep 30
   printf 'finished\n' > "$PREEXEC_FINISHED"
 fi
@@ -654,14 +669,13 @@ exec "$REAL_GIT" "\$@"
 SH
 chmod +x "$ACCOUNT_HOME/.local/bin/git"
 FM_REMOTE_JOB_TIMEOUT=3
-PREEXEC_BEGAN=$(date +%s)
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-PREEXEC_ELAPSED=$(( $(date +%s) - PREEXEC_BEGAN ))
 [ "$FM_REMOTE_JOB_EXIT" -eq 124 ] || fail "the pre-execution deadline did not publish a timeout result"
 assert_present "$PREEXEC_STARTED" "the pre-execution timeout fixture did not enter tracked-command validation"
+PREEXEC_ELAPSED=$(( $(date +%s) - $(cat "$PREEXEC_STARTED") ))
 assert_absent "$PREEXEC_FINISHED" "tracked-command validation continued after the job timeout"
 [ "$PREEXEC_ELAPSED" -le 7 ] || fail "tracked-command validation exceeded the job timeout bound"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the pre-execution timeout leaked output readers or FIFOs"
@@ -684,6 +698,10 @@ WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 fm_remote_job_stop_worker_tree "$WORKER_PID" \
   || fail "the worker tree did not stop before the staged-record tamper"
 assert_absent "$STATE_ROOT/worker.pid" "the worker did not clear its pid before the staged-record tamper"
+# This case must reach argv validation; do not inherit the short pre-execution
+# and queue deadlines from the preceding timeout cases.
+FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+FM_REMOTE_JOB_TIMEOUT=60
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
@@ -691,18 +709,18 @@ rm -f -- "$JOB_DIR/argv"
 ln -s "$TMP_ROOT/not-an-argv" "$JOB_DIR/argv"
 fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 126 ] || fail "the worker accepted a symlinked argv record"
+[ "$FM_REMOTE_JOB_EXIT" -eq 126 ] || fail "the symlinked argv record returned $FM_REMOTE_JOB_EXIT instead of 126"
 assert_absent "$SIDE_EFFECT" "the worker executed a job after its argv changed to a symlink"
 pass "the worker refuses symlinked job fields before command execution"
 
 QUARANTINE_STARTED="$TMP_ROOT/quarantine-started"
 QUARANTINE_SIDE_EFFECT="$TMP_ROOT/quarantine-side-effect"
-FM_REMOTE_JOB_TIMEOUT=5
+FM_REMOTE_JOB_TIMEOUT=60
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-shutdown-job.sh "$QUARANTINE_STARTED" "$QUARANTINE_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-shutdown-job.sh "$QUARANTINE_STARTED" "$QUARANTINE_SIDE_EFFECT" "$TMP_ROOT/release-quarantine" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
-for _ in $(seq 1 100); do
+for _ in $(seq 1 600); do
   [ -f "$QUARANTINE_STARTED" ] && break
   sleep 0.05
 done

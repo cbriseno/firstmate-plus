@@ -15,6 +15,7 @@ retired generation. The hook publishes state/ID.relay-ready; the owning watcher
 uses --dispatch HOME STATE to start control outside the retiring worker scope.
 It waits for the hook to exit, then publishes ID.relay-result for the watcher's
 event classification. Success is informative; failure wakes supervision.
+Replacement spawn retires only obsolete automatic relay inbox requests.
 sessions.jsonl owns history. Internal --request/--control
 PID modes continue after the native callback exits, without reevaluating usage.
 """
@@ -59,8 +60,40 @@ def status(state, task, message):
 
 
 def main():
+    if sys.argv[1:2] == ['--retire']:
+        state, task, current_gen = sys.argv[2:5]
+        inbox = Path(state) / (task + '.inbox')
+        for message in inbox.glob('*.msg'):
+            body = message.read_text().partition('\n--\n')[2]
+            match = re.match(r'FIRSTMATE_RELAY_GENERATION=([a-zA-Z0-9._-]+)\n', body)
+            # Legacy automatic requests carried generation in the note name.
+            if not match and body.startswith('Context relay threshold reached. Finish the current operation safely, then write '):
+                match = re.search(r'/relay-note-([a-zA-Z0-9._-]+)\.md ', body)
+            if match and match[1] != current_gen:
+                (inbox / 'handled').mkdir(exist_ok=True)
+                message.rename(inbox / 'handled' / message.name)
+        return
     if sys.argv[1:2] == ['--dispatch']:
         home, state = sys.argv[2:4]
+        # Recover a completed safe point even when the native callback was lost.
+        for path in Path(state).glob('*.meta'):
+            task = path.stem
+            record = meta(Path(state), task)
+            gen = record.get('busy_gen', '')
+            data = Path(record.get('sessions_file', '/nonexistent')).parent
+            note = data / ('relay-note-' + gen + '.md')
+            if not gen or not (data / ('relay-request-' + gen)).exists() or not note.exists() or not note.read_text().strip():
+                continue
+            if not eligible(Path(state), task, gen):
+                continue
+            probe = subprocess.run(['bash', '-c',
+                'source "$1/fm-backend.sh"; source "$1/fm-busy-lib.sh"; fm_busy_classify_meta "$2" "$3" "$4"',
+                '_', str(ROOT), str(path), task, state], text=True, capture_output=True,
+                env=dict(os.environ, FM_HOME=home, FM_STATE_OVERRIDE=state), timeout=15)
+            if probe.returncode == 0 and probe.stdout.startswith('idle '):
+                ready = Path(state) / (task + '.relay-ready')
+                if not ready.exists():
+                    ready.write_text(json.dumps([gen, '', 0]))
         for ready in Path(state).glob('*.relay-ready'):
             task = ready.name[:-len('.relay-ready')]
             gen, checker, pid = json.loads(ready.read_text())
@@ -90,6 +123,9 @@ def main():
     note = data / ('relay-note-' + gen + '.md')
     mode = sys.argv[6:7]
     if not mode:
+        if (data / ('relay-request-' + gen)).exists() and note.exists() and note.read_text().strip():
+            (state / (task + '.relay-ready')).write_text(json.dumps([gen, checker, os.getpid()]))
+            return
         if not (home / 'config/relay-lite.json').exists():
             return
         payload = {'cwd': record['worktree'], 'transcript_path': current['session']}
@@ -113,6 +149,8 @@ def main():
         return
     # Release the native hook before sending the inbox doorbell or exit command.
     for _ in range(100):
+        if int(sys.argv[7]) == 0:
+            break
         try:
             os.kill(int(sys.argv[7]), 0)
         except ProcessLookupError:
@@ -135,9 +173,13 @@ def main():
         request.seek(0)
         if request.read():
             return
-        message = (f'Context relay threshold reached. Finish the current operation safely, then write {note} '
+        message = (f'FIRSTMATE_RELAY_GENERATION={gen}\n'
+                   f'This request applies only to generation {gen}. If task metadata busy_gen differs, '
+                   'acknowledge this obsolete message and continue your assignment without waiting or writing its note. '
+                   f'Context relay threshold reached. Finish the current operation safely, then write {note} '
                    'with objective, completed work, worktree/branch, evidence, remaining work, exact steering inbox '
-                   'and external actions that must not be repeated. Acknowledge this message, end your turn and '
+                   'and external actions that must not be repeated. Temporary descendants will be terminated: wait for them '
+                   'to finish or checkpoint them; only jobs started through fm-task-job.py survive. Acknowledge this message, end your turn and '
                    'start no new operation. The owning watcher will relaunch this task with that note. '
                    'Do not report done unless the actual assignment is complete.')
         sent = subprocess.run(['bash', str(ROOT / 'fm-send.sh'), task, message], env=env,
@@ -174,3 +216,7 @@ if __name__ == '__main__':
         main()
     except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as error:
         print('worker context relay unavailable: ' + type(error).__name__, file=sys.stderr)
+        if len(sys.argv) >= 6 and not sys.argv[1].startswith('--'):
+            status(Path(sys.argv[2]), sys.argv[3], 'incomplete: ' + type(error).__name__)
+            (Path(sys.argv[2]) / (sys.argv[3] + '.relay-result')).write_text(
+                'failed: worker context relay ' + sys.argv[3] + ' incomplete: ' + type(error).__name__)

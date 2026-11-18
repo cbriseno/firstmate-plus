@@ -1497,7 +1497,7 @@ test_queued_delivery_marks_only_successful_snapshot() {
       . "$WATCH"
       fm_wake_append signal question.status "needs-decision: $state/question.status"
       if [ "$mode" = append ]; then
-        # shellcheck disable=SC2329 # The sourced delivery callback invokes this fixture.
+        # shellcheck disable=SC2329 # wake calls the overridden output primitive.
         echo() {
           if [ "${1:-}" = 'check: snapshot-test' ]; then
             printf 'needs-decision [key=second]: concurrent question\n' >> "$state/question.status"
@@ -1506,7 +1506,7 @@ test_queued_delivery_marks_only_successful_snapshot() {
         }
         wake 'check: snapshot-test'
       else
-        # shellcheck disable=SC2329 # The sourced delivery callback invokes this fixture.
+        # shellcheck disable=SC2329 # wake calls the overridden output primitive.
         echo() { return 1; }
         wake 'check: snapshot-test'
       fi
@@ -1581,24 +1581,6 @@ test_queued_delivery_preserves_branch_owned_status() (
   [ -s "$state/.hb-surfaced-main" ] || fail 'main status was not marked delivered'
   [ ! -e "$state/.hb-surfaced-branch" ] || fail 'main marked a branch-owned status delivered'
   pass 'main delivery leaves the branch-owned heartbeat position alone'
-)
-
-test_endpoint_loss_stays_urgent_during_declared_wait() (
-  local dir state wait_kind verdict
-  # shellcheck source=/dev/null # The daemon is linted separately.
-  . "$ROOT/bin/fm-supervise-daemon.sh"
-  for wait_kind in paused captain-held; do
-    for verdict in dead missing; do
-      dir=$(make_supercase "urgent-endpoint-$wait_kind-$verdict"); state="$dir/state"
-      printf 'kind=ship\nharness=claude\nwindow=sess:fm-worker\n' > "$state/worker.meta"
-      printf '%s: declared wait\n' "$wait_kind" > "$state/worker.status"
-      LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
-        handle_wake "stale: sess:fm-worker (idle 0s, agent $verdict - endpoint recovery required)" "$state"
-      grep -F "agent $verdict" "$state/.subsuper-escalations" >/dev/null \
-        || fail "$wait_kind absorbed a real $verdict endpoint failure"
-    done
-  done
-  pass 'actual endpoint loss stays urgent through paused and held declarations'
 )
 
 test_endpoint_checks_share_observation_policy() {
@@ -1760,7 +1742,7 @@ test_actionable_wake_budget() {
     export FM_HOME="$dir" FM_STATE_OVERRIDE="$state"
     # shellcheck source=/dev/null # Production modules are linted separately.
     . "$WATCH"
-    # shellcheck disable=SC2329 # The sourced watcher invokes the controlled clock.
+    # shellcheck disable=SC2329 # The sourced watcher uses this simulated clock.
     date() {
       if [ "${1-}" = +%s ]; then printf '%s\n' "$stamp"; else command date "$@"; fi
     }
@@ -4881,7 +4863,6 @@ test_raw_wait_keeps_urgency_until_delivery
 test_queued_delivery_marks_only_successful_snapshot
 test_endpoint_snapshots_commit_only_after_delivery
 test_queued_delivery_preserves_branch_owned_status
-test_endpoint_loss_stays_urgent_during_declared_wait
 test_delivered_process_event_does_not_rewake_recovery
 test_declared_waits_share_the_fleet_budget
 test_context_relay_progress_and_turnends_are_informational

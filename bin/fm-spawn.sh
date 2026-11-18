@@ -3426,6 +3426,9 @@ BUSY_GEN=
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
     ;;
   esac
+  if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+    python3 "$FM_ROOT/bin/fm-worker-relay.py" --retire "$STATE_REAL" "$ID" "$BUSY_GEN" || exit 1
+  fi
   worker_relay_cmd=:
   if [ "$KIND" != secondmate ] && { [ "$HARNESS" = codex ] || [ "$HARNESS" = claude ]; }; then
     relay_checker=${FM_RELAY_CHECK:-$(command -v relay-check || true)}

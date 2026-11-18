@@ -9,6 +9,7 @@ metadata:
 # Scout outcome and promotion
 
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; relay its outcome and full `report.html` link, never the Markdown record, in the concise form required by `AGENTS.md` section 9, make sure the card's summary states them in one or two plain sentences in the captain's language (`bin/fm-tasks-axi.sh presentation <id> --summary`), record the report as the Done artifact, and re-evaluate the queue.
+Verify its visible actions with `bin/fm-report-actions.py --check` under the worker report contract before relaying the HTML.
 Once the report is relayed and the shared completion gate below passes, close the scout through `bin/fm-teardown.sh` in the same handling turn rather than leaving its agent idle; preserve local changes under the existing cleanup contract.
 When the captain asks to review or continue a closed scout, have a worker restore its backup into a new copy using the recovery command printed by `bin/fm-teardown.sh`, then inspect or continue the preserved changes instead of repeating the investigation.
 Route unresolved work from the report through `AGENTS.md` section 7, reusing the originating task when promotion fits.

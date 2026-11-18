@@ -71,6 +71,48 @@ publish_status instant paused 'intentional wait'
 [ "$(wc -l < "$TASK_HOME/state/.wake-queue")" = "$count" ] || fail 'a pause queued an immediate wake'
 pass 'decisions and terminal statuses queue immediately; progress and pauses stay informational'
 
+# Detection is unchanged; inject its verified-idle verdict and drive the real
+# close policy and teardown against the same disposable host fixture.
+run_completion_tick() {
+  FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" \
+    FM_DATA_OVERRIDE="$TASK_HOME/data" FM_CONFIG_OVERRIDE="$TASK_HOME/config" \
+    HOME="$TASK_HOME/user-home" PATH="$FAKEBIN:$PATH" bash -c '
+      . "$1"
+      fm_busy_classify_meta() { printf "idle fixture"; }
+      wake() { printf "%s\n" "$1"; }
+      worker_completion_tick
+    ' _ "$ROOT/bin/fm-watch.sh"
+}
+run_brief auto-close --host --path "$TARGET" >/dev/null
+python3 - "$TASK_HOME/data/auto-close/brief.md" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close safely.'))
+PY
+OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/auto-close/work" "$FAKEBIN" auto-close --host --harness 'printf fixture' --backend tmux) || fail "auto-close spawn failed: $OUT"
+publish_status auto-close 'done' verified
+OUT=$(run_completion_tick) || fail "completion tick failed: $OUT"
+[ ! -e "$TASK_HOME/state/auto-close.meta" ] || fail "completed host remained open: $OUT"
+[ ! -e "$TASK_HOME/data/auto-close/work" ] || fail 'completed host scratch remained'
+[ "$(cat "$TARGET")" = preserve ] || fail 'automatic close changed the host target'
+pass 'a verified idle done host closes through ordinary teardown and preserves its target'
+
+printf 'kind=host\n' > "$TASK_HOME/state/unexplained.meta"
+printf 'working: started\n' > "$TASK_HOME/state/unexplained.status"
+run_completion_tick >/dev/null
+python3 - "$TASK_HOME/state/.worker-idle-unexplained" <<'PY'
+import os, sys, time
+os.utime(sys.argv[1], (time.time() - 1801, time.time() - 1801))
+PY
+OUT=$(run_completion_tick) || fail "idle tick failed: $OUT"
+assert_contains "$(cat "$TASK_HOME/state/.watch-triage.log")" 'idle without a result or declared wait for over 30 minutes' 'unexplained idle observation'
+[ -e "$TASK_HOME/state/unexplained.meta" ] || fail 'idle alert discarded unfinished work'
+printf 'blocked: needs an owner answer\n' >> "$TASK_HOME/state/unexplained.status"
+run_completion_tick >/dev/null
+[ ! -e "$TASK_HOME/state/.worker-idle-unexplained" ] || fail 'a declared wait kept the unexplained-idle timer'
+rm "$TASK_HOME/state/unexplained.meta"
+pass 'unexplained idle is batched without discarding work; a declared wait resets it'
+
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'
@@ -117,9 +159,9 @@ checker.write_text('import json,os; print(json.dumps({"schema":"relay-lite.check
 args = [sys.executable, str(bin_dir/'fm-worker-relay.py'), str(lab), str(state), 'worker', 'launch1', str(checker)]
 def run(extra=(), **env):
     subprocess.run(args+list(extra), env=dict(os.environ, **env), check=True)
-def wait(path):
+def wait(path, contains=''):
     for _ in range(100):
-        if path.exists(): return
+        if path.exists() and contains in path.read_text(): return
         time.sleep(.05)
     raise AssertionError('missing '+str(path))
 run(RELAY_STATE='unknown')
@@ -147,7 +189,7 @@ ready=state/'worker.relay-ready'
 assert ready.exists()
 subprocess.run([sys.executable,str(bin_dir/'fm-worker-relay.py'),'--dispatch',str(lab),str(state)],check=True)
 result=state/'worker.relay-result'
-wait(result)
+wait(result, 'replacement launched')
 assert 'replacement launched' in result.read_text()
 control=(data/'relay-control-launch1.log').read_text()
 assert '--note-file\n'+str(note) in control
@@ -155,7 +197,7 @@ assert '--harness\ncodex\n--model\nchosen\n--effort\nhigh' in control
 result.unlink()
 run()
 subprocess.run([sys.executable,str(bin_dir/'fm-worker-relay.py'),'--dispatch',str(lab),str(state)],env=dict(os.environ,RELAY_FAIL='1'),check=True)
-wait(result)
+wait(result, 'incomplete')
 assert 'incomplete' in result.read_text() and note.exists()
 result.unlink()
 (state/'worker.status').write_text('done [at=1]: complete\n')
@@ -169,7 +211,7 @@ assert not ready.exists() and not result.exists()
 run(('--request','999999999'))
 assert (lab/'slow-delivered').read_text() == 'delivered'
 assert (data/'relay-request-launch1').read_text() == 'requested\n'
-assert 'handoff requested' in (state/'worker.status').read_text()
+assert 'handoff requested' in (state/'worker.relay-result').read_text()
 print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure and terminal work')
 PYRELAY
 # Feed the native vendor statusline through the public wrapper. Existing display

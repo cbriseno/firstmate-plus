@@ -55,3 +55,4 @@ assert dict(zip(args[::2], args[1::2])) == {'--model': 'example-model', '--reaso
     '--herdr-pane': 'pane-1', '--chat-id': '12345678-1234-1234-1234-123456789abc'}
 PYTEST
 pass "task-owned replies include available task and active chat metadata"
+

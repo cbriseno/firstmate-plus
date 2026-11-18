@@ -547,6 +547,46 @@ test_park_declared_waits_preserves_work() {
   pass 'park: merge, decision, hold and dated pause preserve work and close only the endpoint'
 }
 
+# shellcheck disable=SC2034,SC2329 # Globals and callbacks are consumed by the sourced lifecycle owner.
+test_session_mechanics_preserve_declared_wait() {
+  local dir declaration
+  for declaration in 'paused: until 2099-01-01T00:00Z' 'captain-held [key=route]: awaiting choice'; do
+    dir=$(new_case mechanics-wait)
+    add_task "$dir" t1 claude
+    printf '%s\n' "$declaration" > "$dir/home/state/t1.status"
+    (
+      STATE="$dir/home/state"; DATA="$dir/home/data"; ID=t1; SCRIPT_DIR="$ROOT/bin"
+      HARNESS_SET=1; NEW_HARNESS=codex; HARNESS=claude
+      # shellcheck source=/dev/null # Production modules are linted separately.
+      . "$ROOT/bin/fm-backend.sh"
+      # shellcheck source=/dev/null # Production modules are linted separately.
+      . "$ROOT/bin/fm-worker-parking-lib.sh"
+      agent_state() { printf missing; }
+      do_relaunch() { return 0; }
+      die() { fail "$*"; }
+      printf 'park_phase=parked\n' > "$STATE/t1.parked"
+      mkdir -p "$DATA/t1"
+      printf 'saved progress\n' > "$DATA/t1/park-note.md"
+      do_resume || fail 'mechanical resume failed'
+    ) || fail 'resume fixture failed'
+    [ "$(cat "$dir/home/state/t1.status")" = "$declaration" ] || fail 'mechanical resume changed declared wait'
+    if [ "${declaration%%:*}" = paused ]; then
+      printf 'busy_gen=relay\nsessions_file=%s\n' "$dir/home/data/t1/sessions.jsonl" >> "$dir/home/state/t1.meta"
+      printf '{"status":"active","session":"fixture-session"}\n' > "$dir/home/data/t1/sessions.jsonl"
+      PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+        python3 "$ROOT/bin/fm-worker-relay.py" "$dir/home" "$dir/home/state" t1 relay "$dir/checker" --request 99999999
+      [ "$(cat "$dir/home/state/t1.status")" = "$declaration" ] || fail 'relay changed declared wait'
+      grep -F 'handoff requested' "$dir/home/state/t1.relay-result" >/dev/null || fail 'relay inbox request failed'
+      [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail 'relay did not reach its inbox'
+    fi
+    FM_HOME="$dir/home" bash "$ROOT/bin/fm-task-status.sh" t1 working 'worker explicitly resumed' || fail 'worker could not resume'
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-classify-lib.sh"
+    [ -z "$(status_declared_wait_line "$dir/home/state/t1.status")" ] || fail 'explicit worker progress retained old wait'
+  done
+  pass 'session restoration preserves pauses and holds; explicit worker intent resumes work'
+}
+
 test_park_refuses_active_or_undated_wait() {
   local dir out declaration gen
   for declaration in 'working: running tests' 'paused: waiting without a date'; do
@@ -1044,6 +1084,90 @@ test_fm_send_still_marks_the_same_secondmate_task() {
 # relaunch stays a fresh session exactly as it does today.
 
 
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit $?
+fi
+
+test_relay_generation_and_lost_callback() {
+  local dir gen
+  dir=$(new_case relay-reconcile)
+  add_task "$dir" t1 claude
+  gen=$(bash "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1)
+  printf 'busy_gen=%s\nsessions_file=%s\n' "$gen" "$dir/home/data/t1/sessions.jsonl" >> "$dir/home/state/t1.meta"
+  printf '{"status":"active","session":"fixture-session"}\n' > "$dir/home/data/t1/sessions.jsonl"
+  printf requested > "$dir/home/data/t1/relay-request-$gen"
+  printf 'safe point\n' > "$dir/home/data/t1/relay-note-$gen.md"
+  # No checker or configuration exists: an accepted request must not recheck it.
+  python3 "$ROOT/bin/fm-worker-relay.py" "$dir/home" "$dir/home/state" t1 "$gen" absent-checker
+  [ -s "$dir/home/state/t1.relay-ready" ] || fail 'accepted request rechecked threshold'
+  rm "$dir/home/state/t1.relay-ready"
+  # Deliberately omit the second callback. Busy must defer; idle must recover.
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
+  [ ! -e "$dir/home/data/t1/relay-control-$gen.log" ] || fail 'busy worker was relaunched'
+  bash "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" t1 idle --gen "$gen" --source claude-hook --event stop >/dev/null
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
+  # Missing profile fields deliberately make control fail: the owner must get
+  # an actionable result instead of waiting for a callback that will not arrive.
+  for _ in $(seq 1 200); do
+    grep -qF "failed: worker context relay t1 incomplete" "$dir/home/state/t1.relay-result" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -F 'failed: worker context relay t1 incomplete' "$dir/home/state/t1.relay-result" >/dev/null || fail 'lost callback was not reconciled to a result'
+  mkdir -p "$dir/home/state/t1.inbox"
+  printf 'schema=v1\n--\nFIRSTMATE_RELAY_GENERATION=old\nobsolete\n' > "$dir/home/state/t1.inbox/001.msg"
+  printf 'schema=v1\n--\nkeep unrelated steering\n' > "$dir/home/state/t1.inbox/002.msg"
+  printf 'schema=v1\n--\nFIRSTMATE_RELAY_GENERATION=%s\ncurrent\n' "$gen" > "$dir/home/state/t1.inbox/003.msg"
+  printf 'schema=v1\n--\nContext relay threshold reached. Finish the current operation safely, then write /task/relay-note-old.md with objective\n' > "$dir/home/state/t1.inbox/004.msg"
+  python3 "$ROOT/bin/fm-worker-relay.py" --retire "$dir/home/state" t1 "$gen"
+  [ -s "$dir/home/state/t1.inbox/handled/001.msg" ] && [ -s "$dir/home/state/t1.inbox/handled/004.msg" ] || fail 'obsolete request retained'
+  [ -s "$dir/home/state/t1.inbox/002.msg" ] && [ -s "$dir/home/state/t1.inbox/003.msg" ] || fail 'live steering retired'
+  pass 'relay: accepted threshold, callback recovery, busy deferral and generation retirement'
+}
+
+test_task_job_survives_worker_scope() {
+  local dir
+  dir=$(new_case task-job)
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'task job did not survive worker exit'
+import json, os, pathlib, shlex, subprocess, sys, time
+root, directory = map(pathlib.Path, sys.argv[1:])
+state=directory/'home/state'
+scope=str(state/'t1')+':old'
+(state/'t1.meta').write_text('kind=host\nprocess_scope='+scope+'\n')
+job=directory/'job.py'
+job.write_text('import time\nfrom pathlib import Path\np=Path('+repr(str(directory))+')\nwhile not (p/"finish").exists():\n (p/"tick").write_text(str(time.time()))\n time.sleep(.1)\n(p/"completed").write_text("once")\n')
+command=shlex.join([sys.executable,str(root/'bin/fm-task-job.py'),str(state),'t1','long',sys.executable,str(job)])+'; sleep 1000'
+worker=subprocess.Popen([sys.executable,str(root/'bin/fm-worker-processes.py'),'run',scope,command],env=dict(os.environ,FM_WORKER_PROCESS_SCOPE=scope))
+def wait_for(test):
+    for _ in range(200):
+        if test(): return
+        time.sleep(.1)
+    raise AssertionError('condition did not complete')
+record=state/'t1.jobs/long.json'
+try:
+    wait_for(record.exists)
+    env=dict(os.environ);env.pop('FM_WORKER_PROCESS_SCOPE',None)
+    subprocess.run([sys.executable,str(root/'bin/fm-task-job.py'),'--dispatch',str(state)],env=env,check=True)
+    wait_for((directory/'tick').exists)
+    before=(directory/'tick').read_text()
+    worker.terminate();worker.wait(timeout=20)
+    wait_for(lambda:(directory/'tick').read_text()!=before)
+    (directory/'finish').touch()
+    wait_for(lambda:json.loads(record.read_text())['state']=='done')
+    assert json.loads(record.read_text())['exit_code']==0
+    assert (directory/'completed').read_text()=='once'
+finally:
+    (directory/'finish').touch()
+    if worker.poll() is None: worker.terminate();worker.wait(timeout=20)
+PY
+  pass 'explicit task job advances after conversation exit and completes once'
+}
+
+test_relay_generation_and_lost_callback
+test_task_job_survives_worker_scope
+
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_unverified_harness_is_refused
@@ -1061,6 +1185,7 @@ test_interrupt_and_exit_lock_before_task_state_resolution
 test_verb_allowlist_is_closed
 test_resume_requires_parking
 test_park_declared_waits_preserves_work
+test_session_mechanics_preserve_declared_wait
 test_park_refuses_active_or_undated_wait
 test_resume_identity_comes_from_saved_launch
 test_resume_changed_policy_opens_choice

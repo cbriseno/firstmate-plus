@@ -1,7 +1,7 @@
 ---
 name: captain-hold-lifecycle
 description: >-
-  Load before holding any task for the captain, before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer, on a `captain call opened for idle in-flight work` check wake, and on any RECORD DIVERGENCE line the wake drain prints.
+  Load before holding any task for the captain, before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when a report is marked reviewed or approved in chat, when recording or routing the captain's answer, on a `captain call opened for idle in-flight work` check wake, and on any RECORD DIVERGENCE line the wake drain prints.
 user-invocable: false
 metadata:
   internal: true
@@ -12,6 +12,10 @@ metadata:
 A decision is not a separate thing: it is simply a task waiting on the captain.
 The one primitive is an ordinary backlog task held for the captain through `bin/fm-captain-hold.sh hold`; its identity is the task id, and that wrapper owns the deterministic mechanics this policy relies on.
 The originating worker performs the semantic inventory under `AGENTS.md` section 1 and returns the concise result; scripts must not infer captain calls from report prose, visual-review artifacts, terminal output, or chat.
+Before generating a report that asks for approval, changes or further investigation, its worker inventories the requested choices and reuses their existing calls.
+For a missing call, the worker sends Firstmate a keyed `needs-decision` with the question and all offered options; Firstmate registers it through this policy and returns the call identity and option ids through the worker inbox.
+The worker continues independent work but waits for those identities before delivering that report; an approval or investigation action must not silently disappear because no call existed yet.
+This registration request is internal coordination, not another question for the captain to authorize the report's buttons.
 
 ## Policy
 
@@ -61,6 +65,10 @@ A bound captured source uses a separate seam: its adapter omits reconcile from k
 A remote-secondmate card whose task is absent from the main backlog therefore remains announced but cannot create a main-home request; owner-aware request and mutation routing to the authoritative secondmate home is a separate follow-up.
 Delegate that board-created re-check to the hosting worker and apply or delegate its resulting disposition: `bin/fm-captain-hold.sh reconcile close <id> --evidence-file <path>` records the EVIDENCE and closes a moot call, while `reconcile note <id> --note-file <path>` annotates a genuinely active call and leaves it held.
 Both outcomes refuse unless that task still has the pending request created by the captain's board selection, so neither is a standalone way to mutate a captain call.
+When the captain marks a report reviewed or approved in chat, including a Lavish conversation, record its current `outcome_occurrence` through `bin/fm-tasks-axi.sh work outcome.review`; an approval also answers the existing captain call with the captain’s words.
+A request for more investigation, changes, or another answer to the report's call also records it reviewed, because the captain read it, and answers that call with the captain's words.
+Read the occurrence with `bin/fm-tasks-axi.sh presentation <id>` and pipe `{"target":"task:<id>","occurrence":"<outcome_occurrence>","review":"done","expected_review":"needed"}` to `bin/fm-tasks-axi.sh work outcome.review`.
+Marking a report reviewed never supplies an answer to an independent decision.
 A normal captain answer also retires any pending request because the call is settled, including close, release, and idempotent replay paths.
 A retirement failure makes the command fail without reversing the already-durable answer, close, or note, and `reconcile list` keeps the surviving request visible for retry.
 `reconcile list` names every request still outstanding.

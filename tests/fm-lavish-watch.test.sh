@@ -281,7 +281,13 @@ SH
   scan_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$first_board")
   pe_register "$SW/home" lavish "$scan_id" -- "$BLOCKER" "$SW/release" 'status: ended' >/dev/null
   pe "$SW/home" reconcile >/dev/null
-  scan >/dev/null
+  # The confirmed runner can briefly hold its source lock while publishing.
+  # Let structural coverage become observable before asserting its episode ended.
+  for _ in $(seq 1 50); do
+    scan >/dev/null
+    [ -e "$SW/home/state/lavish-watch/$scan_id.unattended" ] || break
+    sleep 0.1
+  done
   [ ! -e "$SW/home/state/lavish-watch/$scan_id.unattended" ] || fail "live listener did not close the unattended episode"
   pe "$SW/home" retire "$scan_id" >/dev/null
   scan >/dev/null

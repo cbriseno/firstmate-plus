@@ -72,6 +72,16 @@ The capture uses Python 3.9 standard-library file and subprocess interfaces shar
 
 ## Worker temporary processes
 
+On 2026-11-17, a disposable tmux home on Linux (Python 3.11.2, codex-cli 0.169.0) exercised task-owned jobs through a real automatic context relaunch.
+The job interface and lifetime limits belong to [fm-task-job.py](../../bin/fm-task-job.py).
+The same job PID advanced after the old wrapper exited, its temporary sibling disappeared, and the replacement wrote `READINESS` after the job completed once.
+The pilot reported `PASS native relay: two sessions, one continuation, successor READINESS, background completed`.
+The first inbox doorbell required one retry through `fm_task_inbox_ring`; this pilot does not prove unattended initial doorbell delivery.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh` refreshes real-process job survival, accepted-threshold continuation, lost-callback reconciliation, busy deferral and obsolete-generation retirement.
+The common spawn wrapper and watcher paths were inspected for tmux and Herdr, and Claude Stop and Codex notify still use the same relay adapter.
+A separate native Codex replay delivered the old generation request to a new worker, which acknowledged it and published `READY` without another relay.
+Herdr, Claude and macOS were not executed for this job-survival change.
+
 The ownership and platform contract lives in the header of `bin/fm-worker-processes.py`.
 On 2026-11-10, Linux with Python 3.11.2 ran `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-work-activity.test.sh` with real disposable worker processes.
 It reported `ok - real worker kill and wrapper stop publish death; count, row, recovery, relaunch and incarnation isolation`.

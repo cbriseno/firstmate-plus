@@ -411,7 +411,7 @@ def record_completion(home, task_id, data):
     # report is a final result for the captain to review, anything else a step.
     current = read_presentation(home, task_id)
     if (current['evidence'] or {}).get('available', True) and not current['presentation'].get('outcome'):
-        result = report or (folder / 'report.md').is_file()
+        result = report or (folder / 'report.md').is_file() or (folder / 'report.html').is_file()
         presentation(home, argparse.Namespace(task=task_id, data=None, presentation_file=None,
             groups=False, clear=False, repair=False, reconcile=False, replan=None,
             outcome=dict(role='final', review='needed') if result else dict(role='step', review=None)))

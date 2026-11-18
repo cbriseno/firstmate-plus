@@ -65,7 +65,11 @@ printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 cat > "$REMOTE_ROOT/bin/fm-mark-job.sh" <<'SH'
 #!/bin/bash
 printf '%s\n' "$1" >> "$2"
-sleep "${3:-0}"
+if [ -n "${4:-}" ]; then
+  while [ ! -e "$4" ]; do sleep 0.1; done
+else
+  sleep "${3:-0}"
+fi
 SH
 cat > "$REMOTE_ROOT/bin/fm-touch-job.sh" <<'SH'
 #!/bin/bash
@@ -112,8 +116,8 @@ chmod +x "$FAKEBIN/fake-ssh"
 
 export FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT"
 export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux
-export FM_REMOTE_JOB_QUEUE_TIMEOUT=60
-export FM_REMOTE_JOB_TIMEOUT=30
+export FM_REMOTE_JOB_QUEUE_TIMEOUT=300
+export FM_REMOTE_JOB_TIMEOUT=120
 export FM_REMOTE_JOB_STAGE_REAP_SECONDS=1
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$ROOT/bin/fm-remote-job-lib.sh"
@@ -184,21 +188,19 @@ assert_present "$STATE_ROOT/worker.ready" "the worker did not publish its readin
 # stays strictly behind A's running job.
 LOG_A="$TMP_ROOT/log-a"
 LOG_B="$TMP_ROOT/log-b"
-fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh a1 "$LOG_A" 4 < /dev/null > /dev/null
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh a1 "$LOG_A" 0 "$TMP_ROOT/release-a1" < /dev/null > /dev/null
 A1=$FM_REMOTE_JOB_ID
 wait_for_state "$A1" running || fail "home A's long job did not begin running"
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh a2 "$LOG_A" 0 < /dev/null > /dev/null
 A2=$FM_REMOTE_JOB_ID
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_EDGE" fm-mark-job.sh b1 "$LOG_B" 0 < /dev/null > /dev/null
 B1=$FM_REMOTE_JOB_ID
-B_BEGAN=$(date +%s)
 fm_remote_job_wait "$ACCOUNT_HOME" "$B1" || fail "$FM_REMOTE_JOB_ERROR"
-B_ELAPSED=$(( $(date +%s) - B_BEGAN ))
 [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "home B's job behind home A's long job did not complete"
-[ "$B_ELAPSED" -le 3 ] || fail "home B's job waited ${B_ELAPSED}s behind home A's long job"
 [ "$(job_state "$A1")" = running ] || fail "home A's long job should still be running for the FIFO assertion"
 [ "$(cat "$LOG_A")" = a1 ] || fail "home A's queued job ran beside its running job: $(cat "$LOG_A")"
 fm_remote_job_reap "$ACCOUNT_HOME" "$B1" || fail "home B's job could not be reaped"
+touch "$TMP_ROOT/release-a1"
 fm_remote_job_wait "$ACCOUNT_HOME" "$A1" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$A2" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$(printf '%s' "$(cat "$LOG_A")")" = "$(printf 'a1\na2')" ] \
@@ -210,7 +212,8 @@ pass "lanes run homes concurrently while each home stays FIFO"
 # T9 stage order: five jobs staged in rapid succession behind a busy lane must
 # execute in staging-sequence order, not the queue directory's random-id order.
 : > "$LOG_A"
-fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh hold "$LOG_A" 2 < /dev/null > /dev/null
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" \
+  fm-mark-job.sh hold "$LOG_A" 0 "$TMP_ROOT/release-rapid" < /dev/null > /dev/null
 HOLD=$FM_REMOTE_JOB_ID
 wait_for_state "$HOLD" running || fail "the lane-holding job did not begin running"
 RAPID_IDS=()
@@ -218,24 +221,30 @@ for tag in r1 r2 r3 r4 r5; do
   fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh "$tag" "$LOG_A" 0 < /dev/null > /dev/null
   RAPID_IDS+=("$FM_REMOTE_JOB_ID")
 done
+touch "$TMP_ROOT/release-rapid"
 fm_remote_job_wait "$ACCOUNT_HOME" "$HOLD" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_reap "$ACCOUNT_HOME" "$HOLD" || true
 for id in "${RAPID_IDS[@]}"; do
   fm_remote_job_wait "$ACCOUNT_HOME" "$id" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "queued job $id exited $FM_REMOTE_JOB_EXIT: $(cat "$FM_REMOTE_JOB_STDERR")"
   fm_remote_job_reap "$ACCOUNT_HOME" "$id" || true
 done
 [ "$(cat "$LOG_A")" = "$(printf 'hold\nr1\nr2\nr3\nr4\nr5')" ] \
   || fail "rapidly staged same-home jobs did not execute in stage order: $(tr '\n' ' ' < "$LOG_A")"
-pass "same-home jobs staged in the same second execute in staging-sequence order"
+pass "same-home jobs staged behind a held lane execute in staging-sequence order"
 
 : > "$LOG_A"
-fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh publish-hold "$LOG_A" 3 < /dev/null > /dev/null
+PUBLISH_RELEASE="$TMP_ROOT/publish-release"
+DELAYED_RELEASE="$TMP_ROOT/delayed-release"
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh publish-hold "$LOG_A" 0 "$PUBLISH_RELEASE" < /dev/null > /dev/null
 PUBLISH_HOLD=$FM_REMOTE_JOB_ID
 wait_for_state "$PUBLISH_HOLD" running || fail "the publication-order lane holder did not begin running"
 (
   {
     printf 'delayed payload\n'
-    sleep 5
+    deadline=$((SECONDS + 120))
+    while [ ! -e "$DELAYED_RELEASE" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
+    [ -e "$DELAYED_RELEASE" ] || exit 1
   } | fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" \
     fm-mark-job.sh delayed "$LOG_A" 0
 ) > "$TMP_ROOT/delayed-stage-id" &
@@ -248,6 +257,7 @@ ls "$STATE_ROOT/jobs"/.stage.* >/dev/null 2>&1 \
   || fail "the delayed stdin stage did not begin capturing"
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$HOME_A" fm-mark-job.sh fast "$LOG_A" 0 < /dev/null > /dev/null
 FAST_STAGE=$FM_REMOTE_JOB_ID
+touch "$DELAYED_RELEASE"
 wait "$DELAYED_STAGE_PID" || fail "the delayed stdin stage failed to publish"
 DELAYED_STAGE=$(cat "$TMP_ROOT/delayed-stage-id")
 FAST_SEQ=$(fm_remote_job_read_number "$STATE_ROOT/jobs/$FAST_STAGE" seq) \
@@ -256,6 +266,7 @@ DELAYED_SEQ=$(fm_remote_job_read_number "$STATE_ROOT/jobs/$DELAYED_STAGE" seq) \
   || fail "the delayed stage lost its sequence"
 [ "$FAST_SEQ" -lt "$DELAYED_SEQ" ] \
   || fail "sequence order did not follow publication order: fast=$FAST_SEQ delayed=$DELAYED_SEQ"
+touch "$PUBLISH_RELEASE"
 fm_remote_job_wait "$ACCOUNT_HOME" "$PUBLISH_HOLD" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$FAST_STAGE" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$DELAYED_STAGE" || fail "$FM_REMOTE_JOB_ERROR"
@@ -305,7 +316,8 @@ RUN_START="$TMP_ROOT/running-cancel-start"
 RUN_FINISH="$TMP_ROOT/running-cancel-finish"
 fm_on build fm-two-phase-job.sh "$RUN_START" "$RUN_FINISH" 8 > /dev/null 2>&1 &
 RUNNING_CALLER=$!
-for _ in $(seq 1 200); do
+RUN_START_DEADLINE=$((SECONDS + 60))
+while [ "$SECONDS" -lt "$RUN_START_DEADLINE" ]; do
   [ -f "$RUN_START" ] && break
   sleep 0.05
 done

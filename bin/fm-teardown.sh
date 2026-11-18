@@ -5,6 +5,8 @@
 # scout tasks before reporting success (a secondmate teardown transitions none,
 # since secondmates are not backlog items), then refresh/prune the project's
 # clone for PR-based ship tasks.
+# Any task delivering a report requires HTML with visible review actions;
+# --preserve closes without declaring delivery, while --force requires discard approval.
 # An endpoint whose close could not do its job REFUSES before any record naming
 # it is removed: those records are the only thing that names what survived, so
 # reporting such a close as a completed cleanup strands the endpoint instead of
@@ -3539,11 +3541,23 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ]; the
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
     exit 1
   fi
+fi
+
+if [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ] \
+  && { [ "$KIND" = scout ] || [ -f "$DATA/$ID/report.md" ] || [ -f "$DATA/$ID/report.html" ]; }; then
   if [ ! -s "$DATA/$ID/report.html" ]; then
-    echo "REFUSED: scout task $ID has no nonempty HTML report at $DATA/$ID/report.html." >&2
-    echo "Have the crewmate deliver the HTML report before closing the scout." >&2
+    echo "REFUSED: task $ID has no nonempty HTML report at $DATA/$ID/report.html." >&2
+    echo "Have the crewmate deliver the HTML report (or use --preserve to close without declaring delivery)." >&2
     exit 1
   fi
+  if ! FM_HOME="$FM_HOME" python3 "$SCRIPT_DIR/fm-report-actions.py" \
+      "$DATA/$ID/report.html" --task "$ID" --check; then
+    echo "REFUSED: report is missing visible review actions; generate them with bin/fm-report-actions.py (or --preserve to close without declaring delivery)." >&2
+    exit 1
+  fi
+fi
+
+if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2

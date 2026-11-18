@@ -40,8 +40,6 @@ clear)
   esac
   ;;
 esac
-if [ -e "${FM_CONFIG_OVERRIDE:-${2%/*}/config}/fleet-ledger" ]; then
-  bash "${BASH_SOURCE[0]%/*}/fm-fleet-ledger.sh" appended \
-    "${FM_CONFIG_OVERRIDE:-${2%/*}/config}" "$status" >/dev/null || true
-fi
+# The monitor captures status lines for the fleet ledger; a hook must not wait
+# for that capture or its fleet observation on the worker's tool-call path.
 exit 0

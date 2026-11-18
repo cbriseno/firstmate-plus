@@ -1412,7 +1412,7 @@ class Owner:
             args = ['arm', artifact]
             if destination != 'primary':
                 args += ['--for', task]
-            if outcome.get('review') == 'needed' and isinstance(occurrence, str) and occurrence:
+            if outcome.get('review') in ('needed', 'done') and isinstance(occurrence, str) and occurrence:
                 args += ['--review-task', task, '--review-occurrence', occurrence]
             control('fm-procevent-lavish.sh', *args)
         return dict(ok=True, url=url, owner=destination)

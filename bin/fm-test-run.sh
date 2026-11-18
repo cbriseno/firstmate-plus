@@ -1579,8 +1579,11 @@ families_for_changed_path() {
     bin/fm-claude-native-skills.sh)
       printf '%s\n' '__script__:fm-claude-native-skills.test.sh' live-harness-optin
       ;;
+    bin/fm-task-job.py)
+      printf '%s\n' '__script__:fm-control.test.sh'
+      ;;
     bin/fm-worker-relay.py)
-      printf '%s\n' '__script__:fm-host-task.test.sh' '__script__:fm-worker-relay-live-e2e.test.sh'
+      printf '%s\n' '__script__:fm-control.test.sh' '__script__:fm-host-task.test.sh' '__script__:fm-worker-relay-live-e2e.test.sh'
       ;;
     bin/fm-spawn.sh|bin/fm-spawn-remote-lib.sh|bin/fm-spawn-cleanup-lib.sh|bin/fm-spawn-template-lib.sh|bin/fm-send.sh|bin/fm-send-target-lib.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)

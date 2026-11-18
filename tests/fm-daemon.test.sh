@@ -1300,10 +1300,10 @@ test_housekeeping_paused_resumed_cleared() {
   printf 'paused: holding for the upstream tool release\nworking: upstream landed, resuming\n' \
     > "$state/held-w12.status"
   printf 'Working...\n' > "$pane"
-  fm_write_meta "$state/held-w12.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
+  fm_write_meta "$state/held-w12.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=claude"
   local gen; gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" held-w12)
   "$ROOT/bin/fm-busy-event.sh" apply "$state" held-w12 busy --gen "$gen" \
-    --source pi-ext --event agent-start
+    --source claude-hook --event agent-start
   key=$(printf '%s' "held-w12" | tr ':/.' '___')
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
@@ -1316,33 +1316,26 @@ test_housekeeping_paused_resumed_cleared() {
   pass "a busy pane cannot gate the pause clear once its crew's status no longer declares the wait"
 }
 
-# The inverse of test_housekeeping_paused_resumed_cleared, and the first half of
-# issue #3149. A declared wait can legitimately hold a pane BUSY - a worker parked on
-# a long foreground call it keeps live for as long as the wait lasts - so a busy
-# verdict is not evidence that the crew resumed. Reading it as one dropped the marker
-# un-escalated, and migrate_watcher_pause_markers recreated it with a fresh timestamp
-# on the very next tick, so the window restarted forever and the wait never matured
-# into its one recheck. Away mode makes that terminal: the watcher hands a busy
-# declared wait to the daemon exactly once per declaration (bin/fm-watch.sh's
-# busy_turn_bound_check), so this recheck is the only thing left that can re-surface
-# the pane at all. Both declaration forms take the same 2b arm, so both are pinned.
+# A declared wait can hold a busy pane, so busy does not establish resumed work.
+# Preserve the existing marker until its informational recheck matures, then
+# reset that window without escalating the pause or hold to the primary.
 test_housekeeping_busy_declared_wait_matures_its_window() {
-  local case_name dir state fakebin task win pane key gen tick age escalations digest
+  local case_name dir state fakebin task win pane key gen tick age escalations
   for case_name in paused captain-held; do
     dir=$(make_supercase "busy-declared-wait-$case_name")
     state="$dir/state"; fakebin="$dir/fakebin"
     task="held-w12b-$case_name"; win="sess:fm-$task"; pane="$dir/pane.txt"
     case "$case_name" in
       paused) printf 'paused: the audit engine is running to completion\n' > "$state/$task.status"
-              digest="awaiting external" ;;
+              ;;
       captain-held) printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/$task.status"
-              digest="awaiting the captain" ;;
+              ;;
     esac
     printf 'Working...\n' > "$pane"
-    fm_write_meta "$state/$task.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
+    fm_write_meta "$state/$task.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=claude"
     gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$task")
     "$ROOT/bin/fm-busy-event.sh" apply "$state" "$task" busy --gen "$gen" \
-      --source pi-ext --event agent-start
+      --source claude-hook --event agent-start
     key=$(printf '%s' "$task" | tr ':/.' '___')
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
       FM_STATE_OVERRIDE="$state" stale_window_is_busy "$win" "$state" \
@@ -1364,8 +1357,7 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
     [ ! -s "$state/.subsuper-escalations" ] \
       || fail "$case_name busy declared wait escalated inside its PAUSE_RESURFACE_SECS window"
 
-    # Matured window: exactly one recheck, named for the right human, never a wedge,
-    # and the window reset so the next one repeats rather than firing once.
+    # Matured waits are logged without a model turn; the recheck window resets.
     echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
       FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=3600 \
@@ -1373,28 +1365,24 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
     escalations=0
     [ -s "$state/.subsuper-escalations" ] \
       && escalations=$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')
-    [ "$escalations" = 1 ] \
-      || fail "$case_name busy declared wait produced $escalations escalations past its window, expected exactly one"
-    grep -F "$digest" "$state/.subsuper-escalations" >/dev/null \
-      || fail "$case_name busy declared wait was not re-surfaced as a '$digest' recheck: $(cat "$state/.subsuper-escalations")"
-    grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null \
-      && fail "$case_name busy declared wait was mislabeled a possible wedge"
+    [ "$escalations" = 0 ] \
+      || fail "$case_name busy declared wait woke the primary after its recheck window"
     [ -e "$state/.subsuper-paused-$key" ] \
       || fail "$case_name busy declared wait cleared its marker instead of resetting the window"
     age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
     [ "$age" -lt 60 ] || fail "$case_name busy declared wait did not reset its window to now (age ${age}s)"
 
-    # The next tick, still inside the fresh window, stays silent: one recheck per window.
+    # The next tick inside the fresh window also stays silent.
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
       FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=3600 \
       housekeeping "$state"
     escalations=0
     [ -s "$state/.subsuper-escalations" ] \
       && escalations=$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')
-    [ "$escalations" = 1 ] \
+    [ "$escalations" = 0 ] \
       || fail "$case_name busy declared wait re-surfaced again inside its reset window ($escalations escalations)"
   done
-  pass "housekeeping matures a busy pane's declared-wait window into exactly one recheck per window"
+  pass "housekeeping preserves a busy pane's declared wait and logs rechecks without waking the primary"
 }
 
 

@@ -852,6 +852,7 @@ Declared external-wait status: $PAUSED_VERB
 $WAIT_BLOCK
 # Definition of done
 Write findings to \`$DATA/$ID/report.md\` with what you did, findings, evidence, recommendations and unresolved work. Also deliver \`$DATA/$ID/report.html\` under the worker contract; retain the Markdown record for existing task integrations.
+Before writing the HTML, reread the Reports section of the worker contract, and before delivering it check the report yourself against that section's delivery list; no other reviewer is needed.
 For a diagnosis, follow diagnostic-reasoning and cite the always-on diagnostic logs; with local changes include the applied diff (including new files), commands to reproduce, and the result.
 A plan or protocol reports its expected quota and cost as information and never proposes waiting for a captain approval because the work spends them.
 $LAVISH_LINE

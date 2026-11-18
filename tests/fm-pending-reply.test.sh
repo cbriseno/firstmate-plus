@@ -1278,7 +1278,7 @@ test_unknown_backend_state_uses_capture_fallback() {
       export FM_PENDING_REPLY_NOW=10000
       corr=$(fm_pending_reply_create "$home" "$state" "hibit" "$backend fallback")
       fm_pending_reply_mark_delivered "$state" "$corr"
-      fm_write_secondmate_meta "$state/hibit.meta" "$sm_home" "session:fm-hibit" alpha pi
+      fm_write_secondmate_meta "$state/hibit.meta" "$sm_home" "session:fm-hibit" alpha codex
       [ "$backend" = tmux ] || printf 'backend=%s\n' "$backend" >> "$state/hibit.meta"
       fm_backend_busy_state() { printf 'unknown'; }
       fm_backend_capture() { printf '%s' "$FM_PENDING_TEST_CAPTURE"; }
@@ -1308,7 +1308,7 @@ test_unknown_backend_state_uses_capture_fallback() {
       [ "$(phase_of "$state" "$corr")" = recovery_sent ] \
         || fail "$backend fallback idle should trigger recovery after its own grace period"
       export FM_PENDING_REPLY_NOW=10021
-      export FM_PENDING_TEST_CAPTURE='Working...'
+      export FM_PENDING_TEST_CAPTURE='esc to interrupt'
       fm_pending_reply_tick "$state"
       export FM_PENDING_REPLY_NOW=10022
       export FM_PENDING_TEST_CAPTURE='idle footer'
@@ -1326,12 +1326,83 @@ test_unknown_backend_state_uses_capture_fallback() {
 }
 
 
+test_tick_skips_terminal_and_reuses_target_observation() {
+  (
+    local home state open1 open2 resolved escalated rec probe_log probes scan_log scans snapshot
+    home=$(setup_parent observation-cache)
+    state="$home/state"
+    probe_log="$home/backend-probes.log"
+    scan_log="$home/status-scans.log"
+    : > "$probe_log"
+    : > "$scan_log"
+    # This fixture clock is intentionally scoped to the isolated subshell.
+    # shellcheck disable=SC2030,SC2031
+    export FM_PENDING_REPLY_NOW=10100
+    open1=$(fm_pending_reply_create "$home" "$state" hibit "first open request")
+    open2=$(fm_pending_reply_create "$home" "$state" hibit "second open request")
+    fm_pending_reply_mark_delivered "$state" "$open1"
+    fm_pending_reply_mark_delivered "$state" "$open2"
+    resolved=$(fm_pending_reply_create "$home" "$state" resolved "resolved request")
+    fm_pending_reply_mark_delivered "$state" "$resolved"
+    printf 'done [corr=%s]: complete\n' "$resolved" > "$state/resolved.status"
+    fm_pending_reply_try_resolve "$state" "$resolved" || fail "resolved fixture should resolve"
+    escalated=$(fm_pending_reply_create "$home" "$state" escalated "escalated request")
+    fm_pending_reply_mark_delivered "$state" "$escalated"
+    rec=$(fm_pending_reply_path "$state" "$escalated")
+    fm_pending_reply_set "$rec" phase escalated || fail "escalated fixture should transition"
+    mkdir -p "$home/escalated/state"
+    printf 'done [corr=%s]: wrong home\n' "$escalated" > "$home/escalated/state/child.status"
+    fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
+    fm_write_secondmate_meta "$state/resolved.meta" "$home/resolved" "sess:fm-resolved"
+    fm_write_secondmate_meta "$state/escalated.meta" "$home/escalated" "sess:fm-escalated"
+    # Runtime overrides called indirectly by the pending-reply tick.
+    # shellcheck disable=SC2329
+    fm_backend_busy_state() {
+      printf '%s\t%s\n' "$1" "$2" >> "$probe_log"
+      printf 'busy'
+    }
+    # shellcheck disable=SC2329
+    fm_backend_capture() { fail "native busy observations should not capture"; }
+    # shellcheck disable=SC2329
+    fm_pending_reply_find_resolve_line() {
+      local status_file=$1 corr=$2 line
+      printf '%s\t%s\n' "$status_file" "$corr" >> "$scan_log"
+      [ -f "$status_file" ] || return 0
+      while IFS= read -r line || [ -n "$line" ]; do
+        fm_pending_reply_line_resolves "$line" "$corr" || continue
+        printf '%s' "$line"
+        return 0
+      done < "$status_file"
+      return 0
+    }
+    fm_pending_reply_tick "$state"
+    probes=$(wc -l < "$probe_log" | tr -d ' ')
+    [ "$probes" = 1 ] || fail "two open records for one target should use one probe, got $probes"
+    rec=$(fm_pending_reply_path "$state" "$open1")
+    [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
+      || fail "cached observation should update the first open record"
+    rec=$(fm_pending_reply_path "$state" "$open2")
+    [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
+      || fail "cached observation should update the second open record"
+    rec=$(fm_pending_reply_path "$state" "$escalated")
+    snapshot=$(fm_pending_reply_get "$rec" wrong_home_scan_signature)
+    [ -n "$snapshot" ] || fail "wrong-home scan should persist its file-set signature"
+    fm_pending_reply_tick "$state"
+    scans=$(wc -l < "$scan_log" | tr -d ' ')
+    [ "$scans" = 3 ] \
+      || fail "unchanged records should scan two open and one escalated status only once, got $scans"
+    [ "$(fm_pending_reply_get "$rec" wrong_home_scan_signature)" = "$snapshot" ] \
+      || fail "unchanged wrong-home logs should retain their scan signature"
+  ) || fail "terminal-skip and observation-cache regression failed"
+  pass "tick skips terminal records and reuses target observations"
+}
+
 # Records are never pruned, so a home accumulates thousands of settled ones. The
 # tick selects the records it has work for in one pass and leaves every settled
 # record alone: it must not block on a settled record's per-record lock that a
 # live foreign process holds, and it still does the work the selected records need.
 test_tick_leaves_settled_records_alone() {
-  local home state settled closed open_esc awaiting rec i copy holder tick_pid ticked=0 open lib
+  local home state settled closed open_esc awaiting rec holder tick_pid ticked=0 open lib
   local sums_before sums_after holder_lock_pid
   home=$(setup_parent settled-store)
   state="$home/state"
@@ -1354,16 +1425,25 @@ test_tick_leaves_settled_records_alone() {
   fm_pending_reply_try_resolve "$state" "$closed" || fail "closed-escalation fixture should resolve"
   [ -n "$(fm_pending_reply_get "$rec" escalation_closed_epoch)" ] || fail "fixture escalation did not close"
   # Many settled copies, as a long-lived home accumulates.
-  i=0
-  while [ "$i" -lt 300 ]; do
-    copy=$(printf '%016x' $((0x5e7700000000 + i)))
-    for rec in "$settled" "$closed"; do
-      sed "s/^corr_id=.*/corr_id=$copy/" "$(fm_pending_reply_path "$state" "$rec")" \
-        > "$(fm_pending_reply_path "$state" "$copy")"
-      copy=$(printf '%016x' $((0x5e7780000000 + i)))
-    done
-    i=$((i + 1))
-  done
+  awk -v dir="$(fm_pending_reply_dir "$state")" '
+    FNR == 1 { template++ }
+    { lines[template, FNR] = $0; lengths[template] = FNR }
+    END {
+      for (i = 0; i < 300; i++) {
+        for (t = 1; t <= 2; t++) {
+          id = sprintf(t == 1 ? "00005e770000%04x" : "00005e778000%04x", i)
+          path = dir "/" id
+          for (n = 1; n <= lengths[t]; n++) {
+            line = lines[t, n]
+            if (line ~ /^corr_id=/) line = "corr_id=" id
+            print line > path
+          }
+          close(path)
+        }
+      }
+    }
+  ' "$(fm_pending_reply_path "$state" "$settled")" "$(fm_pending_reply_path "$state" "$closed")" \
+    || fail "could not prepare settled fixture store"
   # Work the tick still owes: a resolved record whose escalation close did not
   # land, and a delivered request whose correlated report is in the parent status.
   open_esc=$(fm_pending_reply_create "$home" "$state" esc "open escalation")
@@ -2024,53 +2104,65 @@ test_summary_keeps_accents_and_caps_by_character() {
 
 # --- run --------------------------------------------------------------------
 
-test_normal_correlated_reply_resolves_once
-test_completed_turn_no_report_triggers_one_recovery
-test_recovery_waits_while_the_mate_has_an_open_decision
-test_recovery_sends_during_an_open_decision_without_the_flag
-test_recovery_grace_measures_from_turn_completion
-test_recovery_fresh_status_read_resolves_before_firing
-test_partial_resolve_write_blocks_firing
-test_escalation_grace_measures_from_recovery_turn_completion
-test_recovery_attempt_is_never_reinjected
-test_recovery_reply_resolves_original
-test_second_missed_turn_escalates_once_and_stays_durable
-test_escalation_wakes_and_its_close_stays_quiet
-test_escalation_publication_failure_retries
-test_legacy_escalation_closes_default_decision
-test_legacy_escalation_does_not_close_taken_default_decision
-test_foreign_blocker_is_not_selected_as_escalation
-test_concurrent_resolution_closes_escalation_once
-test_concurrent_escalation_yields_to_late_reply
-test_transport_success_is_not_reply_success
-test_undelivered_records_are_scan_immutable
-test_delivery_confirmation_fallback_reconciles
-test_delivery_confirmation_serializes_with_reconciliation
-test_unrelated_and_stale_corr_cannot_resolve
-test_another_mates_echo_cannot_resolve
-test_restart_preserves_expectation_and_parent_destination
-test_wrong_home_detected_not_acknowledged
-test_unmarked_captain_input_creates_no_expectation
-test_fm_send_marked_secondmate_creates_pending_and_embeds_corr
-test_document_pointer_resolves
-test_helper_report_resolves
-test_busy_idle_observation_via_backend_abstraction
-test_unknown_backend_state_uses_capture_fallback
-test_tick_skips_terminal_and_reuses_target_observation
-test_tick_leaves_settled_records_alone
-test_correlations_reuse_only_for_matching_open_task
-test_tick_end_to_end_missed_then_escalate
-test_failed_send_discards_undelivered_expectation
-test_remote_repost_waits_for_the_reply_channel
-test_mirrored_remote_reply_never_triggers_a_repost
-test_same_basename_self_home_corr_resolves_on_tick
-test_same_basename_reply_resolves_after_recovery_failure
-test_child_status_wrong_home_is_not_copied
-test_mechanical_helper_writes_parent_channel
-test_remote_parent_replies_is_not_wrong_home
-test_local_parent_replies_is_wrong_home_evidence
-test_escalated_undelivered_correlation_stays_retryable
-test_same_kind_escalation_reopens_after_operator_close
-test_summary_keeps_accents_and_caps_by_character
-
-printf 'ok - all pending-reply tests passed\n'
+case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
+if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
+  test_normal_correlated_reply_resolves_once
+  test_completed_turn_no_report_triggers_one_recovery
+  test_recovery_waits_while_the_mate_has_an_open_decision
+  test_recovery_sends_during_an_open_decision_without_the_flag
+  test_recovery_grace_measures_from_turn_completion
+  test_recovery_fresh_status_read_resolves_before_firing
+  test_partial_resolve_write_blocks_firing
+  test_escalation_grace_measures_from_recovery_turn_completion
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
+  test_recovery_attempt_is_never_reinjected
+  test_recovery_reply_resolves_original
+  test_second_missed_turn_escalates_once_and_stays_durable
+  test_escalation_wakes_and_its_close_stays_quiet
+  test_escalation_publication_failure_retries
+  test_legacy_escalation_closes_default_decision
+  test_legacy_escalation_does_not_close_taken_default_decision
+  test_foreign_blocker_is_not_selected_as_escalation
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
+  test_concurrent_resolution_closes_escalation_once
+  test_concurrent_escalation_yields_to_late_reply
+  test_transport_success_is_not_reply_success
+  test_undelivered_records_are_scan_immutable
+  test_delivery_confirmation_fallback_reconciles
+  test_delivery_confirmation_serializes_with_reconciliation
+  test_unrelated_and_stale_corr_cannot_resolve
+  test_another_mates_echo_cannot_resolve
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 3 ]; then
+  test_restart_preserves_expectation_and_parent_destination
+  test_wrong_home_detected_not_acknowledged
+  test_unmarked_captain_input_creates_no_expectation
+  test_fm_send_marked_secondmate_creates_pending_and_embeds_corr
+  test_document_pointer_resolves
+  test_helper_report_resolves
+  test_busy_idle_observation_via_backend_abstraction
+  test_unknown_backend_state_uses_capture_fallback
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 4 ]; then
+  test_tick_skips_terminal_and_reuses_target_observation
+  test_tick_leaves_settled_records_alone
+  test_correlations_reuse_only_for_matching_open_task
+  test_tick_end_to_end_missed_then_escalate
+  test_failed_send_discards_undelivered_expectation
+  test_remote_repost_waits_for_the_reply_channel
+  test_mirrored_remote_reply_never_triggers_a_repost
+  test_same_basename_self_home_corr_resolves_on_tick
+fi
+if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
+  test_same_basename_reply_resolves_after_recovery_failure
+  test_child_status_wrong_home_is_not_copied
+  test_mechanical_helper_writes_parent_channel
+  test_remote_parent_replies_is_not_wrong_home
+  test_local_parent_replies_is_wrong_home_evidence
+  test_escalated_undelivered_correlation_stays_retryable
+  test_same_kind_escalation_reopens_after_operator_close
+  test_summary_keeps_accents_and_caps_by_character
+fi
+printf 'ok - pending-reply part %s passed\n' "${FM_TEST_SUITE_PART:-0}"

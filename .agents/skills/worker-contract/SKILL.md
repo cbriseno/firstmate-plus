@@ -118,6 +118,7 @@ This does not relax safety gates, required validation, shared-infrastructure bou
 ## Inbox and progress
 
 Read and acknowledge messages in the task inbox in numeric order by moving each handled message to its `handled/` directory.
+For a background command that must survive conversation relaunch, use `bin/fm-task-job.py` (its header owns submission and result paths); ordinary temporary children remain conversation-owned.
 Check the inbox when notified and at natural checkpoints, except while waiting if the brief says not to poll.
 Follow the progress contract provided at launch.
 When firstmate requests a safe point, preserve work and record paused with its exact safe-point request key and numeric timestamp only after reaching it; resume only when explicitly instructed.
@@ -138,21 +139,28 @@ Copy and adapt the inline [report theme](report-theme.html), preserving offline 
 When publishing the HTML, declare `outcome.review=needed` in the task presentation, including for a partial result, and use the returned `outcome_occurrence` in the report's links.
 Each new result must be declared as a new occurrence before its links are written; changing the review mark does not close the task or answer a decision.
 When arming a Lavish review for that report, pass `--review-occurrence <outcome_occurrence>` so End and Send & End apply to the version opened; a browser disconnect never marks it reviewed.
-Use the Deck address in the brief, if present, to build ordinary links to `/?task=<id>&view=delivery&item=<occurrence>&do=reviewed` and `do=lavish`, URL-encoding each value.
-For approval or independent decisions, link each existing captain call as `/?task=<call>&view=call&option=<id>` for each offered option; the Deck confirms the action, and unanswered calls remain open.
+Generate the always-visible action bar with [`bin/fm-report-actions.py`](../../../bin/fm-report-actions.py) after publishing the occurrence; its help owns arguments and Deck navigation mechanics.
 Choose the actions from what the report asks: review and Lavish for an informational report; approve, request changes and Lavish for approval; options for each independent decision and Lavish for decisions.
+Before generating an approval or decision report, follow `captain-hold-lifecycle` to inventory and register its requested choices through Firstmate, including further investigation when useful.
+Pass those calls and offered options to the generator; supply each question to generate selection rows with one Send when several choices are independent.
+Never invent a call or interpret a review mark as approval.
+Run its `--check` with the same option and question arguments before delivering any HTML, including plans, analyses, partial results and investigations.
 When the Deck address or network is unavailable, offer to arrange review through firstmate; do not ask the reader to run commands.
+For reviewed or approved acknowledgments in chat, follow `captain-hold-lifecycle`.
 For a list of independent choices, include every relevant item, identify unverified items as needing investigation, and offer a single submit control that preserves each chosen item as its own decision.
-Start with the result, its significance, and the next action in plain, friendly language for the reader, never agent-to-agent prose.
-Spell out names rather than presenting unexplained IDs or version labels.
-When a report mentions a Deck task, write its name in words and link the task ID to its card.
-Explain a flow with a step-by-step diagram and a concrete end-to-end example; present data in tables or charts instead of paragraphs.
-Adapt the visuals to the subject, and put supporting data, methods, technical verification, and other technical detail in expandable sections or a separate record.
+Open every report with an "En 1 minuto" block (in the reader's language) that answers three questions in this order: what happened, what it means for the reader, and what you need from the reader.
+Answer the third with the decision buttons, or with the words "nada, solo informativo"; never leave the reader to infer whether the report asks something.
+Write for readers from a trainee to a principal engineer: complete sentences, plain words, and no commit hashes, file paths, branch names, task IDs or other internal names in the body.
+Spell out each name in words; when a Deck task is mentioned, write its name in words as the link text and point the link at its card.
+Never use analogies or comparisons ("es como si...", "imagina que..."); state the facts directly, since analogies read as condescending.
+Put the technical detail in a closed "Detalle técnico" section that is also plain prose, with a table and a diagram, never a wall of text; hashes and paths go only in the Markdown record.
+Explain a flow with a step-by-step diagram and a concrete end-to-end example taken from real data; present data in tables or charts instead of paragraphs, and use interactive HTML when it helps.
 Keep the initially visible report to at most 300 words and one screen; put the remaining detail in closed expandable sections.
-Before delivering it, open the report in a browser with those sections closed and run the adjacent [report check](report-check.js) as a browser expression (for example, `chrome-devtools-axi eval "$(cat /path/to/worker-contract/report-check.js)"`).
-It counts rendered HTML and SVG text, including headings, table cells and closed-section summaries, and reports visible graphic candidates; inspect the page and count actual flow diagrams, including any made from HTML rather than graphics.
-Record the visible word count and actual diagram count with the result, and do not deliver until the count is at most 300, at least one flow diagram is visible, and the opening screen includes a complete end-to-end example and data in tables.
+Before delivering, check your own report against this list; do not ask another agent or reviewer to do it. Open it in a browser with those sections closed and run the adjacent [report check](report-check.js) as a browser expression (for example, `chrome-devtools-axi eval "$(cat /path/to/worker-contract/report-check.js)"`).
+It reports the visible word count, whether the "En 1 minuto" block (`id="en-1-minuto"`) has its three answers, opaque identifiers in the visible text, phrases that may be analogies, and visible graphic candidates.
+Deliver only when: the count is at most 300; the block is present and its third answer is a decision or "nada, solo informativo"; no opaque identifier or analogy is visible; at least one flow diagram is visible (count actual diagrams, including HTML ones); and the opening screen has a complete end-to-end example and data in tables.
 Check the screen visually as well: a word count alone cannot prove it fits, and a graphic count cannot establish that a diagram explains the flow.
+Record the visible word count and diagram count with the result.
 Show the generation date and time in the reader's local time, never UTC, plus relative age that refreshes locally when JavaScript is available; the absolute local time must remain visible without it.
 Name the model and reasoning effort of the report author only; obtain them from this task's runtime metadata, and if either is absent say so rather than guessing.
 Include the evidence needed to read the report offline without a CDN, external fonts, agent interface, or required service.

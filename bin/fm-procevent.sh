@@ -2202,27 +2202,32 @@ runner_group_signal() {  # <signal> <pid> <identity> [proved]
   kill -"$signal" -"$pid" 2>/dev/null || return 2
 }
 
+# Count process inspection time inside each two-second grace window.
+runner_group_wait_gone() {  # <pid>
+  local pid=$1 start now
+  start=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f", clock_gettime(CLOCK_MONOTONIC) * 1000') || return 2
+  while fm_procevent_group_alive "$pid"; do
+    now=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f", clock_gettime(CLOCK_MONOTONIC) * 1000') || return 2
+    [ "$((now - start))" -lt 2000 ] || return 1
+    sleep 0.1
+  done
+}
+
 stop_runner_pid() {  # <pid> <identity>
-  local pid=${1-} identity=${2-} signal_state i=0
+  local pid=${1-} identity=${2-} signal_state wait_state
   case "$pid" in ''|*[!0-9]*) return 2 ;; esac
   [ -n "$identity" ] || return 2
   runner_group_signal TERM "$pid" "$identity"
   signal_state=$?
   [ "$signal_state" -eq 0 ] || return "$signal_state"
-  while [ "$i" -lt 20 ]; do
-    fm_procevent_group_alive "$pid" || return 0
-    sleep 0.1
-    i=$((i + 1))
-  done
+  wait_state=0
+  runner_group_wait_gone "$pid" || wait_state=$?
+  [ "$wait_state" -ne 0 ] || return 0
+  [ "$wait_state" -eq 1 ] || return 2
   runner_group_signal KILL "$pid" "$identity" proved
   signal_state=$?
   [ "$signal_state" -eq 0 ] || return "$signal_state"
-  i=0
-  while [ "$i" -lt 20 ]; do
-    fm_procevent_group_alive "$pid" || return 0
-    sleep 0.1
-    i=$((i + 1))
-  done
+  runner_group_wait_gone "$pid" && return 0
   return 2
 }
 

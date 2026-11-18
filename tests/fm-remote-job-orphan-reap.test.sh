@@ -7,10 +7,8 @@
 # stops it. Observed 2026-08-07 as 29 workers at ppid 1, 1-2 days old, each
 # still appending to a log in a pruned no-mistakes gate worktree.
 #
-# bin/fm-remote-job-reap-orphans.sh is a machine-wide sweep by design, so these
-# cases assert only about their own fixture processes. Any other worker it
-# stops during the run had a pruned code root too, which is exactly the
-# contract.
+# Limit the reaper process scan to this fixture so the test never signals
+# abandoned workers belonging to other tasks on the same machine.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -51,39 +49,41 @@ wait_gone() { # <pid> <seconds>
   ! alive "$pid"
 }
 
-# Wait up to <seconds> for <pid> to have a live child; 0 when it does.
+# Wait for the serving child, not a transient setup subprocess.
 wait_child() { # <pid> <seconds>
-  local pid=$1 deadline=$(( $(date +%s) + $2 ))
+  local pid=$1 deadline=$(( $(date +%s) + $2 )) child
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    [ -n "$(pgrep -P "$pid" 2>/dev/null || true)" ] && return 0
+    child=$(pgrep -P "$pid" -f "fm-remote-job-worker.sh --serve$" | head -n 1)
+    if [ -n "$child" ]; then printf '%s\n' "$child"; return 0; fi
     sleep 0.1
   done
   return 1
 }
 
-# True when <pid>'s parent is a reaper for orphaned processes: init itself, or
-# a subreaper systemd registers one hop below init (PR_SET_CHILD_SUBREAPER,
-# e.g. `systemd --user`) - a live host's per-user manager adopts orphans there
-# instead of letting them reach real init, and that is just as orphaned for
-# this fixture's purpose.
-is_orphaned() { # <pid>
-  local parent
-  parent=$(ppid_of "$1")
-  case "$parent" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$parent" = 1 ] && return 0
-  [ "$(ppid_of "$parent")" = 1 ]
-}
-
-# Wait up to <seconds> for <pid> to be reparented to an orphan reaper (see
-# is_orphaned) after its launching shell exits; 0 when it does.
-wait_orphaned() { # <pid> <seconds>
-  local pid=$1 deadline=$(( $(date +%s) + $2 ))
+# The launcher has exited and the worker has been adopted by a different
+# process. A container or harness can install a subreaper at any depth.
+wait_orphaned() { # <pid> <launcher> <seconds>
+  local pid=$1 launcher=$2 deadline=$(( $(date +%s) + $3 )) parent
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    is_orphaned "$pid" && return 0
+    parent=$(ppid_of "$pid")
+    if ! alive "$launcher" && [ -n "$parent" ] && [ "$parent" != "$launcher" ]; then return 0; fi
     sleep 0.1
   done
   return 1
 }
+
+# Restrict only the account-wide scan; all other ps calls inspect real processes.
+mkdir -p "$TMP_ROOT/scan-bin"
+cat > "$TMP_ROOT/scan-bin/ps" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -u ]; then
+  /bin/ps "$@" | awk -v root="$FM_ORPHAN_FIXTURE_ROOT/" 'index($0, root)'
+else
+  exec /bin/ps "$@"
+fi
+SH
+chmod +x "$TMP_ROOT/scan-bin/ps"
+run_reaper() { PATH="$TMP_ROOT/scan-bin:$PATH" FM_ORPHAN_FIXTURE_ROOT="$TMP_ROOT" "$REAPER" "$@"; }
 
 # --- a real worker fixture, launched exactly the way fm-on's Linux start does -
 
@@ -111,6 +111,7 @@ pid_is_numeric() {
 start_worker() {
   local root=$1 account_home=$2 state_root=$3 pid deadline
   pid=$(
+    printf '%s\n' "$BASHPID" > "$TMP_ROOT/launcher.pid"
     export FM_REMOTE_JOB_STATE_ROOT="$state_root"
     export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux
     export FM_REMOTE_JOB_ORPHAN_GRACE_SECONDS=1
@@ -139,8 +140,7 @@ build_remote_root "$CASE1/remote-root"
 WORKER=$(start_worker "$CASE1/remote-root" "$CASE1/account" "$CASE1/remote-jobs") ||
   fail "could not start the fixture remote job worker"
 track "$WORKER"
-wait_child "$WORKER" 10 || fail "the fixture worker never started its serving child"
-SERVE=$(pgrep -P "$WORKER" | head -n 1)
+SERVE=$(wait_child "$WORKER" 10) || fail "the fixture worker never started its serving child"
 
 [ "$(pgid_of "$WORKER")" = "$WORKER" ] ||
   fail "the started worker is not its own process group leader, so its tree cannot be signalled as one group"
@@ -148,7 +148,7 @@ SERVE=$(pgrep -P "$WORKER" | head -n 1)
   fail "the serving child is outside the worker's process group"
 pass "the Linux start path puts the whole worker tree in its own process group"
 
-wait_orphaned "$WORKER" 5 ||
+wait_orphaned "$WORKER" "$(cat "$TMP_ROOT/launcher.pid")" 5 ||
   fail "the fixture worker is not orphaned to init, so this case does not reproduce the leak"
 
 # The exact teardown shape that leaked in production: a fixture cleanup removes
@@ -161,18 +161,17 @@ rm -rf "$CASE1/remote-jobs"
 kill -KILL "$SERVE" 2>/dev/null || true
 wait_gone "$SERVE" 10 || fail "the recorded serving child did not stop"
 alive "$WORKER" || fail "the fixture supervisor did not survive a lone child kill, so this case no longer covers the leak"
-wait_child "$WORKER" 15 || fail "the supervisor did not respawn after its recorded child pid was killed"
+SURVIVOR=$(wait_child "$WORKER" 15) || fail "the supervisor did not respawn after its recorded child pid was killed"
 pass "removing the state root and killing the recorded worker pid leaves the tree running, orphaned"
 
 # A worker whose code root is intact is never a reap candidate, which is what
 # keeps the account's healthy LaunchAgent worker out of scope.
-out=$("$REAPER" 2>&1) || fail "the reaper failed against a live code root: $out"
+out=$(run_reaper 2>&1) || fail "the reaper failed against a live code root: $out"
 assert_not_contains "$out" "$WORKER" "the reaper reported a worker whose code root still exists"
 alive "$WORKER" || fail "the reaper stopped a worker whose code root still exists"
 pass "a worker whose code root still exists is never reaped"
 
 # Prune the code root the way a returned worktree does.
-SURVIVOR=$(pgrep -P "$WORKER" | head -n 1)
 rm -rf "$CASE1/remote-root"
 wait_gone "$WORKER" 60 || fail "the worker survived its code root being pruned"
 wait_gone "$SURVIVOR" 60 || fail "a serving child outlived the abandoned supervisor"
@@ -208,23 +207,22 @@ set -m
 STALE=$!
 set +m
 track "$STALE"
-wait_child "$STALE" 10 || fail "the stand-in worker never started its serving child"
-STALE_SERVE=$(pgrep -P "$STALE" | head -n 1)
+STALE_SERVE=$(wait_child "$STALE" 10) || fail "the stand-in worker never started its serving child"
 
 rm -rf "$CASE2/remote-root"
 
-out=$("$REAPER" --dry-run 2>&1) || fail "the reaper dry run failed: $out"
+out=$(run_reaper --dry-run 2>&1) || fail "the reaper dry run failed: $out"
 assert_contains "$out" "$STALE" "the dry run did not report the abandoned worker"
 assert_contains "$out" "would reap" "the dry run did not mark its report as a preview"
 alive "$STALE" || fail "the dry run stopped the abandoned worker instead of only reporting it"
 pass "a dry run reports the abandoned worker and signals nothing"
 
-out=$("$REAPER" 2>&1) || fail "the reaper failed: $out"
+out=$(run_reaper 2>&1) || fail "the reaper failed: $out"
 assert_contains "$out" "$STALE" "the reaper did not report stopping the abandoned worker"
 wait_gone "$STALE" 20 || fail "the abandoned worker survived the reaper"
 wait_gone "$STALE_SERVE" 20 || fail "the abandoned worker's serving child survived the reaper"
 pass "the reaper stops an abandoned worker's whole tree"
 
-out=$("$REAPER" 2>&1) || fail "a repeat reaper run failed: $out"
+out=$(run_reaper 2>&1) || fail "a repeat reaper run failed: $out"
 assert_not_contains "$out" "$STALE" "the reaper reported an already-stopped worker"
 pass "the reaper is idempotent"

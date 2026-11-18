@@ -211,8 +211,25 @@ exec /bin/bash "$@"
             check(resumed.get('owner')=='resumed' and author.get('owner')=='author'
                   and resumed.get('url')==first['url']==author.get('url'),
                   'resumed author and later live author keep the same session: resumed=%r author=%r first=%r' % (resumed, author, first))
+            reviewed_registration=sources[0].read_text()
+            check('review_task=a\n' in reviewed_registration and ('review_occurrence='+occurrence+'\n') in reviewed_registration,
+                  'opening an already reviewed result still binds its version for a later Undo and End')
             check((home/'resume-calls').read_text().splitlines()==['a resume','a resume'],
                   'resume uses the existing control exactly once per attempt and is not repeated for a live author')
+            cli('work','outcome.review',payload=dict(target='task:a',occurrence=occurrence,
+                                                     review='needed',expected_review='done'))
+            trigger.write_text('session:\n  status: ended\n  session_ended: true\n')
+            deadline=time.monotonic()+30
+            after_undo=None
+            while time.monotonic()<deadline:
+                after_undo=cli('presentation','a','--json')['presentation']['outcome']['review']
+                if after_undo=='done': break
+                time.sleep(.1)
+            check(after_undo=='done', 'End after Undo records the version opened while it was reviewed')
+            captures=list((home/'state/procevent-inbox').glob(source+'.*.result'))
+            sequence=max(int(path.name.removeprefix(source+'.').removesuffix('.result')) for path in captures)
+            subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'handled',source,str(sequence)],
+                           env=env,check=True,capture_output=True)
         finally:
             subprocess.run(['bash',str(root/'bin/fm-procevent.sh'),'sweep-home'],env=env,check=True,capture_output=True)
         print('PASS: report review (%d checks)' % checks)
