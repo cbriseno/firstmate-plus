@@ -632,12 +632,30 @@ if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
   [ -f "$HALIVE/state/live-worker.inbox/001.msg" ] || fail "live owner did not receive feedback"
   [ ! -d "$HALIVE/state/inbox" ] || fail "live owner feedback reached captain inbox"
   pass "live owner retains its board feedback"
-  for unavailable in parked closed; do
-    if [ "$unavailable" = parked ]; then
-      printf 'park_phase=parked\n' > "$HALIVE/state/live-worker.parked"
-    else
-      rm -f -- "$HALIVE/state/live-worker.meta" "$HALIVE/state/live-worker.parked"
-    fi
+  printf 'kind=ship\n' >> "$HALIVE/state/live-worker.meta"
+  printf 'park_phase=parked\n' > "$HALIVE/state/live-worker.parked"
+  cp "$HCLOSED/state/procevent-inbox/closed-board.1.result" "$HALIVE/state/procevent-inbox/parked-board.1.result"
+  printf 'lavish\n' > "$HALIVE/state/procevent-inbox/parked-board.1.adapter"
+  printf 'live-worker\n' > "$HALIVE/state/procevent-inbox/parked-board.1.owner-task"
+  pe "$HALIVE" reconcile >/dev/null || fail "parked owner routing failed"
+  pe "$HALIVE" reconcile >/dev/null || fail "parked owner replay failed"
+  job="$HALIVE/state/live-worker.jobs/lavish-resume-parked-board-1.json"
+  [ -f "$job" ] || fail "parked owner feedback queued no resume job"
+  [ "$(find "$HALIVE/state/live-worker.jobs" -name 'lavish-resume-parked-board-*.json' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "replaying a parked owner's round queued a second resume"
+  assert_grep '_deliver-parked' "$job" "the resume job delivers through the parked-owner path"
+  [ ! -d "$HALIVE/state/inbox" ] || fail "a resumable parked owner's feedback reached firstmate"
+  # The fixture has no resumable endpoint, so the job's delivery falls back.
+  pe "$HALIVE" _deliver-parked live-worker parked-board 1 \
+    "$HALIVE/state/procevent-inbox/parked-board.1.result" 'Lavish review feedback is captured' >/dev/null 2>&1 \
+    || fail "parked-owner fallback did not reach firstmate"
+  FM_HOME="$HALIVE" "$ROOT/bin/fm-inbox.sh" list | grep -F 'closed board words' >/dev/null \
+    || fail "an unresumable parked owner's feedback did not reach firstmate"
+  pe "$HALIVE" pending-lavish | grep -F "parked-board.1.result" >/dev/null \
+    || fail "parked owner capture was acknowledged before handling"
+  pass "a parked author is resumed for its feedback, and firstmate gets it only when resume fails"
+  rm -f -- "$HALIVE/state/live-worker.meta" "$HALIVE/state/live-worker.parked"
+  for unavailable in closed; do
     cp "$HCLOSED/state/procevent-inbox/closed-board.1.result" "$HALIVE/state/procevent-inbox/$unavailable-board.1.result"
     printf 'lavish\n' > "$HALIVE/state/procevent-inbox/$unavailable-board.1.adapter"
     printf 'live-worker\n' > "$HALIVE/state/procevent-inbox/$unavailable-board.1.owner-task"
@@ -647,7 +665,7 @@ if [ "${FM_PROCEVENT_CASE:-}" = owner-routing ]; then
     pe "$HALIVE" pending-lavish | grep -F "$unavailable-board.1.result" >/dev/null \
       || fail "$unavailable owner capture was acknowledged before handling"
   done
-  pass "parked and closed authors keep feedback routed without a completion receipt"
+  pass "closed authors keep feedback routed without a completion receipt"
   exit 0
 fi
 
@@ -1870,6 +1888,9 @@ i=$((n - 1))
 [ "$i" -ge "${#plan[@]}" ] && i=$((${#plan[@]} - 1))
 case "${plan[$i]}" in
   interrupt)
+    # The real client's bytes, help line included (lavish-axi 0.1.80 and newer).
+    printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\nhelp[2]: Run `lavish-axi server --verbose` or inspect `~/.lavish-axi/server.log` (`LAVISH_AXI_STATE_DIR/server.log` when set) for server startup or crash diagnostics,Re-run the last `lavish-axi poll <html-file>` command after the server is healthy\n'; exit 1 ;;
+  bare-interrupt)
     printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n'; exit 1 ;;
   listener-active)
     [ -z "${LAVISH_TIMES:-}" ] || perl -MTime::HiRes=time -e 'print time, "\n"' >> "$LAVISH_TIMES"
@@ -1955,7 +1976,7 @@ printf '<h1>retry</h1>\n' > "$RETRY_ART"
 lavish_session "$RETRY_ART"
 retry_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$RETRY_ART")
 fm_test_track_procevent_home "$HRETRY"
-LAVISH_COUNT="$TMP_ROOT/retry-count"; LAVISH_SCRIPT="interrupt interrupt-help connection-failed feedback"
+LAVISH_COUNT="$TMP_ROOT/retry-count"; LAVISH_SCRIPT="bare-interrupt interrupt interrupt-help connection-failed feedback"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HRETRY" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$RETRY_ART" >/dev/null
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" pe "$HRETRY" reconcile >/dev/null
