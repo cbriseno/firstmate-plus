@@ -273,7 +273,8 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     check(p.returncode == 0, ('promotion scaffold', p.stdout, p.stderr))
     brief = home / 'data/proof/brief.md'
     brief.write_text(brief.read_text().replace('{TASK}', 'Investigate progress reporting')
-                     .replace('{FIRSTMATE_SPEC}', 'Bounded local report'))
+                     .replace('{FIRSTMATE_SPEC}', 'Bounded local report')
+                     .replace('{CAPTAIN_REQUIREMENTS}', '1. Fixture requirement.'))
     publish(['active'] + ['todo'] * 6, phase='investigation')
     p = execute(['bash', str(root / 'bin/fm-promote.sh'), 'proof', '--mode', 'local-only',
                         '--yolo', 'on', '--card-title', 'Implementar ciclo de progreso'],

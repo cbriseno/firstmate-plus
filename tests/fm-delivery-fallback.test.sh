@@ -48,7 +48,7 @@ setup_case() {  # <name> <mode> [extra fm-brief args...]
   make_fakebin "$dir"
   FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/home" "$BRIEF_SH" t1 proj --mode "$mode" "$@" >/dev/null \
     || fail "could not scaffold a $mode brief"
-  sed -i.bak -e 's/^{TASK}$/ship the widget/' -e 's/^{FIRSTMATE_SPEC}$/Add the widget./' "$dir/home/data/t1/brief.md"
+  sed -i.bak -e 's/^{TASK}$/ship the widget/' -e 's/^{FIRSTMATE_SPEC}$/Add the widget./' -e 's/^{CAPTAIN_REQUIREMENTS}$/1. Fixture requirement./' "$dir/home/data/t1/brief.md"
   rm -f "$dir/home/data/t1/brief.md.bak"
   fm_write_meta "$dir/home/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=claude" \
     "mode=$mode" "yolo=on" "worktree=$dir/wt" "project=$dir/proj"

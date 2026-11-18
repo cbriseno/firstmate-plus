@@ -1342,6 +1342,7 @@ test_worker_launch_delivers_role_scope() {
       content=$(cat "$brief")
       content=${content//'{TASK}'/brief for $id}
       content=${content//'{FIRSTMATE_SPEC}'/Exercise the spawn behavior under test.}
+      content=${content//'{CAPTAIN_REQUIREMENTS}'/1. Fixture requirement.}
       printf '%s\n' "$content" > "$brief"
     fi
     cp "$HOME_DIR/data/$id/brief.md" "$CASE_DIR/brief-before"
@@ -1715,7 +1716,7 @@ test_scaffold_category_flow() {
   python3 - "$HOME_DIR/data/$id/brief.md" <<'PYBRIEF'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
-text = path.read_text().replace("{TASK}", "Improve the report template.").replace("{FIRSTMATE_SPEC}", "Update the template.")
+text = path.read_text().replace("{TASK}", "Improve the report template.").replace("{FIRSTMATE_SPEC}", "Update the template.").replace("{CAPTAIN_REQUIREMENTS}", "1. Fixture requirement.")
 path.write_text(text)
 PYBRIEF
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode local-only --yolo off --harness codex --model gpt-6-astra 2>&1); status=$?
@@ -1742,7 +1743,7 @@ PYBRIEF
   python3 - "$HOME_DIR/data/$id/brief.md" <<'PYHOST'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
-text = path.read_text().replace("{TASK}", "Perform a disposable check.").replace("{FIRSTMATE_SPEC}", "No external effects.")
+text = path.read_text().replace("{TASK}", "Perform a disposable check.").replace("{FIRSTMATE_SPEC}", "No external effects.").replace("{CAPTAIN_REQUIREMENTS}", "1. Fixture requirement.")
 path.write_text(text)
 PYHOST
   out=$(run_spawn "$HOME_DIR" "$HOME_DIR/data/$id/work" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --host --harness codex --model gpt-6-astra 2>&1); status=$?

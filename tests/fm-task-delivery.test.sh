@@ -58,6 +58,7 @@ fill_brief_subsections() {  # <file> <intent> <spec>
   content=$(cat "$file")
   content=${content//'{TASK}'/$intent}
   content=${content//'{FIRSTMATE_SPEC}'/$spec}
+  content=${content//'{CAPTAIN_REQUIREMENTS}'/1. Fixture requirement.}
   printf '%s\n' "$content" > "$file"
 }
 

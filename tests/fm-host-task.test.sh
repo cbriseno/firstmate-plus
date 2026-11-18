@@ -18,7 +18,7 @@ run_brief() {
 run_brief "$TASK_ID" --host --path "$TARGET"
 python3 - "$TASK_HOME/data/$TASK_ID/brief.md" <<'PY'
 import pathlib,sys
-p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace('{TASK}','Set up a host file.').replace('{FIRSTMATE_SPEC}','Verify the operation.'))
+p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace('{TASK}','Set up a host file.').replace('{FIRSTMATE_SPEC}','Verify the operation.').replace('{CAPTAIN_REQUIREMENTS}','1. Fixture requirement.'))
 PY
 export FM_FAKE_LAUNCH_LOG="$TMP_ROOT/launch.log"
 export FM_FAKE_PANE_LOG="$TMP_ROOT/pane.log"
@@ -87,7 +87,7 @@ run_brief auto-close --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/auto-close/brief.md" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close safely.'))
+p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close safely.').replace('{CAPTAIN_REQUIREMENTS}', '1. Fixture requirement.'))
 PY
 OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/auto-close/work" "$FAKEBIN" auto-close --host --harness 'printf fixture' --backend tmux) || fail "auto-close spawn failed: $OUT"
 publish_status auto-close 'done' verified
@@ -149,7 +149,7 @@ pass 'a worker idle 30 minutes on an open decision is parked, never one pausing 
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'
 import pathlib,sys
-p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace('{TASK}','Check Claude host launch.').replace('{FIRSTMATE_SPEC}','Preserve hooks.'))
+p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace('{TASK}','Check Claude host launch.').replace('{FIRSTMATE_SPEC}','Preserve hooks.').replace('{CAPTAIN_REQUIREMENTS}','1. Fixture requirement.'))
 PY
 export FM_HOST_ARGV="$TMP_ROOT/claude-argv.json"
 cat > "$FAKEBIN/claude" <<'SH'
