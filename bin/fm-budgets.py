@@ -49,8 +49,6 @@ MEASURES = {
     'usd_per_day': ('spend', 'USD', 86400, None, 'home', 'list-price spend of all tasks in the last 24 h'),
 }
 DEFAULT_EXTRA = {'primary_quiet_wakes_per_h': {'limit_idle': 1}}
-# Raw counters kept in history only, to derive the 24 h measures.
-COUNTERS = ('state_bytes', 'usd_total')
 ALARM_EVERY = 86400
 NOTIFY_AFTER = 7200
 RELAPSE_WINDOW = 14 * 86400
@@ -351,9 +349,7 @@ def check(now):
             continue
         ep.setdefault('since', now)
         row['since'] = ep['since']
-        if not row['alarm'] or (ep['alarms'] and ep['alarms'][-1] > now - ALARM_EVERY):
-            pass
-        else:
+        if row['alarm'] and not (ep['alarms'] and ep['alarms'][-1] > now - ALARM_EVERY):
             relapse = (f'; relapse: {len(ep["alarms"])} earlier alarm(s) in 14 days - stop patching, have a fresh reviewer from the other'
                        ' provider read every producer of this measure and propose what to delete or merge') if ep['alarms'] else ''
             reason = (f'check: behavior budget exceeded: {key}={row["value"]} {row["unit"]} over limit {row["limit"]}'
