@@ -16,10 +16,10 @@ from urllib.parse import parse_qs, urlsplit
 class Links(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.urls = []
+        self.urls, self.anchors = [], []
         self.forms, self.fields, self.choices = [], [], []
     def handle_starttag(self, tag, attrs):
-        if tag == 'a': self.urls.append(dict(attrs)['href'])
+        if tag == 'a': self.urls.append(dict(attrs)['href']); self.anchors.append(dict(attrs))
         if tag == 'form': self.forms.append(dict(attrs))
         if tag == 'input': self.fields.append(dict(attrs))
         if tag == 'select': self.choices.append(dict(attrs))
@@ -49,6 +49,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert queries[2] == dict(task=['approval'],view=['call'],option=['research'])
     assert queries[3]['do'] == ['lavish']
     assert all(url.startswith('https://deck.example/base/?') for url in parser.urls)
+    assert all(a.get('target') == '_blank' and a.get('rel') == 'noopener' for a in parser.anchors)  # Lavish frames cannot navigate the Deck.
+    report.write_text(first.replace(' target="_blank"', ''))
+    run('--check', ok=False)  # A framed Deck link is refused.
+    report.write_text(first)
     report.write_text(first.replace('option=yes', 'option=other'))
     run('--check', '--option','approval','yes','Aprobar',ok=False)
     report.write_text(first)
@@ -64,13 +68,15 @@ with tempfile.TemporaryDirectory() as tmp:
         '--option','approval','yes','Aprobar', '--option','cleanup','research','Pedir más investigación')
     run('--check')
     batch=Links(); batch.feed(report.read_text())
-    assert batch.forms == [dict(action='https://deck.example/base/', method='get')]
+    assert batch.forms == [dict(action='https://deck.example/base/', method='get', target='_blank')]
     assert {x['name']:x['value'] for x in batch.fields} == dict(task='task',view='delivery',item='version & one',do='decisions')
     assert [x['name'] for x in batch.choices] == ['r.approval','r.cleanup']
     choices = ('--question','approval','¿Aprobar el plan?', '--question','cleanup','¿Qué hacemos con los datos?',
                '--option','approval','yes','Aprobar', '--option','cleanup','research','Pedir más investigación')
     run('--check', *choices)
     generated = report.read_text()
+    report.write_text(generated.replace('method="get" target="_blank"', 'method="get"'))
+    run('--check', *choices, ok=False)  # A framed Deck form is refused.
     report.write_text(generated.replace('value="research"', 'value="other"'))
     run('--check', *choices, ok=False)
     report.write_text(generated.replace('<select name="r.cleanup"', '<select hidden name="r.cleanup"'))

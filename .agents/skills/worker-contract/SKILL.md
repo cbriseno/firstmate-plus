@@ -142,6 +142,7 @@ Generate the always-visible action bar with [`bin/fm-report-actions.py`](../../.
 Choose the actions from what the report asks: review and Lavish for an informational report; approve, request changes and Lavish for approval; options for each independent decision and Lavish for decisions.
 Before generating an approval or decision report, follow `captain-hold-lifecycle` to inventory and register its requested choices through Firstmate, including further investigation when useful.
 Pass those calls and offered options to the generator; supply each question to generate selection rows with one Send when several choices are independent.
+Every link or form to the Deck in a report must carry `target="_blank"` (the generator does this): Lavish shows reports in a sandboxed iframe and the Deck refuses framed navigations.
 Never invent a call or interpret a review mark as approval.
 Run its `--check` with the same option and question arguments before delivering any HTML, including plans, analyses, partial results and investigations.
 When the Deck address or network is unavailable, offer to arrange review through firstmate; do not ask the reader to run commands.

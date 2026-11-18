@@ -9,6 +9,10 @@ Each --option names an existing captain call and one of its offered options.
 Use --question for each call to render one selection per row and a single Send.
 Without --question, options remain individual approval/decision links.
 Links and forms only navigate; the Deck confirms through its existing controls.
+Every Deck link and form opens in a new tab (target=_blank): Lavish shows the
+report in a sandboxed iframe, and the Deck refuses framed navigations (403 on
+Sec-Fetch-Dest: iframe, frame-ancestors 'none'), so only a top-level tab works.
+--check also refuses any visible link or form to the Deck without target=_blank.
 Without a Deck address, render an explicit Firstmate review fallback.
 --check verifies visible review navigation and the supplied choices before
 delivery; repeat the generation arguments. It never writes or creates calls.
@@ -28,6 +32,7 @@ class Actions(HTMLParser):
         super().__init__()
         self.stack = []
         self.links = []
+        self.targets = []
         self.forms = []
         self.form = None
         self.call = None
@@ -40,9 +45,10 @@ class Actions(HTMLParser):
             self.stack.append((tag, bool(hidden)))
         if tag == 'a' and not hidden:
             self.links.append(urlsplit(attrs.get('href', '')))
+            self.targets.append(attrs.get('target'))
         if tag == 'form' and not hidden:
             self.form = dict(url=urlsplit(attrs.get('action', '')), method=attrs.get('method', '').lower(),
-                             fields={}, options=set())
+                             fields={}, options=set(), target=attrs.get('target'))
             self.forms.append(self.form)
         if self.form is not None:
             if tag == 'input':
@@ -96,6 +102,12 @@ def main():
             return
         links = [parse_qs(url.query) for url in actions.links
                  if (url.scheme, url.netloc, url.path) == (urlsplit(deck).scheme, urlsplit(deck).netloc, urlsplit(deck).path.rstrip('/') + '/')]
+        deck_origin = urlsplit(deck)[:2]
+        framed = [url.geturl() for url, target in zip(actions.links, actions.targets)
+                  if url[:2] == deck_origin and target != '_blank']
+        framed += [f['url'].geturl() for f in actions.forms if f['url'][:2] == deck_origin and f['target'] != '_blank']
+        if framed:
+            parser.error('Deck links and forms must open outside the Lavish frame (target="_blank"): ' + framed[0])
         for action in ('reviewed', 'lavish'):
             if not any(link.get('task') == [args.task] and link.get('view') == ['delivery']
                        and link.get('item') == [occurrence] and link.get('do') == [action]
@@ -117,7 +129,7 @@ def main():
 
     def link(label, **query):
         url = deck.rstrip('/') + '/?' + urlencode(query)
-        return '<a href="' + html.escape(url, quote=True) + '">' + html.escape(label) + '</a>'
+        return '<a href="' + html.escape(url, quote=True) + '" target="_blank" rel="noopener">' + html.escape(label) + '</a>'
 
     if deck:
         links = [link('Revisado', task=args.task, view='delivery', item=occurrence, do='reviewed')]
@@ -135,7 +147,7 @@ def main():
                     for offered_call, option, label in args.option if offered_call == call)
                 rows.append('<label>' + html.escape(question) + '<select name="r.' + html.escape(call, quote=True)
                             + '">' + options + '</select></label>')
-            content += '<form action="' + html.escape(deck.rstrip('/') + '/', quote=True) + '" method="get">'
+            content += '<form action="' + html.escape(deck.rstrip('/') + '/', quote=True) + '" method="get" target="_blank">'
             content += ''.join('<input type="hidden" name="' + name + '" value="' + html.escape(value, quote=True) + '">'
                                for name, value in fields.items())
             content += ''.join(rows) + '<button type="submit">Enviar</button></form>'
