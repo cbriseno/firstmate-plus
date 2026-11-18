@@ -3800,7 +3800,7 @@ if [ -n "${FM_CONTROL_RESUME_SESSION:-}" ]; then
   [ "$RELAUNCH" = 1 ] && [ -f "$STATE/$ID.parked" ] || { echo 'error: native resume requires a parked task' >&2; exit 1; }
   case "$FM_CONTROL_RESUME_SESSION" in *[!0-9a-fA-F-]*|'') echo 'error: invalid resume session' >&2; exit 1 ;; esac
   case "$HARNESS" in
-    codex) LAUNCH=${LAUNCH/codex /codex resume $FM_CONTROL_RESUME_SESSION } ;;
+    codex) LAUNCH=${LAUNCH/codex /codex resume $FM_CONTROL_RESUME_SESSION --cd $sq_worktree } ;;
     claude) LAUNCH=${LAUNCH/claude /claude --resume $FM_CONTROL_RESUME_SESSION } ;;
     *) echo 'error: no native resume adapter' >&2; exit 1 ;;
   esac

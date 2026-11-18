@@ -23,7 +23,8 @@ The decision persists for the repository, so later worktrees of the same project
 
 ## Parked chat resume
 
-The control plane resolves the parked launch’s exact UUID from its transcript and launches `codex resume UUID` with the existing worker settings and inbox.
+The control plane resolves the parked launch’s exact UUID from its transcript and launches `codex resume UUID --cd <registered worktree>` with the existing worker settings and inbox.
+The explicit `--cd` keeps Codex from showing its modal working-directory selector when the saved session was recorded in another worktree.
 It never selects the last conversation by directory.
 
 ## Hook trust
