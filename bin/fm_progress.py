@@ -313,17 +313,16 @@ Example ship input: {"phase":"implementation","card_status":"Implementation in p
 For host tasks use phase=implementation with operation, verification, and report steps only; there is no branch, merge, or delivery gate.
 For a scout use phase=investigation and only its actual research/report steps; add installed activation only when it is in scope.
 The input file is task scratch; never write presentation.json, which is the owner's validated output.
-Update and republish phase, card_status and steps together after each status report and verified milestone, before a validation wait, after promotion/rebase/resume/handoff, and before readiness; unchanged steps are honest when work continues without a completed milestone.
+Every status command renews this checkpoint together with its card: when phase or steps changed, update this file and add --presentation-file {input_path} to that status command; otherwise it carries the current steps forward. Use the command above only for a verified milestone, promotion, rebase, resume or handoff that has no status line; unchanged steps are honest when work continues without a completed milestone.
 Keep the initial plan small but concrete for this task; the example is a shape, not evidence of completed work.
 Use done for closed explicit steps and todo for remaining ones, never estimate a percentage or time.
 Keep implementation, affected checks, branch readiness, merge and installed activation distinct; never declare delivery or activation from code completion alone.
 When installed activation has been verified, add installed_at (UTC ISO 8601 instant) to the same JSON; close records request-to-installed time when the original request time exists.
-Confirm exit success AND ok=true, state=published, evidence.available=true and lifecycle.evidence.current=true; busy/rejected JSON is not publication, even with exit0.
-After a done status, publish the checkpoint before stopping; the owner verifies gate-bound readiness separately.
-When that done checkpoint delivers a scout report or another result for the captain to read, include "outcome":{"role":"final","review":"needed"} in it (role "partial" for an interim result, "step" for a finished step that is not itself a result); a close without one is declared final when data/<id>/report.md exists, otherwise step.
-Start later inputs from the current owner declaration, never an old draft; a card-status-only write preserves old steps and never renews the checkpoint.
-Put summary and card text in that JSON too; file input and individual field flags are mutually exclusive.
-If publication fails, preserve the input and follow the contention recovery in bin/fm-tasks-axi.sh --help before reporting failure to firstmate; that recovery precedes the generic two-obstacle rule, including in retained briefs. The same help owns explicit repair.
+For the command above, confirm exit success AND ok=true, state=published, evidence.available=true and lifecycle.evidence.current=true; busy/rejected JSON is not publication, even with exit0. The status command checks this itself and exits 3 when it was not confirmed. The owner verifies gate-bound readiness separately.
+When the done status delivers a scout report or another result for the captain to read, include "outcome":{"role":"final","review":"needed"} in its --presentation-file input (role "partial" for an interim result, "step" for a finished step that is not itself a result); a close without one is declared final when data/<id>/report.md exists, otherwise step.
+Start later inputs from the current owner declaration, never an old draft.
+The status command's --card-status and --summary override those fields of the file; the command above takes the file alone.
+If publication fails, preserve the input, never repeat the status line, and follow the contention recovery in bin/fm-tasks-axi.sh --help before reporting failure to firstmate; that recovery precedes the generic two-obstacle rule, including in retained briefs. The same help owns explicit repair.
 """
     for label in ('Implementation in progress', 'Implementation', 'Affected checks', 'Branch ready', 'Integration'):
         template = template.replace(label, tr(label))

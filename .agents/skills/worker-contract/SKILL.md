@@ -32,11 +32,10 @@ If a task-specific instruction conflicts with this contract, the brief takes pre
    copies that URL from your line rather than assembling one.
    A mid-task `working:` line (including setup complete) is nonterminal: do not end the
    turn after it; continue the same stage until a defined `done:` gate under Definition of done.
-   With each status line, also refresh the card the captain's board shows for this task:
-   Use the card command supplied in the task brief.
+   The status command's `--card-status` also refreshes the card the captain's board shows for this task and renews your progress checkpoint in the same call; there is no separate card write.
    Write `{what is happening now}` as one plain line of at most 120 characters that states a fact about the work rather than a message, in the language of the captain's own words under `## Captain's intent`, without repeating the card title and without ids, paths, hashes, or tool names.
    When you report done, add `--summary '{what this delivers, in one or two plain sentences}'` to the same command, in the same language.
-   A card write that fails never blocks the task; the status line stays authoritative.
+   Exit 3 means the status line was recorded but the card was not: the status line stays authoritative, so never repeat it.
    Use `paused: {why}` - distinct from `blocked:` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
    Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append `paused [at=<epoch>]: {job and completion condition}` to the status file.
    Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.

@@ -136,9 +136,10 @@
 # bin/fm-classify-lib.sh; each scaffold renders the stamp as a literal <epoch>
 # placeholder the worker replaces with a numeric Unix time as it appends, so a
 # scaffold never emits a substitution a file-write tool would copy through.
-# Ship and scout status protocols also render the worker's card command, so the
-# card status is refreshed with each status line and the summary is set with
-# done; bin/fm-tasks-axi.sh presentation owns the card fields and their bounds.
+# Ship, scout and host status commands carry --card-status, so one report
+# writes the status line, the card and the progress checkpoint together
+# (bin/fm-task-status.sh owns that call; bin/fm-tasks-axi.sh presentation owns
+# the card fields and their bounds). Secondmate charters keep the plain append.
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
@@ -506,19 +507,17 @@ shell_quote() {
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 # Status publication owns its immediate wake; a watcher is only the backstop.
 STATUS_APPEND="FM_HOME=$(shell_quote "$FM_HOME") FM_STATE_OVERRIDE=$(shell_quote "$STATE") FM_CONFIG_OVERRIDE=$(shell_quote "$CONFIG") bash $(shell_quote "$FM_ROOT/bin/fm-task-status.sh") $(shell_quote "$ID") '{state}' '{one short line}'"
-# The worker's card command: the card fields and their bounds are owned by
-# bin/fm-tasks-axi.sh presentation; the home is explicit because a worker's
-# environment need not carry it.
-CARD_ENV="FM_HOME=$(shell_quote "$FM_HOME")"
-[ "$DATA" = "$FM_HOME/data" ] || CARD_ENV="$CARD_ENV FM_DATA_OVERRIDE=$(shell_quote "$DATA")"
-CARD_UPDATE="$CARD_ENV $(shell_quote "$FM_ROOT/bin/fm-tasks-axi.sh") presentation $(shell_quote "$ID") --card-status '{what is happening now}'"
-# One shared string keeps the ship and scout card rule identical; it continues rule 4.
+# The worker's report command: the status append plus its card, so the
+# presentation reaches the same data directory the brief names.
+REPORT_ENV=
+[ "$DATA" = "$FM_HOME/data" ] || REPORT_ENV="FM_DATA_OVERRIDE=$(shell_quote "$DATA") "
+STATUS_REPORT="$REPORT_ENV$STATUS_APPEND --card-status '{what is happening now}'"
+# The host brief's card rule; ship and scout workers read it in worker-contract rule 4.
 IFS= read -r -d '' CARD_RULE <<EOF || true
-   With each status line, also refresh the card the captain's board shows for this task:
-   \`$CARD_UPDATE\`
+   The status command's \`--card-status\` also refreshes the card the captain's board shows for this task and renews your progress checkpoint in the same call; there is no separate card write.
    Write \`{what is happening now}\` as one plain line of at most 120 characters that states a fact about the work rather than a message, in the language of the captain's own words under \`## Captain's intent\`, without repeating the card title and without ids, paths, hashes, or tool names.
    When you report done, add \`--summary '{what this delivers, in one or two plain sentences}'\` to the same command, in the same language.
-   A card write that fails never blocks the task; the status line stays authoritative.
+   Exit 3 means the status line was recorded but the card was not: never repeat the status line.
 EOF
 CARD_RULE=${CARD_RULE%$'\n'}
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
@@ -802,7 +801,7 @@ Use working, needs-decision, blocked, paused, done, or failed; report only meani
 A decision above your scope requires needs-decision and stopping for firstmate.
 Close any keyed decision or blocker only with a resolved line carrying that exact key.
 Report status with numeric Unix timestamps using:
-\`$STATUS_APPEND\`
+\`$STATUS_REPORT\`
 $CARD_RULE
 $CREWMATE_PAUSE_INSTRUCTIONS
 $CREWMATE_OBSTACLE_INSTRUCTIONS
@@ -845,8 +844,7 @@ The worktree is disposable; teardown preserves local changes in a recoverable ba
 Never push or open a PR.
 Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
 Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
-Status command: \`$STATUS_APPEND\`
-Card command: \`$CARD_UPDATE\`
+Status command: \`$STATUS_REPORT\`
 $SHORT_INBOX
 Declared external-wait status: $PAUSED_VERB
 $WAIT_BLOCK
@@ -909,8 +907,7 @@ $RULE1
    Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
    Leave the worktree clean before reporting done.
 3. $FORGE_RULE_LINE
-Status command: \`$STATUS_APPEND\`
-Card command: \`$CARD_UPDATE\`
+Status command: \`$STATUS_REPORT\`
 $SHORT_INBOX
 Declared external-wait status: $PAUSED_VERB
 $ASK_USER_BLOCK

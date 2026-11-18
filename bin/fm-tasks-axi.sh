@@ -98,8 +98,8 @@
 # captain's language, with no ids, paths, hashes, or tool names.
 #   card_title  (1..80)   short card title; firstmate sets it when filing the task.
 #   card_status (1..120)  what is happening now, without repeating the title; the
-#                         worker refreshes it with each status line (bin/fm-brief.sh
-#                         renders that command for it).
+#                         worker's status command refreshes it with each status
+#                         line (bin/fm-task-status.sh --card-status).
 #   group       (1..40)   the one project or initiative the task belongs to; reuse
 #                         the exact text of a label --groups lists.
 #   summary     (1..2000) one or two sentences on what the task delivers; the

@@ -971,9 +971,19 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {
 }
 
 test_pause_verb_override_renders_all_brief_scaffolds() {
-  local home kind id brief append now end epoch templates template line signals
+  local home kind id brief append now end epoch templates template line signals rc
   home="$TMP_ROOT/pause-verb-home"
   mkdir -p "$home/data"
+  # The ship and scout status commands also publish the task card, which needs
+  # a backlog row for the task.
+  fm_test_tasks_toml "$home/.tasks.toml"
+  {
+    printf '## In flight\n\n## Queued\n'
+    for kind in ship-no-mistakes ship-direct-PR ship-local-only scout; do
+      printf -- '- [ ] brief-pause-verb-%s - Pause verb fixture (kind: ship)\n' "$kind"
+    done
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
 
   for kind in ship:no-mistakes ship:direct-PR ship:local-only scout secondmate; do
     id="brief-pause-verb-${kind//:/-}"
@@ -1006,11 +1016,19 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     now=$(date +%s)
     append=${append//\{state\}/done}
     append=${append//\{one short line\}/test event}
+    append=${append//\{what is happening now\}/Probando el estado}
     case "$append" in
       *"\$("*) fail "$kind scaffold left an unevaluated command in its status-append line" ;;
     esac
     mkdir -p "$home/state"
-    bash -c "$append" || fail "generated status command failed"
+    rc=0
+    bash -c "$append" >/dev/null 2>&1 || rc=$?
+    # Exit 3 records the status line without the card; that is expected only
+    # where the card owner's tools are missing.
+    if [ "$rc" = 3 ] && ! { command -v tasks-axi && command -v node; } >/dev/null 2>&1; then
+      rc=0
+    fi
+    expect_code 0 "$rc" "generated status command failed"
     end=$(date +%s)
     epoch=$(bash -c '. "$1"; status_line_at_epoch "$(cat "$2")"' _ \
       "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
@@ -1689,7 +1707,10 @@ test_crewmate_card_command_writes_the_task_card() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-card-scout alpha --scout >/dev/null 2>&1 \
     || fail "fm-brief.sh --scout exited non-zero"
   brief="$home/data/brief-card/brief.md"
-  assert_grep "presentation 'brief-card' --card-status" "$brief" "ship brief did not render the card command"
+  assert_grep "'brief-card' '{state}' '{one short line}' --card-status '{what is happening now}'" "$brief" \
+    "ship brief status command did not carry the card"
+  assert_no_grep "Card command:" "$brief" "ship brief must not render a separate card write"
+  assert_no_grep "Card command:" "$home/data/brief-card-scout/brief.md" "scout brief must not render a separate card write"
   assert_grep "add \`--summary" "$ROOT/.agents/skills/worker-contract/SKILL.md" "ship brief did not ask for the summary with done"
   assert_grep "status, card, and steering-inbox records authorized" "$ROOT/.agents/skills/worker-contract/SKILL.md" \
     "scout brief did not authorize its card write outside the worktree"
@@ -1697,16 +1718,26 @@ test_crewmate_card_command_writes_the_task_card() {
   assert_grep "worker-contract/SKILL.md" "$home/data/brief-card-scout/brief.md" "scout brief must load card protocol"
 
   if command -v tasks-axi >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    # A plan published once is carried forward by each later status report.
+    printf '%s\n' '{"phase":"implementation","progress":{"steps":[{"label":"Cambios","state":"active"},{"label":"Pruebas","state":"todo"}]}}' \
+      > "$TMP_ROOT/card-plan.json"
+    FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" presentation brief-card --presentation-file "$TMP_ROOT/card-plan.json" >/dev/null 2>&1 \
+      || fail "could not publish the fixture plan"
     # shellcheck disable=SC2016 # The backticks and dollar sign match literal brief text.
-    command=$(sed -n 's/^Card command: `\(.*\)`$/\1/p' "$brief" \
-      | sed -e 's/^ *`//' -e 's/`$//' -e 's/{what is happening now}/Probando los cambios/')
+    command=$(sed -n 's/^Status command: `\(.*\)`$/\1/p' "$brief" \
+      | sed -e 's/{state}/working/' -e 's/{one short line}/card trial/' -e 's/{what is happening now}/Probando los cambios/')
     out=$( (cd "$TMP_ROOT" && env -u FM_HOME -u FM_DATA_OVERRIDE bash -c "$command") 2>&1)
     rc=$?
-    expect_code 0 "$rc" "rendered card command ($out)"
+    expect_code 0 "$rc" "rendered status command ($out)"
+    grep -Eq '^working \[at=[0-9]+\]: card trial$' "$home/state/brief-card.status" \
+      || fail "rendered status command did not record the status line"
     out=$(FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" presentation brief-card --json 2>&1)
-    assert_contains "$out" '"card_status": "Probando los cambios"' "rendered card command did not reach the task card"
+    assert_contains "$out" '"card_status": "Probando los cambios"' "rendered status command did not reach the task card"
+    assert_contains "$out" '"label": "Pruebas"' "status report dropped the published steps"
+    out=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["lifecycle"]["evidence"]["current"])')
+    assert_contains "$out" "True" "status report left the progress checkpoint behind its own status line"
   else
-    echo "skip: tasks-axi and node are needed to run the rendered card command"
+    echo "skip: tasks-axi and node are needed to run the rendered status command"
   fi
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
@@ -1714,7 +1745,7 @@ test_crewmate_card_command_writes_the_task_card() {
     || fail "fm-brief.sh --secondmate exited non-zero"
   assert_no_grep "--card-status" "$home/data/brief-card-mate/brief.md" \
     "secondmate charter must not carry a task card command"
-  pass "fm-brief.sh: ship and scout briefs render one card command that writes the task card"
+  pass "fm-brief.sh: one rendered status command writes the status line, the card and the checkpoint"
 }
 
 test_task_temporary_storage() {
