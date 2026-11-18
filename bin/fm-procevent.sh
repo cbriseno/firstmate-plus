@@ -931,7 +931,7 @@ publish_result() {  # <result-file>
       read_argv "$id" || exit 0
       [ "${#ARGV[@]}" -ge 3 ] && [ "${ARGV[1]}" = poll ] || exit 0
       case "${ARGV[2]}" in
-        "$FM_HOME"/data/*/*) path=${ARGV[2]#"$FM_HOME"/data/}; printf '%s\n' "${path%%/*}" ;;
+        ("$FM_HOME"/data/*/*) path=${ARGV[2]#"$FM_HOME"/data/}; printf '%s\n' "${path%%/*}" ;;
       esac
     )
   fi

@@ -565,6 +565,19 @@ pe "$HCLOSED" handled closed-board 1 >/dev/null || fail "closed board acknowledg
 [ -z "$(pe "$HCLOSED" pending-lavish)" ] || fail "handled board remained in handoff inventory"
 pass "closed board feedback reaches firstmate once and remains visible through handoff until handled"
 
+# An older primary-owned capture has no owner sidecar; the board path under a
+# task's data directory still names that task, which stock Bash 3.2 must parse.
+HLEGACY="$TMP_ROOT/legacy-closed-feedback"; new_home "$HLEGACY"
+mkdir -p "$HLEGACY/state/procevent-inbox" "$HLEGACY/data/legacy-worker"
+pe "$HLEGACY" register lavish legacy-board -- lavish-axi poll "$HLEGACY/data/legacy-worker/board.html" >/dev/null \
+  || fail "legacy board registration failed"
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","legacy board words","","message",""\n' > "$HLEGACY/state/procevent-inbox/legacy-board.1.result"
+printf 'lavish\n' > "$HLEGACY/state/procevent-inbox/legacy-board.1.adapter"
+pe "$HLEGACY" reconcile >/dev/null || fail "legacy board reconciliation failed"
+FM_HOME="$HLEGACY" "$ROOT/bin/fm-inbox.sh" list | grep -F 'unavailable task legacy-worker' >/dev/null \
+  || fail "legacy board feedback did not name its task from the board path"
+pass "an owner-less capture names its task from the board path and reaches firstmate"
+
 # 2026-11-15 CST: config-board 05:43 and P16 06:29:58 retained their
 # metadata/listeners after done. Capture must reach the primary immediately,
 # even with no watcher running and before its 300-second fallback is due.

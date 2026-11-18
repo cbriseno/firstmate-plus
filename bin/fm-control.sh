@@ -1154,23 +1154,23 @@ do_relaunch() {
   safe_checkpoint
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
-  journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"
+  journal_write checkpoint ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line"
 
   record_note
-  journal_write noted "${CHECKPOINT_LINES[@]}" "$note_line"
+  journal_write noted ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line"
 
-  journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
+  journal_write stopping ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line"
   if [ "$VERB" = resume ] && [ "$(fm_meta_get "$STATE/$ID.parked" park_phase)" = parked ]; then
     exit_result=parked
   else
     exit_result=$(do_exit)
   fi
-  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+  journal_write exited ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line" "exit_result=$exit_result"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.
   RELAUNCH_TX="${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).$RANDOM"
-  journal_write launching "${CHECKPOINT_LINES[@]}" "$note_line" "relaunch_tx=$RELAUNCH_TX"
+  journal_write launching ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line" "relaunch_tx=$RELAUNCH_TX"
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS" --model "$TARGET_MODEL" --effort "$TARGET_EFFORT")
   if FM_CONTROL_RESUME_SESSION="${RESUME_SESSION:-}" FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
@@ -1203,7 +1203,7 @@ do_relaunch() {
   }
   RELAUNCH_AGENT_CONFIRMED=1
 
-  journal_write complete "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+  journal_write complete ${CHECKPOINT_LINES[@]+"${CHECKPOINT_LINES[@]}"} "$note_line" "exit_result=$exit_result"
   RELAUNCH_ACTIVE=0
   echo "relaunched $ID harness=$TARGET_HARNESS from=$PRIOR_RECORDED_HARNESS model=$TARGET_MODEL effort=$TARGET_EFFORT backend=$BACKEND endpoint=$T worktree=$WT"
 }

@@ -946,6 +946,34 @@ test_host_relaunch_preserves_scratch() {
   pass 'host relaunch preserves scratch, session history and changes model and effort'
 }
 
+# A host checkpoint proves its scratch without journal lines, so the empty
+# checkpoint list must survive stock Bash 3.2's set -u through park and resume.
+test_host_park_and_resume_preserves_scratch() {
+  local dir out wt
+  dir=$(new_case host-resume host2)
+  add_ship_task "$dir" host2 claude
+  wt="$dir/home/data/host2/work"
+  mkdir -p "$wt" "$dir/home/config" "$dir/home/projects"
+  printf 'keep\n' > "$wt/keep"
+  printf '%s\n' "$dir/host-target" > "$dir/home/data/host2/host-paths"
+  printf '\n%s\n' "$dir/host-target" >> "$dir/home/data/host2/brief.md"
+  sed -i.bak "s|^worktree=.*|worktree=$wt|; s|^project=.*|project=$wt|; s/^kind=.*/kind=host/" "$dir/home/state/host2.meta"
+  printf '%s' "$wt" > "$dir/fake/cwd"
+  printf 'done [at=1]: host work ready\n' > "$dir/home/state/host2.status"
+  # The tmux stub never closes a window, so record a completed park the way
+  # fm-control park leaves it and resume from an endpoint whose agent is gone.
+  { cat "$dir/home/state/host2.meta"; printf 'park_phase=parked\n'; } > "$dir/home/state/host2.parked"
+  printf 'Resume host work from saved scratch.\n' > "$dir/home/data/host2/park-note.md"
+  printf zsh > "$dir/fake/command"
+  out=$(run_control "$dir" host2 resume) || fail "host resume failed: $out"
+  assert_contains "$out" 'resumed host2' "host resume did not complete: $out"
+  [ ! -e "$dir/home/state/host2.parked" ] || fail "host resume kept the parking record: $out"
+  [ "$(cat "$wt/keep")" = keep ] || fail 'host resume did not preserve scratch'
+  grep -qx 'phase=complete' "$dir/home/state/host2.control-relaunch" \
+    || fail "host resume journal did not complete: $out"
+  pass 'host park and resume accept an empty checkpoint list and preserve scratch'
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -2861,6 +2889,13 @@ test_relaunch_keeps_profile_without_revalidating_category() {
   pass "relaunch and context handoff retain resolved profiles without revalidating dispatch categories"
 }
 
+# FM_TEST_ONLY runs one case, such as the host lifecycle regressions under
+# real stock Bash 3.2. The rest of this file is not a 3.2 snapshot suite.
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit $?
+fi
+
 test_relaunch_keeps_profile_without_revalidating_category
 
 test_exit_and_relaunch_remove_the_dialog_file
@@ -2885,6 +2920,7 @@ test_worker_account_pin_follows_the_relaunch
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_exclude_tools_refusals_happen_before_the_agent_stops
 test_host_relaunch_preserves_scratch
+test_host_park_and_resume_preserves_scratch
 test_explicit_model_wins_over_the_recorded_one
 test_control_relaunch_explicitly_resets_profile
 test_relaunch_onto_an_unverified_harness_is_refused
