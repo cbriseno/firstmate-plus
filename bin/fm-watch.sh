@@ -2911,7 +2911,35 @@ EOF
 # later steer resumes it to resolve a conflict), and a parked done task is
 # closed once its content lands. A done worker kept open for another reason is
 # explained once per reason instead of skipped silently.
+# An unfinished worker idle for 30 minutes in a wait another actor clears (an
+# open decision, a captain hold, or a pause dated past that horizon, so never a
+# worker's own short background job) is parked the same way: its agent and
+# endpoint close, and the answer, a steer or the pause date resumes it.
 # Failures are retried on the ordinary check cadence and reported for review.
+worker_wait_park() {  # <task> <current-status-line>
+  local task=$1 last=$2 marker="$STATE/.worker-wait-$1" until output rc=0 reason
+  case "$(status_line_verb "$last")" in
+    needs-decision|captain-held) ;;
+    paused)
+      until=$(status_paused_until "$last") || return 0
+      [ "$until" -ge $(( $(date +%s) + 1800 )) ] || return 0
+      ;;
+    *) return 0 ;;
+  esac
+  [ -e "$marker" ] || { touch "$marker"; return 0; }
+  [ "$(age_of "$marker")" -ge 1800 ] || return 0
+  output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-control.sh" "$task" park 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then
+    rm -f -- "$marker"
+    watch_info_record completion "worker parked while it waits; its answer, a steer or the pause date resumes it: $task; $last"
+    return 0
+  fi
+  touch "$marker"
+  reason="check: worker automatic park refused: $task; $(printf '%s\n' "$output" | tail -3 | tr '\n' ' ')"
+  watch_event_append check "worker-park:$task" "$reason" || exit 1
+  wake "$reason"
+}
+
 worker_completion_tick() {
   local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason kept finished parked
   # shellcheck source=bin/fm-local-branch-lib.sh
@@ -2935,7 +2963,7 @@ worker_completion_tick() {
     if [ "$parked" = 0 ]; then
       activity=$(fm_busy_classify_meta "$meta" "$task" "$STATE")
       if [ "${activity%% *}" != idle ]; then
-        rm -f -- "$marker"
+        rm -f -- "$marker" "$STATE/.worker-wait-$task"
         continue
       fi
       if [ -n "$(status_declared_wait_line "$STATE/$task.status")" ]; then
@@ -2945,7 +2973,7 @@ worker_completion_tick() {
       fi
       if [ -n "$kept" ]; then
         rm -f -- "$marker"
-        [ "$finished" = 0 ] || worker_kept_open_record "$task" "$kept"
+        if [ "$finished" = 0 ]; then worker_wait_park "$task" "$last"; else worker_kept_open_record "$task" "$kept"; fi
         continue
       fi
     fi
