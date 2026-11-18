@@ -114,6 +114,18 @@ run_completion_tick >/dev/null
 rm "$TASK_HOME/state/unexplained.meta"
 pass 'unexplained idle wakes individually without discarding work; a declared wait resets it'
 
+printf 'kind=host\n' > "$TASK_HOME/state/kept.meta"
+printf 'done: finished\n' > "$TASK_HOME/state/kept.status"
+mkdir -p "$TASK_HOME/state/kept.inbox"
+printf 'read me\n' > "$TASK_HOME/state/kept.inbox/001.msg"
+run_completion_tick >/dev/null
+run_completion_tick >/dev/null
+[ "$(grep -c 'worker done but kept open: kept; unread steering 001.msg' "$TASK_HOME/state/.watch-triage.log")" = 1 ] \
+  || fail 'a done worker kept open by unread steering was not explained exactly once'
+[ -e "$TASK_HOME/state/kept.meta" ] || fail 'the kept-open explanation closed the worker'
+rm -rf "$TASK_HOME/state/kept.meta" "$TASK_HOME/state/kept.inbox"
+pass 'a done worker kept open by unread steering is explained once'
+
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'

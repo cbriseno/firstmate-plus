@@ -2905,9 +2905,15 @@ EOF
 
 # A completed worker is closed only after its turn finishes. Teardown remains
 # the authority for preservation, report/decision gates and landed-work safety.
+# Integration and closing are reconciled separately: a done ship whose branch
+# is not yet in an integration target is parked (fm-control.sh park closes the
+# agent and its endpoint, keeps the record, copy and branch for landing, and a
+# later steer resumes it to resolve a conflict), and a parked done task is
+# closed once its content lands. A done worker kept open for another reason is
+# explained once per reason instead of skipped silently.
 # Failures are retried on the ordinary check cadence and reported for review.
 worker_completion_tick() {
-  local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason
+  local meta task kind last activity pending project wt base overlay ref integrated output rc marker reason kept finished parked
   # shellcheck source=bin/fm-local-branch-lib.sh
   . "$SCRIPT_DIR/fm-local-branch-lib.sh"
   # shellcheck source=bin/fm-tangle-lib.sh
@@ -2918,16 +2924,32 @@ worker_completion_tick() {
     case "$kind" in host|scout|ship) ;; *) continue ;; esac
     task=${meta##*/}; task=${task%.meta}
     last=$(status_current_line "$STATE/$task.status" "$kind")
-    [ ! -e "$STATE/$task.parked" ] || continue
-    activity=$(fm_busy_classify_meta "$meta" "$task" "$STATE")
-    marker="$STATE/.worker-idle-$task"
-    if [ "${activity%% *}" != idle ] \
-      || [ -n "$(status_declared_wait_line "$STATE/$task.status")" ] \
-      || [ -n "$(status_own_open_decisions "$STATE/$task.status" "$kind")" ]; then
-      rm -f -- "$marker"
-      continue
+    finished=0; [ "$(status_line_verb "$last")" != 'done' ] || finished=1
+    parked=0
+    if [ -e "$STATE/$task.parked" ]; then
+      [ "$finished" = 1 ] && [ "$(fm_meta_get "$STATE/$task.parked" park_phase)" = parked ] || continue
+      parked=1
     fi
-    if [ "$(status_line_verb "$last")" != 'done' ]; then
+    marker="$STATE/.worker-idle-$task"
+    kept=
+    if [ "$parked" = 0 ]; then
+      activity=$(fm_busy_classify_meta "$meta" "$task" "$STATE")
+      if [ "${activity%% *}" != idle ]; then
+        rm -f -- "$marker"
+        continue
+      fi
+      if [ -n "$(status_declared_wait_line "$STATE/$task.status")" ]; then
+        kept='a declared wait follows its result'
+      elif [ -n "$(status_own_open_decisions "$STATE/$task.status" "$kind")" ]; then
+        kept="open decision $(status_own_open_decisions "$STATE/$task.status" "$kind" | tr '\n' ' ')"
+      fi
+      if [ -n "$kept" ]; then
+        rm -f -- "$marker"
+        [ "$finished" = 0 ] || worker_kept_open_record "$task" "$kept"
+        continue
+      fi
+    fi
+    if [ "$finished" = 0 ]; then
       [ -e "$marker" ] || touch "$marker"
       if [ "$(age_of "$marker")" -ge 1800 ] && ! crew_is_provably_working "$task"; then
         reason="check: worker idle without a result or declared wait for over 30 minutes: $task; inspect or close with fm-teardown.sh --preserve"
@@ -2938,7 +2960,10 @@ worker_completion_tick() {
       continue
     fi
     pending=$(find "$STATE/$task.inbox" -maxdepth 1 -name '*.msg' -print -quit 2>/dev/null)
-    [ -z "$pending" ] || continue
+    if [ -n "$pending" ]; then
+      worker_kept_open_record "$task" "unread steering ${pending##*/}"
+      continue
+    fi
     if [ "$kind" = ship ]; then
       # A published branch awaiting integration must remain available. Accept
       # only content in an integration target, never merely a pushed task
@@ -2951,7 +2976,23 @@ worker_completion_tick() {
       for ref in "refs/heads/$base" "refs/remotes/origin/$base" "refs/heads/$overlay"; do
         if fm_local_content_in_ref "$wt" "$ref"; then integrated=0; break; fi
       done
-      [ "$integrated" = 0 ] || continue
+      if [ "$integrated" != 0 ]; then
+        [ "$parked" = 0 ] || continue
+        marker="$STATE/.worker-park-$task"
+        [ "$(age_of "$marker")" -ge "$CHECK_INTERVAL" ] || continue
+        touch "$marker"
+        rc=0
+        output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-control.sh" "$task" park 2>&1) || rc=$?
+        if [ "$rc" = 0 ]; then
+          rm -f -- "$marker" "$STATE/.worker-idle-$task" "$STATE/.worker-kept-$task"
+          watch_info_record completion "worker parked; its branch is ready but not integrated, and a steer resumes it: $task; $last"
+          continue
+        fi
+        reason="check: worker automatic park refused: $task; $(printf '%s\n' "$output" | tail -3 | tr '\n' ' ')"
+        watch_event_append check "worker-park:$task" "$reason" || exit 1
+        wake "$reason"
+        continue
+      fi
     fi
     marker="$STATE/.worker-close-$task"
     [ "$(age_of "$marker")" -ge "$CHECK_INTERVAL" ] || continue
@@ -2959,7 +3000,7 @@ worker_completion_tick() {
     rc=0
     output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-teardown.sh" "$task" 2>&1) || rc=$?
     if [ "$rc" = 0 ] || [ "$rc" = 4 ]; then
-      rm -f -- "$marker" "$STATE/.worker-idle-$task"
+      rm -f -- "$marker" "$STATE/.worker-idle-$task" "$STATE/.worker-kept-$task"
       watch_info_record completion "worker automatically closed: $task; $last; report=${FM_DATA_OVERRIDE:-$FM_HOME/data}/$task/report.md"
       continue
     else
@@ -2968,6 +3009,14 @@ worker_completion_tick() {
     watch_event_append check "worker-close:$task" "$reason" || exit 1
     wake "$reason"
   done
+}
+
+# Record once, per distinct reason, why a done worker stays open.
+worker_kept_open_record() {  # <task> <reason>
+  local marker="$STATE/.worker-kept-$1"
+  [ "$(cat "$marker" 2>/dev/null)" != "$2" ] || return 0
+  printf '%s\n' "$2" > "$marker" || return 0
+  watch_info_record kept "worker done but kept open: $1; $2"
 }
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by

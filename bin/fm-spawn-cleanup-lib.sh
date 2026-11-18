@@ -72,6 +72,19 @@ spawn_abort_cleanup() {
       status=1
     fi
   fi
+  # An endpoint this attempt created, before any agent was launched into it
+  # and while no published record names it, is only a shell this attempt
+  # owns: close that exact endpoint so a failed spawn leaves no orphan pane.
+  if [ "$status" -ne 0 ] && [ "$SPAWN_ENDPOINT_CREATED" = 1 ] &&
+    [ "$SPAWN_LAUNCH_SENT" = 0 ] && [ -n "${T:-}" ] &&
+    { [ "${RELAUNCH:-0}" -eq 1 ] || { [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; }; }; then
+    SPAWN_ENDPOINT_CREATED=0
+    if fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" >/dev/null 2>&1; then
+      echo "cleanup: closed endpoint $T that this failed spawn created" >&2
+    else
+      echo "warning: endpoint $T that this failed spawn created could not be closed; close it by hand" >&2
+    fi
+  fi
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true

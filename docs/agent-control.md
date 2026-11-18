@@ -151,10 +151,8 @@ When presentation is disabled or unsupported, the ordinary flat container follow
 A cross-session launcher identity refuses that flat placement; a plain shell without a launcher identity resolves the recorded session's labeled home container.
 The pane id necessarily changes when its original endpoint is gone, and metadata follows the replacement.
 
-**Known flat-layout Herdr limitation - a refusal before the record is republished leaves a stray husk pane** (follow-up bead `fm-herdr-rebind-leak-20260913`).
-The rebind registers no abort cleanup, so a refusal in the window between the new tab being created and the record being republished leaves that pane behind while the record still names the old, gone one.
-The stray pane holds a bare shell - the harness is not delivered until after publication - so the next reclaim cleans up after it: the re-created tab carries the same `fm-<id>` label, `tab create` finds it, classifies it a husk, and closes and replaces it.
-That self-heals only when the retry resolves the *same* workspace, which the placement rule above does not guarantee.
+**A refusal before the record is republished closes the new pane.**
+The new pane holds only a bare shell until the harness is delivered after publication, so the spawn's abort cleanup closes that exact pane while the record still names the old, gone one; a fresh spawn that fails before its record survives closes its new endpoint the same way.
 The worktree and the task's records are unaffected either way.
 
 ### Failure and rollback

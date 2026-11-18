@@ -1012,6 +1012,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_ENDPOINT_CREATED=0
 
 # shellcheck source=bin/fm-spawn-cleanup-lib.sh
 . "$SCRIPT_DIR/fm-spawn-cleanup-lib.sh"
@@ -2770,11 +2771,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # Projected replacements were restored above. This is the ordinary flat
     # container path when task presentation is disabled or unrecorded.
     #
-    # KNOWN LIMITATION (bead fm-herdr-rebind-leak-20260913): the tab minted
-    # below is registered with no abort cleanup, so a later refusal leaves that
-    # pane behind and a retry mints another. Documented in
-    # docs/agent-control.md rather than fixed here, because the remedy is
-    # machinery the ordinary flat spawn path does not have either.
+    # The endpoint minted below is closed by the abort cleanup when this
+    # attempt fails before its replacement record is published.
     #
     # Re-create the tab under the RECORDED herdr session. Without the explicit
     # session the container would resolve from the AMBIENT one
@@ -2786,6 +2784,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
       SES=${RELAUNCH_TARGET%%:*}
       fm_backend_tmux_create_task "$SES" "$W" "$WT" >/dev/null || exit 1
       T="$SES:$W"
+      SPAWN_ENDPOINT_CREATED=1
       WT_TARGET=$T
     else
     HERDR_REBIND_SES=${RELAUNCH_TARGET%%:*}
@@ -2826,6 +2825,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    SPAWN_ENDPOINT_CREATED=1
     SES=$HERDR_SES
     WT_TARGET=$T
     fi
@@ -2842,6 +2842,7 @@ else
     # rename-critical worktree-detection steps below; the persisted window= handle
     # stays $T (the name form), which is safe now that rename is disabled.
     WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    SPAWN_ENDPOINT_CREATED=1
     WT_TARGET="$WID"
     ;;
   herdr)
@@ -3027,6 +3028,8 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    # A projected pane already has its exact abort cleanup above.
+    [ "$HERDR_PROJECTED" -eq 1 ] || SPAWN_ENDPOINT_CREATED=1
     ;;
   esac
 fi
@@ -3755,6 +3758,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_PENDING=0
   SPAWN_META_PUBLISH_STARTED=0
   SPAWN_META_TMP=
+  # The published replacement record now names the endpoint it created.
+  SPAWN_ENDPOINT_CREATED=0
 fi
 # A dispatch or relaunch keeps the per-task meta lock through launch delivery.
 # The backlog mutation is deliberately the final fallible commit below, so
