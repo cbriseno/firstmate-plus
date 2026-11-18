@@ -123,6 +123,7 @@ The reviewer compares the delivered work with the original words, not only the p
 Before done, record acceptance using the format owned by `bin/fm-dod-lib.sh` and run its `fm_dod_accept_requirements` with this task's durable brief and acceptance file.
 If a requirement is unfinished, complete it or report the deferral through firstmate and obtain the reference to the explicit notice actually delivered to the captain before recording it as deferred.
 An internal plan, report, or queued message alone is not evidence that the captain was notified.
+Name in each evidence the level reached (code, tests, published, installed, used live); a requirement is fulfilled only at the level its original words ask, otherwise it is deferred with notice.
 Later captain words extend the original intent and regenerate the numbered list; renew affected acceptance evidence.
 
 ## Obstacles and escalation
