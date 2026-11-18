@@ -457,6 +457,10 @@ SH
     mkdir -p "$HANDOFF/bin"; new_home "$HANDOFF/home"
     fm_test_track_procevent_home "$HANDOFF/home"
     new_task_endpoint "$HANDOFF/home" "$owner"
+    # Empty board-message files turn off the receipt and readiness lines, so
+    # this fixture counts only the staged reply.
+    mkdir -p "$HANDOFF/home/config"
+    : > "$HANDOFF/home/config/lavish-board-ack"; : > "$HANDOFF/home/config/lavish-board-ready"
     cat > "$HANDOFF/bin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
 set -eu

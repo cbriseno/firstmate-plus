@@ -14,6 +14,7 @@
 #   fm-procevent-lavish.sh poll <artifact.html> [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
 #   fm-procevent-lavish.sh relisten <result-file>
+#   fm-procevent-lavish.sh notify <artifact.html> ack|ready [<task-id>]
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
 #            waiting, disconnected, listener-active, missing, or unknown.
@@ -55,6 +56,14 @@
 #            3 when the installed Lavish is a confirmed older release without
 #            synchronous reply so the listener keeps the legacy path, and any
 #            other status when the reply failed or the version is unknown.
+# notify     Post one short line to the board's Conversation panel through
+#            synchronous `lavish-axi reply`: `ack` when a captured round reaches
+#            its owner's inbox, `ready` after a task-owned arm is listening. The
+#            optional one-line `config/lavish-board-ack` or `lavish-board-ready`
+#            replaces the default text, and an empty file disables it. Callers
+#            treat it as best effort; older clients without synchronous reply
+#            skip it, because a legacy reply would replace the listener's poll.
+#            Lavish marks every note the listener has seen as Done on any reply.
 # relisten   Keep the detached runner between nonterminal feedback rounds, even
 #            while the owner is replying or done. A supplied capture must be
 #            feedback or a browser disconnect, never terminal or an error.
@@ -353,6 +362,8 @@ cmd_arm() {
     printf 'artifact: %s\n' "$real"
     [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
     printf 'note: an earlier listener is still live and serving this board; a continuing task listener adopts an unchanged command after capture; other commands take effect after the source is retired and armed again\n'
+    [ -z "$task" ] || cmd_notify "$real" ready "$task" >/dev/null 2>&1 \
+      || printf 'note: the board readiness message was not posted\n' >&2
     exit 0
   fi
   if [ "$listening" -ne 0 ]; then
@@ -362,6 +373,8 @@ cmd_arm() {
   printf 'armed: %s\n' "$id"
   printf 'artifact: %s\n' "$real"
   [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
+  [ -z "$task" ] || cmd_notify "$real" ready "$task" >/dev/null 2>&1 \
+    || printf 'note: the board readiness message was not posted\n' >&2
 }
 
 cmd_deliver_reply() {
@@ -369,6 +382,28 @@ cmd_deliver_reply() {
   lavish_reply_compatible || exit 3
   apply_session_host "$2"
   post_lavish_reply "$2" "$4"
+}
+
+cmd_notify() {  # <artifact> ack|ready [<task-id>]
+  local artifact=${1-} kind=${2-} text config file status=0
+  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
+  case "$kind" in
+    ack) text='Received - working on it. I will reply here when the board is ready for another review.' ;;
+    ready) text='Ready for your review.' ;;
+    *) usage ;;
+  esac
+  config="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/lavish-board-$kind"
+  if [ -f "$config" ] && [ ! -L "$config" ]; then
+    text=$(head -n 1 -- "$config") || exit 1
+  fi
+  [ -n "$text" ] || exit 0
+  lavish_reply_compatible || exit 0
+  apply_session_host "$artifact"
+  file=$(mktemp) || exit 1
+  printf '%s\n' "$text" >"$file" || { rm -f -- "$file"; exit 1; }
+  ( FM_PROCEVENT_REPLY_TASK=${3-} post_lavish_reply "$artifact" "$file" ) || status=$?
+  rm -f -- "$file"
+  return "$status"
 }
 
 cmd_retire() {
@@ -1131,6 +1166,7 @@ case "${1-}" in
   retire)    shift; cmd_retire "$@" ;;
   poll)      shift; cmd_poll "$@" ;;
   deliver-reply) shift; cmd_deliver_reply "$@" ;;
+  notify)    shift; cmd_notify "$@" ;;
   source-id) shift; cmd_source_id "$@" ;;
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;

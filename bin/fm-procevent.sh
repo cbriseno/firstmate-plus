@@ -915,7 +915,7 @@ cmd_register_extension() {
 # and drains until `fm_procevent_mark_handled` records it.
 publish_result() {  # <result-file>
   local result=$1 id seq adapter line status=1 owner_task='' closed_candidate='' message='' record=''
-  local ring_backend ring_target ring_meta inbox_dir handled_dir pre_existing existing new_record
+  local ring_backend ring_target ring_meta inbox_dir handled_dir pre_existing existing new_record terminal
   id=$(fm_procevent_result_source_id "$result")
   seq=$(fm_procevent_result_sequence "$result")
   fm_procevent_source_id_valid "$id" || return 1
@@ -950,7 +950,9 @@ publish_result() {  # <result-file>
       owner_task=
     fi
     if [ -n "$owner_task" ]; then
+      terminal=0
       if adapter_result_is_terminal "$adapter" "$result"; then
+        terminal=1
         message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it."
       else
         export FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD=1
@@ -996,6 +998,14 @@ EOF
           if [ -n "$ring_backend" ] && [ -n "$ring_target" ]; then
             fm_task_inbox_ring "$ring_backend" "$ring_target" "$record" "fm-$owner_task" >/dev/null 2>&1 || true
           fi
+        fi
+        # The board acknowledges a fresh nonterminal round at once, so the
+        # captain sees receipt while the owner works on it.
+        if [ "$adapter" = lavish ] && [ "$terminal" -eq 0 ]; then
+          (
+            read_argv "$id" && [ "${ARGV[1]-}" = poll ] \
+              && "$SCRIPT_DIR/fm-procevent-lavish.sh" notify "${ARGV[2]}" ack "$owner_task"
+          ) >/dev/null 2>&1 || true
         fi
       fi
       return "$status"

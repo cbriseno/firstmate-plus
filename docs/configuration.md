@@ -1115,6 +1115,11 @@ A matching primary-side per-secondmate pin for a remote route refuses before rem
 The optional private `config/deck-url` contains the Deck's HTTP or HTTPS base address on one line.
 Ship and scout briefs pass it to report authors for the links described by the worker contract; without it, reports provide the manual review path.
 
+## Lavish board messages (config/lavish-board-ack, config/lavish-board-ready)
+
+The optional local, gitignored one-line files replace the default English receipt and readiness lines a task-owned board posts, for example in the captain's language; an empty file turns that line off.
+They are not inherited by secondmate homes; [crew-hosted Lavish review boards](#crew-hosted-lavish-review-boards) owns when each line is posted.
+
 ## Lavish server address (config/lavish-axi-host)
 
 The optional local, gitignored `config/lavish-axi-host` contains one non-empty address without whitespace for the per-machine Lavish server.
@@ -2270,6 +2275,7 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 **Deliver feedback to the worker**
 
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
+- When that delivery creates a fresh inbox record for a nonterminal round, the board posts a short receipt at once, and every later task-owned arm that is listening posts a short readiness line after any completion reply, so the captain sees receipt, answer, and readiness in the Conversation panel; `bin/fm-procevent-lavish.sh notify` owns the text, its `config/lavish-board-ack` and `config/lavish-board-ready` overrides, and the older-client skip.
 - If the owner has declared `done`, is parked, or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
 - With synchronous-reply clients (0.1.80 or newer), the detached runner listens again after nonterminal feedback or a browser disconnect, including while the owner is replying or has declared `done`; reconciliation can restore that listener while feedback remains unacknowledged.
