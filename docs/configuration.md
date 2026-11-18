@@ -2225,7 +2225,7 @@ Its header owns the exact commands and private episode mechanics; `tests/fm-lavi
 
 **Retry interrupted Lavish polls**
 
-The Lavish adapter keeps polling through the exact transient interruption and server-startup failures until the server recovers, so a slow server cannot turn an internal retry into a captured round that stops the listener.
+The Lavish adapter keeps polling through the transient server-error classes its header owns (interrupted response, failed connection, failed startup) until the server recovers, so a slow server cannot turn an internal retry into a captured round that stops the listener.
 This start-to-start governor is a no-op after a normally blocking poll but caps an immediately returning poll under the shipped defaults independently of the owner lease and registration launch pacing.
 
 Real feedback, ended and missing sessions, and other errors are captured and announced normally; the runner itself stays adapter-agnostic.

@@ -1872,6 +1872,15 @@ case "${plan[$i]}" in
     printf 'error: "Lavish Editor already has an active poll listener (current listener: lab; active for %sms)"\ncode: LISTENER_ACTIVE\nhelp[1]: Use --takeover only when you intend to displace the current listener\n' "$n"; exit 1 ;;
   near-interrupt)
     printf 'error: Lavish Editor poll response was interrupted \ncode: SERVER_ERROR\n'; exit 1 ;;
+  interrupt-help|connection-failed|help-extra)
+    # The byte-exact framing lavish-axi 0.1.97 prints after a real server kill.
+    case "${plan[$i]}" in
+      connection-failed) printf 'error: Lavish Editor server connection failed\n' ;;
+      *) printf 'error: Lavish Editor poll response was interrupted\n' ;;
+    esac
+    printf 'code: SERVER_ERROR\nhelp[2]: Run `lavish-axi server --verbose` or inspect `~/.lavish-axi/server.log` (`LAVISH_AXI_STATE_DIR/server.log` when set) for server startup or crash diagnostics,Re-run the last `lavish-axi poll <html-file>` command after the server is healthy\n'
+    [ "${plan[$i]}" != help-extra ] || printf 'session:\n  status: feedback\n'
+    exit 1 ;;
   other-server-error)
     printf 'error: Lavish Editor session store is unavailable\ncode: SERVER_ERROR\n'; exit 1 ;;
   feedback)
@@ -1942,13 +1951,13 @@ printf '<h1>retry</h1>\n' > "$RETRY_ART"
 lavish_session "$RETRY_ART"
 retry_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$RETRY_ART")
 fm_test_track_procevent_home "$HRETRY"
-LAVISH_COUNT="$TMP_ROOT/retry-count"; LAVISH_SCRIPT="interrupt interrupt feedback"
+LAVISH_COUNT="$TMP_ROOT/retry-count"; LAVISH_SCRIPT="interrupt interrupt-help connection-failed feedback"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HRETRY" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$RETRY_ART" >/dev/null
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" pe "$HRETRY" reconcile >/dev/null
 wait_for "$HRETRY/state/.wake-queue" || fail "feedback after interrupted polls produced no wake"
-[ "$(cat "$LAVISH_COUNT")" = 3 ] \
-  || fail "the interrupted listener was polled $(cat "$LAVISH_COUNT") times, not the two quiet retries plus the delivering poll"
+[ "$(cat "$LAVISH_COUNT")" = 4 ] \
+  || fail "the interrupted listener was polled $(cat "$LAVISH_COUNT") times, not the three quiet retries plus the delivering poll"
 [ "$(count_results "$HRETRY" "$retry_id")" = 1 ] \
   || fail "a retried interruption produced $(count_results "$HRETRY" "$retry_id") captured results instead of one"
 [ "$(wake_payloads "$HRETRY" | sort -u | grep -c .)" = 1 ] \
@@ -1957,7 +1966,7 @@ assert_contains "$(wake_payloads "$HRETRY")" "procevent lavish $retry_id 1" \
   "feedback arriving after quiet retries is captured and announced"
 assert_grep 'ship it' "$(first_result "$HRETRY" "$retry_id")" \
   "the announced result is the captain's feedback, not the interruption"
-pass "a transient Lavish poll interruption is retried quietly and never announced"
+pass "transient Lavish poll failures, with or without help lines, are retried quietly and never announced"
 
 # --- end-user-aligned regression: a retried poll does not resubmit the reply ---
 # The worker hands its round reply to the adapter once. When the first poll of
@@ -2075,8 +2084,8 @@ PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$EXH_ART" >/dev/null
 pass "an interruption that outlives the old bound recovers without a captured error"
 
-# A different SERVER_ERROR is a genuine error, never a retry: no fail-open drift
-# from the one exact transient response this adapter owns.
+# A different SERVER_ERROR is a genuine error, never a retry: no drift from the
+# transient classes this adapter owns.
 HOTHER="$TMP_ROOT/hother"; new_home "$HOTHER"
 OTHER_ART="$TMP_ROOT/other-board.html"
 printf '<h1>other</h1>\n' > "$OTHER_ART"
@@ -2094,7 +2103,7 @@ assert_contains "$(wake_payloads "$HOTHER")" "procevent lavish $other_id 1" \
   "an unrelated SERVER_ERROR is captured and announced immediately"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HOTHER" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$OTHER_ART" >/dev/null
-pass "only the exact interruption is retried; an unrelated SERVER_ERROR still surfaces"
+pass "only the transient classes are retried; an unrelated SERVER_ERROR still surfaces"
 unset FM_LAVISH_POLL_RETRY_DELAY
 
 # A whitespace variant is not the exact transient response and must surface on
@@ -2117,6 +2126,26 @@ assert_contains "$(wake_payloads "$HNEAR")" "procevent lavish $near_id 1" \
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HNEAR" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$NEAR_ART" >/dev/null
 pass "only the literal two-line interruption enters the quiet retry policy"
+
+# A transient head followed by anything beyond one help line is not transient.
+HEXTRA="$TMP_ROOT/hextra"; new_home "$HEXTRA"
+EXTRA_ART="$TMP_ROOT/extra-board.html"
+printf '<h1>extra</h1>\n' > "$EXTRA_ART"
+lavish_session "$EXTRA_ART"
+extra_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$EXTRA_ART")
+fm_test_track_procevent_home "$HEXTRA"
+LAVISH_COUNT="$TMP_ROOT/extra-count"; LAVISH_SCRIPT="help-extra feedback"
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXTRA" FM_LAVISH_POLL_RETRY_DELAY=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$EXTRA_ART" >/dev/null
+wait_for "$HEXTRA/state/.wake-queue" \
+  || fail "a transient head with extra content is captured and announced immediately"
+[ "$(cat "$LAVISH_COUNT")" = 1 ] \
+  || fail "a transient head with extra content was retried instead of surfacing on its first poll"
+assert_grep 'status: feedback' "$(first_result "$HEXTRA" "$extra_id")" \
+  "the extra content after a transient head is captured, not swallowed"
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXTRA" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$EXTRA_ART" >/dev/null
+pass "a transient head followed by more than one help line still surfaces"
 
 # The public arm boundary refuses invalid retry intervals before it publishes a
 # source registration, rather than arming a listener that can only fail later.

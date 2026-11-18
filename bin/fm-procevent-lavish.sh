@@ -43,7 +43,7 @@
 #            status. A declared nonempty block parsed as empty is incomplete.
 # poll       The registered listener command `arm` publishes, not a command to
 #            run in a conversational turn. It runs the published blocking poll
-#            and prints its response verbatim, absorbing only the exact
+#            and prints its response verbatim, absorbing only the
 #            transient errors described below. A staged reply still
 #            present when it starts is posted before the long-poll: through
 #            `lavish-axi reply` when supported, otherwise through the legacy
@@ -127,32 +127,39 @@
 # after the server confirms acceptance. Older compatible versions retain the
 # legacy poll-with-reply path, without the synchronous handoff guarantee.
 #
-# QUIET RETRY, owned here and nowhere else. A live listener can be cut
-# short by the server with exactly this two-line response while the session's
-# marks remain available:
+# QUIET RETRY, owned here and nowhere else. A server restart or crash cuts a
+# live listener short while the session and its marks remain available. The
+# published CLI reports that as one of three transient SERVER_ERROR classes,
+# identified by their exact first two lines:
 #
 #   error: Lavish Editor poll response was interrupted
+#   error: Lavish Editor server connection failed
+#   error: Lavish Editor server did not start
 #   code: SERVER_ERROR
+#
+# optionally followed by a single `help[N]: ...` line. The help line is
+# advisory text the CLI rewords between releases (0.1.97 added two hints to the
+# first two classes), so it is accepted in any wording and never matched.
 #
 # LISTENER_ACTIVE means another poll already serves this board. Keep this
 # listener waiting silently, with exponential retry delay capped at 60 seconds,
 # without taking over or capturing a round. The leading error code is the
 # protocol signal; its holder label and age are variable.
 #
-# The exact three-line startup failure (`Lavish Editor server did not start`,
-# `code: SERVER_ERROR`, and its port-specific `help[1]` server command) is
-# retried by poll and synchronous reply at the same cadence. Poll keeps waiting
-# through these transient failures until the server recovers; synchronous reply
-# retains its bounded attempts and consumes reply files only after acceptance.
+# Poll keeps waiting through the transient classes until the server recovers.
+# Synchronous reply retries only `server did not start`, the one class that
+# proves the reply was never sent, with bounded attempts at the same cadence,
+# and consumes reply files only after acceptance.
 #
 # That is an internal retry, not news, so registering the raw poll made the
 # generic runner capture it and wake the whole fleet. `poll` therefore re-runs
-# the published poll for those exact responses, with
-# attempt starts at least POLL_RETRY_DELAY_DEFAULT seconds apart. The match is exact and
-# deliberately narrow: real feedback, ended and missing sessions and any other
-# SERVER_ERROR are all printed straight through and captured normally. A slow
-# server must not turn an internal retry into a captured round that stops the
-# listener. The retry is a Lavish fact, so the generic runner stays
+# the published poll for those responses, with attempt starts at least
+# POLL_RETRY_DELAY_DEFAULT seconds apart. The match is deliberately narrow:
+# whitespace variants of the first two lines, any further line, a response
+# longer than 512 bytes, real feedback, ended and missing sessions and
+# any other SERVER_ERROR are all printed straight through and captured normally.
+# A slow server must not turn an internal retry into a captured round that stops
+# the listener. The retry is a Lavish fact, so the generic runner stays
 # adapter-agnostic and learns nothing about it.
 #
 # LOSS LIMITATION, stated plainly. The published poll destructively clears
@@ -221,8 +228,10 @@ lavish_reply_compatible() {
 }
 
 lavish_startup_error() {  # <captured-cli-output>
-  # shellcheck disable=SC2016 # Compare the CLI's literal backtick-quoted help.
-  [ "$1" = "$(printf 'error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port %s` to inspect server startup' "$LAVISH_AXI_PORT")" ]
+  # The header's transient-class shape, limited to the startup class.
+  local head=$'error: Lavish Editor server did not start\ncode: SERVER_ERROR'
+  local help_line=$'\nhelp\\[[1-9][0-9]*\\]: [^\n]+'
+  [[ "$1" =~ ^"$head"($help_line)?$ ]]
 }
 
 post_lavish_reply() {  # <artifact> <reply-file>
@@ -325,7 +334,7 @@ cmd_arm() {
   else
     # This adapter's own listener command, which runs the plain blocking form
     # with no --timeout-ms so completion is a server event, and absorbs only
-    # the exact transient interruption.
+    # the transient server errors described in the header.
     register_args=()
     if [ -n "$review_task" ]; then
       register_args+=(--review-task "$review_task" --review-occurrence "$review_occurrence")
@@ -378,22 +387,47 @@ POLL_RETRY_DELAY_DEFAULT=5
 POLL_RETRY_DELAY_MIN=1
 POLL_RETRY_DELAY_MAX=60
 
-# Match the listener-conflict code, exact interruption or startup error. For
-# server failures, the whole
-# response must have the expected bytes: whitespace variants,
-# a longer response that merely opens with them, and any other SERVER_ERROR are
-# genuine errors this adapter must never swallow.
+# Match the listener-conflict code or one of the header's transient
+# SERVER_ERROR classes. The first two lines must have the expected bytes and at
+# most one `help[N]: ` line may follow: whitespace variants, any further line, a
+# response over 512 bytes, and any other SERVER_ERROR are genuine
+# errors this adapter must never swallow.
 poll_response_filter() {  # <response-file>
   perl -e '
     use strict;
     use warnings;
-    my ($stage, $port) = @ARGV;
-    my @expected = (
-      "error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n",
-      "error: Lavish Editor server did not start\ncode: SERVER_ERROR\nhelp[1]: Run `lavish-axi server --port $port` to inspect server startup\n",
+    my ($stage) = @ARGV;
+    my @heads = map { "error: Lavish Editor $_\ncode: SERVER_ERROR\n" } (
+      "poll response was interrupted",
+      "server connection failed",
+      "server did not start",
     );
-    my $stage_limit = 1;
-    for (@expected) { $stage_limit = length($_) + 1 if length($_) >= $stage_limit; }
+    my $transient_max = 512;
+    # The rest after a head: nothing, or one complete help line.
+    sub transient {
+      my ($c) = @_;
+      return 0 if length($c) > $transient_max;
+      for my $head (@heads) {
+        next unless substr($c, 0, length $head) eq $head;
+        my $rest = substr($c, length $head);
+        return 1 if $rest eq "" || $rest =~ /\Ahelp\[[1-9][0-9]*\]: [^\n]+\n\z/;
+      }
+      return 0;
+    }
+    # Whether more bytes could still complete a transient response.
+    sub transient_prefix {
+      my ($c) = @_;
+      return 0 if length($c) > $transient_max;
+      for my $head (@heads) {
+        return 1 if length($c) <= length($head) && substr($head, 0, length $c) eq $c;
+        next unless substr($c, 0, length $head) eq $head;
+        my $rest = substr($c, length $head);
+        return 1 if index("help[", $rest) == 0
+          || $rest =~ /\Ahelp\[[1-9][0-9]*(?:\](?::(?: [^\n]*)?)?)?\z/;
+      }
+      return 0;
+    }
+    my $stage_limit = $transient_max;
     my $limit = 4096;
     open my $staged, ">", $stage or exit 2;
     binmode STDIN;
@@ -432,10 +466,7 @@ poll_response_filter() {  # <response-file>
       my $conflict_prefix = length($candidate) < $limit
         && (index("error:", $candidate) == 0 || ($candidate =~ /\Aerror:/
           && (!defined($code_prefix) || index("code: LISTENER_ACTIVE\n", $code_prefix) == 0)));
-      my $matches_prefix = grep {
-        length($candidate) <= length($_)
-          && substr($_, 0, length($candidate)) eq $candidate
-      } @expected;
+      my $matches_prefix = transient_prefix($candidate) || transient($candidate);
       if (!$matches_prefix && !$conflict_prefix) {
         write_all(*STDOUT, $candidate);
         write_all(*STDOUT, substr($chunk, $take));
@@ -443,9 +474,9 @@ poll_response_filter() {  # <response-file>
       }
     }
     exit 11 if $conflict;
-    exit 10 if !$streaming && grep { $candidate eq $_ } @expected;
+    exit 10 if !$streaming && transient($candidate);
     write_all(*STDOUT, $candidate) unless $streaming;
-  ' "$1" "$LAVISH_AXI_PORT"
+  ' "$1"
 }
 
 # Minimum seconds between retry attempt starts. FM_LAVISH_POLL_RETRY_DELAY is a
