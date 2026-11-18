@@ -66,6 +66,15 @@
 #   fm_timed_out <status>
 #       0 iff <status> is how fm_run_timed or fm_exec_timed reports the bound.
 #
+#   fm_scratch_sweep <dir> <prefix>
+#       Removes <dir>/<prefix>.<pid>.* scratch whose owner has provably ended,
+#       so whoever next uses that kind of scratch frees what a killed owner
+#       left behind. Scratch named before owners were recorded is removed
+#       once a day old. fm_scratch_owner_gone owns the identity test.
+#
+# fm_run_timed sends TERM at the bound and KILL FM_TIMEOUT_GRACE seconds later
+# (default 5), long enough under load for TERM traps to remove scratch.
+#
 # A non-positive bound is not a bound: `timeout 0` and the perl fallback's
 # `alarm 0` both disable the deadline, so callers must reject 0 before calling.
 #
@@ -104,6 +113,45 @@ fm_timeout_mechanism() {
   fi
 }
 
+fm_timeout_grace() {
+  case "${FM_TIMEOUT_GRACE:-}" in
+    '' | 0* | *[!0-9]*) printf '5\n' ;;
+    *) printf '%s\n' "$FM_TIMEOUT_GRACE" ;;
+  esac
+}
+
+# fm_scratch_owner_gone <pid> <path>: 0 when the process that created <path>
+# has provably ended: no process of ours has that pid, or (Linux) the process
+# now holding it started after <path> was last written, so the pid was reused.
+# 1 when the owner may be alive; other platforms cannot tell reuse apart.
+fm_scratch_owner_gone() {
+  local pid=$1 path=$2 stat btime ticks start mtime
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  [ -r "/proc/$pid/stat" ] && IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
+  read -r -a stat <<< "${stat##*)}"
+  start=${stat[19]:-}
+  btime=$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)
+  ticks=$(getconf CLK_TCK 2>/dev/null)
+  mtime=$(stat -c %Y "$path" 2>/dev/null)
+  case "$start$btime$ticks$mtime" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$ticks" -gt 0 ] && [ $((btime + start / ticks)) -gt "$mtime" ]
+}
+
+fm_scratch_sweep() {  # <dir> <prefix>
+  local dir=$1 prefix=$2 path name
+  for path in "$dir/$prefix".*; do
+    [ -O "$path" ] && [ ! -L "$path" ] || continue
+    name=${path##*/}
+    name=${name#"$prefix".}
+    case "${name%%.*}" in
+      "$name" | '' | *[!0-9]*) [ -n "$(find "$path" -maxdepth 0 -mmin +1440 2>/dev/null)" ] || continue ;;
+      *) fm_scratch_owner_gone "${name%%.*}" "$path" || continue ;;
+    esac
+    rm -rf -- "$path" 2>/dev/null || true
+  done
+}
+
 fm_run_bash_timeout() {
   local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
   shift
@@ -124,7 +172,7 @@ fm_run_bash_timeout() {
     sleep "$seconds"
     printf 'expired\n' > "$deadline_status"
     kill -TERM -- "-$child_pid" 2>/dev/null || true
-    sleep 0.2
+    sleep "$(fm_timeout_grace)"
     kill -KILL -- "-$child_pid" 2>/dev/null || true
     exit 124
   ) &
@@ -152,7 +200,10 @@ fm_run_bash_timeout() {
 fm_run_external_timeout() {
   local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
   shift 2
-  status_file=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-status.XXXXXX" 2>/dev/null) || return 124
+  # The owner pid is read here: inside $(...) BASHPID names the subshell.
+  local owner=${BASHPID:-$$}
+  fm_scratch_sweep "${TMPDIR:-/tmp}" fm-timeout-status
+  status_file=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-status.$owner.XXXXXX" 2>/dev/null) || return 124
   # Run the executable path asynchronously (never a bare name: that is the omp
   # timeout builtin, and backgrounding it leaves $! empty) so its pid - also
   # the process-group id created by GNU/BSD timeout without --foreground -
@@ -161,7 +212,7 @@ fm_run_external_timeout() {
   # ignores TERM; timeout then considers the command finished and does not send
   # its configured KILL. Explicitly reap that leftover group on a real timeout.
   # shellcheck disable=SC2016  # Expansion is deliberately deferred to the child shell.
-  "$runner" -k 1 "$seconds" bash -c '
+  "$runner" -k "$(fm_timeout_grace)" "$seconds" bash -c '
     status_file=$1
     shift
     "$@"
@@ -206,8 +257,8 @@ fm_run_timed() {  # <seconds> <command...>
       fm_run_external_timeout "$timeout_path" "$seconds" "$@"
       ;;
     perl)
-      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
-        "$seconds" "$@"
+      perl -e 'my $t = shift; my $g = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, $g; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
+        "$seconds" "$(fm_timeout_grace)" "$@"
       ;;
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
     *) return 124 ;;

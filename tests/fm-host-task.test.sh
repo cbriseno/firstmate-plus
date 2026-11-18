@@ -126,6 +126,25 @@ run_completion_tick >/dev/null
 rm -rf "$TASK_HOME/state/kept.meta" "$TASK_HOME/state/kept.inbox"
 pass 'a done worker kept open by unread steering is explained once'
 
+backdate() {  # <path>: 31 minutes old
+  python3 -c 'import os,sys,time; t=time.time()-1860; os.utime(sys.argv[1],(t,t))' "$1"
+}
+printf 'kind=host\n' > "$TASK_HOME/state/waiting.meta"
+printf 'needs-decision [key=name]: which name\n' > "$TASK_HOME/state/waiting.status"
+OUT=$(run_completion_tick) || fail "waiting tick failed: $OUT"
+[ -e "$TASK_HOME/state/.worker-wait-waiting" ] || fail 'an idle open decision started no wait timer'
+case "$OUT" in *park*) fail "a fresh wait was parked at once: $OUT" ;; esac
+backdate "$TASK_HOME/state/.worker-wait-waiting"
+OUT=$(run_completion_tick) || fail "waiting tick failed: $OUT"
+assert_contains "$OUT" 'worker automatic park refused: waiting' 'a 30-minute idle open decision attempts park'
+[ -e "$TASK_HOME/state/waiting.meta" ] || fail 'the park attempt discarded the waiting worker'
+rm -f "$TASK_HOME/state/.worker-wait-waiting"
+printf 'paused: own test run until %s\n' "$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -v+10M +%Y-%m-%dT%H:%MZ)" > "$TASK_HOME/state/waiting.status"
+run_completion_tick >/dev/null
+[ ! -e "$TASK_HOME/state/.worker-wait-waiting" ] || fail 'a short pause for the worker own job was timed for parking'
+rm -f "$TASK_HOME/state/waiting.meta" "$TASK_HOME/state/waiting.status"
+pass 'a worker idle 30 minutes on an open decision is parked, never one pausing for its own short job'
+
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/claude-host/brief.md" <<'PY'

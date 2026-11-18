@@ -118,6 +118,9 @@ home_summary_refresh_once() {
     fm_lock_acquire_wait "$REFRESH_LOCK"
   fi
   HOME_SUMMARY_LOCK_HELD=1
+  # Only the refresh-lock holder creates these files, so any present now were
+  # left by a predecessor killed before its own cleanup ran.
+  rm -f -- "$STATE"/.home-summary.json.* "$STATE"/.home-summary-error.* 2>/dev/null || true
   HOME_SUMMARY_TMP=$(umask 077; mktemp "$STATE/.home-summary.json.XXXXXX") || {
     home_summary_fail "could not create an atomic publication file in $STATE"
     return 1

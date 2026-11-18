@@ -738,7 +738,8 @@ prefetch_task_current_states() {
   local meta captured_meta id active=0 index=0 rc=0
   local -a pids=()
   snapshot_task_cleanup
-  SNAPSHOT_TASK_DIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-fleet-tasks.XXXXXX") || return 1
+  fm_scratch_sweep "${TMPDIR:-/tmp}" fm-fleet-tasks
+  SNAPSHOT_TASK_DIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-fleet-tasks.$$.XXXXXX") || return 1
   # Keep the metadata generation that selected each task beside its observations.
   # Publishers replace metadata atomically, so copying before workers start gives
   # composition one coherent task manifest even if publication or teardown races it.
@@ -1582,6 +1583,10 @@ snapshot_cleanup() {
   cleanup_json_files
 }
 trap snapshot_cleanup EXIT
+# A bound's TERM must still run the EXIT cleanup; bash skips it on an untrapped signal.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 
 bounded_parent_activities_json() {  # <status-file>
   local f=$1 out rc reason script
@@ -2073,7 +2078,8 @@ if [ "$OUTPUT_MODE" = contribution-input ]; then
   # The backlog JSON can exceed Linux MAX_ARG_STRLEN (128 KiB) as one --argjson
   # argument, so both documents ride temp files via --slurpfile instead of argv.
   contribution_tasks=$(contribution_tasks_json) || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
-  contribution_input_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-snapshot.contrib.XXXXXX") || { echo "fm-fleet-snapshot: contribution temp dir failed" >&2; exit 1; }
+  fm_scratch_sweep "${TMPDIR:-/tmp}" fm-fleet-snapshot-contrib
+  contribution_input_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-snapshot-contrib.$$.XXXXXX") || { echo "fm-fleet-snapshot: contribution temp dir failed" >&2; exit 1; }
   # shellcheck disable=SC2064  # The trap resolves this invocation's directory at exit.
   trap 'rm -rf -- "$contribution_input_dir"' EXIT
   printf '%s' "$BACKLOG_JSON" > "$contribution_input_dir/backlog.json" || { echo "fm-fleet-snapshot: contribution backlog write failed" >&2; exit 1; }
@@ -2084,7 +2090,8 @@ fi
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
-JSON_TRANSPORT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-snapshot.XXXXXX") \
+fm_scratch_sweep "${TMPDIR:-/tmp}" fm-fleet-snapshot
+JSON_TRANSPORT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-snapshot.$$.XXXXXX") \
   || { echo "fm-fleet-snapshot: temporary transport directory creation failed" >&2; exit 1; }
 BACKLOG_JSON_FILE="$JSON_TRANSPORT_DIR/backlog.json"
 TASKS_JSON_FILE="$JSON_TRANSPORT_DIR/tasks.json"

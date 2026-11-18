@@ -527,7 +527,11 @@ fm_lock_reap_abandoned_owners() {
       *)
         pid=
         if [ -f "$candidate/pid" ]; then read -r pid 2>/dev/null < "$candidate/pid" || true; fi
-        fm_pid_alive "$pid" && continue
+        # A live pid counts only while it still names the process that wrote it.
+        if fm_pid_alive "$pid"; then
+          _fm_wake_require_timeout
+          fm_scratch_owner_gone "$pid" "$candidate/pid" || continue
+        fi
         fm_lock_mid_acquire_is_fresh "$candidate" "$pid" && continue
         ;;
     esac

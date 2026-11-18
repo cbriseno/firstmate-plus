@@ -367,6 +367,26 @@ test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace() {
   pass "fm_exec_timed's GNU timeout fallback kills a TERM-ignoring command once the grace has passed"
 }
 
+test_scratch_sweep_frees_only_scratch_of_ended_owners() {
+  local dir="$TMP_ROOT/sweep" live dead
+  mkdir -p "$dir"
+  sleep 30 & live=$!
+  bash -c 'exit 0' & dead=$!
+  wait "$dead"
+  : > "$dir/fm-x.$live.aaaaaa"
+  mkdir "$dir/fm-x.$dead.bbbbbb"
+  : > "$dir/fm-x.cccccc"
+  : > "$dir/fm-x.dddddd"
+  touch -t 202001010000 "$dir/fm-x.dddddd"
+  ( . "$ROOT/bin/fm-timeout-lib.sh"; fm_scratch_sweep "$dir" fm-x )
+  kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+  [ -e "$dir/fm-x.$live.aaaaaa" ] || fail 'scratch of a live owner was removed'
+  [ ! -e "$dir/fm-x.$dead.bbbbbb" ] || fail 'scratch of an ended owner was kept'
+  [ -e "$dir/fm-x.cccccc" ] || fail 'fresh scratch without an owner was removed'
+  [ ! -e "$dir/fm-x.dddddd" ] || fail 'day-old scratch without an owner was kept'
+  pass 'fm_scratch_sweep frees only scratch whose owner ended, and ownerless scratch after a day'
+}
+
 test_timed_out_names_exactly_the_bound_statuses() {
   local status verdict
   for status in 124 137 0 1 125 127 143 ''; do
@@ -434,3 +454,4 @@ test_refuses_rather_than_running_unbounded
 test_rejects_malformed_bounds_before_running_anything
 test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace
 test_timed_out_names_exactly_the_bound_statuses
+test_scratch_sweep_frees_only_scratch_of_ended_owners
