@@ -463,6 +463,7 @@ EOF
 fm_dod_path_unavailable_block() {
   cat <<EOF
 If a higher-priority rule in your session forbids the delivery path above for this task - such as a captain rule that allows no-mistakes only on an explicit request, or one that allows triggering GitHub Actions, as your push or PR would, only on an explicit request - that rule is the captain's standing answer, not a question.
+Where the target repository's GitHub Actions are disabled (check \`gh-axi api repos/<owner>/<repo>/actions/permissions\` for \`enabled=false\`), a push or PR triggers nothing: that is not a use of Actions, so publishing there never needs Actions authorization.
 Never append \`needs-decision\` about how to deliver, and do not stop: finish the implementation, run the project's affected local checks, and commit.
 Then append \`blocked [key=delivery-fallback] [at=<epoch>]: {path} forbidden by {the rule, quoted briefly}; its stated default: {the path that rule names, or none}\` and wait for the replacement Definition of done that firstmate sends to your steering inbox.
 EOF
