@@ -3840,6 +3840,28 @@ LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
+# The task copy exists only now, so its repository skills
+# (bin/fm-repo-skills.py) join the launch brief here, ahead of any --intent
+# overlay, which bin/fm-dod-lib.sh requires to end the brief.
+if { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } && [ -d "$WT" ]; then
+  repo_skills=$(python3 "$SCRIPT_DIR/fm-repo-skills.py" "$WT") || {
+    echo "warning: could not list $WT's repository skills in the launch brief; continuing with native skill discovery" >&2
+    repo_skills=
+  }
+  if [ -n "$repo_skills" ]; then
+    intent_at=$(grep -nxF '# Current no-mistakes intent contract' "$BRIEF" | tail -n 1 | cut -d: -f1)
+    if [ "$KIND" != ship ] || [ "$MODE" != no-mistakes ] || [ -z "$intent_at" ]; then
+      intent_at=$(($(wc -l <"$BRIEF") + 2))
+    fi
+    if ! { {
+      head -n "$((intent_at - 2))" "$BRIEF" && printf '\n%s\n' "$repo_skills" && tail -n "+$((intent_at - 1))" "$BRIEF"
+    } >"$BRIEF_TMP" && mv "$BRIEF_TMP" "$BRIEF"; }; then
+      rm -f -- "$BRIEF_TMP"
+      echo "error: could not add repository skills to $BRIEF" >&2
+      exit 1
+    fi
+  fi
+fi
 # A record-backed launch brief is published into the state dir of the pane
 # receiving it, which for a secondmate is its own home, not this primary's.
 case "$LAUNCH" in

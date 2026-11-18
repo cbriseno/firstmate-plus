@@ -170,6 +170,44 @@ test_claude_launch_brief_publishes_record_doorbell() {
   pass "a claude launch publishes the brief as an operational-inbox record and passes only the doorbell"
 }
 
+# The launch brief lists the task copy's own repository skills with their
+# descriptions, once per skill even when two skill roots share it, ahead of the
+# --intent overlay that must stay last; a copy without skills adds nothing.
+test_launch_brief_lists_target_repository_skills() {
+  local rec out brief skills_line intent_line
+  rec=$(make_spawn_case repo-skills-none claude repo-skills-none)
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" repo-skills-none "$PROJ_DIR" 2>&1)
+  expect_code 0 "$?" "spawn without repository skills failed: $out"
+  assert_not_contains "$(cat "$HOME_DIR/data/repo-skills-none/launch-brief.md")" '# Target repository skills' \
+    'a copy without skills or instruction files gained a repository skills section'
+
+  rec=$(make_spawn_case repo-skills claude repo-skills-z1)
+  read_case_record "$rec"
+  mkdir -p "$PROJ_DIR/.agents/skills/ci-build" "$PROJ_DIR/.claude"
+  printf -- '---\nname: ci-build\ndescription: >-\n  Use before triggering a CI build;\n  signs in first.\n---\n# CI\n' \
+    > "$PROJ_DIR/.agents/skills/ci-build/SKILL.md"
+  ln -s ../.agents/skills "$PROJ_DIR/.claude/skills"
+  printf '# Project\n' > "$PROJ_DIR/AGENTS.md"
+  if ! { git -C "$PROJ_DIR" add -A && git -C "$PROJ_DIR" commit -qm 'Add a repository skill' \
+    && git -C "$PROJ_DIR" push -q origin HEAD; }; then
+    fail 'could not publish the fixture skill'
+  fi
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" repo-skills-z1 "$PROJ_DIR" 2>&1)
+  expect_code 0 "$?" "spawn with repository skills failed: $out"
+  brief="$HOME_DIR/data/repo-skills-z1/launch-brief.md"
+  assert_contains "$(cat "$brief")" "- \`ci-build\`: Use before triggering a CI build; signs in first." \
+    'launch brief did not list the repository skill with its description'
+  [ "$(grep -c "^- .ci-build.: " "$brief")" = 1 ] || fail "a skill shared by two roots was not listed once: $(cat "$brief")"
+  assert_contains "$(cat "$brief")" "/AGENTS.md\`; read any your tool did not load automatically" \
+    'launch brief did not name the repository instruction file'
+  skills_line=$(grep -n '^# Target repository skills$' "$brief" | cut -d: -f1)
+  intent_line=$(grep -n '^## Captain intent authorized for --intent$' "$brief" | cut -d: -f1)
+  [ -n "$skills_line" ] && [ -n "$intent_line" ] && [ "$skills_line" -lt "$intent_line" ] \
+    || fail "the --intent overlay no longer ends the launch brief: $(cat "$brief")"
+  pass "the launch brief lists target repository skills once, before the --intent overlay"
+}
+
 # A secondmate's launch brief belongs to the secondmate home that pane runs in,
 # so its record must publish there rather than into the primary's state.
 test_claude_secondmate_launch_brief_publishes_into_its_own_home() {
@@ -1719,6 +1757,7 @@ test_scaffold_category_flow
 test_category_profile_guard
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
+test_launch_brief_lists_target_repository_skills
 test_claude_secondmate_launch_brief_publishes_into_its_own_home
 test_claude_spawn_refuses_when_the_brief_record_cannot_publish
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
