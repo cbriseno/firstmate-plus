@@ -125,7 +125,7 @@ fm_timeout_grace() {
 # now holding it started after <path> was last written, so the pid was reused.
 # 1 when the owner may be alive; other platforms cannot tell reuse apart.
 fm_scratch_owner_gone() {
-  local pid=$1 path=$2 stat btime ticks start mtime
+  local pid=$1 owned=$2 stat btime ticks start mtime
   case "$pid" in '' | *[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 0
   [ -r "/proc/$pid/stat" ] && IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
@@ -133,22 +133,22 @@ fm_scratch_owner_gone() {
   start=${stat[19]:-}
   btime=$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)
   ticks=$(getconf CLK_TCK 2>/dev/null)
-  mtime=$(stat -c %Y "$path" 2>/dev/null)
+  mtime=$(stat -c %Y "$owned" 2>/dev/null)
   case "$start$btime$ticks$mtime" in '' | *[!0-9]*) return 1 ;; esac
   [ "$ticks" -gt 0 ] && [ $((btime + start / ticks)) -gt "$mtime" ]
 }
 
 fm_scratch_sweep() {  # <dir> <prefix>
-  local dir=$1 prefix=$2 path name
-  for path in "$dir/$prefix".*; do
-    [ -O "$path" ] && [ ! -L "$path" ] || continue
-    name=${path##*/}
-    name=${name#"$prefix".}
-    case "${name%%.*}" in
-      "$name" | '' | *[!0-9]*) [ -n "$(find "$path" -maxdepth 0 -mmin +1440 2>/dev/null)" ] || continue ;;
-      *) fm_scratch_owner_gone "${name%%.*}" "$path" || continue ;;
+  local sweep_dir=$1 sweep_prefix=$2 sweep_path sweep_name
+  for sweep_path in "$sweep_dir/$sweep_prefix".*; do
+    [ -O "$sweep_path" ] && [ ! -L "$sweep_path" ] || continue
+    sweep_name=${sweep_path##*/}
+    sweep_name=${sweep_name#"$sweep_prefix".}
+    case "${sweep_name%%.*}" in
+      "$sweep_name" | '' | *[!0-9]*) [ -n "$(find "$sweep_path" -maxdepth 0 -mmin +1440 2>/dev/null)" ] || continue ;;
+      *) fm_scratch_owner_gone "${sweep_name%%.*}" "$sweep_path" || continue ;;
     esac
-    rm -rf -- "$path" 2>/dev/null || true
+    rm -rf -- "$sweep_path" 2>/dev/null || true
   done
 }
 
