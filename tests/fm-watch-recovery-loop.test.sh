@@ -188,8 +188,9 @@ test_ready_work_wakes_once() {
     fail "held or dependent work was included"
   fi
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add second 'Another task' --repo firstmate >/dev/null 2>&1
+  # The triage line is written before the batch record; wait for the record.
   for ((i=0; i<600; i++)); do
-    grep -F 'second' "$state/.watch-triage.log" >/dev/null && break
+    [ "$(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info" 2>/dev/null)" -ge 2 ] && break
     kill -0 "$child" 2>/dev/null || break
     sleep 0.1
   done
@@ -199,7 +200,7 @@ test_ready_work_wakes_once() {
   grep -F 'second' "$state/.watch-triage.log" >/dev/null || fail "new dispatch opportunity was not recorded"
   [ ! -s "$state/.wake-queue" ] || fail "scheduling information queued an individual wake"
   [ "$(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info")" -eq 2 ] \
-    || fail "unchanged opportunities repeated in the batch"
+    || fail "expected two scheduling records in the batch, got $(awk -F '\t' '$2=="scheduling"{n++} END{print n+0}' "$state/.watch-info")"
   pass "dispatch opportunities are recorded once per change and share the informational batch"
 }
 
