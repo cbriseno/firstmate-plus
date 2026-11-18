@@ -11,10 +11,10 @@ metadata:
 
 # bearings
 
-Delegate the following snapshot and report composition to a scout or ship under `AGENTS.md` section 1; the primary relays its concise digest so the captain can resume in one read.
+Delegate the following snapshot and report composition to a scout or ship under `SUPERVISOR.md` section 1; the primary relays its concise digest so the captain can resume in one read.
 Plain `/bearings` returns only the concise four-section chat digest.
 Only `/bearings file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
-Only `/bearings lavish` asks that worker to create, host, and iterate the interactive fleet board beside the digest under `AGENTS.md` section 9.
+Only `/bearings lavish` asks that worker to create, host, and iterate the interactive fleet board beside the digest under `SUPERVISOR.md` section 9.
 A digest invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, and the explicit dated report in file mode; lavish mode additionally delegates the board to its hosting worker.
 During that invocation it never tears down a task, merges a PR, dispatches or steers work beyond the report or discussion handoff, answers a decision, or cleans up work.
 Board answers are acted on later under the normal authority rules; this skill's board-wake section explicitly owns the guarded routing at that time.
@@ -173,7 +173,7 @@ Rules that keep the contract unambiguous:
 - Do not suppress separately projected decisions, landed records, or gates from a `partial-structured` home merely because that secondmate's own row is `unknown` or its `invalidity` reports an inventory mismatch.
 - Include the required direct address to the captain inside one item or empty-state sentence.
 - Every PR appears as the full `https://...` URL; a shorthand `#number` is fine only as a back-reference after the full URL has already appeared in the same digest.
-- The chat follows `AGENTS.md` section 9 and carries one scannable line per item.
+- The chat follows `SUPERVISOR.md` section 9 and carries one scannable line per item.
 - Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while lavish mode puts only its payload-backed interactive detail on the board.
 - In file mode, include the report path or link inside the four-section digest without adding another heading.
 - In lavish mode, include the board URL inside the four-section digest the same way.

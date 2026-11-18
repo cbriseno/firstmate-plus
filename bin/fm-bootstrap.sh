@@ -21,6 +21,7 @@
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
+#                 "BOOTSTRAP_INFO: wrote|linked <home>/<file> ..." (bin/fm-home-instructions.sh),
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>",
 #                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
@@ -30,7 +31,7 @@
 #          the same commit to its host, which imports that commit into the home
 #          without moving the host's Firstmate copy. If either placement changes
 #          its loaded instruction surface
-#          (AGENTS.md, bin/, or .agents/skills/), bootstrap immediately nudges it
+#          (SUPERVISOR.md, worker/, bin/, or .agents/skills/), bootstrap immediately nudges it
 #          via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta resolves the
 #          current route and the standard from-firstmate marker is applied. A
 #          successful send prints one BOOTSTRAP_INFO line with the exact target
@@ -73,7 +74,7 @@
 #          tasks-axi is required unless config/backlog-backend=manual.
 #          A compatible tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
-#          procedure in AGENTS.md section 4 and
+#          procedure in SUPERVISOR.md section 4 and
 #          .agents/skills/quota-array-dispatch/SKILL.md.
 #          Feature-only tools are not startup requirements: treehouse is checked
 #          at dispatch, no-mistakes at explicit delivery, and browser tools when
@@ -403,8 +404,8 @@ secondmate_sync() {
   # another machine, so its host is handed that same commit and imports it there
   # (bin/fm-remote-secondmate-control.sh); this side still fetches nothing.
   # Startup sends reread nudges only for RUNNING secondmates whose instruction
-  # surface (AGENTS.md, bin/, or .agents/skills/) actually changed, so a secondmate already on the primary's
-  # version is never disturbed (AGENTS.md bootstrap + supervision). Unlike
+  # surface (SUPERVISOR.md, worker/, bin/, or .agents/skills/) actually changed, so a secondmate already on the primary's
+  # version is never disturbed (SUPERVISOR.md bootstrap + supervision). Unlike
   # /updatefirstmate, startup owns the live-convergence send itself because it is
   # a deterministic locked sweep and can report success as BOOTSTRAP_INFO while
   # preserving failed sends as NUDGE_SECONDMATES retry markers.
@@ -1684,6 +1685,7 @@ fi
 local_phase && detect_local_config
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
+  local_phase && bash "$SCRIPT_DIR/fm-home-instructions.sh" "$FM_HOME"
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
   # those two always run together in the same phase. Clone refresh does not
   # depend on them, so it starts in the background and overlaps their wall clock.

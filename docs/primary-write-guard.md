@@ -89,7 +89,7 @@ Shell commands are lexed with the shared classifier in `bin/fm-arm-command-polic
 - inline interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, and heredoc stdin) that calls a common write API on a literal path;
 - nested programs: subshells, brace groups, command substitutions, `bash -c` and other shell payloads, `eval`, `find -exec` and `-delete`, and `xargs`.
 
-Durable knowledge still follows the ownership rules in [`AGENTS.md`](../AGENTS.md) section 6.
+Durable knowledge still follows the ownership rules in [`SUPERVISOR.md`](../SUPERVISOR.md) section 6.
 A relative target resolves against the payload's working directory, tracking `cd` inside a subshell.
 `~`, `$HOME`, and `$FM_HOME` are expanded; under `off`, other variables defined in the hook environment retain their legacy expansion.
 In host-mode shell commands, simple literal absolute or home-relative assignments earlier in the same command, including chains and `export`, can resolve later targets.

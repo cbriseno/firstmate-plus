@@ -63,3 +63,22 @@ Verify with `FM_HOME=/absolute/home bash bin/fm-tasks-axi.sh work snapshot`: `al
 Repeat for each authorized home; a snapshot or code update alone does not activate aliases.
 
 Command: `bash -c 'exec bash bin/fm-tasks-axi.sh work aliases-init --map "$FM_HOME/data/upgrades/deck-short-aliases-seed.json" --request-id deck-short-aliases-20261111'`
+
+## native-rule-files - 2026-11-18
+
+Action: Load the supervisor contract natively and migrate this installation's rule notes to the files each audience loads.
+
+The supervisor contract moved from `AGENTS.md` to `SUPERVISOR.md`, and task workers now receive `worker/AGENTS.md` at launch.
+The command writes the home's untracked loaders, `CLAUDE.local.md` and `AGENTS.override.md`; restart the primary afterwards so it loads them.
+Then the primary, or a worker it dispatches, migrates the installation's existing notes once:
+
+1. Back up `data/captain.md` and `data/captain-shared.md`, and append each rule it moves, verbatim, to `data/memory-archive.md`.
+2. Classify each rule by who must follow it: every agent, only this home's supervisor, Firstmate task workers, one project's agents, or a program's behavior.
+3. Move every-agent rules into the operator's global instruction file (`~/.claude/CLAUDE.md`), and make `~/.codex/AGENTS.md` a symbolic link to it after backing up the old copy.
+4. Leave supervisor-only rules in `data/captain.md` and `data/captain-shared.md`; route worker, project, and program rules as `SUPERVISOR.md` section 6 says.
+5. Show the operator the classification table once, through a captain hold, and apply the corrections the operator gives.
+6. Start one minimal Claude and one minimal Codex session in a project and confirm each cites a moved every-agent rule without being told.
+
+From then on, `SUPERVISOR.md` section 6 writes every new rule straight to its audience's file, so the notes do not refill.
+
+Command: `bash bin/fm-home-instructions.sh .`

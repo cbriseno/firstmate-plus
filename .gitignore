@@ -13,3 +13,5 @@ __pycache__/
 config/
 
 .tools/
+CLAUDE.local.md
+AGENTS.override.md

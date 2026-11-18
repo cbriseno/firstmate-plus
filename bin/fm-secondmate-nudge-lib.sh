@@ -14,8 +14,8 @@
 # written back to owed=0 when it failed or removed when it converged; an owed
 # reread survives unchanged retries until a successful send.
 
-FM_SECOND_MATE_NUDGE_MESSAGE='firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'
-FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE='Firstmate instructions or inherited config changed on this host. Re-read AGENTS.md and the inherited config files before further work.'
+FM_SECOND_MATE_NUDGE_MESSAGE='firstmate was updated to the latest - please re-read your SUPERVISOR.md to pick up the new instructions.'
+FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE='Firstmate instructions or inherited config changed on this host. Re-read SUPERVISOR.md and the inherited config files before further work.'
 
 fm_secondmate_nudge_marker_path() { # <state-dir> <id>
   local state=$1 id=$2

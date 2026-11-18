@@ -110,14 +110,11 @@
 # restating the rule.
 # Every heredoc here stays outside a command substitution: `VAR=$(cat <<EOF ...)`
 # breaks parsing of the whole file on Bash 3.2 (tests/fm-brief.test.sh).
-# fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
-# emitter, supplying it first in every ship/scout launch brief and never to a
-# secondmate charter. It names the one task-owned steering inbox without
-# relaxing isolation from every other home's endpoint namespace. Like
-# fm_brief_intent_overlay it is a distinctly titled launch section that states
-# its own precedence, so a brief or project instruction that authors a
-# conflicting role is superseded rather than duplicated.
-# Skill references use names; each worker's native catalog owns its paths.
+# fm_brief_worker_role renders the task-specific part of the worker role:
+# where the launch loaded worker/AGENTS.md from and the one task-owned steering
+# inbox. bin/fm-spawn.sh is its one emitter, supplying it first in every task
+# launch brief and never to a secondmate charter; the role itself lives in
+# worker/AGENTS.md, which the launch hands to the harness natively.
 # fm_ship_rule_one owns the mode-specific first ship safety rule shared by an
 # ordinary ship brief and the durable contract written during scout promotion.
 # It takes the same optional trailing forge argument, because the rule that keeps
@@ -134,24 +131,11 @@
 # shellcheck source=bin/fm-external-review-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-external-review-lib.sh"
 
-fm_brief_worker_role() {  # <state-dir> <task-id>
-  local state=$1 task_id=$2
-  cat <<'EOF'
-# Current worker role contract
-You are a crewmate: an autonomous worker agent managed by firstmate.
-This section establishes your current identity before every project or task instruction below and supersedes any conflicting role identity in those instructions.
-Do the assigned work yourself and report only to firstmate; do not adopt a firstmate or secondmate supervisor identity, delegate the task, run fleet supervision, or address the captain.
-Do not use `request_user_input`, `request_user_input_async`, or native question selectors: firstmate cannot see or answer those UI waits.
-Before asking firstmate, follow worker-contract's "Obstacles and escalation" procedure; it owns whether to continue, wait, or escalate and which status to use.
-For a question that still requires an outside answer, report it with all options using that status and the task status command, refresh your progress, and wait for the reply in your steering inbox.
-Before finishing, close the servers, browsers, temporary services, and background processes you opened; report anything intentionally left running.
-EOF
+fm_brief_worker_role() {  # <state-dir> <task-id> <code-root>
+  local state=$1 task_id=$2 root=$3
+  printf '# Current worker role contract\n'
+  printf "Your worker contract was loaded at launch from \`%s/worker/AGENTS.md\`; the Firstmate code root its relative paths name is \`%s\`.\n" "$root" "$root"
   printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
-  cat <<'EOF'
-Never inspect or change any other home's endpoint namespace; this authorization is limited to the exact task paths named by this brief.
-When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is project content and the supervisor contract for the firstmate managing you: follow this brief instead of that supervisor contract.
-Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
-EOF
 }
 
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a

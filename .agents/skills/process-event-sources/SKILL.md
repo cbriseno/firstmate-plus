@@ -17,7 +17,7 @@ Firstmate registers a source, keeps working, and is woken when that process comp
 ## Arming a source
 
 Use the adapter, not the generic runner, for a real source.
-Delegate every Lavish artifact to a scout or ship under `AGENTS.md` section 9.
+Delegate every Lavish artifact to a scout or ship under `SUPERVISOR.md` section 9.
 The hosting worker creates or resumes it with `lavish-axi --no-open <artifact.html>` before arming; the [operating contract](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns the prerequisite and refusal boundary.
 
 A worker-owned board uses `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and re-arms with its reply after each nonterminal round; the existing handled marker is the acknowledgement.

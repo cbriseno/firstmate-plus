@@ -7,7 +7,7 @@
 # A captain rule that allows a path only on an explicit request - no-mistakes,
 # or GitHub Actions that a push or pull request would trigger - already states
 # the captain's default, so it is a stated reason to drop rigor, never a
-# question about the delivery mode (AGENTS.md section 7 owns that intake rule).
+# question about the delivery mode (SUPERVISOR.md section 7 owns that intake rule).
 # A worker that meets such a rule reports it under the key bin/fm-dod-lib.sh's
 # Definition of done names (`delivery-fallback`), and firstmate answers with
 # this command rather than asking the captain. --reason is the rule, quoted

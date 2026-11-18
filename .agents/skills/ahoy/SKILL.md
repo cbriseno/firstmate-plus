@@ -15,7 +15,7 @@ Give the captain a concise session-only recap without gathering fresh state.
    Run-tier harness surfaces run it automatically at session open, so this step is normally already satisfied and costs one glance; it is the safety net for surfaces that cannot run it on a hook, and for any path where a skill would otherwise act first.
    Taking the helm always precedes this skill's own logic, and the digest it produces is operational input, never a captain message or a recap event.
 
-1. Use only conversation or session history already visible to the current first mate; delegate sustained analysis under `AGENTS.md` section 1 with the relevant visible facts.
+1. Use only conversation or session history already visible to the current first mate; delegate sustained analysis under `SUPERVISOR.md` section 1 with the relevant visible facts.
 2. Find the most recent real captain-authored message before the current `/ahoy` invocation.
    A captain boundary is an ordinary user-role message unless it matches one of the narrow operational exclusions below.
    Exclude messages that begin with the current U+2063 `FIRSTMATE_OP:` injection prefix.
@@ -44,7 +44,7 @@ Give the captain a concise session-only recap without gathering fresh state.
 7. If no ordinary events occurred after the previous captain message but an older visibly open decision exists, report that decision instead of claiming nothing happened.
    If neither ordinary events nor visibly open decisions exist, say directly in one sentence that nothing happened after the previous captain message.
 
-8. After the normal recap, keep a single yes-or-no question in plain chat; otherwise dispatch or retain a scout or ship with the visibly open decision inventory for the guided discussion under `AGENTS.md` section 9.
+8. After the normal recap, keep a single yes-or-no question in plain chat; otherwise dispatch or retain a scout or ship with the visibly open decision inventory for the guided discussion under `SUPERVISOR.md` section 9.
    Include the impact ordering, why each decision matters, its options, and a recommendation in the handoff.
 9. The hosting worker presents and iterates the decisions, then returns the resulting decision for the primary to relay and apply or delegate.
    Do not start a discussion when the inventory is empty.

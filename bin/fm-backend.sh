@@ -42,7 +42,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # Verified backend adapters. Extend only after a backend gets its own
-# bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
+# bin/backends/<name>.sh and empirical verification, mirroring SUPERVISOR.md
 # section 4's harness-verification discipline. herdr is verified (P2;
 # data/fm-backend-design-d7/herdr-addendum.md) and has its own required CI lane,
 # with current coverage in docs/herdr-backend.md and

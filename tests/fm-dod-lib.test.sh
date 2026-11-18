@@ -469,29 +469,22 @@ test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_promotion_keeps_the_recorded_base_branch
 
-# The generated role names the skill without priming other skill loads to use
-# the operator's home. The native catalog owns resolution of skill paths.
-test_worker_role_names_skill_without_home_path() {
+# The launch role carries only task-specific facts: where the worker contract
+# came from and the task's own steering inbox. The role itself lives in
+# worker/AGENTS.md, which the launch hands to the harness natively.
+test_worker_role_is_task_specific() {
   local role_file
   role_file="$TMP_ROOT/worker-role.txt"
-  fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 >"$role_file"
-  assert_grep "Do not use \`request_user_input\`, \`request_user_input_async\`, or native question selectors" "$role_file" \
-    "worker launch contract allows a question selector invisible to firstmate"
-  assert_grep 'Before asking firstmate, follow worker-contract' "$role_file" \
-    "worker launch contract must classify questions before escalating"
-  assert_grep 'report it with all options using that status and the task status command' "$role_file" \
-    "worker launch contract does not route unanswered questions through classified status"
-  assert_no_grep "When an answer is required, write \`blocked\`" "$role_file" \
-    "worker launch contract must not override decision/wait classification"
-  assert_grep 'wait for the reply in your steering inbox' "$role_file" \
-    "worker launch contract does not name the reply channel"
-  assert_grep "\`CONTRIBUTING.md\` and \`firstmate-coding-guidelines\` for Firstmate changes" "$role_file" \
-    "worker role did not name the skill"
-  assert_no_grep '/.agents/skills/' "$role_file" \
-    "worker role primes skill loading with an absolute home path"
-  assert_no_grep "Skill tool cannot resolve" "$role_file" \
-    "worker role claims the Skill tool never resolves the skill"
-  pass "worker role names the skill without a home-path fallback"
+  fm_brief_worker_role "$TMP_ROOT/state" upstream-4751 /code-root >"$role_file"
+  assert_grep '/code-root/worker/AGENTS.md' "$role_file" "launch role does not name the loaded worker contract"
+  assert_grep "$TMP_ROOT/state/upstream-4751.inbox" "$role_file" "launch role does not name the task steering inbox"
+  assert_no_grep 'request_user_input' "$role_file" "launch role copied a worker-contract rule"
+  assert_no_grep '/.agents/skills/' "$role_file" "launch role primes skill loading with an absolute home path"
+  # shellcheck disable=SC2016 # literal backticks in the contract text
+  assert_grep 'Do not use `request_user_input`, `request_user_input_async`, or native question selectors' "$ROOT/worker/AGENTS.md" \
+    "worker contract allows a question selector invisible to firstmate"
+  assert_grep 'wait for the reply in your steering inbox' "$ROOT/worker/AGENTS.md" "worker contract does not name the reply channel"
+  pass "launch role is task-specific and the worker contract owns the role"
 }
 
 # forge=external: a review tool uploads its own snapshot, so nothing is pushed.
@@ -603,7 +596,7 @@ test_external_dod_renders_the_adapter
 test_external_review_done_without_backup_is_accepted_on_the_url
 test_external_review_done_with_backup_needs_the_copy
 
-test_worker_role_names_skill_without_home_path
+test_worker_role_is_task_specific
 
 # A captain rule that forbids the selected path (no-mistakes or GitHub Actions
 # only on explicit request) is answered by firstmate, never by the captain: every

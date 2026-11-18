@@ -11,7 +11,7 @@ metadata:
 
 A decision is not a separate thing: it is simply a task waiting on the captain.
 The one primitive is an ordinary backlog task held for the captain through `bin/fm-captain-hold.sh hold`; its identity is the task id, and that wrapper owns the deterministic mechanics this policy relies on.
-The originating worker performs the semantic inventory under `AGENTS.md` section 1 and returns the concise result; scripts must not infer captain calls from report prose, visual-review artifacts, terminal output, or chat.
+The originating worker performs the semantic inventory under `SUPERVISOR.md` section 1 and returns the concise result; scripts must not infer captain calls from report prose, visual-review artifacts, terminal output, or chat.
 Before generating a report that asks for approval, changes or further investigation, its worker inventories the requested choices and reuses their existing calls.
 For a missing call, the worker sends Firstmate a keyed `needs-decision` with the question and all offered options; Firstmate registers it through this policy and returns the call identity and option ids through the worker inbox.
 The worker continues independent work but waits for those identities before delivering that report; an approval or investigation action must not silently disappear because no call existed yet.
@@ -20,13 +20,13 @@ This registration request is internal coordination, not another question for the
 ## Policy
 
 Every unresolved question that belongs to the captain and is discovered while producing, reading, presenting, or ending an investigation or visual review must be carried by a captain-held task in the authoritative backlog of the home that owns the originating work before that work or review may be treated as complete.
-For a Lavish board-backed handoff, the hosting worker passes its reply through the crew-hosted contract before appending status; `AGENTS.md` section 9 owns delegation and the adapter owns version-specific acceptance ordering.
+For a Lavish board-backed handoff, the hosting worker passes its reply through the crew-hosted contract before appending status; `SUPERVISOR.md` section 9 owns delegation and the adapter owns version-specific acceptance ordering.
 Prefer holding the work item the question gates over minting a new row; create a new task only when no work item exists to hold.
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
-Prepare the decision under `AGENTS.md` section 9 before holding it; retain the analysis and plan in the linked result rather than expanding the card.
-Question it before holding, as `AGENTS.md` section 9 requires: when a prior rule or decision, `captain-shared` authorization, reversibility, or a contradiction with what was already asked settles it, decide with the recommendation and note the decision on the task instead of holding; otherwise pass `--challenge` with the one line saying why none settles it, which `hold` records on the task.
+Prepare the decision under `SUPERVISOR.md` section 9 before holding it; retain the analysis and plan in the linked result rather than expanding the card.
+Question it before holding, as `SUPERVISOR.md` section 9 requires: when a prior rule or decision, `captain-shared` authorization, reversibility, or a contradiction with what was already asked settles it, decide with the recommendation and note the decision on the task instead of holding; otherwise pass `--challenge` with the one line saying why none settles it, which `hold` records on the task.
 Quota and cost are reported in the result, never a reason to hold; `--category money` needs `--charge` naming the real payment or purchase.
-Keep the reason a short plain summary, pass the required `--category` from `AGENTS.md` section 9 and its `--challenge`, and put the card the captain answers in the structured hold fields: `--context`, `--question`, one `--option` per choice, `--recommended`, and `--link` to the report.
+Keep the reason a short plain summary, pass the required `--category` from `SUPERVISOR.md` section 9 and its `--challenge`, and put the card the captain answers in the structured hold fields: `--context`, `--question`, one `--option` per choice, `--recommended`, and `--link` to the report.
 Write the context as the consequence in human language, and include the recommended outcome and why when the report supports one; keep dates, source keys, and diagnostics in the linked report.
 Pass `--origin` for the work that produced the decision, then block each work item the answer gates with `bin/fm-tasks-axi.sh block <work> --by <decision>` so the Deck can show recorded relationships without inferring them.
 `hold` refuses a call without `--question` and at least two `--option` choices, so think the choices through before holding rather than retrying around the refusal.
@@ -55,7 +55,7 @@ Before asking again, reconcile the canonical recorded answer and the originating
 A settled question can still have a pending inbox application receipt; handle or relay that saved answer through the primary owner without reopening the question or bypassing policy review.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
-When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
+When the answer changes what a task must build, follow `SUPERVISOR.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
 When the captain says "later", that is an answer too: re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --category <category> --challenge "<the captain deferred it>" --until <date>` plus the card fields (`--question`, the `--option` choices, `--recommended`) so the item leaves the live Captain's Call and resurfaces on its date, instead of leaving a live-looking card or fabricating a closure.
 "A keyed answer resolves its matching captain-held task" is one capability with one owner, `bin/fm-captain-hold.sh answers`, and every channel that carries a captain answer feeds it the same task id and answer; a channel never maps keys to tasks, records a decision, or resolves anything itself.
 Chat already feeds it through `bin/fm-send.sh --resolve-key`, and a captured-answer source feeds it once bound with `bin/fm-captain-hold.sh bind <source-id>`; bind before arming the source, and key each structured question by the held task's id.
@@ -102,7 +102,7 @@ Leave out internal terms such as task ids, hold, intake, reconcile, pipeline ste
 2. Prepare decisions under the policy above, question each one, decide and note every call a rule, authorization, reversibility, or contradiction settles, inventory only the genuine unresolved choices left for the captain, and find the task each one gates.
 3. Hold that task - or create one captain-held task per open decision the review raised - with a short reason plus the structured card fields written as described in "Writing the card".
 4. Run `complete` with the full captain-held inventory for that review pass.
-5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.
+5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `SUPERVISOR.md` section 9; do not use the word hold in captain chat.
 6. Resolve calls through their owner: `answer` (or a channel feeding `answers`), board-requested `reconcile close` or `reconcile note`, verified moot retirement, action completion, or `--until` for a captain deferral.
 7. Confirm Bearings reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.
 

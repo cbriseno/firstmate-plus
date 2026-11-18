@@ -3,7 +3,7 @@
 How firstmate works, in depth.
 
 This document describes each part of firstmate's design in depth.
-firstmate's supervisor contract and routing index for conditional procedures is [`AGENTS.md`](../AGENTS.md); this is the human-facing companion.
+firstmate's supervisor contract and routing index for conditional procedures is [`SUPERVISOR.md`](../SUPERVISOR.md); this is the human-facing companion.
 
 ## Event-driven supervision
 
@@ -197,7 +197,7 @@ Placement is proven only at launch, so `bin/fm-spawn.sh` also exports the task i
 
 ## No-mistakes gate authority boundary
 
-Firstmate's own no-mistakes gate runs agents inside a checkout that also contains the fleet-captain identity in `AGENTS.md`, so gate execution needs an authority boundary separate from ordinary crewmate worktree isolation.
+Firstmate's own no-mistakes gate runs agents inside a checkout that also contains the fleet-captain identity in `SUPERVISOR.md`, so gate execution needs an authority boundary separate from ordinary crewmate worktree isolation.
 The tracked `.no-mistakes.yaml` sets `disable_project_settings: true`; no-mistakes honors that setting only from the trusted default-branch copy, so a pushed branch cannot enable its own project instructions during validation.
 Independently, the fleet lifecycle entrypoints use `bin/fm-gate-refuse-lib.sh` to refuse gate calls against the real fleet, while permitting validation against a disposable lab home minted by `bin/fm-lab-home.sh`.
 A normal primary checkout or crewmate worktree remains unaffected.
@@ -206,12 +206,12 @@ The refusal library's header owns the gate detection, lab-home exception, test-h
 ## Two task shapes
 
 Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
-The intake and authority contract in `AGENTS.md` owns when separate scout research is warranted.
+The intake and authority contract in `SUPERVISOR.md` owns when separate scout research is warranted.
 
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
-[`AGENTS.md` section 4](../AGENTS.md) owns firstmate's dispatch decision boundary, and [`quota-array-dispatch`](../.agents/skills/quota-array-dispatch/SKILL.md) owns its profile-array selection procedure.
+[`SUPERVISOR.md` section 4](../SUPERVISOR.md) owns firstmate's dispatch decision boundary, and [`quota-array-dispatch`](../.agents/skills/quota-array-dispatch/SKILL.md) owns its profile-array selection procedure.
 The optional typed resolver's rule matching and deterministic profile selection are owned by [configuration.md](configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model).
 The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
@@ -362,13 +362,13 @@ The [Relay configuration reference](configuration.md#promised-public-replies-sta
 
 ## Project memory belongs to projects
 
-Project-memory ownership and the crewmate corrections-only boundary are defined in [`AGENTS.md` section 6](../AGENTS.md#6-project-and-knowledge-management); `data/projects.md` stays a thin private registry.
+Project-memory ownership and the crewmate corrections-only boundary are defined in [`SUPERVISOR.md` section 6](../SUPERVISOR.md#6-project-and-knowledge-management); `data/projects.md` stays a thin private registry.
 For manual project initialization, [`bin/fm-ensure-agents-md.sh`](../bin/fm-ensure-agents-md.sh) owns the `CLAUDE.md` pointer, self-governance insertion, and case-variant file refusal; its header and help document the explicit mark for equivalent project-owned guidance.
 
 ## Operational memory routing
 
 `/stow` sweeps the current session for durable knowledge that only exists in conversation and routes each finding to the most specific disk home.
-The destination for each kind of knowledge, including project-intrinsic knowledge, is owned by [`AGENTS.md` section 6](../AGENTS.md#6-project-and-knowledge-management).
+The destination for each kind of knowledge, including project-intrinsic knowledge, is owned by [`SUPERVISOR.md` section 6](../SUPERVISOR.md#6-project-and-knowledge-management).
 Memory writes use inspect-then-update rather than blind append; the internal [`stow` skill](../.agents/skills/stow/SKILL.md) owns tier markers, decay, cold archival, and offload.
 The same pass also persists open-work record state the session is holding - filing a thread that was never recorded and correcting one the session knows went stale - bounded to the open work that session is actually holding.
 It is deliberately not a reconciliation of durable records against repository or PR reality: its input is the volatile context, so it can only preserve what the session still knows, and no reconciliation that outlives a session exists today.

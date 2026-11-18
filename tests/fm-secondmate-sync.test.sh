@@ -430,7 +430,7 @@ test_bootstrap_sweep_nudges_only_instruction_change() {
 
   info_line=$(printf '%s\n' "$out" | grep '^BOOTSTRAP_INFO: nudged fm-sm-instr ' || true)
   [ -n "$info_line" ] || fail "no BOOTSTRAP_INFO nudge line emitted (got: $out)"
-  assert_contains "$info_line" "firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions." \
+  assert_contains "$info_line" "firstmate was updated to the latest - please re-read your SUPERVISOR.md to pick up the new instructions." \
     "successful nudge report should include the exact message sent"
   assert_not_contains "$out" "NUDGE_SECONDMATES:" "successful nudge must not leave a firstmate action item"
   assert_not_contains "$out" "sm-readme" "readme-only advance is not nudged"
@@ -439,7 +439,7 @@ test_bootstrap_sweep_nudges_only_instruction_change() {
   # the secondmate task's steering-inbox record while only the doorbell is typed.
   assert_contains "$(cat "$w/home/state/sm-instr.inbox/001.msg")" "[fm-from-firstmate]" \
     "nudge send should use the marked fm-send secondmate path"
-  assert_contains "$(cat "$w/home/state/sm-instr.inbox/001.msg")" "firstmate was updated to the latest - please re-read your AGENTS.md" \
+  assert_contains "$(cat "$w/home/state/sm-instr.inbox/001.msg")" "firstmate was updated to the latest - please re-read your SUPERVISOR.md" \
     "nudge send should enqueue the exact re-read message"
   assert_contains "$(cat "$log")" "Firstmate instruction waiting" \
     "nudge send should ring the doorbell at the secondmate pane"
@@ -498,7 +498,7 @@ test_bootstrap_nudge_retry_rejects_malformed_marker_id() {
     printf 'home=%s\n' "$evil"
     printf 'commit=%s\n' "$c1"
     printf 'instructions=AGENTS.md\n'
-    printf 'message=firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.\n'
+    printf 'message=firstmate was updated to the latest - please re-read your SUPERVISOR.md to pick up the new instructions.\n'
   } > "$marker"
   {
     printf 'window=firstmate:fm-evil\n'
@@ -541,7 +541,7 @@ test_bootstrap_nudge_failure_records_retry_marker() {
   marker="$w/home/state/.secondmate-nudge-pending/sm-instr.pending"
   assert_present "$marker" "failed nudge should leave a retry marker"
   assert_grep "selector=fm-sm-instr" "$marker" "retry marker should pin the stable selector"
-  assert_grep "message=firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions." \
+  assert_grep "message=firstmate was updated to the latest - please re-read your SUPERVISOR.md to pick up the new instructions." \
     "$marker" "retry marker should pin the exact message"
   pass "T8c failed bootstrap nudge is surfaced and recorded for retry"
 }
@@ -707,7 +707,7 @@ SH
   assert_contains "$out" "BOOTSTRAP_INFO: nudged fm-sm-instr" \
     "a stale herdr endpoint must not fail a durably enqueued nudge"
   assert_contains "$(cat "$w/home/state/sm-instr.inbox/001.msg")" \
-    "please re-read your AGENTS.md" \
+    "please re-read your SUPERVISOR.md" \
     "the nudge should be durably recorded despite the stale endpoint"
 
   window=$(grep '^window=' "$meta" | tail -1 | cut -d= -f2-)
@@ -1336,7 +1336,7 @@ remote_marker() {  # <w> <owed:0|1|legacy>
   mkdir -p "${marker%/*}"
   {
     printf 'id=sm\nselector=fm-sm\nhome=%s\ncommit=\ninstructions=remote\n' "$1/sm"
-    printf 'message=%s\nremote=1\n' 'Firstmate instructions or inherited config changed on this host. Re-read AGENTS.md and the inherited config files before further work.'
+    printf 'message=%s\nremote=1\n' 'Firstmate instructions or inherited config changed on this host. Re-read SUPERVISOR.md and the inherited config files before further work.'
     [ "$2" = legacy ] || printf 'owed=%s\n' "$2"
   } > "$marker"
 }

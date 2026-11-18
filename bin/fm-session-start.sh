@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fm-session-start.sh - one command for the whole session start.
 #
-# Collapses AGENTS.md sections 3 (bootstrap) and 5 (recovery) into ONE script
+# Collapses SUPERVISOR.md sections 3 (bootstrap) and 5 (recovery) into ONE script
 # producing ONE ordered digest, so a session starts in one or two turns
 # instead of the six-plus separate reads the old docs required: run
 # fm-bootstrap.sh, then separately read data/projects.md, data/secondmates.md,
@@ -23,7 +23,7 @@
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
-# ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
+# ORDERING, and why LOCK now runs before BOOTSTRAP (the old SUPERVISOR.md order
 # was bootstrap-then-lock):
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
@@ -140,7 +140,7 @@
 #     reporting surfaces (bin/fm-bearings-snapshot.sh, /ahoy), and at startup it
 #     is pure weight - 10 done rows cost 3.3KB in an observed main-home digest.
 #   - Every in-flight, held, and blocked row is listed IN FULL, with its
-#     hold_kind/hold_reason and blocked_by. Those are the rows AGENTS.md
+#     hold_kind/hold_reason and blocked_by. Those are the rows SUPERVISOR.md
 #     sections 7 and 10 make actionable at startup, so they are never bounded
 #     away.
 #   - Only the plain queued (dispatchable-now) listing is bounded, by
@@ -169,7 +169,7 @@
 # STATUS TAILS: FM_SESSION_START_STATUS_TAIL bounds how many lines each task's
 # tail prints, and bin/fm-line-cap-lib.sh bounds how long each of those lines
 # may be. Both bounds are safe because the section prints every task's full
-# status log path, and AGENTS.md section 8 treats a status line as a wake EVENT
+# status log path, and SUPERVISOR.md section 8 treats a status line as a wake EVENT
 # rather than current state - bin/fm-crew-state.sh owns current state.
 #
 # RUNTIME BOUND: the digest is now executed through a native session-open
@@ -225,7 +225,7 @@
 #
 #   --source  The native session-open source, supplied only by
 #             fm-sessionstart-run.sh. A genuine `startup` that owns the active
-#             session lock records AGENTS.md's SHA-256 baseline only after the
+#             session lock records SUPERVISOR.md's SHA-256 baseline only after the
 #             digest completion record is published, keyed to that lock's
 #             harness pid. No resume, clear, reset, compact, or other rebuild
 #             creates or replaces it. Claude fresh-reads instructions on reset;
@@ -451,7 +451,7 @@ subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 # subsection, or an explicit ABSENT marker. Absence is semantically
 # meaningful for every one of these files (captain.md absent = firstmate
 # repo built-in defaults, projects.md absent = rebuild from clones, etc. -
-# AGENTS.md section 3) and must never be confused with an empty-but-present
+# SUPERVISOR.md section 3) and must never be confused with an empty-but-present
 # file, so the two cases print differently.
 print_file_or_absent() {
   local path=$1 label=$2
@@ -728,7 +728,7 @@ write_agents_baseline() {  # <lock-pid> <agents-hash>
 
 AGENTS_START_HASH=
 if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
-  AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
+  AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/SUPERVISOR.md" 2>/dev/null || true)
 fi
 
 if [ "$REEMIT" -eq 1 ]; then
@@ -861,7 +861,7 @@ fi
 # separate 900-second cadence remains unchanged.
 # Presented records are this turn's first work queue and remain durable until
 # post-handling acknowledgement. The drain's separate OPEN DECISIONS section
-# remains actionable even when that queue is empty (AGENTS.md sections 3 and 8).
+# remains actionable even when that queue is empty (SUPERVISOR.md sections 3 and 8).
 # The drain also runs fm-guard.sh internally on the locked path, so the
 # tangle/watcher-liveness alarms land right here too, ahead of the bulk digest
 # below. The read-only path never touches the queue because it lacks mutation
@@ -919,7 +919,7 @@ data/backlog.md or state/*.status: re-reading everything defeats the entire
 point of this command.
 
 Go to a source directly only when:
-  - this digest flagged it ABSENT (then rebuild or create it per AGENTS.md),
+  - this digest flagged it ABSENT (then rebuild or create it per SUPERVISOR.md),
   - its contents looked unparseable or corrupt,
   - an individual full status log is needed for older wake-event history, or a
     status line was capped and its tail matters (each task's full log path is
@@ -1145,7 +1145,7 @@ if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   fi
   if [ "$SESSION_SOURCE" = startup ] && [ "$COMPLETION_RECORDED" -eq 1 ] && [ -n "$AGENTS_START_HASH" ]; then
     if ! write_agents_baseline "$COMPLETION_PID" "$AGENTS_START_HASH"; then
-      printf '\nSESSION_START_AGENTS_BASELINE: not recorded - a later supported rebuild will re-emit AGENTS.md.\n'
+      printf '\nSESSION_START_AGENTS_BASELINE: not recorded - a later supported rebuild will re-emit SUPERVISOR.md.\n'
     fi
   fi
 fi

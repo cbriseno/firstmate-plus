@@ -21,7 +21,7 @@
 #
 # Usage:
 #   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact
-#   (AGENTS.md section 9 owns their meaning). `money` also requires --charge
+#   (SUPERVISOR.md section 9 owns their meaning). `money` also requires --charge
 #   naming the real payment or purchase, so quota, tokens, and subscription use
 #   cannot pass as money. Every hold that passes call fields (it opens or
 #   re-opens a call) also requires --challenge: one line saying why no prior
@@ -1185,12 +1185,12 @@ EOF
 
 refuse_category() {
   printf 'fm-captain-hold: %s\n' "$1" >&2
-  printf '%s\n' 'Allowed --category values (AGENTS.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
+  printf '%s\n' 'Allowed --category values (SUPERVISOR.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
   printf '%s\n' 'Solo pregunta al capitán por su gusto o visión de producto, acciones destructivas o irreversibles sin respaldo, pagos o compras reales, credenciales/seguridad, o un dato que solo el capitán tiene. Para cualquier otra cosa, hazlo y repórtalo.' >&2
   exit 1
 }
 
-# One-line refusals for a hold that is not the captain's (AGENTS.md section 9).
+# One-line refusals for a hold that is not the captain's (SUPERVISOR.md section 9).
 refuse_charge() {
   fail 'money means a real payment or purchase; quota, tokens and subscription use are reported, never held - decide with your recommendation and note it on the task, or pass --charge "<what is bought, from whom, how much>" for a real charge'
 }

@@ -808,13 +808,13 @@ class ShellAnalyzer {
 // Decision and reasons.
 // ---------------------------------------------------------------------------
 
-const DISPATCH = "register the request and dispatch a worker instead: classify it under the AGENTS.md intake contract, then bin/fm-brief.sh followed by bin/fm-spawn.sh (bin/fm-scout.sh for a scout)";
+const DISPATCH = "register the request and dispatch a worker instead: classify it under the SUPERVISOR.md intake contract, then bin/fm-brief.sh followed by bin/fm-spawn.sh (bin/fm-scout.sh for a scout)";
 
 function reasonFor(denial, tool) {
   const where = `${tool} would write ${denial.target}`;
   switch (denial.code) {
     case "primary-write-project":
-      return `${where}, inside a project clone. The firstmate primary never changes a project itself: ${DISPATCH}. Only a concrete captain-approved project operation (AGENTS.md hard rule 1) may proceed, after recording that approval with bin/fm-primary-write-grant.sh grant.`;
+      return `${where}, inside a project clone. The firstmate primary never changes a project itself: ${DISPATCH}. Only a concrete captain-approved project operation (SUPERVISOR.md hard rule 1) may proceed, after recording that approval with bin/fm-primary-write-grant.sh grant.`;
     case "primary-write-grant-record":
       return `${where}, a primary write grant record. Grants are created and revoked only through bin/fm-primary-write-grant.sh.`;
     case "primary-delete": return `Refused unsafe or unresolved recursive delete: ${denial.target}.`;

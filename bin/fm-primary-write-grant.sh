@@ -3,7 +3,7 @@
 # firstmate primary, so bin/fm-primary-write-pretool-check.sh lets it through.
 #
 # The primary write guard refuses every direct write outside the home's private
-# operational paths, including project clones. AGENTS.md hard rule 1 keeps one
+# operational paths, including project clones. SUPERVISOR.md hard rule 1 keeps one
 # narrow exception: a concrete project operation the captain approved in the
 # moment, which firstmate then performs with its own tools. This script is how
 # that approval becomes visible to the guard. A grant names one path, quotes the

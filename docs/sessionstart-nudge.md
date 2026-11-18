@@ -1,7 +1,7 @@
 # Native session-start adapters
 
 This doc is for operators who need to know which harnesses run `bin/fm-session-start.sh` when a session opens, which only nudge the agent to run it, and how clear, compaction, and resume are handled.
-AGENTS.md section 3 is the authoritative behavioral contract for session start.
+SUPERVISOR.md section 3 is the authoritative behavioral contract for session start.
 This file owns how the tracked native session-open adapters deliver it, and the compatibility limits that force two tiers rather than one.
 
 One term recurs throughout:
@@ -109,7 +109,7 @@ The requested session start remains idempotent.
 `bin/fm-session-start.sh --reemit` owns these re-emit details:
 
 - Which work a re-emit skips.
-- Its true-start AGENTS.md baseline.
+- Its true-start SUPERVISOR.md baseline.
 - Its supported stale-instruction refresh pairs.
 
 The `bin/fm-session-start.sh` header is the single owner of those mechanics.

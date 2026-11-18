@@ -13,7 +13,7 @@
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
-#   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
+#   per task at intake (SUPERVISOR.md section 7); data/projects.md holds the captain's
 #   standing posture as context, not as this task's answer, so a spawn never looks
 #   the mode up. A ship spawn additionally reads the brief's recorded
 #   "Delivery contract: mode=<mode>" line and REFUSES a mismatch, so the worker's
@@ -239,7 +239,7 @@
 #   (fm-config-inherit-lib.sh). A successful launch clears pending inherited
 #   config reread generations because the new agent reads the converged files.
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
-#   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
+#   see SUPERVISOR.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
 #   Before a secondmate launch, the home is fast-forwarded to the primary's
 #   default-branch commit when safe: directly for a local home, or through the
@@ -367,6 +367,7 @@
 #   pins are never inherited and remote per-mate overrides refuse locally.
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __WORKERCONTRACT__ quoted path to the code root's worker/AGENTS.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
 #     __CLAUDEADDDIRS__ quoted --add-dir flags granting exactly this task's
 #                  Firstmate channel directories (claude_add_dirs_flag below;
@@ -911,7 +912,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   }
 else
-  # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
+  # Delivery contract (SUPERVISOR.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
   # here rather than resolved from the project registry. Scouts deliver a report
   # and record no delivery posture; secondmate spawns hardcode theirs.
@@ -2098,7 +2099,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   BRIEF="$DATA/$ID/launch-brief.md"
   BRIEF_TMP="$DATA/$ID/.launch-brief.md.${BASHPID:-$$}"
   {
-    fm_brief_worker_role "$STATE" "$ID" &&
+    fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT" &&
       printf '\n' &&
       printf 'Report author at launch: model=%s; reasoning effort=%s. Use these for reports you author; if either is default or changes later, verify the actual value before naming it.\n\n' "${MODEL:-default}" "${EFFORT:-default}" &&
       printf '# Current progress reporting contract\nThis supersedes earlier progress reporting instructions, including in a retained brief.\n' &&
@@ -3824,6 +3825,7 @@ else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
+LAUNCH=${LAUNCH//__WORKERCONTRACT__/$(shell_quote "$FM_ROOT/worker/AGENTS.md")}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 # Codex notify proves a normal turn completion only. Its classifier continues to
 # use the bound rollout on Linux and stays unknown on unsupported surfaces.

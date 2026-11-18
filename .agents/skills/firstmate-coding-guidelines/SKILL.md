@@ -1,7 +1,7 @@
 ---
 name: firstmate-coding-guidelines
 description: >-
-  Load before editing firstmate's shared, tracked material as defined by AGENTS.md section 1 as a crewmate briefed on a firstmate-repo task, and before briefing one.
+  Load before editing firstmate's shared, tracked material as defined by SUPERVISOR.md section 1 as a crewmate briefed on a firstmate-repo task, and before briefing one.
 user-invocable: false
 metadata:
   internal: true
@@ -9,8 +9,8 @@ metadata:
 
 # firstmate-coding-guidelines
 
-Load this before changing firstmate's shared, tracked material, as defined by `AGENTS.md` section 1.
-It exists because `AGENTS.md` grew from 585 to 958 lines between its last two restructures, entirely from conditional detail added inline instead of routed to its right home.
+Load this before changing firstmate's shared, tracked material, as defined by `SUPERVISOR.md` section 1.
+It exists because `SUPERVISOR.md` grew from 585 to 958 lines between its last two restructures, entirely from conditional detail added inline instead of routed to its right home.
 Applying the rules below on every change is what keeps that from happening again.
 
 ## Knowledge-placement decision tree
@@ -18,9 +18,9 @@ Applying the rules below on every change is what keeps that from happening again
 Before writing a new fact anywhere in this repo, ask where it belongs, in this order.
 
 1. Does the firstmate AGENT need this on every session or every turn to operate?
-   If yes: `AGENTS.md`, inline.
+   If yes: `SUPERVISOR.md`, inline.
 2. Does the agent need it only in a nameable situation - a spawn, a recovery, a specific wake type, a specific lifecycle step?
-   If yes: an agent-only skill under `.agents/skills/`, whose description states its load trigger; leave a one-line inline pointer in `AGENTS.md` only when an always-loaded rule must name the skill.
+   If yes: an agent-only skill under `.agents/skills/`, whose description states its load trigger; leave a one-line inline pointer in `SUPERVISOR.md` only when an always-loaded rule must name the skill.
 3. Is it public product, setup, or user/operator reference?
    If yes: the surface classified for that audience in [`docs/documentation-audiences.md`](../../../docs/documentation-audiences.md), limited to current behavior, setup, supported limits, stable invariants, concise rationale, and current verification entry points.
 4. Is it contributor/maintainer architecture?
@@ -30,7 +30,7 @@ Before writing a new fact anywhere in this repo, ask where it belongs, in this o
 6. Is it task or incident evidence - chronology, transcripts, branches, temporary paths, failed hypotheses, or delivery proof?
    If yes: keep it in the private task report or PR evidence by default, after distilling every unique current fact into its authoritative owner.
 7. Is it mechanics - exact flags, exact commands, exact paths?
-   If yes: the script's own header comment plus its `--help` output, not prose in `AGENTS.md`, a skill, or a second documentation owner.
+   If yes: the script's own header comment plus its `--help` output, not prose in `SUPERVISOR.md`, a skill, or a second documentation owner.
 
 Stop at the first tier that answers yes.
 Do not place a fact at a more convenient tier than the one this tree gives you.
@@ -46,25 +46,25 @@ When you touch a contract, patch, replace, or prune the owner's existing languag
 
 ## Inline-stub pattern
 
-When content moves out of `AGENTS.md` into a skill, decide what stays behind by asking one question: what must survive with no skill loaded?
+When content moves out of `SUPERVISOR.md` into a skill, decide what stays behind by asking one question: what must survive with no skill loaded?
 That is the trigger condition for loading the skill, plus any safety-critical fact that fires on a wake the skill itself is not loaded for.
 Everything else - the procedure, the mechanism, the surrounding detail - moves out completely.
 Do not leave a partial restatement behind "just in case".
 A partial copy is exactly the duplication the one-owner rule forbids.
-The model to copy is `AGENTS.md` section 8's "Away-mode and quiet-mode stub": it keeps only the skill-invocation triggers inline and points everything else at the `/afk`, `/quiet`, and `away-quiet-supervision` skills.
+The model to copy is `SUPERVISOR.md` section 8's "Away-mode and quiet-mode stub": it keeps only the skill-invocation triggers inline and points everything else at the `/afk`, `/quiet`, and `away-quiet-supervision` skills.
 
 ## Size discipline
 
-Apply the decision tree above to every line you are about to add to `AGENTS.md`.
+Apply the decision tree above to every line you are about to add to `SUPERVISOR.md`.
 If an addition needs more than a few lines of conditional detail (detail that matters only in a specific situation) or reference detail (a wire format, an exact schema, historical rationale), you are almost certainly adding it to the wrong file.
-`AGENTS.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.
+`SUPERVISOR.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.
 A skill's cost is paid only by the sessions that actually load it.
-When in doubt, write the fact into the skill or doc first by patching that owner's existing language, and add only the one-line trigger to `AGENTS.md`.
+When in doubt, write the fact into the skill or doc first by patching that owner's existing language, and add only the one-line trigger to `SUPERVISOR.md`.
 
 ## Trigger hygiene
 
 A new skill is dead weight if nothing loads it.
-Every new skill needs its load trigger declared in its description, which is the always-loaded trigger index; add an inline `AGENTS.md` pointer only in the operating section whose always-loaded rule must name it.
+Every new skill needs its load trigger declared in its description, which is the always-loaded trigger index; add an inline `SUPERVISOR.md` pointer only in the operating section whose always-loaded rule must name it.
 State the trigger as a condition ("load before X", "load on Y wake"), never as a vague pointer.
 Briefs for tasks that touch firstmate's own tracked material should tell the crewmate to load this skill.
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string, while its optional `--project` directory enables lineage-based self-repository detection for the publication gate (`bin/fm-role-lib.sh`).

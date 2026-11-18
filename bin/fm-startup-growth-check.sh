@@ -286,6 +286,7 @@ run_check() {
   printf '%s\n' "$RECORD_SCHEMA_LINE" > "$NEW_RECORD" || exit 1
   printf '%s\t%s\n' last_eval "$now" >> "$NEW_RECORD" || exit 1
 
+  stat_surface tracked SUPERVISOR.md "$FM_ROOT/SUPERVISOR.md" no
   stat_surface tracked AGENTS.md "$FM_ROOT/AGENTS.md" no
   stat_surface tracked CLAUDE.md "$FM_ROOT/CLAUDE.md" yes
   stat_surface tracked bin/fm-session-start.sh "$FM_ROOT/bin/fm-session-start.sh" no

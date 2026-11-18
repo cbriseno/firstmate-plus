@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the explicit per-task delivery contract (AGENTS.md section 7)
+# Behavior tests for the explicit per-task delivery contract (SUPERVISOR.md section 7)
 # across bin/fm-spawn.sh, bin/fm-promote.sh, and bin/fm-project-mode.sh.
 #
 # A ship task's delivery mode and yolo posture are firstmate's decision at intake,
@@ -161,7 +161,7 @@ EOF
 # The registry is the captain's standing posture, so dropping below its rigor is
 # allowed but never silent, while matching or exceeding it stays quiet. An
 # unregistered project resolves to the same no-mistakes standing default
-# (AGENTS.md section 7), so a downgrade there is announced too. A conditional
+# (SUPERVISOR.md section 7), so a downgrade there is announced too. A conditional
 # policy is excluded because both of its legs are legitimate classifications.
 test_spawn_notices_a_rigor_downgrade_against_the_registry() {
   local rec home proj fakebin out label mode registry expect registered n=0
@@ -1105,10 +1105,8 @@ EOF
       first_line=$(sed -n '1p' "$brief")
       [ "$first_line" = '# Current worker role contract' ] ||
         fail "$project_kind $kind did not put worker identity first"
-      assert_grep 'follow this brief instead of that supervisor contract' "$brief" "$project_kind $kind omitted worker authority"
+      assert_grep "Your worker contract was loaded at launch from \`$ROOT/worker/AGENTS.md\`" "$brief" "$project_kind $kind omitted worker authority"
       assert_grep "$home/state/$id.inbox" "$brief" "$project_kind $kind omitted its exact steering inbox"
-      assert_grep 'When this task works on Firstmate itself' "$brief" "$project_kind $kind made the exception unconditional"
-      assert_grep 'Project instructions still govern the work wherever they do not conflict with this worker identity' "$brief" "$project_kind $kind displaced project guidance"
       ! grep -q '^This section supersedes every earlier brief instruction about your role' "$brief" ||
         fail "$project_kind $kind revoked the brief's own role for a task that is not Firstmate"
       assert_no_grep '# Current worker role contract' "$home/data/$id/brief.md" "spawn rewrote the source brief"
@@ -1116,10 +1114,12 @@ EOF
       [ "$(cat "$proj/CLAUDE.md")" = '@AGENTS.md' ] || fail "spawn changed the project import"
     done
   done
-  role_line=$(grep -n 'A ship or scout worker launched by Firstmate into a worktree of this repository' "$ROOT/AGENTS.md" | cut -d: -f1)
-  supervisor_line=$(grep -n '^You are the first mate\.$' "$ROOT/AGENTS.md" | head -1 | cut -d: -f1)
-  [ -n "$role_line" ] && [ "$role_line" -lt "$supervisor_line" ] ||
-    fail "Firstmate AGENTS.md does not disambiguate a launched worker before assigning the supervisor identity"
+  # The role lives in the worker contract the launch loads natively; the
+  # repository AGENTS.md every session in a Firstmate worktree loads carries no
+  # supervisor identity, so a worker on Firstmate itself is never made a first mate.
+  assert_grep 'Project instructions still govern the work wherever they do not conflict with this worker identity' "$ROOT/worker/AGENTS.md" "worker contract displaced project guidance"
+  ! grep -q '^You are the first mate\.$' "$ROOT/AGENTS.md" ||
+    fail "Firstmate AGENTS.md assigns the supervisor identity to every session in a worktree"
   cmp -s "$ROOT/AGENTS.md" "$home/AGENTS.md" || fail "worker spawn changed the primary contract"
   pass "fm-spawn: every legacy worker receives scoped role instructions without changing project or primary instructions"
 }

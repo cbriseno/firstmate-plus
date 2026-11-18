@@ -17,7 +17,8 @@
 #       never converts populated homes in place. The charter brief
 #       is copied to data/charter.md, newly cloned no-mistakes projects are
 #       initialized, an ignored .fm-secondmate-parent binding is published before
-#       the .fm-secondmate-home identity marker, and data/secondmates.md is updated.
+#       the .fm-secondmate-home identity marker, and data/secondmates.md is updated;
+#       the home then gets its supervisor-contract loaders (bin/fm-home-instructions.sh).
 #       Seeding is transactional: on validation, clone, init, or registry failure,
 #       generated briefs, new homes, new project clones, and registry edits are
 #       rolled back. Treehouse-acquired homes are returned only when the rollback
@@ -1004,6 +1005,8 @@ seed_home() {
   seed_registry_lock_release
   trap - EXIT
   rm -rf -- "$SEED_BACKUP_DIR"
+  bash "$SCRIPT_DIR/fm-home-instructions.sh" "$home" >/dev/null \
+    || echo "warning: $home could not get its supervisor-contract loaders; its bootstrap retries" >&2
   printf 'home=%s\n' "$home"
 }
 

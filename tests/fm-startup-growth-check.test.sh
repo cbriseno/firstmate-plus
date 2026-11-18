@@ -16,6 +16,7 @@ make_world() {
   home="$TMP_ROOT/$name/home"
   mkdir -p "$root/bin" "$home/config" "$home/data" "$home/state"
   printf '# Firstmate\n' > "$root/AGENTS.md"
+  printf '# Supervisor\n' > "$root/SUPERVISOR.md"
   printf 'See AGENTS.md\n' > "$root/CLAUDE.md"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$root/bin/fm-session-start.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$root/bin/fm-bootstrap.sh"

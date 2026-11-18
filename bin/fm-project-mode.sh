@@ -54,7 +54,7 @@
 #                          no-mistakes, so sync, seeding, and init treat such a
 #                          project as the remote-backed pipeline project it is.
 # yolo (orthogonal) = merge authority only: when on, firstmate merges green,
-#   in-scope work itself (AGENTS.md section 7).
+#   in-scope work itself (SUPERVISOR.md section 7).
 # branch=<prefix> (orthogonal) = overrides the "fm/" ship-branch prefix so a
 #   project's branch and PR do not read as firstmate-authored, e.g. for a
 #   third-party repo that does not use this tooling. Query it with

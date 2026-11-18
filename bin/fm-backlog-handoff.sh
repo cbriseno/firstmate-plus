@@ -49,7 +49,7 @@
 # Every move names its markdown backlog files explicitly and pins
 # `--backend markdown`, so a `.tasks.toml` in the caller's working directory
 # cannot redirect the move to another backend.
-# See AGENTS.md project management and task lifecycle.
+# See SUPERVISOR.md project management and task lifecycle.
 # Remote routes use an outbox handoff: one atomic local tasks-axi mv removes the
 # selected set from the dispatchable backlog into data/handoff/<id>.outbox.md,
 # then an idempotent confined transfer and fm-backlog-receive.sh deliver it.

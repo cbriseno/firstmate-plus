@@ -25,7 +25,8 @@ class ExportTests(unittest.TestCase):
         self.git('config', 'core.hooksPath', os.devnull)
         for file in ['bin/fm-public-export.py', 'docs/public-export-manifest.json']:
             self.put(file, (ROOT / file).read_bytes())
-        for file in ['LICENSE', 'AGENTS.md', 'README.md', 'bin/fm-session-start.sh']:
+        manifest = json.loads((ROOT / 'docs/public-export-manifest.json').read_text())
+        for file in manifest['required']:
             self.put(file, b'Public fixture\n')
         self.put('docs/removed.md', b'Removed in next release\n')
         self.put('bin/tool.sh', b'#!/bin/sh\nprintf portable\n')

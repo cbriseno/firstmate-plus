@@ -5,7 +5,7 @@
 # Usage: fm-secondmate-restart.sh <secondmate-id>... [--help]
 #
 # This is the executable half of /updatefirstmate's reload step. A running agent
-# holds AGENTS.md and every skill it has loaded frozen from launch, and no
+# holds SUPERVISOR.md and every skill it has loaded frozen from launch, and no
 # verified harness offers a reload, so a re-read steer cannot replace either -
 # it appends a second copy of the mate's own job description with no defined
 # precedence. Replacing the agent is the only mechanism that guarantees the new

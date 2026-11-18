@@ -3,7 +3,7 @@
 # guarantee owned by bin/fm-backend.sh's detailed fm_backend_agent_state and
 # bin/fm-bootstrap.sh's secondmate_liveness_sweep that acts on it.
 #
-# The gap under test (AGENTS.md "Session start"; evidence 2026-07-07): a
+# The gap under test (SUPERVISOR.md "Session start"; evidence 2026-07-07): a
 # secondmate agent that has exited leaves its backend endpoint alive as a bare
 # shell. fm_backend_target_exists only checks pane PRESENCE, so it reports
 # that shell "alive"; recovery only respawns endpoints reported dead, and the

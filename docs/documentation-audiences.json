@@ -198,6 +198,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "SUPERVISOR.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "CLAUDE.md",
       "audience": "agent-runtime"
     },
@@ -486,7 +490,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/worker-contract/SKILL.md",
+      "path": "worker/AGENTS.md",
       "audience": "agent-runtime"
     },
     {

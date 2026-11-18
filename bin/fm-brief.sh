@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Scaffold a crewmate brief or persistent secondmate charter at
 # data/<task-id>/brief.md under the active firstmate home.
-# Ship and scout briefs carry task-specific facts and load the worker-contract
-# skill for shared rules. Ship, scout, and host `# Task` sections have two subsections Firstmate
+# Ship, scout, and host briefs carry only task-specific facts; fm-spawn.sh hands
+# every task worker the shared worker/AGENTS.md contract at launch. Ship, scout, and host `# Task` sections have two subsections Firstmate
 # fills before dispatch: `{TASK}` under `## Captain's intent` (the captain's
 # own ask plus the context needed to read it, including the substance of any
 # report, decision, or PR the ask refers to, without added speaker labels or
@@ -40,7 +40,7 @@
 #   identify this repo. Briefs made without it carry a loud declaration so an
 #   omitted contract cannot be silent.
 # For ship tasks, --mode is REQUIRED and shapes the definition of done. Firstmate
-# resolves it per task at intake (AGENTS.md section 7); data/projects.md holds the
+# resolves it per task at intake (SUPERVISOR.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never reads it:
 #   no-mistakes  implement -> /no-mistakes pipeline -> PR -> configured merge authority
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> configured merge authority
@@ -119,14 +119,13 @@
 # disagrees, so an adjusted brief and the recorded task metadata cannot drift
 # apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
-# Both crewmate scaffolds load worker-contract, which owns the shared rule against
-# administering the no-mistakes daemon or worktree pool. A secondmate charter
-# omits it because that home allocates and returns its own crewmates' slots.
+# worker/AGENTS.md owns the shared rule against administering the no-mistakes
+# daemon or worktree pool. A secondmate charter does not get it because that home allocates and returns its own crewmates' slots.
 # --mode, --forge, and --shape are refused on scout and secondmate scaffolds: a
 # scout's deliverable is a report rather than a merge, and a charter is not a
 # delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
-# a spawn-time and firstmate-side input only (AGENTS.md section 7).
+# a spawn-time and firstmate-side input only (SUPERVISOR.md section 7).
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known wait expected to clear on its own, including
@@ -143,7 +142,7 @@
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
-# The worker-contract skill bounds ship crewmate edits to a
+# worker/AGENTS.md bounds ship crewmate edits to a
 # project's AGENTS.md/CLAUDE.md: only corrections of factually wrong
 # information, including wrong information the task itself introduced - never
 # additions of missing knowledge. A correction edits only the wrong text and
@@ -333,7 +332,7 @@ else
   fi
 fi
 
-# Ship delivery mode is an explicit per-task decision (AGENTS.md section 7). A
+# Ship delivery mode is an explicit per-task decision (SUPERVISOR.md section 7). A
 # missing or invalid value stops the scaffold rather than silently defaulting.
 if [ "$KIND" = ship ]; then
   [ "$MODE_SET" -eq 1 ] || {
@@ -512,7 +511,7 @@ STATUS_APPEND="FM_HOME=$(shell_quote "$FM_HOME") FM_STATE_OVERRIDE=$(shell_quote
 REPORT_ENV=
 [ "$DATA" = "$FM_HOME/data" ] || REPORT_ENV="FM_DATA_OVERRIDE=$(shell_quote "$DATA") "
 STATUS_REPORT="$REPORT_ENV$STATUS_APPEND --card-status '{what is happening now}'"
-# The host brief's card rule; ship and scout workers read it in worker-contract rule 4.
+# The host brief's card rule; ship and scout workers read it in worker/AGENTS.md rule 4.
 IFS= read -r -d '' CARD_RULE <<EOF || true
    The status command's \`--card-status\` also refreshes the card the captain's board shows for this task and renews your progress checkpoint in the same call; there is no separate card write.
    Write \`{what is happening now}\` as one plain line of at most 120 characters that states a fact about the work rather than a message, in the language of the captain's own words under \`## Captain's intent\`, without repeating the card title and without ids, paths, hashes, or tool names.
@@ -614,7 +613,7 @@ $SECONDMATE_SCOPE
 $PROJECT_CLONES_BODY
 
 # Operating model
-You are in an isolated firstmate home. The local \`AGENTS.md\` is your job description, and your local \`data/\`, \`state/\`, \`config/\`, and \`projects/\` dirs are yours to operate.
+You are in an isolated firstmate home. The local \`SUPERVISOR.md\` is your job description, and your local \`data/\`, \`state/\`, \`config/\`, and \`projects/\` dirs are yours to operate.
 $PROJECT_CLONES_NOTE
 Delegate project work to your own crewmates with the normal firstmate lifecycle: brief, spawn, status, watcher, steer, teardown, and recovery.
 Do not invent a second delegation system.
@@ -624,7 +623,7 @@ Never start a survey, audit, or "find improvements" sweep on your own initiative
 
 # The captain and the parent channel
 Nobody reads this chat: the captain and the main firstmate see only what is appended to $STATUS_FILE, and a captain-facing sentence that is not appended there has not been sent.
-That file is your parent channel, and in this home it IS the captain: every sentence you would say to the captain, and every outcome the local AGENTS.md tells a firstmate to bring to the captain, is one appended line there, never chat.
+That file is your parent channel, and in this home it IS the captain: every sentence you would say to the captain, and every outcome the local SUPERVISOR.md tells a firstmate to bring to the captain, is one appended line there, never chat.
 Your own machinery publishes the durable facts about your crew's work for you (\`bin/fm-parent-channel-lib.sh\`): a child's terminal done or failed line with its note and PR on every supervision poll, a PR-ready line when you register a PR, a task you hold for the captain and its answer, a merge, and a child's final line at cleanup all reach the parent channel from the scripts that record them, whether or not you append anything.
 What only you can append is judgement: the answer to a marked request below, a recommendation or caveat on a delivered outcome, a blocker or failure of your own, and anything else you would otherwise say to the captain.
 
@@ -751,22 +750,6 @@ if [ -f "$CONFIG/deck-url" ] && [ ! -L "$CONFIG/deck-url" ]; then
   fi
 fi
 
-WORK_OWNERSHIP_LINE='If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
-Own the monitoring and follow-up for this task within its authorized scope; report concrete results with their full artifact links.
-Before a long run or freezing its inputs, list required services and data areas and perform one small read from each using the documented access mode (including anonymous reads); report missing access before the full pass.
-Before saving or sharing captured logs, pipe them through python3 bin/fm-redact-log.py from the Firstmate code root; never save the raw token-bearing output or enable shell tracing around credentials.'
-
-if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-  SIMPLICITY_LINE='Follow the simplicity rules in AGENTS.md: implement the manual procedure as is, run it live first, add no control layer without observed harm
-For Firstmate shell checks, including reviews, use bin/fm-lint.sh [paths...] instead of raw shellcheck; its header owns host serialization and memory protection.'
-else
-  SIMPLICITY_LINE=''
-fi
-
-# Host tasks need the same classification as ship/scout workers without loading
-# the worker contract's project/worktree rules.
-CREWMATE_OBSTACLE_INSTRUCTIONS="Before escalating an obstacle or question, read and follow only the Obstacles and escalation section of \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`; it owns recovery and blocked classification for this host task."
-
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
 Base branch: $BASE_BRANCH"
@@ -778,10 +761,6 @@ if [ "$KIND" = host ]; then
   HOST_TARGETS=$(fm_host_paths "${HOST_PATHS[@]+"${HOST_PATHS[@]}"}") || exit 1
   printf '%s\n' "$HOST_TARGETS" > "$DATA/$ID/host-paths"
   cat > "$BRIEF" <<EOF
-You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
-Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
-$WORK_OWNERSHIP_LINE
-
 $TASK_SECTION
 
 # Setup
@@ -804,7 +783,6 @@ Report status with numeric Unix timestamps using:
 \`$STATUS_REPORT\`
 $CARD_RULE
 $CREWMATE_PAUSE_INSTRUCTIONS
-$CREWMATE_OBSTACLE_INSTRUCTIONS
 $INBOX_SECTION
 
 # Definition of done
@@ -824,13 +802,7 @@ else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor); still deliver the required standalone HTML report, and ask firstmate to arrange any requested review.'
 fi
 cat > "$BRIEF" <<EOF
-You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
-Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
-$WORK_OWNERSHIP_LINE
-Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
-
 $TASK_SECTION
-$SIMPLICITY_LINE
 $DECK_LINE
 
 $HERDR_SECTION
@@ -885,13 +857,7 @@ RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exi
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT") || exit 1
 
 cat > "$BRIEF" <<EOF
-You are a crewmate managed by firstmate. Work yourself and report only to firstmate.
-Own this task end to end, including technical fixes; escalate only decisions or actions requiring authority you lack, such as product choices, real-data access, publication, credentials, or discarding work.
-$WORK_OWNERSHIP_LINE
-Before starting, load and follow \`$FM_ROOT/.agents/skills/worker-contract/SKILL.md\`.
-
 $TASK_SECTION
-$SIMPLICITY_LINE
 $DECK_LINE
 
 $HERDR_SECTION

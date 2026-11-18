@@ -141,7 +141,7 @@
 # If still busy, preserve the input, report both failures as an unavailable
 # checkpoint through the task status log, and continue independent authorized work.
 # Retry publication at the next reporting checkpoint; never claim the rejected
-# checkpoint was published. Classify any escalation through worker-contract's
+# checkpoint was published. Classify any escalation through worker/AGENTS.md's
 # "Obstacles and escalation" procedure; contention alone requires no lock repair.
 # Do not apply this recovery to unsafe lock errors, other refusals or failures
 # with possible partial effects.

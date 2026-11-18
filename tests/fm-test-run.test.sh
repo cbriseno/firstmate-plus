@@ -155,8 +155,8 @@ init_changed_fixture_repo() {
   printf '# .claude/settings.json\n# bin/lib/fm-branch-dispatch.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
   printf '# bin/lib/fm-branch-dispatch.ts\n' >>"$repo/tests/fm-watch-recovery-loop.test.sh"
-  mkdir -p "$repo/.agents/skills/worker-contract"
-  : >"$repo/.agents/skills/worker-contract/report-theme.html"
+  mkdir -p "$repo/.agents/skills/worker-contract" "$repo/worker"
+  : >"$repo/worker/report-theme.html"
   : >"$repo/.agents/skills/worker-contract/theme-tokens.json"
   mkdir -p \
     "$repo/.agents/skills/example" \
@@ -421,11 +421,11 @@ test_changed_dependency_selection_and_unmapped_failure() {
   git -C "$repo" add .agents/skills/harness-adapters/SKILL.md
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm harness-adapter-router-change
 
-  printf '\n' >>"$repo/.agents/skills/worker-contract/report-theme.html"
+  printf '\n' >>"$repo/worker/report-theme.html"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-brief.test.sh" \
-    "a worker-contract report asset selects its brief contract coverage"
-  git -C "$repo" add .agents/skills/worker-contract/report-theme.html
+    "a worker contract report asset selects its brief contract coverage"
+  git -C "$repo" add worker/report-theme.html
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm worker-contract-report-asset-change
 
   printf '\n' >>"$repo/.agents/skills/worker-contract/theme-tokens.json"

@@ -16,12 +16,14 @@
     "GROK_BOT.md",
     "LICENSE",
     "README.md",
+    "SUPERVISOR.md",
     "VISION.md",
     "assets/",
     "bin/",
     "docs/",
     "skills/",
-    "tests/"
+    "tests/",
+    "worker/"
   ],
   "exclude": [
     ".env",
@@ -48,6 +50,7 @@
   "required": [
     "LICENSE",
     "AGENTS.md",
+    "SUPERVISOR.md",
     "README.md",
     "bin/fm-session-start.sh"
   ],
