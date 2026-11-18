@@ -72,6 +72,15 @@ A successful relay is observed in the watcher information log rather than requir
 macOS was inspected but not executed; the adapter passed Python 3.9 grammar parsing and uses only the standard library.
 These pilots do not calibrate production thresholds or enable workers in an operator home.
 
+The background-work variant uses `FM_WORKER_RELAY_BACKGROUND=1 FM_WORKER_RELAY_LIVE_PROFILES=<claude model>` with the same live command above.
+On 2026-11-18, Linux with Herdr 0.9.5 and Claude Code 2.1.327 (`claude-sonnet-5-5`) started a task job and a native background shell, then wrote the note and ended its turn while both ran.
+The relaunch met Claude's background-work exit picker, cancelled it, kept the agent running and recorded the deferral; the next turn end after the native shell finished relaunched it.
+The task job survived the relaunch and finished afterwards, and the successor kept its projected Herdr space.
+
+```text
+PASS background work: native run finished before relaunch at 1795034474.0 ; task job survived and finished at 1795034551 ; successor stayed in projected workspace w3
+```
+
 On 2026-11-15 UTC, Claude Code 2.1.325 reported `context_window.context_window_size=1000000` through its native statusline for `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5` on Linux.
 The per-launch capture and display-preservation contract belongs to [fm-claude-context.py](../../bin/fm-claude-context.py).
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` refreshes native payload forwarding, display preservation and session replacement without model prompts.

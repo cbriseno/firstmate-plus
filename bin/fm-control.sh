@@ -43,6 +43,9 @@
 #              busy, then submits the harness's exit command. Postcondition:
 #              the backend's recovery-grade classifier reports the agent gone,
 #              then fm-worker-processes.py reclaims its temporary processes.
+#              Claude's background-work exit picker is cancelled with its own
+#              Esc and exits 75 (exit-deferred): the agent and tasks keep
+#              running, and relaunch rolls back the same way.
 #              Already-stopped is success (idempotent). An endpoint that reads
 #              `missing` is put through the control plane's per-backend absence
 #              proof (fm_control_endpoint_absence_verdict) before anything is
@@ -426,6 +429,31 @@ refuse_blocking_prompt() {  # <dialog-name>
   die "task $ID is blocked on a prompt: $1. Refusing to type Enter into it."
 }
 
+# answer_blocking_prompt: the Claude exit picker means native background work
+# is still running. Its selected row stops that work, and this verb reclaims
+# the remaining processes afterward, so neither Enter nor an option is safe.
+# Its own Esc cancels and keeps the agent and the tasks: send that, prove the
+# picker closed, and exit 75 so a caller retries after the work finishes.
+# Every other recognised dialog is refused untouched.
+answer_blocking_prompt() {  # <dialog-name>
+  local elapsed=0
+  [ "$1" = 'Claude background-task exit picker' ] || refuse_blocking_prompt "$1"
+  fm_backend_send_key "$BACKEND" "$T" Escape "$LABEL" \
+    || die "task $ID shows the $1 and the cancel key could not be sent"
+  while :; do
+    : > "$FM_COMPOSER_DIALOG_SINK" || true
+    fm_backend_composer_state "$BACKEND" "$T" "$LABEL" >/dev/null 2>&1 || true
+    [ -s "$FM_COMPOSER_DIALOG_SINK" ] || break
+    awk -v e="$elapsed" -v t="$SETTLE_WAIT" 'BEGIN{exit !(e < t)}' \
+      || die "task $ID is blocked on a prompt: $1, which stayed open after its cancel key"
+    sleep "$POLL"
+    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+  done
+  [ "$(agent_state)" = alive ] || die "task $ID's agent is no longer alive after cancelling the $1"
+  echo "error: exit-deferred $ID: background work is still running; the exit was cancelled and the agent and its tasks keep running. Retry after that work finishes" >&2
+  exit 75
+}
+
 # rendered_matches <ere>: whether any row of the visible viewport matches.
 # An unreadable viewport is a no, so every caller treats it as missing proof.
 rendered_matches() {  # <ere>
@@ -684,7 +712,7 @@ do_exit_agent() {
   # rather than a function that subshell sourced.
   if [ -s "${FM_COMPOSER_DIALOG_SINK:-}" ]; then
     dialog=$(cat "$FM_COMPOSER_DIALOG_SINK")
-    refuse_blocking_prompt "$dialog"
+    answer_blocking_prompt "$dialog"
   fi
   case "$composer_state" in
     empty) ;;
@@ -728,7 +756,7 @@ do_exit_agent() {
       if [ -s "${FM_COMPOSER_DIALOG_SINK:-}" ]; then
         dialog=$(cat "$FM_COMPOSER_DIALOG_SINK")
         if [ "$(agent_state)" != dead ]; then
-          refuse_blocking_prompt "$dialog"
+          answer_blocking_prompt "$dialog"
         fi
       fi
       ;;
@@ -740,7 +768,7 @@ do_exit_agent() {
     : > "$FM_COMPOSER_DIALOG_SINK" || true
     fm_backend_composer_state "$BACKEND" "$T" "$LABEL" >/dev/null 2>&1 || true
     if [ -s "$FM_COMPOSER_DIALOG_SINK" ]; then
-      refuse_blocking_prompt "$(cat "$FM_COMPOSER_DIALOG_SINK")"
+      answer_blocking_prompt "$(cat "$FM_COMPOSER_DIALOG_SINK")"
     fi
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
   }

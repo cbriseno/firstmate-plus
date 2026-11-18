@@ -17,6 +17,8 @@ It waits for the hook to exit, then publishes ID.relay-result for the watcher's
 event classification. Success is informative; failure wakes supervision.
 A safe-point note with unavailable activity emits one actionable failure per
 verdict through the existing request marker; busy waits, idle recovers.
+fm-control exit 75 (native background work still running) is informative:
+relay-deferred-GEN stops idle recovery until the next completed turn retries.
 Replacement spawn retires only obsolete automatic relay inbox requests.
 sessions.jsonl owns history. Internal --request/--control
 PID modes continue after the native callback exits, without reevaluating usage.
@@ -86,7 +88,7 @@ def main():
             note = data / ('relay-note-' + gen + '.md')
             if not gen or not (data / ('relay-request-' + gen)).exists() or not note.exists() or not note.read_text().strip():
                 continue
-            if not eligible(Path(state), task, gen):
+            if not eligible(Path(state), task, gen) or (data / ('relay-deferred-' + gen)).exists():
                 continue
             probe = subprocess.run(['bash', '-c',
                 'source "$1/fm-backend.sh"; source "$1/fm-busy-lib.sh"; fm_busy_classify_meta "$2" "$3" "$4"',
@@ -143,6 +145,7 @@ def main():
     mode = sys.argv[6:7]
     if not mode:
         if (data / ('relay-request-' + gen)).exists() and note.exists() and note.read_text().strip():
+            (data / ('relay-deferred-' + gen)).unlink(missing_ok=True)
             (state / (task + '.relay-ready')).write_text(json.dumps([gen, checker, os.getpid()]))
             return
         if not (home / 'config/relay-lite.json').exists():
@@ -197,8 +200,8 @@ def main():
                    'acknowledge this obsolete message and continue your assignment without waiting or writing its note. '
                    f'Context relay threshold reached. Finish the current operation safely, then write {note} '
                    'with objective, completed work, worktree/branch, evidence, remaining work, exact steering inbox '
-                   'and external actions that must not be repeated. Temporary descendants will be terminated: wait for them '
-                   'to finish or checkpoint them; only jobs started through fm-task-job.py survive. Acknowledge this message, end your turn and '
+                   'and external actions that must not be repeated. Background tasks still running delay the relaunch until they finish; '
+                   'only jobs started through fm-task-job.py continue after it, and other temporary processes end. Acknowledge this message, end your turn and '
                    'start no new operation. The owning watcher will relaunch this task with that note. '
                    'Do not report done unless the actual assignment is complete.')
         sent = subprocess.run(['bash', str(ROOT / 'fm-send.sh'), task, message], env=env,
@@ -220,6 +223,12 @@ def main():
     with log.open('w') as stream:
         subprocess.run([sys.executable, str(ROOT / 'fm-redact-log.py')],
                        input=control.stdout + control.stderr, text=True, stdout=stream, check=True)
+    if control.returncode == 75:
+        # The old agent keeps running its background work; its next turn end retries.
+        (data / ('relay-deferred-' + gen)).write_text('deferred\n')
+        status(state, task, 'waiting for background work to finish; diagnostic=' + str(log))
+        event(env, task, 'deferred', 'background-work')
+        return
     if control.returncode:
         status(state, task, 'incomplete; work and note preserved; diagnostic=' + str(log))
         (state / (task + '.relay-result')).write_text('failed: worker context relay ' + task + ' incomplete; diagnostic=' + str(log))

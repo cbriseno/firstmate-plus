@@ -96,6 +96,8 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      # The recorded exit picker closes on its own Esc and keeps the agent.
+      [ "$payload" != Escape ] || [ ! -f "$D/escape-closes" ] || rm -f "$D/pane" "$D/after-enter"
       printf '%s %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$payload" >> "$D/key-times"
       if [ -n "${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
          && { [ "$payload" = Escape ] || [ "$payload" = C-c ]; }; then
@@ -871,39 +873,53 @@ exit_picker_screen() {
     'Enter to confirm · Esc to cancel'
 }
 
-test_exit_refuses_an_open_background_picker() {
+test_exit_defers_an_open_background_picker() {
   local dir out rc
   dir=$(new_case open-picker)
   add_task "$dir" t1 claude
   alive_as "$dir" claude
   exit_picker_screen > "$dir/fake/pane"
+  : > "$dir/fake/escape-closes"
   out=$(run_control "$dir" t1 exit); rc=$?
-  expect_code 1 "$rc" "an open exit picker should refuse"$'\n'"$out"
-  assert_contains "$out" "blocked on a prompt: Claude background-task exit picker" \
-    "the refusal should name the dialog"
-  assert_not_contains "$out" "Esc" "the refusal must not name a dismissal key"
+  expect_code 75 "$rc" "an open exit picker should defer"$'\n'"$out"
+  assert_contains "$out" "exit-deferred t1: background work is still running" \
+    "the deferral should name the running background work"
   [ ! -s "$dir/fake/literal" ] || fail "an open picker must not be typed into"
-  [ ! -s "$dir/fake/keys" ] || fail "an open picker must receive no keys"
-  pass "fm-control exit: an already-open background-task picker is not typed into"
+  [ "$(cat "$dir/fake/keys")" = Escape ] || fail "only the picker's cancel key should be sent, got: $(cat "$dir/fake/keys")"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "the agent must keep running"
+  pass "fm-control exit: an already-open background-task picker is cancelled and the exit deferred"
 }
 
-test_exit_refuses_the_confirming_enter() {
+test_exit_refuses_a_picker_that_stays_open() {
+  local dir out rc
+  dir=$(new_case stuck-picker)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  exit_picker_screen > "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "a picker that ignores its cancel key should refuse"$'\n'"$out"
+  assert_contains "$out" "stayed open after its cancel key" "the refusal should name the open picker"
+  grep -qx Enter "$dir/fake/keys" && fail "a picker must never receive Enter"
+  pass "fm-control exit: a picker that stays open after Esc refuses without Enter"
+}
+
+test_exit_defers_instead_of_the_confirming_enter() {
   local dir out rc enters
   dir=$(new_case confirm-picker)
   add_task "$dir" t1 claude
   alive_as "$dir" claude
   exit_picker_screen > "$dir/fake/after-enter"
+  : > "$dir/fake/escape-closes"
   out=$(env FM_FAKE_NEVER_DIES=1 PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" \
     FM_FAKE_DIR="$dir/fake" FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 \
     "$CONTROL" t1 exit 2>&1); rc=$?
-  expect_code 1 "$rc" "the confirming Enter should refuse"$'\n'"$out"
-  assert_contains "$out" "blocked on a prompt: Claude background-task exit picker" \
-    "the refusal should name the dialog"
-  assert_not_contains "$out" "Esc" "the refusal must not name a dismissal key"
+  expect_code 75 "$rc" "the picker opened by the exit command should defer"$'\n'"$out"
+  assert_contains "$out" "exit-deferred t1" "the deferral should be named"
   [ "$(literals "$dir")" = /exit ] || fail "the exit command should still be typed, got '$(literals "$dir")'"
   enters=$(grep -c '^Enter$' "$dir/fake/keys" || true)
   [ "$enters" -eq 1 ] || fail "only the submitting Enter should be sent, got $enters"
-  pass "fm-control exit: the Enter that opens the background-task picker is not followed by a confirming Enter"
+  [ "$(keys_sent "$dir")" = Escape ] || fail "the picker should be cancelled with Escape, got: $(keys_sent "$dir")"
+  pass "fm-control exit: the picker opened by the exit command is cancelled, never confirmed"
 }
 
 # The submit reads a cleared composer before the picker renders, so it reports
@@ -915,15 +931,15 @@ test_exit_names_a_picker_that_renders_after_the_submit() {
   add_task "$dir" t1 claude
   alive_as "$dir" claude
   exit_picker_screen > "$dir/fake/after-enter"
+  : > "$dir/fake/escape-closes"
   printf '1' > "$dir/fake/after-enter-late"
   out=$(env FM_FAKE_NEVER_DIES=1 PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" \
     FM_FAKE_DIR="$dir/fake" FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 \
     "$CONTROL" t1 exit 2>&1); rc=$?
-  expect_code 1 "$rc" "a picker that renders after the submit should refuse"$'\n'"$out"
+  expect_code 75 "$rc" "a picker that renders after the submit should defer"$'\n'"$out"
   [ "$(cat "$dir/fake/after-enter-late")" = 0 ] \
     || fail "the submit should have read the ordinary pane once after Enter"
-  assert_contains "$out" "blocked on a prompt: Claude background-task exit picker" \
-    "the refusal should name the dialog"
+  assert_contains "$out" "exit-deferred t1" "the deferral should be named"
   assert_not_contains "$out" "did not stop within" \
     "a recognised picker must not fall back to the generic timeout message"
   enters=$(grep -c '^Enter$' "$dir/fake/keys" || true)
@@ -1132,6 +1148,39 @@ test_relay_generation_and_lost_callback() {
   pass 'relay: accepted threshold, callback recovery, busy deferral and generation retirement'
 }
 
+# Claude background work at the safe point (18 Nov 2026: two relays stuck on
+# the exit picker): the relay cancels it, keeps agent and work, waits quietly
+# until the next completed turn, and never retries from idle recovery meanwhile.
+test_relay_waits_for_background_work() {
+  local dir gen
+  dir=$(new_case relay-background)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  exit_picker_screen > "$dir/fake/pane"
+  : > "$dir/fake/escape-closes"
+  gen=$(bash "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state idle --source claude-hook --event stop)
+  printf 'busy_gen=%s\nsessions_file=%s\n' "$gen" "$dir/home/data/t1/sessions.jsonl" >> "$dir/home/state/t1.meta"
+  printf '{"status":"active","session":"fixture-session"}\n' > "$dir/home/data/t1/sessions.jsonl"
+  printf requested > "$dir/home/data/t1/relay-request-$gen"
+  printf 'safe point\n' > "$dir/home/data/t1/relay-note-$gen.md"
+  env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_CONTROL_POLL=0.01 \
+    FM_CONTROL_SETTLE_WAIT=0.05 FM_CONTROL_EXIT_WAIT=0.05 \
+    python3 "$ROOT/bin/fm-worker-relay.py" "$dir/home" "$dir/home/state" t1 "$gen" checker --control 0
+  grep -F 'waiting for background work to finish' "$dir/home/state/t1.relay-result" >/dev/null \
+    || fail "background work was not reported as a quiet wait: $(cat "$dir/home/state/t1.relay-result" 2>/dev/null)"
+  [ -e "$dir/home/data/t1/relay-deferred-$gen" ] || fail 'deferral was not recorded'
+  [ "$(cat "$dir/fake/command")" = claude ] || fail 'the agent and its background work were stopped'
+  : > "$dir/fake/keys"
+  env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    python3 "$ROOT/bin/fm-worker-relay.py" --dispatch "$dir/home" "$dir/home/state"
+  [ ! -e "$dir/home/state/t1.relay-ready" ] || fail 'idle recovery retried a deferred relay'
+  [ ! -s "$dir/fake/keys" ] || fail "idle recovery typed into a deferred worker: $(cat "$dir/fake/keys")"
+  python3 "$ROOT/bin/fm-worker-relay.py" "$dir/home" "$dir/home/state" t1 "$gen" checker
+  [ -s "$dir/home/state/t1.relay-ready" ] && [ ! -e "$dir/home/data/t1/relay-deferred-$gen" ] \
+    || fail 'the next completed turn did not retry the relay'
+  pass 'relay: background work defers the relaunch to the next completed turn without stopping it'
+}
+
 test_task_job_survives_worker_scope() {
   local dir
   dir=$(new_case task-job)
@@ -1176,6 +1225,7 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
 fi
 
 test_relay_generation_and_lost_callback
+test_relay_waits_for_background_work
 test_task_job_survives_worker_scope
 
 test_exit_types_each_harness_verified_command
@@ -1210,8 +1260,9 @@ test_ambiguous_endpoint_refuses
 test_busy_agent_is_interrupted_before_the_exit_command
 test_idle_agent_is_not_interrupted
 test_exit_drops_meta_busy_gen_with_the_sidecar
-test_exit_refuses_an_open_background_picker
-test_exit_refuses_the_confirming_enter
+test_exit_defers_an_open_background_picker
+test_exit_refuses_a_picker_that_stays_open
+test_exit_defers_instead_of_the_confirming_enter
 test_exit_names_a_picker_that_renders_after_the_submit
 test_interrupt_without_acknowledgement_preserves_busy_state
 test_exit_accepts_agent_stopped_by_busy_interrupt
