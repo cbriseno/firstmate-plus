@@ -417,6 +417,9 @@ trap 'fm_test_cleanup; exit 131' QUIT
 # log (bin/fm-diag.sh) while still exercising the recording path.
 FM_DIAGNOSTICS_HOME=$(fm_test_tmproot fm-test-diagnostics) || return 1
 export FM_DIAGNOSTICS_HOME
+# Watcher fixtures must not receive behavior-budget alarms computed from the
+# suite's own timings; tests/fm-budgets.test.sh opts back in.
+export FM_BUDGETS=0
 
 # fm_test_reap_orphans: best-effort sweep for fixture roots left behind by a
 # prior run that was killed hard enough to skip the traps above (e.g. a

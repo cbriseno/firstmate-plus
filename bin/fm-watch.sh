@@ -3860,7 +3860,8 @@ while :; do
   for budget_alarm in "$STATE"/*.budget-alarm; do
     [ -f "$budget_alarm" ] || continue
     reason=$(cat "$budget_alarm")
-    watch_event_append check "budget:${budget_alarm##*/}" "$reason" || exit 1
+    budget_key=${budget_alarm##*/budget-}
+    watch_event_append check "budget:${budget_key%.budget-alarm}" "$reason" || exit 1
     rm -f -- "$budget_alarm"
     wake "$reason"
   done

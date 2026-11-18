@@ -5,10 +5,11 @@
 # switches work.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/wake-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 
 BUDGETS="$ROOT/bin/fm-budgets.py"
+TMP_ROOT=$(fm_test_tmproot fm-budgets-watch)
 
 new_home() {  # -> sets HOME_DIR and exports the reader's paths
   local root
@@ -89,7 +90,26 @@ test_skip_switches() {
   pass "FM_BUDGETS=0 disables the check and alarm=false keeps the measure without alarming"
 }
 
+test_watcher_queues_the_alarm_for_firstmate() {
+  local dir state out pid
+  dir=$(make_supercase budget-watch); state="$dir/state"; out="$dir/watch.out"
+  new_home
+  printf '{}\n' > "$state/home-summary.json"
+  touch -t "$(date -d '-1 hour' +%Y%m%d%H%M.%S 2>/dev/null || date -v-1H +%Y%m%d%H%M.%S)" "$state/home-summary.json"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$dir/config" \
+    FM_DATA_OVERRIDE="$dir/data" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 "$ROOT/bin/fm-watch.sh" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 300 || fail "watcher did not deliver the alarm: $(cat "$out")"
+  assert_grep 'check: behavior budget exceeded: home_summary_age_s=' "$out" "watcher delivers the alarm"
+  awk -F '\t' '$3 == "check" && $4 == "budget:home_summary_age_s"' "$state/.wake-queue" | grep -q . \
+    || fail "alarm is not a queued check row: $(cat "$state/.wake-queue" 2>/dev/null)"
+  assert_equals "" "$(find "$state" -name '*.budget-alarm')" "the alarm file is consumed"
+  pass "the watcher turns an exceeded budget into one queued actionable check"
+}
+
 test_exceeded_limit_alarms_once_per_day
+test_watcher_queues_the_alarm_for_firstmate
 test_installation_file_moves_the_limit
 test_missing_data_is_unmeasured
 test_skip_switches
