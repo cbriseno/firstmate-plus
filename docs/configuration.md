@@ -89,6 +89,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+- The behavior-budget table `state/budgets.json` and its hourly history `state/budgets-history.jsonl` (`bin/fm-budgets.py`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -507,6 +508,12 @@ This default applies to every home, independently of harness, backend, or whethe
 Read-only sessions and context re-emits do not create the flag.
 Deleting it stops publication until the next full locked session start; existing flag contents are left unchanged.
 See [`fleet-ledger.md`](fleet-ledger.md) for the record contract and limits.
+
+## Behavior budgets (config/budgets.json)
+
+The watcher compares the system's own records with fixed behavior limits every five minutes and turns an exceeded limit into one actionable check for firstmate.
+The optional, gitignored `config/budgets.json` overrides a limit or silences one measure's alarm for this installation; `bin/fm-budgets.py`'s header owns the measures, defaults, file shape, outputs, and skip switches.
+`FM_BUDGETS=0` disables the check.
 
 ## Firstmate role (config/firstmate-role)
 

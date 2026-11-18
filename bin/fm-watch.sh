@@ -3849,6 +3849,22 @@ while :; do
     python3 "$SCRIPT_DIR/fm-worker-processes.py" sample "$STATE" </dev/null >/dev/null 2>&1 &
   fi
 
+  # Behavior budgets (bin/fm-budgets.py) on the same cadence: an exceeded limit
+  # becomes one actionable check for firstmate, never a captain question.
+  if [ "${FM_BUDGETS:-1}" != 0 ] \
+    && [ "$(age_of "$STATE/.budgets-tick")" -ge "${FM_DIAG_SAMPLE_SECS:-300}" ]; then
+    touch "$STATE/.budgets-tick" 2>/dev/null || true
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      python3 "$SCRIPT_DIR/fm-budgets.py" check </dev/null >/dev/null 2>&1 &
+  fi
+  for budget_alarm in "$STATE"/*.budget-alarm; do
+    [ -f "$budget_alarm" ] || continue
+    reason=$(cat "$budget_alarm")
+    watch_event_append check "budget:${budget_alarm##*/}" "$reason" || exit 1
+    rm -f -- "$budget_alarm"
+    wake "$reason"
+  done
+
   # Bearings publishes reconcile asks as local one-shot request files and
   # returns before any mate delivery. Supervision owns their later delivery;
   # a skipped or failed request remains durable for another poll.

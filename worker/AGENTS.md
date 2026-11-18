@@ -159,6 +159,14 @@ Check the inbox when notified and at natural checkpoints, except while waiting i
 Follow [Progress reporting](#progress-reporting).
 When firstmate requests a safe point, preserve work and record paused with its exact safe-point request key and numeric timestamp only after reaching it; resume only when explicitly instructed.
 
+## Measured real window
+
+When a change alters when an agent or process wakes, starts, stops, relaunches, or is cleaned up, its passing tests are not enough: measure the real installation before it is finished or published.
+Save the output of `bin/fm-budgets.py table` from the installed home before activation, let the real installation operate for at least one hour after activation under a dated external wait, then save the table again and put both tables in the report.
+If a measure got worse or exceeds its limit, the local installation is reverted first and the work reopened; a window without real activity is unmeasured, never a pass.
+A skipped window is reported as one line, `window skipped: <reason>`.
+An independent acceptance review of such a change also answers which measures the diff can move, in which direction, and where its before-and-after tables are.
+
 ## Access and captured logs
 
 Before a long run or freezing inputs, list the required services and data areas and make one small read from each using the documented access mode, including anonymous access when supported.
