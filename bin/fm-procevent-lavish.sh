@@ -506,7 +506,6 @@ cmd_poll() {
     trap "$cleanup_command; trap - $signal; kill -$signal $$" "$signal"
   done
   while :; do
-    iteration_started=$(poll_iteration_started) || die "cannot start the poll rate governor"
     [ -f "$artifact" ] && [ ! -L "$artifact" ] && [ -r "$artifact" ] \
       || die "artifact is no longer a readable file: $artifact"
     apply_session_host "$artifact"
@@ -525,6 +524,7 @@ cmd_poll() {
         reply_pending=1
       fi
     fi
+    iteration_started=$(poll_iteration_started) || die "cannot start the poll rate governor"
     if [ "$reply_pending" -eq 1 ]; then
       lavish-axi poll "$artifact" --agent-reply "$reply_text" | poll_response_filter "$response"
     else

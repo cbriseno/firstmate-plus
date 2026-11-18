@@ -217,16 +217,22 @@ run_shim() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-decision-hold.sh" "$@"
 }
 
-write_origin_meta() {  # <home> <id> [kind]
+write_origin_meta() {  # <home> <id> [kind] [data-dir] [worktree]
   local home=$1 id=$2 kind=${3:-scout}
+  local data=${4:-$home/data} worktree=${5:-$home/projects/missing-$id}
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" \
-    "worktree=$home/projects/missing-$id" \
+    "worktree=$worktree" \
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=$kind" \
     "mode=$kind" \
     "spawn_gen=fixture-$id"
+  # Lifecycle fixtures represent completed scouts with both required reports.
+  if [ "$kind" = scout ]; then
+    mkdir -p "$data/$id"
+    printf '<!doctype html><title>Fixture report</title><p>Investigation complete.</p>\n' > "$data/$id/report.html"
+  fi
 }
 
 # --- markdown-to-beads migration resolution ----------------------------------
@@ -3462,7 +3468,7 @@ EOF
   (cd "$home" && tasks-axi add "$id" "Investigate relocated sample hold" --kind scout \
     --repo sample --start --file "$data/backlog.md" >/dev/null) \
     || fail "could not create the relocated captain-hold fixture"
-  write_origin_meta "$home" "$id"
+  write_origin_meta "$home" "$id" scout "$data"
   printf 'done: report complete\n' > "$home/state/$id.status"
   printf '# Relocated hold\n\nThe captain call remains open.\n' > "$data/$id/report.md"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
@@ -6090,8 +6096,7 @@ test_teardown_sweeps_moot_calls_with_archived_origins() {
   mkdir -p "$home/data/$id"
   tasks_in "$home" add "$id" 'Finished gated investigation' --kind scout --repo sample --start >/dev/null
   tasks_in "$home" block "$id" --by stale >/dev/null
-  fm_write_meta "$home/state/$id.meta" "window=firstmate:fm-$id" "worktree=$wt" \
-    "project=$home/projects/sample" 'harness=codex' 'kind=scout' 'mode=scout' "spawn_gen=fixture-$id"
+  write_origin_meta "$home" "$id" scout "$home/data" "$wt"
   printf 'done: report complete\n' > "$home/state/$id.status"
   printf '# Finished gated investigation\n' > "$home/data/$id/report.md"
   run_captain "$home" complete "$id" --none >/dev/null || fail 'inventory completion failed'
