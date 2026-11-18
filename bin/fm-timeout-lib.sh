@@ -72,6 +72,13 @@
 #       left behind. Scratch named before owners were recorded is removed
 #       once a day old. fm_scratch_owner_gone owns the identity test.
 #
+#   fm_load_scaled_seconds <seconds>
+#       Prints <seconds> multiplied by how many times the 1-minute load average
+#       exceeds the core count (rounded up, between 1 and 4). A loaded host
+#       needs longer for the same recoverable work, so default bounds that
+#       are not an explicit operator choice call this. An unreadable load or
+#       core count prints <seconds> unchanged.
+#
 # fm_run_timed sends TERM at the bound and KILL FM_TIMEOUT_GRACE seconds later
 # (default 5), long enough under load for TERM traps to remove scratch.
 #
@@ -118,6 +125,28 @@ fm_timeout_grace() {
     '' | 0* | *[!0-9]*) printf '5\n' ;;
     *) printf '%s\n' "$FM_TIMEOUT_GRACE" ;;
   esac
+}
+
+fm_load_scaled_seconds() {  # <seconds>
+  local base=$1 load cores whole=0 factor=1
+  case "$base" in '' | *[!0-9]*) printf '%s\n' "$base"; return 0 ;; esac
+  if [ -n "${FM_LOAD_SCALE_SAMPLE:-}" ]; then  # "<load1> <cores>", for tests
+    load=${FM_LOAD_SCALE_SAMPLE%% *} cores=${FM_LOAD_SCALE_SAMPLE##* }
+  elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    load=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')
+    cores=$(sysctl -n hw.logicalcpu 2>/dev/null)
+  else
+    load=$(awk '{print $1}' /proc/loadavg 2>/dev/null)
+    cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+  fi
+  case "$load" in [0-9]*) ;; *) printf '%s\n' "$base"; return 0 ;; esac
+  case "$cores" in '' | *[!0-9]* | 0) printf '%s\n' "$base"; return 0 ;; esac
+  whole=${load%%.*}
+  [ "${load#*.}" != "$load" ] && [ "${load#*.}" != 00 ] && whole=$((whole + 1))
+  factor=$(( (whole + cores - 1) / cores ))
+  [ "$factor" -ge 1 ] || factor=1
+  [ "$factor" -le 4 ] || factor=4
+  printf '%s\n' $((base * factor))
 }
 
 # fm_scratch_owner_gone <pid> <path>: 0 when the process that created <path>

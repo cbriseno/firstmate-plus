@@ -141,8 +141,10 @@
 #            Serialize tracked binding publication against extension resolution,
 #            registration publication, and retirement in this home.
 # Reconcile is single-flight per physical state root. Concurrent calls return
-# immediately. FM_PROCEVENT_RECONCILE_SECONDS bounds one run (default 60, 1-3600
-# whole seconds), plus a 2s termination grace. A timeout returns 124 and the next
+# immediately. FM_PROCEVENT_RECONCILE_SECONDS bounds one run (1-3600 whole
+# seconds), plus a 2s termination grace. Unset, the bound is 60s multiplied by
+# the host's load (up to 4x, fm_load_scaled_seconds); a value set here is
+# exact. A timeout returns 124 and the next
 # watcher cycle retries; no source registration or captured result is discarded.
 # list       Show registered sources, owners, and pending captured results.
 #            A busy source lock reports uncertain instead of blocking discovery.
@@ -1840,11 +1842,12 @@ stranded_leaderless_detail() {  # <source-id>
 # it while reconciliation is still running. Detached listeners keep their own
 # groups and survive this operation's deadline.
 cmd_reconcile_bounded() {
-  local bound=${FM_PROCEVENT_RECONCILE_SECONDS:-60} status
-  case "$bound" in ''|0*|*[!0-9]*) die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600" ;; esac
-  [ "$bound" -le 3600 ] || die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600"
+  local bound status
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$SCRIPT_DIR/fm-timeout-lib.sh"
+  bound=${FM_PROCEVENT_RECONCILE_SECONDS:-$(fm_load_scaled_seconds 60)}
+  case "$bound" in ''|0*|*[!0-9]*) die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600" ;; esac
+  [ "$bound" -le 3600 ] || die "FM_PROCEVENT_RECONCILE_SECONDS must be an integer from 1 to 3600"
   (fm_exec_timed "$bound" 2 bash "$SCRIPT_DIR/fm-procevent.sh" _reconcile)
   status=$?
   if fm_timed_out "$status"; then

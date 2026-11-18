@@ -436,6 +436,22 @@ test_run_timed_keeps_stdout_and_nonzero_status_when_a_function_shadows_timeout()
   pass "fm_run_timed keeps stdout and nonzero status when a function shadows timeout"
 }
 
+test_load_scaled_seconds_stretches_a_default_bound_with_host_load() {
+  local got
+  (
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    for case in "0.50 4:60" "4.00 4:60" "4.01 4:120" "9.00 4:180" "40.00 4:240" "7.30 1:240" "x 4:60"; do
+      sample=${case%%:*} want=${case##*:}
+      got=$(FM_LOAD_SCALE_SAMPLE=$sample fm_load_scaled_seconds 60)
+      [ "$got" = "$want" ] || { echo "load sample '$sample': got $got want $want" >&2; exit 1; }
+    done
+  ) || fail "fm_load_scaled_seconds did not scale by load as specified"
+  got=$(. "$ROOT/bin/fm-timeout-lib.sh"; FM_LOAD_SCALE_SAMPLE='40.00 4' fm_load_scaled_seconds abc)
+  [ "$got" = abc ] || fail "a non-numeric base must pass through unchanged (got $got)"
+  pass "fm_load_scaled_seconds scales a bound by load between 1x and 4x and falls back to the base"
+}
+
+test_load_scaled_seconds_stretches_a_default_bound_with_host_load
 test_passes_the_command_status_and_output_through
 test_system_bash_preserves_completion_and_signal_statuses
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death

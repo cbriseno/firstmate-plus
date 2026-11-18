@@ -3898,9 +3898,20 @@ while :; do
   # only republishes results already captured durably and restarts a source
   # whose owner is gone. It is a no-op with nothing registered.
   if [ -d "$STATE/procevent" ]; then
+    # A reconcile that times out under load is recoverable and the next cycle
+    # retries it, so only the third consecutive failure wakes firstmate, once;
+    # any success clears the count.
     if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" reconcile >/dev/null 2>&1; then
-      watch_event_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
-        "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
+      reconcile_failures=$(cat "$STATE/.procevent-reconcile-failures" 2>/dev/null)
+      case "$reconcile_failures" in ''|*[!0-9]*) reconcile_failures=0 ;; esac
+      reconcile_failures=$((reconcile_failures + 1))
+      printf '%s\n' "$reconcile_failures" > "$STATE/.procevent-reconcile-failures" 2>/dev/null || true
+      if [ "$reconcile_failures" -eq 3 ]; then
+        watch_event_append check "procevent:reconcile:unattended:failed-$(date +%s)-$$" \
+          "check: process-event coverage unavailable: reconciliation failed or exceeded its deadline on 3 consecutive cycles; the next cycle retries. Run bin/fm-procevent.sh reconcile to inspect the failure." || true
+      fi
+    else
+      rm -f -- "$STATE/.procevent-reconcile-failures"
     fi
   fi
   # Then deliver any queued-but-unsurfaced result, including one a runner

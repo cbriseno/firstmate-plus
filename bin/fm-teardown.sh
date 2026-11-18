@@ -2387,7 +2387,8 @@ validate_worktree_teardown_safety() {
 # binds through the strict object-local head rule, with bin/fm-nm-run-lib.sh's
 # shared ledger-anchored continuation rule as the only recognition for a head
 # this copy cannot resolve at all.
-NM_TEARDOWN_TIMEOUT=${FM_TEARDOWN_NM_TIMEOUT:-10}
+# The default stretches with host load (fm_load_scaled_seconds); a set value is exact.
+NM_TEARDOWN_TIMEOUT=${FM_TEARDOWN_NM_TIMEOUT:-$(fm_load_scaled_seconds 10)}
 case "$NM_TEARDOWN_TIMEOUT" in ''|*[!0-9]*) NM_TEARDOWN_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows the parked-run
 # continuation proof may scan, mirroring bin/fm-crew-state.sh's limit posture

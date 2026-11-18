@@ -28,6 +28,7 @@ If cleanup must wait for a decision, monitoring, or a real remaining operation, 
 For a completed host task, relay the operation and verification results and perform ordinary teardown in that same turn; branch landing does not apply.
 Before cleanup, check that the card's summary says in one or two plain sentences, in the captain's language, what changed for the captain, and rewrite it with `bin/fm-tasks-axi.sh presentation <id> --summary` when it does not.
 Retain delivery gate facts with `presentation <id> --reconcile` and settle any progress reconciliation notice under that owner's checkpoint contract before retiring the live status/meta; installed acceptance remains separate.
+Run `bin/fm-teardown.sh` with a command timeout of at least 10 minutes: cleanup can take longer than the harness's default two-minute command limit on a loaded host. A run cut off by that limit left its pending-close record, so rerun the same command once; it is neither a refusal nor a captain-facing failure.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
 Use `--preserve` only for a ship or scout with an attached task branch; a host or detached scout uses ordinary teardown.
