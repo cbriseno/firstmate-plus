@@ -765,6 +765,43 @@ PY
   pass "a running worker wrapper reaps exited orphans immediately and keeps the worker exit code"
 }
 
+test_worker_cleanup_keeps_process_event_runners() {
+  local dir
+  dir=$(new_case runner)
+  python3 - "$ROOT" "$dir" <<'PY' || fail 'a board listener armed by a worker must outlive that worker'
+import os, pathlib, shlex, signal, subprocess, sys
+root, directory = map(pathlib.Path, sys.argv[1:])
+scope = f'{directory}/home/state/t1:runner'
+# The worker detaches one process-event runner the way bin/fm-procevent.sh
+# isolate_process does (own group, FM_PROCEVENT_RUNNER_GROUP=<its pid>, worker
+# scope removed) with a long-lived child, plus one ordinary temporary child.
+record = shlex.quote(str(directory / 'runner.pid'))
+runner = ("perl -e 'defined(my $p=fork) or exit 1; if(!$p){setpgrp(0,0); "
+          "$ENV{FM_PROCEVENT_RUNNER_GROUP}=$$; delete $ENV{FM_WORKER_PROCESS_SCOPE}; "
+          "exec(\"sh\",\"-c\",\"sleep 60 & echo \\$\\$ \\$! > \" . $ARGV[0] . \"; wait\")} exit 0' " + record)
+command = runner + '; (sleep 60 & echo $! > ' + shlex.quote(str(directory / 'temp.pid')) + '); sleep 1'
+wrapper = subprocess.Popen([sys.executable, str(root / 'bin/fm-worker-processes.py'), 'run', scope, command],
+                           env=dict(os.environ, FM_WORKER_PROCESS_SCOPE=scope))
+assert wrapper.wait(timeout=30) == 0
+def alive(pid):
+    out = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(out) and not out.startswith('Z')
+leader, child = map(int, (directory / 'runner.pid').read_text().split())
+temp = int((directory / 'temp.pid').read_text())
+try:
+    assert not alive(temp), 'worker cleanup leaked its ordinary temporary child'
+    assert alive(leader), 'worker cleanup killed the process-event runner'
+    assert alive(child), 'worker cleanup killed the runner child'
+finally:
+    for pid in (child, leader):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+PY
+  pass "worker cleanup keeps a process-event runner and its children while reclaiming ordinary temporary processes"
+}
+
 test_worker_wrapper_owns_one_private_session_bus() {
   local dir
   if [ "$(uname -s)" != Linux ] || ! command -v dbus-daemon >/dev/null 2>&1; then
@@ -1252,6 +1289,7 @@ test_resume_changed_policy_opens_choice
 test_relaunch_only_flags_are_rejected_on_other_verbs
 test_worker_resource_cleanup
 test_worker_wrapper_reaps_orphans_while_running
+test_worker_cleanup_keeps_process_event_runners
 test_worker_wrapper_owns_one_private_session_bus
 test_already_stopped_exit_is_idempotent
 test_missing_tmux_endpoint_refuses_rather_than_claiming_a_stop

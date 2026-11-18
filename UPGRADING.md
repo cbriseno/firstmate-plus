@@ -11,6 +11,10 @@ Before reporting an error, check the installed version and the received package 
 
 On each machine, the client primary reviews with the user which extensions to integrate and activate: context handoff, Lavish (record installed and compared versions), and local tools such as Diffity. Record what is installed, active, or pending and verify a small use of each selected integration. Do not assume the package activates everything or that another machine’s preferences apply.
 
+For Lavish, install or upgrade the `cbriseno/lavish-axi` copy instead of `npm install -g lavish-axi`, even when the same version number is already installed: `git clone --depth 1 https://github.com/cbriseno/lavish-axi "${TMPDIR:-/tmp}/lavish-axi-src" && (cd "${TMPDIR:-/tmp}/lavish-axi-src" && npm install && npm pack) && npm install -g "${TMPDIR:-/tmp}"/lavish-axi-src/lavish-axi-*.tgz && lavish-axi setup hooks`.
+That copy opens a board once without a false other-tab warning and shows the replying agent's model, reasoning, harness, chat, pane, project and task.
+After installing it, stop the shared Lavish server with `lavish-axi stop` while no review is open, so the next board starts the new version.
+
 ## Manual procedure
 
 1. Read each dated entry below and compare its id with the home's applied ids.

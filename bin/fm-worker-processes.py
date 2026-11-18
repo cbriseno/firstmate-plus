@@ -77,16 +77,27 @@ def snapshot():
             if int(uid) == os.getuid() and int(p) != probe.pid and not state.startswith("Z")}
 
 
-def owned(scope, root=None):
-    rows = snapshot()
-    selected = {pid for pid in rows if KEY + os.fsencode(scope) in environment(pid)}
-    if root is not None:
-        selected.add(root)
+def descendants(rows, roots):
+    selected = set(roots)
     while True:
         expanded = selected | {pid for pid, (parent, _) in rows.items() if parent in selected}
         if expanded == selected:
-            break
+            return selected
         selected = expanded
+
+
+def owned(scope, root=None):
+    rows = snapshot()
+    # A process-event runner (bin/fm-procevent.sh isolate_process) leads its own
+    # group and is owned by its registration, which outlives the worker that
+    # armed it: a board listener must survive its owner's exit, park or relaunch.
+    exempt = descendants(rows, {pid for pid in rows
+                                if f"FM_PROCEVENT_RUNNER_GROUP={pid}".encode() in environment(pid)})
+    selected = {pid for pid in rows if KEY + os.fsencode(scope) in environment(pid)}
+    if root is not None:
+        selected.add(root)
+    rows = {pid: row for pid, row in rows.items() if pid not in exempt}
+    selected = descendants(rows, selected - exempt)
     return {pid: rows[pid][1] for pid in selected if pid in rows and pid != os.getpid()}
 
 

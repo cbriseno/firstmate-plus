@@ -2,7 +2,7 @@
 # Lavish adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id>] [--review-task <task-id> --review-occurrence <id>] [--agent-reply-file <path>]
+#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id> [--park]] [--review-task <task-id> --review-occurrence <id>] [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh classify <result-file>
 #   fm-procevent-lavish.sh terminal <result-file>
 #   fm-procevent-lavish.sh silent <result-file>
@@ -16,6 +16,11 @@
 #   fm-procevent-lavish.sh relisten <result-file>
 #   fm-procevent-lavish.sh notify <artifact.html> ack|ready [<task-id>]
 #
+# arm --park After arming, park the owner task once it is idle on a declared
+#            needs-decision, done or dated pause, retrying for up to ten minutes
+#            from a task job outside the worker (bin/fm-task-job.py). Its board
+#            listener keeps running, and the next captured round resumes the
+#            parked owner through bin/fm-send.sh.
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
 #            waiting, disconnected, listener-active, missing, or unknown.
 # read       Print a structured presentation of one already-captured result so a
@@ -285,7 +290,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' review_task='' review_occurrence='' reply_file='' id real listening
+  local artifact='' task='' review_task='' review_occurrence='' reply_file='' id real listening park=0
   local -a listener=() register_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -309,6 +314,10 @@ cmd_arm() {
         review_occurrence=$2
         shift 2
         ;;
+      --park)
+        park=1
+        shift
+        ;;
       --*) usage ;;
       *)
         [ -z "$artifact" ] || usage
@@ -319,6 +328,7 @@ cmd_arm() {
   done
   [ -n "$artifact" ] || usage
   [ -z "$reply_file" ] || [ -n "$task" ] || usage
+  [ "$park" -eq 0 ] || [ -n "$task" ] || usage
   if [ -n "$task" ] && [ -n "$review_occurrence" ]; then
     [ -z "$review_task" ] || [ "$review_task" = "$task" ] || usage
     review_task=$task
@@ -337,9 +347,16 @@ cmd_arm() {
   if [ -n "$task" ]; then
     register_args=()
     [ -z "$review_occurrence" ] || register_args+=(--review-occurrence "$review_occurrence")
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" \
+    if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" \
       ${register_args[@]+"${register_args[@]}"} -- \
-      "${listener[@]}" || exit 1
+      "${listener[@]}"; then
+      # A refused re-arm of a board this task already owns still leaves the
+      # owner waiting on it, so the requested park stands.
+      if [ "$park" -eq 1 ] && grep -qx "owner_task=$task" "$STATE/procevent/$id.source" 2>/dev/null; then
+        request_owner_park "$task"
+      fi
+      exit 1
+    fi
   else
     # This adapter's own listener command, which runs the plain blocking form
     # with no --timeout-ms so completion is a server event, and absorbs only
@@ -362,6 +379,7 @@ cmd_arm() {
     printf 'artifact: %s\n' "$real"
     [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
     printf 'note: an earlier listener is still live and serving this board; a continuing task listener adopts an unchanged command after capture; other commands take effect after the source is retired and armed again\n'
+    [ "$park" -eq 0 ] || request_owner_park "$task"
     [ -z "$task" ] || cmd_notify "$real" ready "$task" >/dev/null 2>&1 \
       || printf 'note: the board readiness message was not posted\n' >&2
     exit 0
@@ -373,8 +391,38 @@ cmd_arm() {
   printf 'armed: %s\n' "$id"
   printf 'artifact: %s\n' "$real"
   [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
+  [ "$park" -eq 0 ] || request_owner_park "$task"
   [ -z "$task" ] || cmd_notify "$real" ready "$task" >/dev/null 2>&1 \
     || printf 'note: the board readiness message was not posted\n' >&2
+}
+
+# The park itself must run outside the worker it stops, so it is a task job the
+# watcher starts. A failed submission leaves the worker running as before.
+request_owner_park() {  # <task-id>
+  if python3 "$SCRIPT_DIR/fm-task-job.py" "$STATE" "$1" "lavish-park-$(date +%s)-$$" \
+      env FM_HOME="$FM_HOME" bash "$SCRIPT_DIR/fm-procevent-lavish.sh" _park-owner "$1" >/dev/null; then
+    printf 'park: requested once %s is idle on its declared wait\n' "$1"
+  else
+    printf 'warning: park request for %s was not recorded; the worker stays running\n' "$1" >&2
+  fi
+}
+
+cmd_park_owner() {  # <task-id>
+  local task=${1-} out deadline=$((SECONDS + 600))
+  [ -n "$task" ] || usage
+  # Every park refusal is safe to retry: a busy, still-starting or unread
+  # worker, a pending steer, an undeclared wait, or an unconfirmed stop that
+  # left the park half done, which park itself finishes on the next call.
+  # No supervisor watches this job, so it stops only a positively idle worker:
+  # a relaunched owner still holding its unsent launch prompt keeps running.
+  while :; do
+    if out=$("$SCRIPT_DIR/fm-control.sh" "$task" park --when-idle 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || { printf '%s\n' "$out" >&2; return 1; }
+    sleep 10
+  done
 }
 
 cmd_deliver_reply() {
@@ -1163,6 +1211,7 @@ cmd_read() {
 
 case "${1-}" in
   arm)       shift; cmd_arm "$@" ;;
+  _park-owner) shift; cmd_park_owner "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
   poll)      shift; cmd_poll "$@" ;;
   deliver-reply) shift; cmd_deliver_reply "$@" ;;

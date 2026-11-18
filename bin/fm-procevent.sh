@@ -939,7 +939,7 @@ publish_result() {  # <result-file>
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ "$adapter" = lavish ] && [ -n "$closed_candidate" ] \
       && fm_pr_task_id_valid "$closed_candidate" \
-      && { [ ! -e "$STATE/$closed_candidate.meta" ] || [ -e "$STATE/$closed_candidate.parked" ] \
+      && { [ ! -e "$STATE/$closed_candidate.meta" ] \
         || [ "$(status_line_verb "$(last_status_line "$STATE/$closed_candidate.status")")" = 'done' ]; } \
       && ! adapter_result_is_silent "$adapter" "$result"
     then
@@ -968,6 +968,21 @@ publish_result() {  # <result-file>
         fi
         unset FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD
         message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply in-scope report iterations, route new tasks or decisions through firstmate, and re-arm the board with the reply."
+      fi
+      # A parked owner is resumed by the ordinary parked-steer path, which
+      # records the message idempotently, resumes the worker and rings it. If
+      # it cannot resume, the feedback goes to firstmate as for an absent owner.
+      if [ -f "$STATE/$owner_task.parked" ]; then
+        fm_procevent_source_lock_release "$id"
+        if FM_SEND_IDEMPOTENT=1 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+          "$SCRIPT_DIR/fm-send.sh" "$owner_task" "$message" >/dev/null 2>&1; then
+          return 0
+        fi
+        {
+          printf 'Lavish feedback for parked task %s could not resume it. Recover the author for report iterations; route new work or decisions through firstmate. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$owner_task" "$id" "$seq"
+          "$SCRIPT_DIR/fm-procevent-lavish.sh" read "$result"
+        } | FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-inbox.sh" note --request-id "lavish:$id:$seq" - >/dev/null || true
+        return 0
       fi
       # Snapshot the records that already exist (active and handled) before
       # the idempotent write, so a dedup match - including one already
@@ -1064,7 +1079,9 @@ publish_pending() {  # [result-file-to-skip]
 # the runner's own owner guard). The guard deliberately gets its OWN group
 # rather than joining the runner's: it has to survive the group signal it sends,
 # and a member of the runner's group would also make that group read as alive
-# after the runner itself is gone.
+# after the runner itself is gone. A group leader started from a worker's arm
+# belongs to its registration, not to that worker: it drops the worker's process
+# scope, and bin/fm-worker-processes.py exempts its subtree from worker cleanup.
 isolate_process() {  # <wait|detach> <command> [argv...]
   local mode=$1 program
   shift
@@ -1074,6 +1091,7 @@ isolate_process() {  # <wait|detach> <command> [argv...]
     if ($pid == 0) {
       setpgrp(0, 0) or exit 125;
       $ENV{FM_PROCEVENT_RUNNER_GROUP} = $$;
+      delete $ENV{FM_WORKER_PROCESS_SCOPE};
       exec @ARGV;
       exit 125;
     }

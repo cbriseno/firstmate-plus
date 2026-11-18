@@ -874,7 +874,11 @@ install_cmd() {
       echo "brew install $1  # or the platform's package manager" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
-    gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    gh-axi|chrome-devtools-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    # Firstmate's review boards need the reviewer-ownership and reply-identity
+    # fixes published only in the cbriseno/lavish-axi copy, which npm cannot
+    # install straight from Git because its build needs development packages.
+    lavish-axi) echo 'git clone --depth 1 https://github.com/cbriseno/lavish-axi "${TMPDIR:-/tmp}/lavish-axi-src" && (cd "${TMPDIR:-/tmp}/lavish-axi-src" && npm install && npm pack) && npm install -g "${TMPDIR:-/tmp}"/lavish-axi-src/lavish-axi-*.tgz && lavish-axi setup hooks' ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
     *) return 1 ;;
   esac

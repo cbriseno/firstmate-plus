@@ -133,7 +133,7 @@ optional no-mistakes 'no-mistakes delivery when explicitly requested'
 optional chrome-devtools-axi 'browser operations'
 optional quota-axi 'quota-based dispatch selection'
 optional treehouse 'isolated task dispatch'
-optional lavish-axi 'visual review'
+optional lavish-axi 'visual review; install the cbriseno/lavish-axi copy, see UPGRADING.md'
 fm_backlog_backend_manual "$config" && optional tasks-axi 'tasks-axi backlog operations'
 if ! python3 -c 'import fcntl, os, sys; sys.exit(0 if sys.version_info >= (3, 9) and hasattr(os, "killpg") else 1)' >/dev/null 2>&1; then
   printf 'missing: Python 3.9+ with POSIX locking and process groups\n'

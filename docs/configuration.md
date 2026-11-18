@@ -2251,6 +2251,8 @@ An already-armed Lavish source keeps its registered listener command until it is
 
 A live task that hosts a Lavish board owns its listener, so firstmate must never arm that board.
 After opening the artifact as required above, the worker arms it with `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and never runs `lavish-axi poll` itself.
+With `--park`, the owner is parked once it is idle on its declared wait, so no worker session stays open while the reviewer reads; the adapter header owns the retry bound.
+The listener belongs to its registration rather than to the worker that armed it, so it keeps running when that worker exits, parks or is relaunched.
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.
 
@@ -2282,8 +2284,9 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 **Deliver feedback to the worker**
 
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
+- A parked owner receives the same delivery through `bin/fm-send.sh`, which resumes it before ringing, from one task job per round so the listener keeps listening meanwhile; only if that resume fails does the feedback go to the primary inbox as below, and board supervision treats the parked owner's open round as covered.
 - When that delivery creates a fresh inbox record for a nonterminal round, the board posts a short receipt at once, and every later task-owned arm that is listening posts a short readiness line after any completion reply, so the captain sees receipt, answer, and readiness in the Conversation panel; `bin/fm-procevent-lavish.sh notify` owns the text, its `config/lavish-board-ack` and `config/lavish-board-ready` overrides, and the older-client skip.
-- If the owner has declared `done`, is parked, or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
+- If the owner has declared `done` or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
 - With synchronous-reply clients (0.1.80 or newer), the detached runner listens again after nonterminal feedback or a browser disconnect, including while the owner is replying or has declared `done`; reconciliation can restore that listener while feedback remains unacknowledged.
 - Listening never acknowledges a capture; terminal results and errors still stop continuation, and older clients retain their one-round reply handoff.
