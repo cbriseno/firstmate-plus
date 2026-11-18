@@ -19,6 +19,9 @@ A safe-point note with unavailable activity emits one actionable failure per
 verdict through the existing request marker; busy waits, idle recovers.
 fm-control exit 75 (native background work still running) is informative:
 relay-deferred-GEN stops idle recovery until the next completed turn retries.
+A turn that never ends never runs the callback: --dispatch checks each busy
+worker at most once a minute (--midturn) and may send the request; only a
+completed turn publishes the safe point.
 Replacement spawn retires only obsolete automatic relay inbox requests.
 sessions.jsonl owns history. Internal --request/--control
 PID modes continue after the native callback exits, without reevaluating usage.
@@ -28,6 +31,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -115,6 +119,28 @@ def main():
                         request.write(message + '\n')
                         (Path(state) / (task + '.relay-result')).write_text(message)
                         event(dict(os.environ, FM_HOME=home), task, 'incomplete', 'activity-unavailable')
+        checker = os.environ.get('FM_RELAY_CHECK') or shutil.which('relay-check') or str(
+            Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+            / 'firstmate-extensions/runtime/context-relay-lite/relay-check')
+        for path in Path(state).glob('*.meta'):
+            task = path.stem
+            record = meta(Path(state), task)
+            gen = record.get('busy_gen', '')
+            busy = Path(state) / (task + '.busy-state')
+            if record.get('harness') not in ('claude', 'codex') or not gen or not record.get('sessions_file') \
+                    or not busy.exists() or ' state=busy ' not in busy.read_text():
+                continue
+            data = Path(record.get('sessions_file', '/nonexistent')).parent
+            stamp = data / ('relay-midturn-' + gen)
+            if (data / ('relay-request-' + gen)).exists() or not eligible(Path(state), task, gen) \
+                    or stamp.exists() and time.time() - stamp.stat().st_mtime < 60:
+                continue
+            stamp.touch()
+            env = dict(os.environ)
+            env.pop('FM_WORKER_PROCESS_SCOPE', None)
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), home, state, task, gen, checker,
+                              '--midturn'], env=env, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for ready in Path(state).glob('*.relay-ready'):
             task = ready.name[:-len('.relay-ready')]
             gen, checker, pid = json.loads(ready.read_text())
@@ -143,8 +169,9 @@ def main():
     env['FM_DATA_OVERRIDE'] = str(data.parent)
     note = data / ('relay-note-' + gen + '.md')
     mode = sys.argv[6:7]
-    if not mode:
-        if (data / ('relay-request-' + gen)).exists() and note.exists() and note.read_text().strip():
+    if mode in ([], ['--midturn']):
+        midturn = bool(mode)
+        if not midturn and (data / ('relay-request-' + gen)).exists() and note.exists() and note.read_text().strip():
             (data / ('relay-deferred-' + gen)).unlink(missing_ok=True)
             (state / (task + '.relay-ready')).write_text(json.dumps([gen, checker, os.getpid()]))
             return
@@ -159,14 +186,15 @@ def main():
                                text=True, capture_output=True, env=env, timeout=10)
         result = json.loads(check.stdout) if check.returncode == 0 else {}
         if result.get('schema') != 'relay-lite.check.v1' or result.get('state') != 'reached':
-            if result.get('state', 'unknown') == 'unknown':
+            if result.get('state', 'unknown') == 'unknown' and not midturn:
                 event(env, task, 'unknown', result.get('reason') or 'checker-unavailable')
             return
         if note.exists() and note.read_text().strip():
-            (state / (task + '.relay-ready')).write_text(json.dumps([gen, checker, os.getpid()]))
+            if not midturn:
+                (state / (task + '.relay-ready')).write_text(json.dumps([gen, checker, os.getpid()]))
             return
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:6],
-                          '--request', str(os.getpid())], env=env, start_new_session=True,
+                          '--request', str(0 if midturn else os.getpid())], env=env, start_new_session=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
     # Release the native hook before sending the inbox doorbell or exit command.

@@ -4,6 +4,7 @@
 # FM_WORKER_RELAY_DROP_CALLBACK=1 FM_WORKER_RELAY_LIVE_PROFILES=codex exercises lost-callback recovery.
 # FM_WORKER_RELAY_BACKGROUND=1 FM_WORKER_RELAY_LIVE_PROFILES=<claude model> adds a task job and a native
 # background run: the relay waits for the native run, the job survives and the projected space stays.
+# FM_WORKER_RELAY_LONG_TURN=1 keeps the first turn open: the watcher's mid-turn check must request the handoff.
 # FM_WORKER_RELAY_LIVE_CLAUDE_MODELS="claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5" selects explicit Claude coverage.
 set -eu
 # shellcheck source=tests/fixtures.sh
@@ -122,7 +123,7 @@ command = ' '.join(map(shlex.quote, (sys.argv[2], sys.argv[3])))
 Path(sys.argv[1]).write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]}]}}))
 HOOK
 fi
-tmux new-window -d -t primary -n watch "export FM_HOME='$FM_HOME' FM_ROOT_OVERRIDE='$ROOT' HERDR_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_HELPER='$HERDR_LAB_HELPER' ORIGINAL_PATH='$ORIGINAL_PATH' PATH='$PATH' CODEX_HOME='${CODEX_HOME:-$HOME/.codex}' FM_SPAWN_NO_GUARD=1; unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; while true; do FM_POLL=1 FM_CHECK_INTERVAL=999999 bash '$ROOT/bin/fm-watch.sh'; sleep 1; done"
+tmux new-window -d -t primary -n watch "export FM_HOME='$FM_HOME' FM_ROOT_OVERRIDE='$ROOT' HERDR_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_SESSION='$HERDR_LAB_SESSION' HERDR_LAB_HELPER='$HERDR_LAB_HELPER' ORIGINAL_PATH='$ORIGINAL_PATH' PATH='$PATH' CODEX_HOME='${CODEX_HOME:-$HOME/.codex}' FM_RELAY_CHECK='$CHECKER' FM_SPAWN_NO_GUARD=1; unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; while true; do FM_POLL=1 FM_CHECK_INTERVAL=999999 bash '$ROOT/bin/fm-watch.sh'; sleep 1; done"
 if [ "${FM_WORKER_RELAY_BACKGROUND:-0}" = 1 ]; then
   # A parent space lets the spawn project the task, as in the captain's fleet.
   bash -c '. "$1/bin/fm-backend.sh"; fm_backend_source herdr; fm_backend_herdr_container_ensure "$2" >/dev/null' _ "$ROOT" "$TMP_ROOT"
@@ -159,6 +160,16 @@ f.write_text(f.read_text().replace('Isolated continuity pilot. ', (
     f'(2) a native background shell (Bash with run_in_background): sleep 180; date +%s > {output}/native. '
     'Never wait for, poll or sleep on either run, including after the handoff request: end every turn as soon as its own step is done. '
     'When the background shell reports completion, only note it and end the turn. '), 1))
+PY
+  fi
+  if [ "${FM_WORKER_RELAY_LONG_TURN:-0}" = 1 ]; then
+    python3 - "$FM_HOME/data/$id/brief.md" <<'PY'
+from pathlib import Path
+import sys
+f = Path(sys.argv[1])
+f.write_text(f.read_text().replace('then end the turn saying: Checkpoint: ONCE complete; do not repeat.', (
+    'then say: Checkpoint: ONCE complete; do not repeat. Do not end that turn: run sleep 15 in the foreground, '
+    'one Bash call at a time, up to 30 times, and act on any steering message as soon as it arrives.'), 1))
 PY
   fi
   bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
@@ -267,6 +278,17 @@ PY
   if [ "${FM_WORKER_RELAY_DROP_CALLBACK:-0}" = 1 ]; then
     [ -s "$FM_HOME/data/$id/callback-suppressed" ] || fail 'safe-point callback was not omitted'
     printf 'PASS lost callback: recovered automatically or reported unavailable activity before manual recovery\n'
+  fi
+  if [ "${FM_WORKER_RELAY_LONG_TURN:-0}" = 1 ]; then
+    python3 - "$FM_HOME" "$id" <<'PY'
+import json, sys
+from pathlib import Path
+rows = [json.loads(line) for line in (Path(sys.argv[1])/'data'/sys.argv[2]/'sessions.jsonl').read_text().splitlines()]
+old = [json.loads(line) for line in open(rows[0]['session']) if line.strip()]
+starts = [r for r in old if r.get('type') == 'user' and isinstance((r.get('message') or {}).get('content'), str)]
+assert len(starts) == 1, 'the first conversation ended a turn, so the mid-turn request was not exercised: %d starts' % len(starts)
+print('PASS long turn: the handoff request reached the first conversation inside its only turn')
+PY
   fi
   if [ "${FM_WORKER_RELAY_BACKGROUND:-0}" = 1 ]; then
     python3 - "$FM_HOME" "$id" "$output" <<'PY'

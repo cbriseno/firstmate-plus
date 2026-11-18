@@ -68,7 +68,7 @@ On 2026-11-17, Linux with Herdr 0.9.5 and codex-cli 0.169.0 repeated the normal 
 The classifier intentionally returned `unknown codex-unverified` because its activity qualification remains pinned to 0.166.0; this verification does not expand that qualification.
 The unavailable verdict reached the owner's queue once and preserved the note for manual recovery, rather than remaining silently at handoff requested.
 A successful relay is observed in the watcher information log rather than requiring an immediate wake-queue entry.
-`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` covers unknown checker results, replayed callbacks, retired generations, profile/note preservation, control failure, terminal tasks and teardown of relay signals.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` covers unknown checker results, replayed callbacks, retired generations, profile/note preservation, control failure, terminal tasks, mid-turn threshold requests and teardown of relay signals.
 macOS was inspected but not executed; the adapter passed Python 3.9 grammar parsing and uses only the standard library.
 These pilots do not calibrate production thresholds or enable workers in an operator home.
 
@@ -76,6 +76,9 @@ The background-work variant uses `FM_WORKER_RELAY_BACKGROUND=1 FM_WORKER_RELAY_L
 On 2026-11-18, Linux with Herdr 0.9.5 and Claude Code 2.1.327 (`claude-sonnet-5-5`) started a task job and a native background shell, then wrote the note and ended its turn while both ran.
 The relaunch met Claude's background-work exit picker, cancelled it, kept the agent running and recorded the deferral; the next turn end after the native shell finished relaunched it.
 The task job survived the relaunch and finished afterwards, and the successor kept its projected Herdr space.
+
+`FM_WORKER_RELAY_LONG_TURN=1` keeps the worker's first turn open, as a Claude worker does when steering and background notices arrive inside a running turn.
+On 2026-11-18 the same Linux, Herdr and Claude Code versions with `claude-sonnet-5-5` received the handoff request from the watcher's mid-turn threshold check inside that turn, then wrote the note, ended the turn and relaunched.
 
 ```text
 PASS background work: native run finished before relaunch at 1795034474.0 ; task job survived and finished at 1795034551 ; successor stayed in projected workspace w3

@@ -244,7 +244,23 @@ run(('--request','999999999'))
 assert (lab/'slow-delivered').read_text() == 'delivered'
 assert (data/'relay-request-launch1').read_text() == 'requested\n'
 assert 'handoff requested' in (state/'worker.relay-result').read_text()
-print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure and terminal work')
+# A turn that never ends never reaches the native callback; the watcher checks it mid-turn.
+(bin_dir/'fm-send.sh').write_text('#!/usr/bin/env bash\nprintf requested >> "$FM_HOME/requests"\n')
+for path in (data/'relay-request-launch1', lab/'requests', state/'worker.relay-result'): path.unlink()
+(state/'worker.busy-state').write_text('v1 gen=launch1 seq=3 state=busy source=claude-hook event=user-prompt-submit ts=1\n')
+dispatch = [sys.executable, str(bin_dir/'fm-worker-relay.py'), '--dispatch', str(lab), str(state)]
+watcher = dict(os.environ, FM_RELAY_CHECK=str(checker))
+subprocess.run(dispatch, env=watcher, check=True)  # A note written mid-turn is not a safe point.
+time.sleep(1.5)
+assert not ready.exists() and not (lab/'requests').exists()
+os.utime(data/'relay-midturn-launch1', (0, 0))
+note.unlink()
+subprocess.run(dispatch, env=watcher, check=True)
+wait(lab/'requests')
+subprocess.run(dispatch, env=watcher, check=True)
+time.sleep(.5)
+assert (lab/'requests').read_text() == 'requested' and not ready.exists()
+print('ok - relay checker gates requests, duplicate callbacks, note/profile preservation, owner control, failure, terminal work and mid-turn thresholds')
 PYRELAY
 # Feed the native vendor statusline through the public wrapper. Existing display
 # receives unchanged JSON, local overrides user settings, and only native fields persist.
