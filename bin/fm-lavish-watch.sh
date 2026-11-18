@@ -17,7 +17,7 @@
 # After 30 seconds without a supervised listener, enqueue a durable check wake,
 # once per loss until coverage returns or the session ends with no queued feedback.
 # An open worker round is covered by its immutable captured result, not another
-# listener while its worker is provably working; otherwise after the same grace,
+# listener while its worker is provably working or parked; otherwise after the same grace,
 # ask firstmate to verify it. Never acknowledge it or re-arm on its behalf.
 # A listener claim is structural process-event evidence, not a Lavish CLI label.
 # This deliberately also detects unmanaged polls without a verified wake path.
@@ -213,7 +213,9 @@ while IFS=$'\t' read -r id task artifact status pending port; do
     live|task:*/listening) rm -f -- "$marker"; continue ;;
     task:*/round-open)
       owner_task=${owner#task:}; owner_task=${owner_task%/round-open}
-      if crew_is_provably_working "$owner_task"; then
+      # A parked owner's round is already on its way: publication resumes it
+      # or hands the round to firstmate.
+      if crew_is_provably_working "$owner_task" || [ -f "$STATE/$owner_task.parked" ]; then
         rm -f -- "$marker"; continue
       fi ;;
   esac

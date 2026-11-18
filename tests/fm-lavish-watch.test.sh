@@ -319,7 +319,15 @@ SH
   scan >/dev/null
   [ "$(grep -Fc "procevent:$scan_id:unattended:" "$SW/home/state/.wake-queue")" = "$prior_count" ] \
     || fail "working round owner woke supervision"
+  # A parked owner is being resumed for its round, so it is covered too.
   printf 'state: stopped · source: pane · agent exited\n' > "$SCAN_CREW_STATE"
+  printf 'park_phase=parked\n' > "$SW/home/state/host.parked"
+  scan >/dev/null
+  advance_scan 301
+  scan >/dev/null
+  [ "$(grep -Fc "procevent:$scan_id:unattended:" "$SW/home/state/.wake-queue")" = "$prior_count" ] \
+    || fail "a parked round owner woke supervision while its resume was under way"
+  rm -f -- "$SW/home/state/host.parked"
   scan >/dev/null
   advance_scan 300
   scan >/dev/null

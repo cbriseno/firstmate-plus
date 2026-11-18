@@ -969,19 +969,18 @@ publish_result() {  # <result-file>
         unset FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD
         message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply in-scope report iterations, route new tasks or decisions through firstmate, and re-arm the board with the reply."
       fi
-      # A parked owner is resumed by the ordinary parked-steer path, which
-      # records the message idempotently, resumes the worker and rings it. If
-      # it cannot resume, the feedback goes to firstmate as for an absent owner.
+      # A parked owner is resumed by the ordinary parked-steer path. Resuming
+      # takes minutes, so it runs as one task job per round (the job name makes
+      # a repeated publication a no-op) and the listener goes straight back to
+      # listening; cmd_deliver_parked owns the fallback.
       if [ -f "$STATE/$owner_task.parked" ]; then
         fm_procevent_source_lock_release "$id"
-        if FM_SEND_IDEMPOTENT=1 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-          "$SCRIPT_DIR/fm-send.sh" "$owner_task" "$message" >/dev/null 2>&1; then
-          return 0
-        fi
-        {
-          printf 'Lavish feedback for parked task %s could not resume it. Recover the author for report iterations; route new work or decisions through firstmate. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$owner_task" "$id" "$seq"
-          "$SCRIPT_DIR/fm-procevent-lavish.sh" read "$result"
-        } | FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-inbox.sh" note --request-id "lavish:$id:$seq" - >/dev/null || true
+        env -u FM_WORKER_PROCESS_SCOPE python3 "$SCRIPT_DIR/fm-task-job.py" "$STATE" "$owner_task" \
+          "lavish-resume-$id-$seq" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+          bash "$SCRIPT_DIR/fm-procevent.sh" _deliver-parked "$owner_task" "$id" "$seq" "$result" "$message" \
+          >/dev/null 2>&1 || true
+        [ -f "$STATE/$owner_task.jobs/lavish-resume-$id-$seq.json" ] \
+          || cmd_deliver_parked "$owner_task" "$id" "$seq" "$result" '' || true
         return 0
       fi
       # Snapshot the records that already exist (active and handled) before
@@ -1072,6 +1071,22 @@ publish_pending() {  # [result-file-to-skip]
     fi
   done < <(fm_procevent_pending "$STATE")
   printf '%s\n' "$published"
+}
+
+# Deliver one captured round to a parked owner through fm-send, which resumes it
+# before ringing. If it cannot resume, the round goes to firstmate as for an
+# absent owner, still unacknowledged.
+cmd_deliver_parked() {  # <owner-task> <source-id> <sequence> <result-file> <message>
+  [ "$#" -eq 5 ] || usage
+  # An empty message skips the resume: its job could not be queued.
+  if [ -n "$5" ] && FM_SEND_IDEMPOTENT=1 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-send.sh" "$1" "$5"; then
+    return 0
+  fi
+  {
+    printf 'Lavish feedback for parked task %s could not resume it. Recover the author for report iterations; route new work or decisions through firstmate. After handling, run bin/fm-procevent.sh handled %s %s.\n\n' "$1" "$2" "$3"
+    "$SCRIPT_DIR/fm-procevent-lavish.sh" read "$4"
+  } | FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-inbox.sh" note --request-id "lavish:$2:$3" - >/dev/null
 }
 
 # Start one command as the leader of a fresh process group, either waiting for
@@ -2770,6 +2785,7 @@ case "${1-}" in
   ensure-listening)   shift; cmd_ensure_listening "$@" ;;
   _start)             shift; cmd_start "$@" ;;
   _owner-watchdog)    shift; cmd_owner_watchdog "$@" ;;
+  _deliver-parked)    shift; cmd_deliver_parked "$@" ;;
   reconcile)          shift; cmd_reconcile_bounded "$@" ;;
   _reconcile)         shift; cmd_reconcile "$@" ;;
   classify)           shift; cmd_classify "$@" ;;
