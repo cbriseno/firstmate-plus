@@ -2706,6 +2706,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
     else
       fm_backend_herdr_projection_recovery_allows_flat "$HERDR_SES" \
         "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
+      # The parent workspace is presentation, not task identity: it vanishes
+      # when its last pane closes (a sibling's cleanup), so recreate it.
+      if [ -n "$HERDR_PARENT_WORKSPACE_ID" ] && [ "$(fm_backend_herdr_workspace_presence_state \
+        "$HERDR_SES" "$HERDR_PARENT_WORKSPACE_ID")" = dead ]; then
+        HERDR_PARENT_WORKSPACE_ID=
+      fi
       if [ -z "$HERDR_PARENT_WORKSPACE_ID" ]; then
         HERDR_PARENT_WORKSPACE_ID=$(HERDR_PANE_ID="$RELAUNCH_LAUNCHER_PANE_ID" \
           fm_backend_herdr_container_ensure "$WT" launcher-home "$HERDR_SES") || exit 1
