@@ -4,7 +4,7 @@
 #
 # Usage: fm-control.sh <task-id> interrupt
 #        fm-control.sh <task-id> exit
-#        fm-control.sh <task-id> park
+#        fm-control.sh <task-id> park [--when-idle]
 #        fm-control.sh <task-id> resume [--harness <chosen>] [--model <name>] [--effort <level>]
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>]
@@ -12,7 +12,9 @@
 #
 # park requires a declared wait and an idle agent; saves metadata, progress and
 # wait in state/<id>.parked and data/<id>/park-note.md, then stops and closes
-# only its endpoint. resume reuses the native chat from sessions.jsonl when
+# only its endpoint. --when-idle, for an automatic caller no supervisor
+# watches, refuses (retryably) unless the agent reads positively idle; a
+# relaunch's unconfirmed seed or an unknown activity is never stopped. resume reuses the native chat from sessions.jsonl when
 # readable, otherwise reports the reason and relaunches with that saved note.
 # A changed usage-policy harness opens a captain hold before automatic resume.
 # After recording the answer, Firstmate passes its chosen profile explicitly.
@@ -255,6 +257,7 @@ MODEL_SET=0
 EFFORT_SET=0
 NOTE=
 NOTE_SET=0
+PARK_WHEN_IDLE=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -285,6 +288,7 @@ for control_arg in "$@"; do
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
+    --when-idle) PARK_WHEN_IDLE=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -303,6 +307,7 @@ if [ "$VERB" != relaunch ] && [ "$VERB" != resume ]; then
     || die "--harness, --model and --effort apply to 'relaunch' or 'resume'; --note applies to 'relaunch' only"
 fi
 [ "$VERB" != resume ] || [ "$NOTE_SET" = 0 ] || die "resume uses the saved progress note"
+[ "$VERB" = park ] || [ "$PARK_WHEN_IDLE" = 0 ] || die "--when-idle applies to 'park' only"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"

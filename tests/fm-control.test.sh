@@ -607,6 +607,22 @@ test_park_refuses_active_or_undated_wait() {
   printf 'busy_gen=%s\n' "$gen" >> "$dir/home/state/t1.meta"
   if out=$(run_control "$dir" t1 park); then fail 'park stopped an active operation'; fi
   [ -z "$(literals "$dir")" ] || fail 'park interrupted an active operation'
+  # An unwatched caller never stops a relaunch still holding its unsent seed.
+  dir=$(new_case park-seed)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  printf 'paused: until 2099-01-01T00:00Z\n' > "$dir/home/state/t1.status"
+  gen=$(bash "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state busy --source fm-spawn)
+  printf 'busy_gen=%s\n' "$gen" >> "$dir/home/state/t1.meta"
+  if out=$(run_control "$dir" t1 park --when-idle); then fail 'automatic park stopped an unconfirmed launch'; fi
+  assert_contains "$out" 'not positively idle' 'unconfirmed launch is a retryable refusal'
+  [ -z "$(literals "$dir")" ] || fail 'automatic park interrupted an unconfirmed launch'
+  [ -s "$dir/fake/windows" ] || fail 'automatic park closed an unconfirmed launch'
+  [ ! -f "$dir/home/state/t1.parked" ] || fail 'refused automatic park wrote parking record'
+  bash "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" t1 idle --gen "$gen" --source claude-hook --event Stop \
+    || fail 'could not record the idle turn end'
+  out=$(run_control "$dir" t1 park --when-idle) || fail "automatic park refused an idle worker: $out"
+  assert_contains "$out" 'parked t1' 'automatic park closes an idle worker'
   dir=$(new_case park-unread)
   add_task "$dir" t1 claude
   printf 'done: ready\n' > "$dir/home/state/t1.status"

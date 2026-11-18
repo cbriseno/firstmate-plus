@@ -8,7 +8,7 @@
 # shellcheck disable=SC2034,SC2153
 
 do_park() {
-  local pending wait_line state socket='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
+  local pending wait_line state verdict socket='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
   case "$KIND" in ship|scout|host) ;; *) die 'parking applies to task workers only' ;; esac
   # shellcheck source=bin/fm-classify-lib.sh
   . "$SCRIPT_DIR/fm-classify-lib.sh"
@@ -26,7 +26,12 @@ do_park() {
   case "$state" in
     dead) ;;
     alive)
-      case "$(busy_verdict)" in
+      verdict=$(busy_verdict)
+      case "$PARK_WHEN_IDLE:$verdict" in
+        1:idle*|0:*) ;;
+        *) die "task $ID is not positively idle ($verdict); retry park once it is" ;;
+      esac
+      case "$verdict" in
         idle*) ;;
         'busy fm-spawn') echo "warning: $ID has only an unconfirmed launch seed; parking relies on Firstmate's verified operation-complete safe point" >&2 ;;
         busy*) die "task $ID is busy; retry park after its operation finishes" ;;
