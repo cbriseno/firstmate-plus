@@ -1833,6 +1833,33 @@ EOF
   pass "paused <=1 wake/h; active questions/results stay queued; failures and direct messages bypass the shared interval"
 }
 
+# A due batch made only of repeated upkeep (heartbeat, watcher re-arm, endpoint
+# observation) has nothing for the primary to read, so it is dropped silently;
+# any other absorbed category still earns the one summary wake.
+test_upkeep_only_summary_does_not_wake() {
+  local dir state out FM_HOME FM_STATE_OVERRIDE
+  dir=$(make_case upkeep-summary); state="$dir/state"; out="$dir/deliveries"
+  : > "$out"
+  (
+    export FM_HOME="$dir" FM_STATE_OVERRIDE="$state"
+    # shellcheck source=/dev/null # Production modules are linted separately.
+    . "$WATCH"
+    printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$state/.last-info-summary"
+    watch_info_record heartbeat 'no captain-relevant change'
+    watch_info_record recovery 'watcher rearmed'
+    watch_info_record lifecycle 'endpoint observation deferred'
+    watch_info_summary_tick >> "$out"
+    [ ! -s "$out" ] || fail "an upkeep-only batch woke the primary: $(cat "$out")"
+    [ ! -s "$state/.watch-info" ] || fail "an upkeep-only batch was not dropped"
+    watch_info_record heartbeat 'no captain-relevant change'
+    watch_info_record scheduling 'capacity available'
+    watch_info_summary_tick >> "$out"
+    grep -q 'informational summary: heartbeat=1 scheduling=1' "$out" \
+      || fail "a batch with a real observation did not produce its summary: $(cat "$out")"
+  ) || fail "upkeep-only summary regression"
+  pass "an upkeep-only informational batch is dropped; one with a real observation still wakes once"
+}
+
 # A status log only grows: a remote second mate's mirrored parent channel passes a
 # megabyte and thousands of keyed decisions. Deciding whether a newly appended
 # keyed decision is still open must cost the new span, not the log's lifetime.
@@ -4887,6 +4914,7 @@ test_declared_waits_share_the_fleet_budget
 test_context_relay_progress_and_turnends_are_informational
 test_owned_lifecycle_gap_is_not_endpoint_failure
 test_actionable_wake_budget
+test_upkeep_only_summary_does_not_wake
 test_keyed_decision_signal_reads_only_the_new_span
 test_release_completion_survives_a_later_routine_append
 test_routine_appends_after_a_classified_event_stay_absorbed

@@ -2931,8 +2931,9 @@ worker_completion_tick() {
       [ -e "$marker" ] || touch "$marker"
       if [ "$(age_of "$marker")" -ge 1800 ] && ! crew_is_provably_working "$task"; then
         reason="check: worker idle without a result or declared wait for over 30 minutes: $task; inspect or close with fm-teardown.sh --preserve"
-        watch_info_record idle "$reason"
         touch "$marker"
+        watch_event_append check "worker-idle:$task" "$reason" || exit 1
+        wake "$reason"
       fi
       continue
     fi

@@ -105,13 +105,14 @@ import os, sys, time
 os.utime(sys.argv[1], (time.time() - 1801, time.time() - 1801))
 PY
 OUT=$(run_completion_tick) || fail "idle tick failed: $OUT"
-assert_contains "$(cat "$TASK_HOME/state/.watch-triage.log")" 'idle without a result or declared wait for over 30 minutes' 'unexplained idle observation'
+assert_contains "$OUT" 'idle without a result or declared wait for over 30 minutes' 'unexplained idle individual wake'
+assert_contains "$(cat "$TASK_HOME/state/.wake-queue")" 'worker-idle:unexplained' 'unexplained idle queued individually'
 [ -e "$TASK_HOME/state/unexplained.meta" ] || fail 'idle alert discarded unfinished work'
 printf 'blocked: needs an owner answer\n' >> "$TASK_HOME/state/unexplained.status"
 run_completion_tick >/dev/null
 [ ! -e "$TASK_HOME/state/.worker-idle-unexplained" ] || fail 'a declared wait kept the unexplained-idle timer'
 rm "$TASK_HOME/state/unexplained.meta"
-pass 'unexplained idle is batched without discarding work; a declared wait resets it'
+pass 'unexplained idle wakes individually without discarding work; a declared wait resets it'
 
 # Run the emitted Claude command: a host grant must not swallow --settings.
 run_brief claude-host --host --path "$TARGET" >/dev/null

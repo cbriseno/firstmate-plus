@@ -131,10 +131,21 @@ watch_event_append() {  # <kind> <key> <payload>
   fm_wake_append "$@"
 }
 
+# Categories that only repeat background upkeep (heartbeat, watcher re-arm,
+# endpoint observation). A batch made of nothing else needs no primary turn.
+watch_info_only_upkeep() {
+  ! awk -F '\t' '$2 != "heartbeat" && $2 != "recovery" && $2 != "lifecycle" { found=1 } END { exit !found }' \
+    "$STATE/.watch-info" 2>/dev/null
+}
+
 watch_info_summary_tick() {
   local now summary reason
   [ -s "$STATE/.watch-info" ] || return 0
   watch_attention_batch_due || return 0
+  if watch_info_only_upkeep; then
+    : > "$STATE/.watch-info"
+    return 0
+  fi
   now=$(date +%s)
   summary=$(awk -F '\t' '{ n[$2]++ } END { for (k in n) print k "=" n[k] }' \
     "$STATE/.watch-info" | LC_ALL=C sort | tr '\n' ' ')
