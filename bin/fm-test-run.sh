@@ -1662,6 +1662,9 @@ families_for_changed_path() {
     bin/fm-redact-log.py)
       printf '%s\n' __script__:fm-redact-log.test.sh
       ;;
+    bin/fm_progress.py)
+      printf '%s\n' __script__:fm-progress-reporting.test.sh __script__:fm-progress-holds.test.sh __script__:fm-notification-command.test.sh
+      ;;
     bin/fm-notify.py|locales/*)
       printf '%s\n' __script__:fm-notification-command.test.sh
       ;;
