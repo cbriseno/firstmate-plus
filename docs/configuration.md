@@ -11,7 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
-| Supervision and presentation | [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
+| Supervision and presentation | [supervision host](#supervision-host-configsupervision-host), [Calm preference](#calm-preference-configcalm), and [captain language](#captain-language-configlanguage) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -125,6 +125,14 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 
 The shared orchestrator behavior lives in [`SUPERVISOR.md`](../SUPERVISOR.md).
 Changes to it ship like any other change to this repository, through a dispatched worker rather than a direct edit by the running firstmate, whether or not tasks are in flight.
+
+## Captain language (config/language)
+
+The captain's language is a setting of each installation, never a rule in Firstmate's tracked instructions.
+Agents take it from the operator's global instruction file, which every Claude and Codex session loads natively (see `UPGRADING.md`, native-rule-files): one line there, such as "always answer in Mexican Spanish" or "always answer in English", governs the primary, workers and any other agent on that machine.
+Firstmate's own fixed text, including progress messages and captain notifications, follows `config/language`: `es` or a regional tag such as `es-MX` selects Spanish, and an absent file or any other value keeps English.
+`FM_LANGUAGE` overrides the file for one process.
+The Deck has its own `CD_WEB_LANGUAGE` setting.
 
 ## Calm preference (config/calm)
 
@@ -2257,6 +2265,7 @@ A live task that hosts a Lavish board owns its listener, so firstmate must never
 After opening the artifact as required above, the worker arms it with `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and never runs `lavish-axi poll` itself.
 With `--park`, the owner is parked once it is idle on its declared wait, so no worker session stays open while the reviewer reads; the adapter header owns the retry bound.
 The listener belongs to its registration rather than to the worker that armed it, so it keeps running when that worker exits, parks or is relaunched.
+The first arm of a board also tells the captain it waits for them through the [optional notification command](notification-command.md).
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.
 
@@ -2664,6 +2673,7 @@ FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
+FM_CAPTAIN_REMINDER_HOUR=9  # local hour from which the watcher sends the daily summary of what waits for the captain (docs/notification-command.md)
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for Linux process-identity reads in fm-wake-lib.sh and fm-teardown.sh, mainly for tests
 FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr support ship/scout spawns, codex-app is not accepted
 FM_TRACE_CONTEXT=       # optional trace-context override; see "Trace context propagation"

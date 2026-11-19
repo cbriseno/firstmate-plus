@@ -3922,6 +3922,15 @@ while :; do
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
   fi
+  # Daily reminder of what waits for the captain (bin/fm-captain-notice.py):
+  # once per local day from FM_CAPTAIN_REMINDER_HOUR, only with a notification
+  # command configured. The day is recorded before the detached run starts.
+  if [ -f "${FM_NOTIFICATION_COMMAND_FILE:-$CONFIG/notification-command.json}" ] \
+    && [ "$(cat "$STATE/.captain-reminder-day" 2>/dev/null)" != "$(date +%Y-%m-%d)" ] \
+    && [ "$((10#$(date +%H)))" -ge "${FM_CAPTAIN_REMINDER_HOUR:-9}" ]; then
+    date +%Y-%m-%d > "$STATE/.captain-reminder-day" 2>/dev/null || true
+    python3 "$SCRIPT_DIR/fm-captain-notice.py" --home "$FM_HOME" --kind reminder </dev/null >/dev/null 2>&1 &
+  fi
   # Opt-in lane capacity facts: off costs one file test.
   if [ -e "$CONFIG/lane-capacity" ] && [ "$(age_of "$STATE/lane-capacity.json")" -ge 30 ]; then
     lane_capacity_publish_detached

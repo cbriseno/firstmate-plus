@@ -1694,6 +1694,14 @@ command_hold() {
   [ "$call_given" = 0 ] || write_captain_call "$id" "$hold_set"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   publish_call_event call.opened "$id" "$occurrence"
+  # A new hold lifecycle tells the captain once; a repeat of an active hold
+  # and the captain's own dated deferral stay silent.
+  if [ "$preserve_hold_set" = 0 ] && [ -z "$until" ]; then
+    local notice_kind=question
+    case "$call_kind" in action|approval) notice_kind=$call_kind ;; esac
+    python3 "$SCRIPT_DIR/fm-captain-notice.py" --home "$FM_HOME" --kind "$notice_kind" --task "$id" \
+      --title "$(show_field_value "$show" title)" --detail "${question:-${instruction:-$reason}}" >/dev/null 2>&1 || :
+  fi
   printf '%s\n' "$id"
 }
 

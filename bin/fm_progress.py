@@ -26,7 +26,8 @@ def tr(message):
             language = (home / 'config/language').read_text(encoding='utf-8').strip()
         except OSError:
             language = 'en'
-    if language != 'es':
+    # A regional tag such as es-MX selects the same catalog as es.
+    if language.replace('_', '-').split('-')[0].lower() != 'es':
         return message
     try:
         catalog = json.loads((Path(__file__).resolve().parent.parent / 'locales/es.json').read_text(encoding='utf-8'))

@@ -142,5 +142,11 @@
   "Incomplete activation: review its receipt.": "Activación incompleta: revisa su recibo.",
   "Invalid identity allocation.": "Asignación de identificador inválida.",
   "The identity already belongs to another item.": "El identificador ya pertenece a otro elemento.",
-  "The item already has a persistent primary identity.": "El elemento ya tiene un identificador principal persistente."
+  "The item already has a persistent primary identity.": "El elemento ya tiene un identificador principal persistente.",
+  "Needs your answer": "Falta tu respuesta",
+  "Needs your approval": "Falta tu aprobación",
+  "Needs you to act": "Falta que hagas algo",
+  "Ready for your review": "Listo para tu revisión",
+  "Review board waiting for you": "Tablero de revisión esperándote",
+  "{count} items wait for you. Newest: {names}": "Te esperan {count} pendientes de revisión o respuesta. Los más recientes: {names}"
 }

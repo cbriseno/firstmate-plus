@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Optional notification command, disabled unless configured by the installation.
 
-Usage: python3 bin/fm-notify.py --home HOME --event EVENT --text TEXT
+Usage: python3 bin/fm-notify.py --home HOME --event EVENT --text TEXT [--link URL]
 config/notification-command.json is a JSON argv array. An explicit absolute
 --command-file can select an installation adapter for this invocation only;
 it changes no configuration and is never supplied by a model. No shell is involved.
 The command receives EVENT and TEXT as its final arguments and a JSON record on
-stdin. It has a five-second deadline. Missing configuration is a successful no-op.
+stdin; an optional absolute http(s) --link is passed only in that record.
+It has a five-second deadline. Missing configuration is a successful no-op.
 Exit 0: disabled or command accepted; 1: failed command; 2: invalid input/config.
 Success never asserts delivery to a device. No hooks or services are installed.
 """
@@ -23,9 +24,12 @@ def main():
     parser.add_argument('--command-file', type=Path)
     parser.add_argument('--event', required=True)
     parser.add_argument('--text', required=True)
+    parser.add_argument('--link')
     args = parser.parse_args()
     if not args.home.is_absolute() or not args.event or len(args.event) > 80 or not args.text or len(args.text) > 240 or any(ord(c) < 32 for c in args.event + args.text):
         parser.error('absolute home and bounded single-line event/text are required')
+    if args.link is not None and (not args.link.startswith(('http://', 'https://')) or len(args.link) > 500 or any(c.isspace() or ord(c) < 32 for c in args.link)):
+        parser.error('link must be one absolute http(s) URL without spaces')
     if args.command_file is not None and not args.command_file.is_absolute():
         parser.error('command file must be absolute')
     try:
@@ -39,7 +43,7 @@ def main():
         print('notification: command must be a nonempty JSON argv array', file=sys.stderr)
         return 2
     try:
-        result = subprocess.run(command + [args.event, args.text], input=json.dumps(dict(event=args.event, text=args.text)), text=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(command + [args.event, args.text], input=json.dumps(dict(event=args.event, text=args.text, **({'link': args.link} if args.link else {}))), text=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 0 if result.returncode == 0 else 1
     except (OSError, subprocess.TimeoutExpired):
         return 1

@@ -30,7 +30,59 @@ with tempfile.TemporaryDirectory() as tmp:
     assert subprocess.check_output(command,env=env,text=True).strip()=='Firstmate registró una respuesta.'
     env['FM_LANGUAGE']='en'
     assert subprocess.check_output(command,env=env,text=True).strip()=='Firstmate recorded an answer.'
-print('ok - disabled notifications, literal argv, failures, timeout and installation language')
+    (home/'config/language').write_text('es-MX\n'); env.pop('FM_LANGUAGE')
+    assert subprocess.check_output(command,env=env,text=True).strip()=='Firstmate registró una respuesta.'
+    # The link travels only in the JSON record and must be one absolute URL.
+    config.write_text(json.dumps([sys.executable,str(consumer),str(receipt)]))
+    assert run('--link','https://deck.example/?task=t').returncode==0
+    assert json.loads(receipt.read_text())[1]['link']=='https://deck.example/?task=t'
+    assert run('--link','file:///etc/passwd').returncode==2
+    # Captain notices: localized text and the Deck target for each waiting kind.
+    (home/'config/deck-url').write_text('https://deck.example/\n')
+    (home/'data/t1').mkdir(parents=True)
+    (home/'data/t1/presentation.json').write_text(json.dumps(dict(presentation=dict(card_title='Mi tarea'))))
+    def notice(*args):
+        receipt.unlink(missing_ok=True)
+        subprocess.run([sys.executable,str(root/'bin/fm-captain-notice.py'),'--home',str(home),*args],check=True,env=env)
+        return json.loads(receipt.read_text()) if receipt.exists() else None
+    argv,record=notice('--kind','question','--task','t1','--detail','¿Sí o no?')
+    assert argv==['captain-question','Falta tu respuesta: Mi tarea - ¿Sí o no?'] and record['link']=='https://deck.example/?task=t1&view=call'
+    argv,record=notice('--kind','review','--task','t1','--occurrence','o1')
+    assert argv[0]=='captain-review' and argv[1].startswith('Listo para tu revisión') and record['link'].endswith('?task=t1&view=delivery&item=o1')
+    argv,record=notice('--kind','board','--title','tablero','--link','http://lavish.example/session/1')
+    assert argv[0]=='captain-board' and record['link']=='http://lavish.example/session/1'
+    (home/'config/language').write_text('en\n')
+    assert notice('--kind','approval','--task','t1')[0][1]=='Needs your approval: Mi tarea'
+    config.write_text(json.dumps(['false']))
+    assert notice('--kind','review','--task','t1') is None  # a failed delivery never fails its caller
+print('ok - disabled notifications, literal argv, failures, timeout, installation language, link and captain notices')
+PY
+
+# The presentation owner tells the captain once per newly reviewable result.
+python3 - "$ROOT" <<'PY'
+import json, os, pathlib, subprocess, sys, tempfile
+root=pathlib.Path(sys.argv[1])
+with tempfile.TemporaryDirectory() as tmp:
+    home=pathlib.Path(tmp); (home/'config').mkdir(); (home/'data').mkdir()
+    (home/'data/backlog.md').write_text('# Backlog\n\n## In flight\n\n- [ ] t1 - Mi tarea\n\n## Queued\n\n## Done\n')
+    sink=home/'notices'
+    (home/'config/notification-command.json').write_text(json.dumps([sys.executable,'-c','import sys; open(sys.argv[1],"a").write(sys.argv[-2]+"\\n")',str(sink)]))
+    env=dict(os.environ,FM_HOME=str(home)); env.pop('FM_LANGUAGE',None)
+    def publish(value):
+        source=home/'input.json'; source.write_text(json.dumps(value))
+        result=subprocess.run(['bash',str(root/'bin/fm-tasks-axi.sh'),'presentation','t1','--presentation-file',str(source)],env=env,capture_output=True,text=True)
+        assert result.returncode==0, result.stderr
+    def count():
+        return sink.read_text().count('captain-review') if sink.exists() else 0
+    publish(dict(card_status='Working'))
+    assert count()==0
+    publish(dict(outcome=dict(role='final',review='needed')))
+    assert count()==1
+    publish(dict(summary='Done in one sentence.'))
+    assert count()==1  # a summary-only change keeps the outcome and stays silent
+    publish(dict(outcome=dict(role='partial',review='needed')))
+    assert count()==2
+print('ok - presentation owner notifies once per newly reviewable outcome')
 PY
 
 # Real disposable tmux panels exercise the watcher, including its primary path.

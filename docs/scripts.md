@@ -8,6 +8,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-notify.py` | Optional event notification argv command, disabled until configured (header/help) |
+| `fm-captain-notice.py` | Tells the captain through that command when something starts waiting on them, plus a daily summary (header/help) |
 | `fm-session-start.sh`    | Compose lock, bootstrap, and wake drain into the single ordered session-start digest |
 | `fm-sessionstart-nudge.sh` | Print the native session-start hook nudge when the primary has not already run the digest |
 | `fm-sessionstart-run.sh` | Route a native session-open hook to the full digest, a context re-emit, or the nudge |

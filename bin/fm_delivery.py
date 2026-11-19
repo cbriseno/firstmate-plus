@@ -1181,6 +1181,17 @@ def presentation(home, args):
                 os.unlink(temp)
     finally:
         os.close(lock)
+    # A result that newly waits for the captain's review tells them once; a
+    # summary-only or card change keeps the same outcome and stays silent.
+    outcome = fields.get('outcome') or {}
+    if outcome.get('review') == 'needed' and outcome != (current['presentation'].get('outcome') or {}):
+        try:
+            subprocess.run([sys.executable, str(BIN / 'fm-captain-notice.py'), '--home', str(home), '--kind', 'review',
+                            '--task', args.task, '--occurrence', occurrence,
+                            '--title', fields.get('card_title') or fields.get('summary') or args.task],
+                           timeout=20, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            pass
     result = dict(ok=True, state='published', **result)
     if repair_backup:
         result['repair_backup'] = repair_backup

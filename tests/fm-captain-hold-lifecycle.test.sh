@@ -6199,6 +6199,26 @@ if [ "${1:-}" = --intake-cas ] || [ "${FM_CAPTAIN_HOLD_TEST_INTAKE_CAS:-}" = 1 ]
   exit 0
 fi
 
+# A new hold tells the captain once through the notification command; a repeat
+# of the active hold and a dated deferral stay silent.
+test_new_hold_notifies_the_captain_once() {
+  local home sink
+  home=$(make_home hold-notice)
+  sink="$home/notices"
+  printf '["%s","-c","import sys; open(sys.argv[1],\\"a\\").write(sys.argv[-2]+\\"|\\"+sys.argv[-1]+\\"\\\\n\\")","%s"]\n' \
+    "$(command -v python3)" "$sink" > "$home/config/notification-command.json"
+  run_captain "$home" hold notice-call "${FM_TEST_CALL[@]}" --title "Choose the route" \
+    --reason "route choice pending" --repo sample >/dev/null || fail "hold failed"
+  [ "$(grep -c '^captain-question|Needs your answer: Choose the route - Which way should this go?$' "$sink" 2>/dev/null)" = 1 ] \
+    || fail "a new hold did not notify the captain once: $(cat "$sink" 2>/dev/null)"
+  run_captain "$home" hold notice-call "${FM_TEST_CALL[@]}" --title "Choose the route" \
+    --reason "route choice pending" --repo sample >/dev/null || fail "repeat hold failed"
+  run_captain "$home" hold later-call "${FM_TEST_CALL[@]}" --title "Revisit later" \
+    --reason "deferred" --repo sample --until 2099-01-01 >/dev/null || fail "dated hold failed"
+  [ "$(wc -l < "$sink" | tr -d ' ')" = 1 ] || fail "a repeat or deferred hold notified again: $(cat "$sink")"
+  pass "a new hold notifies the captain once; repeats and deferrals stay silent"
+}
+
 # Each part keeps the full lifecycle coverage below the per-script time bound.
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 0 ]; then
   test_moot_retirement_waits_for_all_work_and_preserves_evidence
@@ -6433,4 +6453,8 @@ fi
 
 if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 62 ]; then
   FM_RETAINED_ARTIFACT_GROUP=released test_retained_row_artifacts_survive_captain_answers
+fi
+
+if [ "${FM_CAPTAIN_HOLD_TEST_PART:-0}" = 63 ]; then
+  test_new_hold_notifies_the_captain_once
 fi
