@@ -206,12 +206,14 @@
 #   under the existing home task-set lock before creating launch resources.
 #   That script owns the opt-in lane ceiling and live resource verdict; exit 75
 #   keeps the item queued, while invalid configuration remains an error.
-#   Either deferral writes state/<id>.spawn-deferred containing the absolute
-#   project path. The watcher rechecks admission each poll and queues a one-shot
-#   `check: capacity available: retry deferred task <id>` when both limits allow
-#   dispatch again. It retires the reminder after queuing that wake, or when the
-#   task already has metadata or no longer has a brief; spawning still owns the
-#   locked admission verdict and Firstmate retries the original dispatch.
+#   Either deferral writes state/<id>.spawn-deferred: the absolute project path
+#   on line 1, then this invocation's arguments separated by NUL. The watcher
+#   rechecks admission each poll and, when both limits allow dispatch and the
+#   task is still ready with a brief, reruns this script with those arguments
+#   and queues one `check: capacity available:` wake naming the launch or its
+#   failure; another deferral rewrites the marker silently. It retires the
+#   reminder when the task already has metadata or no longer has a brief;
+#   spawning still owns the locked admission verdict.
 #   Batch pairs run one at a time, rereading capacity after the previous spawn
 #   has published its record. Host tasks retain their separate admission path.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
@@ -695,6 +697,8 @@ RELAUNCH=0
 # Absent/unset keeps upstream refuse-on-contention. See header.
 HERDR_RESUME_LOCK_WAIT=0
 POS=()
+# The exact single-task invocation, replayed by the watcher after a deferral.
+SPAWN_ARGS=("$@")
 want_value=
 for a in "$@"; do
   if [ -n "$want_value" ]; then
@@ -1978,6 +1982,10 @@ if [ "$KIND" = host ]; then
   fi
   fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
 fi
+# Line 1 is the project; the NUL-separated rest is this invocation's arguments.
+spawn_defer_marker() {
+  { printf '%s\n' "$PROJ_ABS"; printf '%s\0' "${SPAWN_ARGS[@]}"; } > "$STATE/$ID.spawn-deferred"
+}
 # Read live home capacity for each fresh worker, never the watcher's cached
 # document. The existing task-set lock stays held through metadata publication,
 # so the next spawn sees this worker before making its own admission decision.
@@ -1987,7 +1995,7 @@ if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
     FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit || spawn_capacity_rc=$?
   if [ "$spawn_capacity_rc" -ne 0 ]; then
     if [ "$spawn_capacity_rc" -eq 75 ]; then
-      printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+      spawn_defer_marker || exit 1
       [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{"source":"spawn-deferred","project_limit":null}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
         "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
       echo "deferred: task $ID was not launched and its backlog item stays queued; the watcher will wake dispatch when capacity is available; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
@@ -2030,7 +2038,7 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
     exit 1
   fi
   if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
-    printf '%s\n' "$PROJ_ABS" > "$STATE/$ID.spawn-deferred" || exit 1
+    spawn_defer_marker || exit 1
     [ ! -e "$CONFIG/fleet-ledger" ] || printf '{"source":"spawn-deferred","project_limit":%s}\n' "$SPAWN_PROJECT_CAPACITY" | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
     echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - the watcher will wake dispatch when capacity is available" >&2

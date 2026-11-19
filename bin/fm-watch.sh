@@ -3229,7 +3229,8 @@ for line in sys.stdin:
 
 # Admission reminders are owned by bin/fm-spawn.sh's capacity contract.
 spawn_deferred_tick() {
-  local marker id project capacity_config project_lock reason ready
+  local marker id project capacity_config project_lock reason ready arg out rc
+  local -a args
   ready=
   for marker in "$STATE"/*.spawn-deferred; do
     [ -f "$marker" ] || continue
@@ -3242,7 +3243,7 @@ spawn_deferred_tick() {
       bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice >/dev/null 2>&1 || return 0
     if [ -z "$ready" ]; then ready=$(dispatch_ready_ids) || return 0; fi
     printf '%s\n' "$ready" | grep -Fxq "$id" || continue
-    project=$(cat "$marker") || continue
+    project=$(head -n 1 "$marker") || continue
     [ -d "$project" ] || continue
     capacity_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || continue
     fm_project_capacity_lookup "$capacity_config" "$(basename "$project")" || continue
@@ -3251,9 +3252,24 @@ spawn_deferred_tick() {
       fm_project_capacity_occupants "$project_lock" "$project" "$STATE" "$id" || continue
       [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -lt "$FM_PROJECT_CAPACITY" ] || continue
     fi
-    reason="check: capacity available: retry deferred task $id"
-    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
+    args=()
+    while IFS= read -r -d '' arg; do args+=("$arg"); done < <(tail -n +2 "$marker")
     rm -f -- "$marker" || return 1
+    if [ "${#args[@]}" -eq 0 ]; then
+      reason="check: capacity available: retry deferred task $id"
+    else
+      # Replay the deferred dispatch itself; a new deferral rewrites the marker.
+      rc=0
+      out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
+        "$SCRIPT_DIR/fm-spawn.sh" "${args[@]}" 2>&1 </dev/null) || rc=$?
+      [ "$rc" -ne "$FM_PROJECT_CAPACITY_DEFER_EXIT" ] || continue
+      if [ "$rc" -eq 0 ]; then
+        reason="check: capacity available: launched deferred task $id with its original dispatch"
+      else
+        reason="check: capacity available: automatic launch of deferred task $id failed (exit $rc): $(printf '%s\n' "$out" | tail -n 1 | cut -c1-300); dispatch it manually"
+      fi
+    fi
+    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
     [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
     wake "$reason"

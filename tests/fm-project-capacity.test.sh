@@ -219,8 +219,11 @@ call_count() { wc -l < "$1/calls.log" | tr -d ' '; }
 worktree_list() { git -C "$1/project" worktree list --porcelain; }
 
 capacity_watch() {  # <case-dir>
-  local home="$1/home" meta
+  local home="$1/home" meta pane
   make_fake_crew_state "$1/fakebin" >/dev/null
+  # The pane path the watcher's own replay of a deferred spawn reports.
+  CAPACITY_WATCH_RUN=$((${CAPACITY_WATCH_RUN:-0} + 1))
+  pane=$(new_worktree "$1" "retry-$CAPACITY_WATCH_RUN")
   for meta in "$home/state"/*.meta; do
     [ -f "$meta" ] || continue
     sed -n 's/^window=firstmate://p' "$meta"
@@ -229,16 +232,19 @@ capacity_watch() {  # <case-dir>
   touch "$home/state/.last-check" "$home/state/.last-heartbeat"
   watch_bg "$home/state" "$1/fakebin" "$home/watch.out" env \
     FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DIAGNOSTICS=0 FM_BACKEND=tmux \
+    FM_ROOT_OVERRIDE="$ROOT" TMUX="fake,1,0" FM_FAKE_PANE_PATH="$pane" \
     FM_FAKE_CALL_LOG="$1/calls.log" FM_FAKE_CREW_STATE='state: working · source: fixture · active holder' \
     2> "$home/watch.err"
 }
 
 expect_capacity_wake() {  # <home> <pid>
-  wait_for_exit "$2" 200 || fail "capacity watcher did not wake: $(cat "$1/watch.err")"
-  assert_contains "$(cat "$1/watch.out")" 'check: capacity available: retry deferred task task-c' \
-    "capacity recovery did not request the original dispatch"
-  assert_contains "$(cat "$1/state/.wake-queue")" 'spawn-deferred-task-c' "retry wake was not queued durably"
-  assert_absent "$1/state/task-c.spawn-deferred" "the delivered reminder was not retired"
+  # The watcher now runs the whole replayed spawn before it wakes.
+  wait_for_exit "$2" 900 || fail "capacity watcher did not wake: $(cat "$1/watch.err")"
+  assert_contains "$(cat "$1/watch.out")" 'check: capacity available: launched deferred task task-c with its original dispatch' \
+    "capacity recovery did not replay the original dispatch: $(cat "$1/watch.out")"
+  assert_present "$1/state/task-c.meta" "the watcher's replayed dispatch published no worker record"
+  assert_contains "$(cat "$1/state/.wake-queue")" 'spawn-deferred-task-c' "launch wake was not queued durably"
+  assert_absent "$1/state/task-c.spawn-deferred" "the replayed reminder was not retired"
 }
 
 # --- cases ------------------------------------------------------------------
@@ -696,6 +702,7 @@ ROWS
   ack_stopped_cycle "$home/state" || fail "could not settle the intentional capacity test stop"
   assert_present "$home/state/task-c.spawn-deferred" "watcher stop lost the retry reminder"
   before=$(call_count "$case_dir")
+  worktrees=$(worktree_list "$case_dir")
   rc=0
   out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$case_dir/project" --scout) || rc=$?
   expect_code "$DEFER_EXIT" "$rc" "a scout ignored resource admission: $out"
@@ -715,10 +722,6 @@ ROWS
   assert_present "$home/state/task-c.spawn-deferred" "full project lost the retry reminder"
   rm -f -- "$home/state/live-a.meta"
   expect_capacity_wake "$home" "$pid"
-  rc=0
-  out=$(spawn_ship "$case_dir" task-c) || rc=$?
-  expect_code 0 "$rc" "the same queued task was not admitted after pressure cleared: $out"
-  assert_present "$home/state/task-c.meta" "an admitted worker has no record"
   pass "fresh load and memory verdicts defer ships and scouts without effects, then admit after recovery"
 }
 
