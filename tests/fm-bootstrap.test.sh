@@ -533,6 +533,7 @@ ROWS
 
 test_lavish_axi_min_version() {
   local label version mode case_dir fakebin base out unavailable upgrade n
+  # shellcheck disable=SC2016 # the expected text keeps ${TMPDIR:-/tmp} unexpanded
   unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.77; install: git clone --depth 1 https://github.com/cbriseno/lavish-axi "${TMPDIR:-/tmp}/lavish-axi-src" && (cd "${TMPDIR:-/tmp}/lavish-axi-src" && npm install && npm pack) && npm install -g "${TMPDIR:-/tmp}"/lavish-axi-src/lavish-axi-*.tgz && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
   upgrade='BOOTSTRAP_INFO: lavish-axi >=0.1.80 enables confirmed board replies; this older compatible version retains the legacy reply path, but upgrade to prevent handing back a board before its reply is accepted'
   n=0

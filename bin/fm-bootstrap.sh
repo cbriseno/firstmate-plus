@@ -868,6 +868,7 @@ secondmate_handoff_detect() {
 }
 
 install_cmd() {
+  # shellcheck disable=SC2016 # the lavish-axi command keeps ${TMPDIR:-/tmp} for the user's shell
   case "$1" in
     tmux|node|git|gh|curl|jq)
       [ "$(fm_platform_name)" != macos ] || return 1
