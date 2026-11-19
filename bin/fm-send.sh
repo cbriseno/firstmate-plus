@@ -873,7 +873,14 @@ else
       exit 1
     fi
     fm_lock_release "$INBOX_META_LOCK"
-    if [ -f "$STATE/$INBOX_TASK_ID.parked" ]; then
+    # A .parked record only means the worker is away when its agent is gone. A
+    # park that stalled (a rejected exit, a background shell, a failed close)
+    # leaves the record behind a live idle agent; resume would refuse that
+    # agent as a duplicate. Ring the live one instead, like any other steer.
+    if [ -f "$STATE/$INBOX_TASK_ID.parked" ] \
+      && [ "$(fm_backend_agent_state "$TARGET_BACKEND" "$T" 2>/dev/null || true)" = alive ]; then
+      echo "fm-send: $INBOX_TASK_ID has a parked record but its agent is alive (park incomplete); ringing it without resume" >&2
+    elif [ -f "$STATE/$INBOX_TASK_ID.parked" ]; then
       # Lifecycle control takes the same lease-command lock in its own process.
       fm_lease_guard_release
       if ! "$SCRIPT_DIR/fm-control.sh" "$INBOX_TASK_ID" resume >&2; then

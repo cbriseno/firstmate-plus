@@ -118,6 +118,28 @@ record_body() { # <record>
   bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$2"
 }
 
+test_parked_record_with_live_agent_still_rings() {
+  local dir err phase
+  for phase in stopping parked; do
+    dir=$(setup_case "parked-live-$phase")
+    err="$dir/send.err"
+    cat >"$dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" -t "*) printf '100 100 100 claude\n' ;;
+  *" -p "*) printf 'claude\n' ;;
+esac
+SH
+    chmod +x "$dir/fakebin/ps"
+    printf 'park_phase=%s\n' "$phase" > "$dir/home/state/t1.parked"
+    run_send "$dir" "$err" -- t1 'worker is alive and idle' \
+      || fail "a $phase parked record over a live agent must still deliver: $(cat "$err")"
+    assert_contains "$(cat "$dir/send.log")" 'Firstmate instruction waiting' "doorbell not typed ($phase)"
+    [ -f "$dir/home/state/t1.parked" ] || fail "the parked record was discarded ($phase)"
+  done
+  pass 'fm-send: a parked record over a live agent rings it instead of failing resume'
+}
+
 test_text_steer_rides_inbox() {
   local dir err rc rec body typed
   dir=$(setup_case rides)
@@ -518,6 +540,7 @@ test_parked_resume_failure_keeps_response_pending() {
   pass 'fm-send: failed resume retains the response and never rings an absent endpoint'
 }
 
+test_parked_record_with_live_agent_still_rings
 test_text_steer_rides_inbox
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
