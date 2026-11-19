@@ -61,6 +61,17 @@ def declared_title(home, task):
         return task
 
 
+def board_link(artifact):
+    try:
+        listing = subprocess.run(['lavish-axi'], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in listing.splitlines():
+        if artifact + ',' in line and '://' in line:
+            return 'http' + line.split('http', 1)[1].split('"')[0]
+    return None
+
+
 def reminder_text(home):
     env = dict(os.environ, FM_HOME=str(home))
     out = subprocess.run(['bash', str(BIN / 'fm-tasks-axi.sh'), 'work', 'snapshot'], env=env,
@@ -86,6 +97,7 @@ def main():
     parser.add_argument('--detail')
     parser.add_argument('--occurrence')
     parser.add_argument('--link')
+    parser.add_argument('--artifact', help='board file whose Lavish session is linked when no --link is given')
     args = parser.parse_args()
     home = args.home.resolve()
     os.environ.setdefault('FM_HOME', str(home))
@@ -108,6 +120,9 @@ def main():
                    '--event', 'captain-' + args.kind, '--text', one_line(text, 240)]
         if os.environ.get('FM_NOTIFICATION_COMMAND_FILE'):
             command += ['--command-file', os.environ['FM_NOTIFICATION_COMMAND_FILE']]
+        configured = os.environ.get('FM_NOTIFICATION_COMMAND_FILE') or (home / 'config' / 'notification-command.json').exists()
+        if args.artifact and not args.link and configured:
+            link = board_link(args.artifact) or link
         if link:
             command += ['--link', link]
         result = subprocess.run(command, capture_output=True, text=True, timeout=15)

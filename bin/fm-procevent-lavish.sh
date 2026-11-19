@@ -429,13 +429,11 @@ cmd_park_owner() {  # <task-id>
   done
 }
 
-# Tell the captain a board waits for them, linking the board itself when the
-# installed Lavish lists its session, otherwise the task's Deck card.
+# Tell the captain a board waits for them; the notice script links the board's
+# Lavish session when a notification command exists, otherwise the Deck card.
 board_notice() {  # <artifact> <task-or-empty> <occurrence-or-empty>
-  local real=$1 task=$2 occurrence=$3 url name
-  local -a args=(--kind board)
-  url=$(lavish-axi 2>/dev/null | grep -F "$real," | grep -o 'https\{0,1\}://[^"]*' | head -n 1) || url=''
-  [ -z "$url" ] || args+=(--link "$url")
+  local real=$1 task=$2 occurrence=$3 name
+  local -a args=(--kind board --artifact "$real")
   [ -z "$occurrence" ] || args+=(--occurrence "$occurrence")
   if [ -n "$task" ]; then
     args+=(--task "$task")
