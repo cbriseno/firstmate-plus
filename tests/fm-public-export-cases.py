@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import unittest
@@ -137,6 +138,25 @@ class ExportTests(unittest.TestCase):
         result = self.run_export()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'user-path', result.stdout)
+
+    def test_private_integrations_refuse_but_generic_text_passes(self):
+        # Captain rule 16: the private notifier and tailnet integration never reach a public repo.
+        # Terms are assembled so this file stays clean under the same scan.
+        private = [b'Agent ' + b'Notify', b'agent' + b'-notify', b'Agent' + b'Notify',
+                   b'workspace' + b'-dashboard', b'adb-tail' + b'scale',
+                   b'tail' + b'scale serve --bg 8080', b'Tail' + b'scale',
+                   b'host.example.' + b't' + b's.net:8080']
+        for index, value in enumerate(private):
+            with self.subTest(value=value):
+                shutil.rmtree(self.area / 'export', ignore_errors=True)
+                self.put('docs/new.md', b'x ' + value + b' y\n')
+                result = self.run_export()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(value, result.stdout + result.stderr)
+        shutil.rmtree(self.area / 'export', ignore_errors=True)
+        self.put('docs/new.md', b'Lets the agent ' + b'notify the captain via a configurable command.\n')
+        result = self.run_export()
+        self.assertEqual(result.returncode, 0, result.stderr.decode() + result.stdout.decode())
 
     def test_existing_destination_and_symbolic_source_refuse(self):
         self.out = self.area / 'export'

@@ -29,7 +29,7 @@ python3 bin/fm-public-export.py \
 
 The optional private deny file contains one literal sensitive identifier per line, such as a local project name or private service hostname.
 Its values are not printed or exported.
-The built-in scan refuses introduced home paths, tailnet addresses, notification destinations and credential-shaped values, and refuses changed binary content that cannot be reviewed as text.
+The built-in scan refuses introduced home paths, tailnet addresses, mentions of the private notifier and tailnet integration, notification destinations and credential-shaped values, and refuses changed binary content that cannot be reviewed as text.
 Exact examples already present in the independently verified public base are preserved; credential-shaped values are always refused.
 This heuristic is a guard, not proof that all personal data has been found.
 Review the entire patch, including strings, URLs, prompts, fixture captures, executable configuration and additions under allowed directories.

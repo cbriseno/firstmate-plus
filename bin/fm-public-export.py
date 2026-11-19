@@ -40,6 +40,10 @@ SENSITIVE = {
     'user-path': rb'(?<![\w/])/(?:home|Users)/[A-Za-z0-9_.-]+(?:/[^\s\"\'`<>]*)?',
     'tailnet-address': rb'\b(?:100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d+\.\d+|[\w.-]+\.ts\.net)\b',
     'credential': rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)',
+    # Captain rule 16: the private notifier, the private tailnet integration and its
+    # dashboard stay out of public repos. Hosts and ports are caught by the term or
+    # by tailnet-address. The character classes keep this line from matching itself.
+    'private-integration': rb'(?i:agent[-_]notif[y]|agent[n]otify|tail[s]cale|workspace[-_]dashboard)|Agent[ ]Notify',
 }
 
 
