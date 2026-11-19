@@ -168,7 +168,7 @@ run_brief batch-close --host --path "$TARGET" >/dev/null
 python3 - "$TASK_HOME/data/batch-close/brief.md" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close in a batch.'))
+p.write_text(p.read_text().replace('{TASK}', 'Finish host work.').replace('{FIRSTMATE_SPEC}', 'Close in a batch.').replace('{CAPTAIN_REQUIREMENTS}', '1. Fixture requirement.'))
 PY
 OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/batch-close/work" "$FAKEBIN" batch-close --host --harness 'printf fixture' --backend tmux) || fail "batch-close spawn failed: $OUT"
 publish_status batch-close 'done' verified
