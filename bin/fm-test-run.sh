@@ -2282,14 +2282,23 @@ if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1
   trap '' PIPE
 fi
 export FM_TEST_HOST_LOCKED=1
-# Holder: <slots> <ready-file> <notice-file> <runner-pid>. Takes the first free
-# slot, creates <ready-file>, and keeps the slot until killed or its parent
-# shell exits. <notice-file> makes the waiting line print once per run.
+# Holder: <slots> <ready-file> <notice-file> <runner-pid> <owner-pid>. Takes the
+# first free slot, creates <ready-file>, and keeps the slot until killed or the
+# owner shell exits. <notice-file> makes the waiting line print once per run.
+# The holder is never a child of its owner: a shell wait that has lost its own
+# child would otherwise block on the holder, which waits for that shell.
 # shellcheck disable=SC2016
 TEST_SLOT_HOLDER_PY='
 import fcntl, os, sys, time
-slots, ready, notice, runner = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
-owner = os.getppid()
+slots, ready, notice, runner, owner = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+def owner_alive():
+    try:
+        os.kill(owner, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
 lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
 fds = [os.open(os.path.join(lock_dir, f"firstmate-test-{os.getuid()}-{slot}.lock"),
                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in range(1, slots + 1)]
@@ -2304,7 +2313,7 @@ while held is None:
         break
     if held is not None:
         break
-    if os.getppid() != owner:
+    if not owner_alive():
         sys.exit(1)
     try:
         os.close(os.open(notice, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
@@ -2321,7 +2330,7 @@ os.ftruncate(held, 0)
 os.lseek(held, 0, os.SEEK_SET)
 os.write(held, runner.encode())
 os.close(os.open(ready, os.O_CREAT | os.O_WRONLY, 0o600))
-while os.getppid() == owner:
+while owner_alive():
     time.sleep(0.2)
 '
 
@@ -2330,9 +2339,13 @@ while os.getppid() == owner:
 acquire_test_slot() {
   TEST_SLOT_PID=
   [ "$TEST_SLOTS" -gt 0 ] || return 0
+  local owner
   rm -f "$1"
-  python3 -c "$TEST_SLOT_HOLDER_PY" "$TEST_SLOTS" "$1" "$RUN_TMP/slot-wait-noticed" "$$" </dev/null &
-  TEST_SLOT_PID=$!
+  # $$ is the runner even in a worker subshell; the child's PPID is this shell.
+  owner=$(exec sh -c 'echo "$PPID"')
+  # Started inside a command substitution, the holder is reparented when it exits.
+  TEST_SLOT_PID=$(python3 -c "$TEST_SLOT_HOLDER_PY" "$TEST_SLOTS" "$1" \
+    "$RUN_TMP/slot-wait-noticed" "$$" "$owner" </dev/null >/dev/null & echo "$!")
   while [ ! -e "$1" ]; do
     kill -0 "$TEST_SLOT_PID" 2>/dev/null || die "test slot holder exited before acquiring a slot"
     sleep 0.05
@@ -2342,7 +2355,6 @@ acquire_test_slot() {
 release_test_slot() {
   [ -n "${TEST_SLOT_PID:-}" ] || return 0
   kill "$TEST_SLOT_PID" 2>/dev/null || true
-  wait "$TEST_SLOT_PID" 2>/dev/null || true
   TEST_SLOT_PID=
 }
 

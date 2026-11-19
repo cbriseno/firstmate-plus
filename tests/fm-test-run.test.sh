@@ -2043,6 +2043,46 @@ SH
   pass "machine test budget bounds scripts across simultaneous runs"
 }
 
+# A slot holder that is a child of the shell running a suite turns any wait in
+# that shell into a hang: a wait whose child was already reaped blocks on the
+# holder, which in turn waits for that shell to exit. Holders must be detached.
+test_host_slot_holder_is_detached_from_waiting_shells() {
+  local tmp repo runner s
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-holder.XXXXXX")
+  repo="$tmp/repo"
+  runner="$repo/bin/fm-test-run.sh"
+  mkdir -p "$repo/bin" "$repo/tests" "$tmp/locks"
+  cp "$RUNNER" "$runner"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  for s in fm-brief fm-composer-lib fm-lint; do
+    cat >"$repo/tests/$s.test.sh" <<'SH'
+#!/usr/bin/env bash
+# Only the runner's own shells wait for suites; an outer subreaper may adopt holders.
+ancestors=" " pid=$$
+while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+  case "$(ps -o args= -p "$pid")" in *fm-test-run.sh*) ancestors="$ancestors$pid " ;; esac
+  pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+done
+[ "$ancestors" != " " ] || { echo "not ok - no runner shell among the suite's ancestors"; exit 1; }
+ps -A -o ppid= -o args= | while read -r ppid args; do
+  case "$ancestors" in *" $ppid "*) ;; *) continue ;; esac
+  case "$args" in *firstmate-test-*) echo "not ok - slot holder is a child of suite ancestor $ppid"; exit 1 ;; esac
+done || exit 1
+echo "ok - slot holder detached"
+SH
+    chmod +x "$repo/tests/$s.test.sh"
+  done
+  (
+    cd "$repo"
+    unset FM_TEST_HOST_LOCKED FM_TEST_SKIP_HOST_LOCK
+    FM_TEST_LOCK_DIR="$tmp/locks" bash "$runner" tests/fm-lint.test.sh >"$tmp/serial" 2>&1 \
+      && FM_TEST_LOCK_DIR="$tmp/locks" bash "$runner" --jobs 2 tests/fm-brief.test.sh \
+        tests/fm-composer-lib.test.sh >"$tmp/concurrent" 2>&1
+  ) || { cat "$tmp/serial" "$tmp/concurrent" 2>/dev/null; rm -rf "$tmp"; fail "a slot holder was a child of a shell that waits for suites"; }
+  rm -rf "$tmp"
+  pass "slot holders are detached from the serial and concurrent shells that wait for suites"
+}
+
 test_heavy_sessions() {
   python3 - "$ROOT" <<'PYTEST' || fail "heavy-session serialization contract failed"
 import os
@@ -2149,6 +2189,7 @@ if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_heavy_sessions
 test_host_test_slots
 test_host_test_budget_spans_runs
+test_host_slot_holder_is_detached_from_waiting_shells
 test_list_all_exact_suite_coverage
 test_family_selection
 fi
