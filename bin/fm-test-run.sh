@@ -2416,9 +2416,51 @@ declare -a WORKER_PIDS=()
 declare -a WORKER_IDX=()
 declare -a WORKER_SCRIPTS=()
 
+# Stop every suite still running when the run ends early. A TERM to the runner
+# also ends its forked workers, whose bounded suites then outlive them; removing
+# RUN_TMP under such a suite deletes the TMPDIR it is still using, and a suite
+# whose fixtures fail to create cannot clean up safely. Each suite's pid file
+# (run_script_bounded) names it: TERM goes to its process group (the bound's own
+# group, never the runner's), so its traps clean up while its TMPDIR still
+# exists, and KILL follows a bounded grace. Invoked through cleanup_run.
+# shellcheck disable=SC2329
+stop_live_suites() {
+  local pidfile pid pgid own_pgid target alive i
+  local -a targets=()
+  own_pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]')
+  for pidfile in "$RUN_TMP"/out.*.pid "$RUN_TMP"/w*/output.pid; do
+    [ -f "$pidfile" ] || continue
+    pid=$(cat "$pidfile" 2>/dev/null) || continue
+    case "$pid" in '' | *[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    target=$pid
+    if [ -n "$pgid" ] && [ "$pgid" != "$own_pgid" ]; then
+      target=-$pgid
+    fi
+    targets+=("$target")
+    kill -s TERM -- "$target" 2>/dev/null || true
+  done
+  [ "${#targets[@]}" -gt 0 ] || return 0
+  i=0
+  while [ "$i" -lt 100 ]; do
+    alive=0
+    for target in "${targets[@]}"; do
+      kill -0 -- "$target" 2>/dev/null && alive=1
+    done
+    [ "$alive" -eq 1 ] || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  for target in "${targets[@]}"; do
+    kill -s KILL -- "$target" 2>/dev/null || true
+  done
+}
+
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
+  stop_live_suites
   # A timed-out test can leave its fixture directories read-only.
   find "$RUN_TMP" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   rm -rf "$RUN_TMP"
@@ -2525,6 +2567,11 @@ run_script_bounded() (  # <script> <out> <stream> <id>
   local GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
+  # Record the suite's pid beside its output for stop_live_suites. Expansion is
+  # intentionally deferred to the child bash passed to -c.
+  # shellcheck disable=SC2016
+  command=(bash -c 'printf "%s\n" "$$" > "$1" && shift && exec "$@"' fm-test-suite \
+    "$out.pid" "${command[@]}")
   local rc
   : "$id"
   set +e
@@ -2551,6 +2598,7 @@ run_script_bounded() (  # <script> <out> <stream> <id>
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
     [ "$stream" -eq 1 ] && tail -1 "$out"
   fi
+  rm -f "$out.pid"
   return "$rc"
 )
 

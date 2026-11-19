@@ -63,7 +63,7 @@ trap cleanup_all EXIT
 
 # --- setup ------------------------------------------------------------------
 
-STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-e2e.XXXXXX")
+STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-e2e.XXXXXX") || exit 1
 mkdir -p "$STATE_DIR"
 LOG_FILE="$STATE_DIR/submitted.log"
 : > "$LOG_FILE"
@@ -139,7 +139,7 @@ sleep 1  # let the loop start and settle
 
 # tmux shim: redirects bare `tmux` to the private socket. Optionally swallows
 # the first Enter (file-based flag) for Scenario B.
-TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-shim.XXXXXX")
+TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-shim.XXXXXX") || exit 1
 cat > "$TMUX_SHIM_DIR/tmux" <<SHIM
 #!/usr/bin/env bash
 if [ "\${1:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then

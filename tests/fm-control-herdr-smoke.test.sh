@@ -59,7 +59,7 @@ cleanup_all() {
         cleanup_status=1
       }
     fi
-    rm -rf "$SCRATCH" || {
+    fm_test_remove_tree "$SCRATCH" || {
       echo "not ok - could not remove Herdr smoke scratch tree: $SCRATCH" >&2
       cleanup_status=1
     }
@@ -78,7 +78,7 @@ trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"
 LAB_PREPARED=1
 
-SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-control-herdr.XXXXXX")
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-control-herdr.XXXXXX") || exit 1
 SCRATCH=$(cd "$SCRATCH" && pwd)
 HOME_DIR="$SCRATCH/home"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data/hsmoke"

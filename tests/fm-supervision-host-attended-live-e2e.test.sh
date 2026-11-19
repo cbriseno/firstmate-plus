@@ -46,7 +46,6 @@ CLAUDE_VERSION=$(claude --version 2>/dev/null | head -n 1)
 MODEL=${FM_SUPERVISION_HOST_ATTENDED_LIVE_MODEL:-haiku}
 CONTROL_REF=${FM_SUPERVISION_HOST_ATTENDED_LIVE_CONTROL_REF:-}
 LAB=$(fm_test_tmproot fm-sh-attended-live)
-LAB=$(cd -P "$LAB" && pwd -P)
 SOCKET="fmshal-$$"
 PROJECTS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 TURN_POLLS=${FM_SUPERVISION_HOST_ATTENDED_LIVE_POLLS:-1800}

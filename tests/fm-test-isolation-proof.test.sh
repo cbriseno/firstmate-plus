@@ -20,7 +20,7 @@ test_unknown_pool_is_refused() {
   set -e
   [ "$rc" -eq 2 ] || fail "unknown --pool must be refused with exit 2, got $rc"
   [ ! -s "$tmp/out" ] || fail "unknown --pool unexpectedly listed candidates: $(cat "$tmp/out")"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "unknown candidate pools are refused"
 }
 
@@ -164,7 +164,7 @@ assert artifact["summary"]["total"] == 1
 assert artifact["summary"]["failed"] == 1
 assert artifact["scripts"][0]["exit"] == 1
 ' "$skipped_json" || fail "gate-skipped family artifact was admitted"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "family pool JSON scopes jobs admission to proven concurrency"
 }
 

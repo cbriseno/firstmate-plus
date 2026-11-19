@@ -5,7 +5,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BIN="$FM_ROOT/bin"
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-procevent-quota.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-procevent-quota.XXXXXX") || exit 1
 FAKEBIN="$LAB/fakebin"
 NO_QUOTA_BIN="$LAB/no-quota-bin"
 COUNT="$LAB/count"

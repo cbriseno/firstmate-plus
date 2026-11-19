@@ -16,7 +16,6 @@ set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job-process-start)
 mkdir -p "$TMP_ROOT"
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 FIXTURE_ROOT="$TMP_ROOT/remote-root"
 ACCOUNT_HOME="$TMP_ROOT/account"
 mkdir -p "$FIXTURE_ROOT/bin" "$ACCOUNT_HOME"

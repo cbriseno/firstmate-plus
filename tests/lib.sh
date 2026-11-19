@@ -106,6 +106,67 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
+# --- setup failure and removal guard -----------------------------------------
+#
+# A test whose setup failed must stop, never continue without its fixtures: a
+# fixture root that comes back empty turns `cd "$X"` into the working directory,
+# and the test's own cleanup then removes that directory - which is how a task
+# worker's whole checkout was once deleted when the runner removed a live test's
+# TMPDIR. Setup failures in this library therefore exit, fm_test_tmproot stops
+# its caller when it fails, and fixture trees are removed through
+# fm_test_remove_tree, whose guard below refuses an empty path, any directory
+# containing the firstmate checkout under test, and any directory containing the
+# working directory unless that directory lies inside a marked fixture root (a
+# test may remove the fixture it has cd'ed into). A refusal is a hard failure of
+# the test. Suites remove their own roots with fm_test_remove_tree, never a raw
+# `rm -rf`.
+
+fm_test_setup_failed() {  # <what>
+  printf 'not ok - tests/lib.sh setup failed: %s\n' "$1" >&2
+  exit 1
+}
+
+FM_TEST_ROOT_PHYSICAL=$(cd -P -- "$ROOT" && pwd -P) ||
+  fm_test_setup_failed "cannot resolve the checkout under test ($ROOT)"
+
+# 0 when <path> is <dir> or lies below it; both are physical absolute paths.
+fm_test_path_within() {  # <path> <dir>
+  [ "$2" = / ] || [ "$1" = "$2" ] && return 0
+  case "$1" in "$2"/*) return 0 ;; esac
+  return 1
+}
+
+fm_test_inside_fixture() {  # <physical-dir>
+  local dir=$1
+  while :; do
+    [ -f "$dir/.fm-test-fixture" ] && return 0
+    [ "$dir" = / ] && return 1
+    dir=${dir%/*}
+    [ -n "$dir" ] || dir=/
+  done
+}
+
+# Exit the test when removing <operand> would reach the checkout or the working
+# directory; return 0 for anything else, including paths that do not exist and
+# a symlink named without a trailing slash, which rm removes as a link.
+fm_test_check_removal() {  # <operand>
+  local target=$1 here reason
+  case "$target" in */) ;; *) [ -L "$target" ] && return 0 ;; esac
+  [ -d "$target" ] || return 0
+  target=$(cd -P -- "$target" 2>/dev/null && pwd -P) || return 0
+  here=$(pwd -P 2>/dev/null) || here=
+  if fm_test_path_within "$FM_TEST_ROOT_PHYSICAL" "$target"; then
+    reason="it contains the firstmate checkout under test ($FM_TEST_ROOT_PHYSICAL)"
+  elif [ -n "$here" ] && fm_test_path_within "$here" "$target" &&
+    ! fm_test_inside_fixture "$target"; then
+    reason="it contains the working directory ($here)"
+  else
+    return 0
+  fi
+  printf 'not ok - tests/lib.sh refused to remove %s: %s\n' "$target" "$reason" >&2
+  exit 1
+}
+
 # Inspect the shell payload carried by the worker process owner's argv.
 fm_test_launch_payload() {  # <launch>
   case "$1" in
@@ -147,7 +208,10 @@ fm_test_launch_command() {  # <launch>
 # --- self-cleaning temp root ------------------------------------------------
 #
 # fm_test_tmproot <prefix> echoes a fresh temp dir and registers it for removal
-# on EXIT/INT/TERM. A test file that needs extra teardown (e.g. killing a
+# on EXIT/INT/TERM. When it cannot create or register one it stops the calling
+# test: an exit inside the usual command substitution would end only that
+# subshell, so it sends TERM to the test shell (`$$`, see below), whose trap
+# cleans up and exits 143 rather than run on with an empty root. A test file that needs extra teardown (e.g. killing a
 # daemon) should define its own EXIT trap and call fm_test_cleanup from inside
 # it so registered dirs are still removed.
 #
@@ -207,10 +271,11 @@ fm_test_tmpdir() {
   return 1
 }
 
-FM_TEST_TMPDIR=$(fm_test_tmpdir) || return 1
+FM_TEST_TMPDIR=$(fm_test_tmpdir) || fm_test_setup_failed 'no usable temporary directory'
 
 FM_TEST_CLEANUP_DIRS=()
-FM_TEST_CLEANUP_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-cleanup.$$.XXXXXX") || return 1
+FM_TEST_CLEANUP_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-cleanup.$$.XXXXXX") ||
+  fm_test_setup_failed "cannot create the cleanup registry in $FM_TEST_TMPDIR"
 
 fm_test_pid_identity() {
   local pid=$1
@@ -233,7 +298,7 @@ fm_test_pids_dead() {
 
 FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
   rm -f "$FM_TEST_CLEANUP_REGISTRY"
-  return 1
+  fm_test_setup_failed "cannot read this process's identity"
 }
 
 # --- process-event runner reaping -------------------------------------------
@@ -250,7 +315,8 @@ FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
 # private one). It never matches on a script or process name, which would reach
 # into another home's live runners.
 
-FM_TEST_PROCEVENT_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-procevent.$$.XXXXXX") || return 1
+FM_TEST_PROCEVENT_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-procevent.$$.XXXXXX") ||
+  fm_test_setup_failed "cannot create the process-event registry in $FM_TEST_TMPDIR"
 
 fm_test_track_procevent_home() {  # <home> [claim-root]
   [ -n "${1:-}" ] || return 1
@@ -289,7 +355,8 @@ fm_test_reap_procevent_homes() {
 # deleted has no lock and is skipped; that watcher exits on its own home-gone
 # check within one poll.
 
-FM_TEST_WATCHER_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-watcher.$$.XXXXXX") || return 1
+FM_TEST_WATCHER_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-watcher.$$.XXXXXX") ||
+  fm_test_setup_failed "cannot create the watcher registry in $FM_TEST_TMPDIR"
 
 fm_test_track_watcher_state() {  # <state-dir>
   [ -n "${1:-}" ] || return 1
@@ -333,9 +400,15 @@ FM_TEST_SUITE_PID=$$
 export FM_TEST_SUITE_PID
 
 # Remove a fixture tree even when it holds a read-only directory, such as the
-# spawn-owned state/<id>.git-hooks strip directory.
+# spawn-owned state/<id>.git-hooks strip directory. An empty path is refused and
+# anything reaching the checkout or the working directory stops the test.
 fm_test_remove_tree() {
-  local dir=$1
+  local dir=${1-}
+  if [ -z "$dir" ]; then
+    printf 'fm_test_remove_tree: refused to remove an empty path\n' >&2
+    return 1
+  fi
+  fm_test_check_removal "$dir"
   if [ -d "$dir" ] && [ ! -L "$dir" ]; then
     find "$dir" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   fi
@@ -395,16 +468,20 @@ fm_test_cleanup() {
 
 fm_test_tmproot() {
   local prefix=${1:-fm-test} root tmp_base
-  tmp_base=$(fm_test_tmpdir)
-  tmp_base=${tmp_base%/}
-  root=$(mktemp -d "$tmp_base/${prefix}.XXXXXX") || return 1
-  root=$(cd -P -- "$root" && pwd -P) || return 1
-  if ! printf '%s\n%s\n' "$$" "$FM_TEST_OWNER_IDENTITY" > "$root/.fm-test-fixture" ||
-    ! printf '%s\n' "$root" >> "$FM_TEST_CLEANUP_REGISTRY"; then
+  if tmp_base=$(fm_test_tmpdir) &&
+    root=$(mktemp -d "${tmp_base%/}/${prefix}.XXXXXX") &&
+    root=$(cd -P -- "$root" && pwd -P); then
+    if printf '%s\n%s\n' "$$" "$FM_TEST_OWNER_IDENTITY" > "$root/.fm-test-fixture" &&
+      printf '%s\n' "$root" >> "$FM_TEST_CLEANUP_REGISTRY"; then
+      printf '%s\n' "$root"
+      return 0
+    fi
     rm -rf "$root"
-    return 1
   fi
-  printf '%s\n' "$root"
+  printf 'not ok - fm_test_tmproot could not create a fixture root for %s; stopping the test\n' \
+    "$prefix" >&2
+  kill -s TERM "$$"
+  return 1
 }
 
 trap fm_test_cleanup EXIT
@@ -415,7 +492,8 @@ trap 'fm_test_cleanup; exit 131' QUIT
 
 # Keep the suite's hook and startup timings out of the operator's diagnostic
 # log (bin/fm-diag.sh) while still exercising the recording path.
-FM_DIAGNOSTICS_HOME=$(fm_test_tmproot fm-test-diagnostics) || return 1
+FM_DIAGNOSTICS_HOME=$(fm_test_tmproot fm-test-diagnostics) ||
+  fm_test_setup_failed "cannot create the diagnostics fixture root"
 export FM_DIAGNOSTICS_HOME
 # Watcher fixtures must not receive behavior-budget alarms computed from the
 # suite's own timings; tests/fm-budgets.test.sh opts back in.

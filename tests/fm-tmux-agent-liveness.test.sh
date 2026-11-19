@@ -27,12 +27,12 @@ command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-liveness-$$"
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-liveness.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-liveness.XXXXXX") || exit 1
 SESSION=liveness
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -n "${LAB:-}" ] && rm -rf "$LAB"
+  [ -n "${LAB:-}" ] && fm_test_remove_tree "$LAB"
   fm_test_cleanup
 }
 trap cleanup_all EXIT

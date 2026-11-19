@@ -30,7 +30,7 @@ fm_live_gate opt-in FM_SECONDMATE_BUSY_LIVE tmux
 
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-sm-busy-$$"
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-secondmate-busy-live.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-secondmate-busy-live.XXXXXX") || exit 1
 CHECKED=0
 SKIPPED=
 
@@ -39,7 +39,7 @@ cleanup_all() {
   if [ -n "${LAB:-}" ]; then
     # fm-spawn leaves each mate's per-task git hooks directory read-only.
     chmod -R u+w "$LAB" 2>/dev/null || true
-    rm -rf "$LAB"
+    fm_test_remove_tree "$LAB"
   fi
   fm_test_cleanup
 }

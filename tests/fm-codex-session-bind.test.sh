@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().parent.parent)' "${BASH_SOURCE[0]}")
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-codex-session-bind.XXXXXX")
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-codex-session-bind.XXXXXX") || exit 1
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
 
 home="$TMP_ROOT/home"

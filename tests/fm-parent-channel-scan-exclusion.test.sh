@@ -20,8 +20,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-parent-channel-scan-exclusion)
-mkdir -p "$TMP_ROOT"
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 
 # The real drain asserts watcher liveness through fm-guard.sh, whose tangle
 # check warns when FM_ROOT sits on a feature branch; point it at a fresh
@@ -31,7 +29,7 @@ FM_ROOT_OVERRIDE="$(fm_test_tmproot fm-parent-channel-scan-exclusion-root)"
 export FM_ROOT_OVERRIDE
 mkdir -p "$FM_ROOT_OVERRIDE"
 
-cleanup() { rm -rf -- "$TMP_ROOT"; }
+cleanup() { fm_test_remove_tree "$TMP_ROOT"; }
 trap cleanup EXIT
 
 # seed_remote_mate <dir>: build a remote mate home whose state dir carries one

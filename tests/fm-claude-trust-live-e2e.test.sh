@@ -11,7 +11,6 @@ fm_live_gate opt-in FM_CLAUDE_TRUST_LIVE_E2E claude tmux node git
 
 VERSION=$(claude --version)
 LAB=$(fm_test_tmproot fm-claude-trust-live)
-LAB=$(cd -P "$LAB" && pwd -P)
 SOCKET="fm-claude-trust-live-$$"
 PROOF=
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.

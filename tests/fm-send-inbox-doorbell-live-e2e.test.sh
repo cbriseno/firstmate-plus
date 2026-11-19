@@ -42,7 +42,7 @@ unset NO_MISTAKES_GATE
 
 SOCKET="fm-inbox-live-$$"
 SESSION="inboxlive"
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-inbox-live.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-inbox-live.XXXXXX") || exit 1
 LAB=$(cd "$LAB" && pwd)
 TIMEOUT=${FM_SEND_INBOX_LIVE_TIMEOUT:-240}
 CHECKED=0
@@ -53,7 +53,7 @@ note() { printf '# %s\n' "$1"; }
 
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
-  rm -rf "$LAB"
+  fm_test_remove_tree "$LAB"
 }
 trap cleanup EXIT
 

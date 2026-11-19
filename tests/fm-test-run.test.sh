@@ -222,6 +222,52 @@ SH
   pass "runner removes read-only fixture directories from worker roots"
 }
 
+# An operator stopping a run sends TERM to the runner, and a name match such as
+# `pkill -f fm-test-run.sh` also reaches the forked workers that share its
+# command line, but not the bounded suites below them. The runner must stop
+# those suites while their TMPDIR still exists, then remove its scratch:
+# removing a live suite's TMPDIR once made a suite resolve an empty fixture root
+# to its checkout and delete it.
+test_interrupted_run_stops_live_suites_before_removing_their_tmpdir() {
+  local repo runner_pid pids i suite_pid
+  repo=$(fm_test_tmproot fm-interrupted-run)
+  init_changed_fixture_repo "$repo"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
+  mkdir -p "$repo/tmp"
+  cat > "$repo/tests/fm-secondmate-safety.test.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "$repo/suite.pid"
+trap 'if [ -d "\$TMPDIR" ]; then echo present; else echo gone; fi > "$repo/tmpdir-at-term"; exit 143' TERM
+i=0
+while [ "\$i" -lt 200 ]; do sleep 0.1; i=\$((i + 1)); done
+SH
+  chmod +x "$repo/tests/fm-secondmate-safety.test.sh"
+  TMPDIR="$repo/tmp" FM_LIVE=0 "$repo/bin/fm-test-run.sh" --per-script-timeout-secs 60 \
+    tests/fm-secondmate-safety.test.sh >"$repo/runner.log" 2>&1 &
+  runner_pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$repo/suite.pid" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -s "$repo/suite.pid" ] || fail "the fixture suite never started: $(cat "$repo/runner.log")"
+  suite_pid=$(cat "$repo/suite.pid")
+  pids=$(ps -ww -eo pid=,args= | FM_MATCH="$repo/bin/fm-test-run.sh" \
+    awk 'index($0, ENVIRON["FM_MATCH"]) { print $1 }')
+  [ -n "$pids" ] || fail "no runner process matched its command line"
+  # shellcheck disable=SC2086 # one argument per pid
+  kill -s TERM $pids 2>/dev/null
+  wait "$runner_pid" 2>/dev/null
+  i=0
+  while [ "$i" -lt 50 ] && kill -0 "$suite_pid" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$suite_pid" 2>/dev/null; then
+    kill -s KILL "$suite_pid" 2>/dev/null
+    fail "an interrupted run left its live suite running"
+  fi
+  [ "$(cat "$repo/tmpdir-at-term" 2>/dev/null)" = present ] ||
+    fail "the suite was not stopped while its TMPDIR still existed: $(cat "$repo/tmpdir-at-term" 2>/dev/null || echo 'never stopped')"
+  [ -z "$(find "$repo/tmp" -maxdepth 1 -name 'fm-test-run.*' -print -quit)" ] ||
+    fail "an interrupted run left its scratch behind"
+  pass "an interrupted run stops its live suites before removing their TMPDIR"
+}
+
 # Build a repository with a primary checkout and one linked worktree, each
 # holding a runnable copy of the runner and a probe suite that records the fact
 # that it ran. Untracked copies are enough: the runner resolves its root from
@@ -257,7 +303,7 @@ test_task_marker_refuses_the_primary_checkout() {
 
   # Marker set, primary checkout: refuse, name the primary, and run nothing.
   out=$(FM_TASK_ID=probe-task "$repo/bin/fm-test-run.sh" tests/probe.test.sh 2>&1) && rc=0 || rc=$?
-  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "the runner must refuse the primary checkout under a task marker"; }
+  [ "$rc" -ne 0 ] || { fm_test_remove_tree "$tmp"; fail "the runner must refuse the primary checkout under a task marker"; }
   assert_contains "$out" "primary checkout" "refusal did not name the primary checkout"
   assert_contains "$out" "FM_TASK_ID=probe-task" "refusal did not name the task marker"
   assert_contains "$out" "task worktree" "refusal did not point at the task worktree"
@@ -266,23 +312,23 @@ test_task_marker_refuses_the_primary_checkout() {
 
   # Marker set, linked worktree: the assigned placement, so the suite runs.
   FM_TASK_ID=probe-task "$linked/bin/fm-test-run.sh" tests/probe.test.sh >/dev/null 2>&1 \
-    || { rm -rf "$tmp"; fail "the runner must still run in a linked task worktree"; }
+    || { fm_test_remove_tree "$tmp"; fail "the runner must still run in a linked task worktree"; }
   assert_present "$linked/ran" "the linked-worktree run did not execute its suite"
 
   # No marker: a person in their own checkout is unaffected.
   "$repo/bin/fm-test-run.sh" tests/probe.test.sh >/dev/null 2>&1 \
-    || { rm -rf "$tmp"; fail "an unmarked run in the primary checkout must be unchanged"; }
+    || { fm_test_remove_tree "$tmp"; fail "an unmarked run in the primary checkout must be unchanged"; }
   assert_present "$repo/ran" "the unmarked run did not execute its suite"
 
   # Inspection executes nothing, so it stays available even in the primary.
   rm -f "$repo/ran"
   out=$(FM_TASK_ID=probe-task "$repo/bin/fm-test-run.sh" --list tests/probe.test.sh 2>&1) \
-    || { rm -rf "$tmp"; fail "--list must remain available under a task marker"; }
+    || { fm_test_remove_tree "$tmp"; fail "--list must remain available under a task marker"; }
   [ "$out" = "tests/probe.test.sh" ] \
-    || { rm -rf "$tmp"; fail "--list under a task marker printed: $out"; }
+    || { fm_test_remove_tree "$tmp"; fail "--list under a task marker printed: $out"; }
   assert_absent "$repo/ran" "--list must not execute a suite"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a task marker refuses execution in the primary checkout and leaves worktrees and inspection alone"
 }
 
@@ -334,7 +380,7 @@ test_changed_runner_surfaces_select_their_family() {
     *) fail "documentation surface change did not select its curated family: $listed" ;;
   esac
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "runner and its documentation surfaces select their curated family, not just their contract owners"
 }
 
@@ -347,7 +393,7 @@ test_shell_line_ending_policy_selects_runner_contract() {
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-test-run.test.sh" \
     "shell line-ending policy selects the runner contract"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "shell line-ending policy selects runner coverage"
 }
 
@@ -484,7 +530,7 @@ test_changed_dependency_selection_and_unmapped_failure() {
   rm -f "$repo/src/unmapped.ts" "$repo/tests/unread-thing.sh" "$repo/tests/unread-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   [ -z "$listed" ] || fail "retired sources and helpers without consumers selected tests: $listed"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "changed selection covers dependents, fails closed for live unmapped source, and accepts retired unconsumed source"
 }
 
@@ -515,7 +561,7 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
   assert_contains "$listed" "tests/fm-watch-recovery-loop.test.sh" \
     "a curated consumer of the helper must still select its whole family"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a bin reference selects the referencing scripts, and consumers still select their curated families"
 }
 
@@ -539,7 +585,7 @@ test_changed_codex_activity_selects_its_subjects() {
   printf '\n' >>"$repo/tests/fm-codex-session-bind.test.sh"
   listed=$(FM_LIVE=0 "$repo/bin/fm-test-run.sh" --changed --base HEAD --list | LC_ALL=C sort)
   [ "$listed" = "$expected" ] || fail "Codex helper change must select exactly its five subjects: $listed"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a Codex helper change selects its subjects without expanding the spawn families"
 }
 
@@ -623,7 +669,7 @@ SH
     || fail "single unproven changed script did not receive the automatic timeout: $(cat "$tmp/timeout.out")"
   [ ! -e "$timeout_repo/should-not-run" ] || fail "automatic timeout helper did not own the single changed script"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "changed defaults to bounded automatic scheduling with serial override"
 }
 
@@ -667,7 +713,7 @@ SH
   expect_code 1 "$rc" "Cygwin POSIX-mode enforcement"
   assert_contains "$out" "isolation failure: worker root mode is 755, expected 0700" \
     "Cygwin mode enforcement did not reject a non-0700 worker root"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "Windows emulation exempts only synthetic POSIX modes"
 }
 
@@ -738,7 +784,7 @@ PYJSON
   grep -Eq '^FM_TEST_END .+ tests/fm-spawn-worktree-settle\.test\.sh exit=0 ' "$tmp/named.out" \
     || fail "a named script did not run without an automatic bound: $(cat "$tmp/named.out")"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a plain script list defaults to bounded automatic concurrency without an automatic timeout"
 }
 
@@ -790,7 +836,7 @@ assert not active, active
 assert all(overlap.values()), overlap
 PY
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "family proofs run concurrently only within separate family phases"
 }
 
@@ -815,7 +861,7 @@ assert doc["summary"]["skipped_gate"] == 0
 assert doc["summary"]["duration_ms"] >= 0
 assert doc["scripts"] == []
 assert doc["families"] == []
-' "$json" || { rm -rf "$tmp"; fail "empty selection JSON summary is wrong"; }
+' "$json" || { fm_test_remove_tree "$tmp"; fail "empty selection JSON summary is wrong"; }
   fake_bin="$tmp/fake-bin"
   real_git=$(command -v git)
   mkdir -p "$fake_bin"
@@ -852,7 +898,7 @@ SH
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "malformed timeout on an empty selection must be refused, got $rc"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "empty changed selection emits deterministic text and JSON summaries"
 }
 
@@ -869,7 +915,7 @@ exit 0
 SH
   chmod +x "$fixture"
   "$RUNNER" --json "$json" "$fixture" >"$out" 2>"$tmp/err.txt" \
-    || { rm -rf "$tmp"; fail "runner should pass on a green fixture"; }
+    || { fm_test_remove_tree "$tmp"; fail "runner should pass on a green fixture"; }
   begin_n=$(grep -c '^FM_TEST_BEGIN ' "$out" || true)
   end_n=$(grep -c '^FM_TEST_END ' "$out" || true)
   [ "$begin_n" -eq 1 ] || fail "expected one FM_TEST_BEGIN, got $begin_n"
@@ -897,8 +943,8 @@ assert doc["summary"]["total"] == 1
 assert doc["summary"]["failed"] == 0
 assert "duration_ms" in doc["scripts"][0]
 assert "family" in doc["scripts"][0]
-' "$json" || { rm -rf "$tmp"; fail "JSON timing artifact missing required fields"; }
-  rm -rf "$tmp"
+' "$json" || { fm_test_remove_tree "$tmp"; fail "JSON timing artifact missing required fields"; }
+  fm_test_remove_tree "$tmp"
   pass "timing markers and JSON artifact are valid"
 }
 
@@ -930,8 +976,8 @@ SH
   "$RUNNER" "$pass_f" >"$tmp/out2.txt" 2>"$tmp/err2.txt"
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "aggregate exit must be 0 when every script passes"; }
-  rm -rf "$tmp"
+  [ "$rc" -eq 0 ] || { fm_test_remove_tree "$tmp"; fail "aggregate exit must be 0 when every script passes"; }
+  fm_test_remove_tree "$tmp"
   pass "aggregate exit reflects any script failure"
 }
 
@@ -959,8 +1005,8 @@ doc = json.load(open(sys.argv[1]))
 assert doc["scripts"][0]["gate_skip"] is True
 assert doc["summary"]["skipped_gate"] == 1
 assert doc["summary"]["failed"] == 0
-' "$json" || { rm -rf "$tmp"; fail "JSON gate_skip accounting is wrong"; }
-  rm -rf "$tmp"
+' "$json" || { fm_test_remove_tree "$tmp"; fail "JSON gate_skip accounting is wrong"; }
+  fm_test_remove_tree "$tmp"
   pass "gate-skip accounting is honest and non-failing"
 }
 
@@ -986,8 +1032,8 @@ doc = json.load(open(sys.argv[1]))
 record = doc["scripts"][0]
 assert record["gate_skip"] is True, record
 assert record["gate_skip_reason"] == "live: fmnosuchharness absent", record
-' "$json" || { rm -rf "$tmp"; fail "the timing artifact must carry the skip reason"; }
-  rm -rf "$tmp"
+' "$json" || { fm_test_remove_tree "$tmp"; fail "the timing artifact must carry the skip reason"; }
+  fm_test_remove_tree "$tmp"
   pass "a gate skip records why it skipped"
 }
 
@@ -1011,8 +1057,8 @@ doc = json.load(open(sys.argv[1]))
 record = doc["scripts"][0]
 assert record["gate_skip"] is False, record
 assert record["gate_skip_reason"] == "", record
-' "$json" || { rm -rf "$tmp"; fail "a script that ran must carry an empty skip reason"; }
-  rm -rf "$tmp"
+' "$json" || { fm_test_remove_tree "$tmp"; fail "a script that ran must carry an empty skip reason"; }
+  fm_test_remove_tree "$tmp"
   pass "a script that actually ran records no skip reason"
 }
 
@@ -1093,7 +1139,7 @@ SH
     || fail "summary must report failed=1 under fail-on-gate-skip: $(grep FM_TEST_SUMMARY "$out")"
   grep -q 'required gate skip token' "$tmp/err.txt" \
     || fail "runner must log the required gate skip token"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "fail-on-gate-skip converts herdr-not-found into a hard failure"
 }
 
@@ -1288,7 +1334,7 @@ test_portable_serial_shard_lane_refusals() {
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "shard lane without a count must refuse (exit 2), got $rc"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "portable serial shard lanes refuse mismatched, out-of-range, and countless names"
 }
 
@@ -1316,7 +1362,7 @@ test_jobs_requires_proven_isolated() {
   [ "$rc" -eq 2 ] || fail "--jobs with a portable serial shard must refuse, got $rc"
   grep -Fq 'portable serial lanes stay serial' "$tmp/err3" \
     || fail "shard --jobs refusal message missing: $(cat "$tmp/err3")"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "--jobs refuses non-proven / stateful selections"
 }
 
@@ -1368,7 +1414,7 @@ test_jobs_admits_a_concurrent_safe_family() {
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "a nested path colliding with a proven member must be refused, got $rc"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "--jobs admits and schedules a family with a recorded concurrent proof"
 }
 
@@ -1423,7 +1469,7 @@ test_unmapped_new_test_never_inherits_family_concurrency() {
     || fail "an unclassified test must still run serially, got $rc: $(cat "$tmp/serial.err")"
   grep -Eq '^FM_TEST_BEGIN .+ family=unclassified expected_gate_skip=none$' "$tmp/serial.out" \
     || fail "the unmapped fixture did not land in the catch-all family: $(cat "$tmp/serial.out")"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "an unclassified new test stays serial while the proven residual family runs concurrently"
 }
 
@@ -1463,7 +1509,7 @@ test_changed_shared_fixture_selects_its_readers() {
   assert_contains "$listed" "tests/fm-spawn-worktree-settle.test.sh" \
     "a nested fixture selects the suite that reads its directory"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a changed shared test fixture selects its readers while an unread tests/ path still refuses"
 }
 
@@ -1490,7 +1536,7 @@ test_concurrent_runs_are_ordered_longest_first() {
   first=$(grep -m1 '^FM_TEST_BEGIN' "$tmp/out" | awk '{print $3}')
   [ "$first" = tests/fm-task-inbox.test.sh ] \
     || fail "concurrent run did not start the longest script first, started: $first"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "a concurrent run starts the longest-hint script first"
 }
 
@@ -1553,7 +1599,7 @@ SH
   set -e
   [ "$rc" -eq 2 ] || fail "--per-script-timeout-secs with a non-number must be refused, got $rc"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "--per-script-timeout-secs turns a hung script into a bounded failure"
 }
 
@@ -1598,7 +1644,7 @@ SH
   bound=$(cat "$repo/bound-secs")
   [ "$bound" -ge 1500 ] \
     || fail "automatic --changed bound for $script must be at least 1500s, got ${bound}s"
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "the automatic --changed bound gives the slow watcher suite at least 1500s"
 }
 
@@ -1658,7 +1704,7 @@ SH
   set -e
   [ "$rc" -eq 2 ] || fail "--max-wall-ms with a non-number must be refused (exit 2), got $rc"
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "--max-wall-ms fails an over-budget run and refuses a malformed budget"
 }
 
@@ -1728,7 +1774,7 @@ SH
     "$a" "$b" "$c" >"$tmp/out" 2>"$tmp/err"
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err"; rm -rf "$tmp"; fail "jobs=2 must refill the first completed slot"; }
+  [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err"; fm_test_remove_tree "$tmp"; fail "jobs=2 must refill the first completed slot"; }
   begin_n=$(grep -c '^FM_TEST_BEGIN ' "$tmp/out" || true)
   end_n=$(grep -c '^FM_TEST_END ' "$tmp/out" || true)
   [ "$begin_n" -eq 3 ] || fail "expected 3 BEGIN markers, got $begin_n"
@@ -1741,7 +1787,7 @@ doc=json.load(open(sys.argv[1]))
 assert doc["summary"]["total"]==3
 assert doc["summary"]["failed"]==0
 assert "jobs=2" in doc["selection"]
-' "$tmp/timing.json" || { rm -rf "$tmp"; fail "jobs JSON artifact wrong"; }
+' "$tmp/timing.json" || { fm_test_remove_tree "$tmp"; fail "jobs JSON artifact wrong"; }
 
   # Non-proven path is refused before any worker starts (no race masking).
   cat >"$tmp/fail.test.sh" <<'SH'
@@ -1767,9 +1813,9 @@ SH
   SCHED_EVIDENCE="$evidence" "$runner" --jobs 2 "$a" "$b" >"$tmp/out4" 2>"$tmp/err4"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "jobs aggregate must be non-zero when a proven worker fails"; }
+  [ "$rc" -ne 0 ] || { fm_test_remove_tree "$tmp"; fail "jobs aggregate must be non-zero when a proven worker fails"; }
   grep -q 'FM_TEST_SUMMARY total=2 failed=1' "$tmp/out4" \
-    || { rm -rf "$tmp"; fail "jobs failure summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out4")"; }
+    || { fm_test_remove_tree "$tmp"; fail "jobs failure summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out4")"; }
 
   cat >"$repo/$d" <<'SH'
 #!/usr/bin/env bash
@@ -1781,18 +1827,18 @@ SH
   "$runner" --jobs 2 --fail-on-gate-skip 'herdr not found' "$d" >"$tmp/out5" 2>"$tmp/err5"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "parallel stderr gate skip must hard-fail"; }
+  [ "$rc" -ne 0 ] || { fm_test_remove_tree "$tmp"; fail "parallel stderr gate skip must hard-fail"; }
   grep -q 'FM_TEST_SUMMARY total=1 failed=1' "$tmp/out5" \
-    || { rm -rf "$tmp"; fail "parallel stderr hard-fail summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out5")"; }
+    || { fm_test_remove_tree "$tmp"; fail "parallel stderr hard-fail summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out5")"; }
 
   "$runner" --jobs 2 "$d" >"$tmp/out6" 2>"$tmp/err6" \
-    || { rm -rf "$tmp"; fail "ordinary parallel stderr gate skip must remain successful"; }
+    || { fm_test_remove_tree "$tmp"; fail "ordinary parallel stderr gate skip must remain successful"; }
   grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true$' "$tmp/out6" \
-    || { rm -rf "$tmp"; fail "parallel stderr gate skip was not recorded"; }
+    || { fm_test_remove_tree "$tmp"; fail "parallel stderr gate skip was not recorded"; }
   grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$tmp/out6" \
-    || { rm -rf "$tmp"; fail "parallel stderr skip summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out6")"; }
+    || { fm_test_remove_tree "$tmp"; fail "parallel stderr skip summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out6")"; }
 
-  rm -rf "$tmp"
+  fm_test_remove_tree "$tmp"
   pass "jobs scheduler runs proven scripts; failure propagates; non-proven refused"
 }
 
@@ -1833,8 +1879,8 @@ assert doc["summary"]["total"]==3
 assert doc["summary"]["failed"]==1
 assert doc["summary"]["critical_path_duration_ms"]==2000
 assert len(doc["scripts"])==3
-' "$tmp/out.json" || { rm -rf "$tmp"; fail "aggregate JSON shape wrong"; }
-  rm -rf "$tmp"
+' "$tmp/out.json" || { fm_test_remove_tree "$tmp"; fail "aggregate JSON shape wrong"; }
+  fm_test_remove_tree "$tmp"
   pass "aggregate-json merges lane timing artifacts"
 }
 
@@ -2055,6 +2101,7 @@ if [ "${FM_TEST_SUITE_PART:-0}" = 1 ]; then
 test_single_script_selection
 test_numbered_parts_follow_their_base_suite
 test_runner_removes_readonly_worker_roots
+test_interrupted_run_stops_live_suites_before_removing_their_tmpdir
 test_changed_file_selection_is_conservative
 fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then

@@ -36,7 +36,7 @@ herdr_forget_inherited_pane
 
 ORIGINAL_PATH=$PATH
 SESSION=$("$LAB_HELPER" name herdr-submit-confirm-live)
-TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-submit-confirm-live.XXXXXX")
+TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-submit-confirm-live.XXXXXX") || exit 1
 FAKEBIN="$TMP_ROOT/fakebin"
 mkdir -p "$FAKEBIN"
 CHECKED=0
@@ -47,7 +47,7 @@ cleanup() {
   if ! PATH="$ORIGINAL_PATH" "$LAB_HELPER" teardown "$SESSION"; then
     rc=1
   fi
-  rm -rf "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
   exit "$rc"
 }
 trap cleanup EXIT

@@ -26,7 +26,7 @@ fm_live_gate opt-in FM_SEND_MARKER_HERDR_E2E git herdr jq pi
 
 LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 SESSION=$("$LAB_HELPER" name fm-send-secondmate-marker-v7)
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-send-marker-herdr-e2e.XXXXXX")
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-send-marker-herdr-e2e.XXXXXX") || exit 1
 SENDER_HOME="$TMP_ROOT/sender-home"
 SECOND_HOME="$TMP_ROOT/secondmate-home"
 CAPTURE="$TMP_ROOT/pi-before-agent.jsonl"
@@ -43,7 +43,7 @@ cleanup() {
   if ! "$LAB_HELPER" teardown "$SESSION"; then
     rc=1
   fi
-  rm -rf "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
   exit "$rc"
 }
 trap cleanup EXIT

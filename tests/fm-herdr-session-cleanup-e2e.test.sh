@@ -17,7 +17,7 @@ command -v python3 >/dev/null 2>&1 || { echo 'skip: python3 not found'; exit 0; 
 
 REAL_HERDR=$(command -v herdr)
 HERDR_ORIGINAL_PATH=$PATH
-TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-session-cleanup-e2e.XXXXXX")
+TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-session-cleanup-e2e.XXXXXX") || exit 1
 FAKEBIN="$TMP_ROOT/fakebin"
 HOME_DIR="$TMP_ROOT/home"
 mkdir -p "$FAKEBIN" "$HOME_DIR/state" "$HOME_DIR/config"

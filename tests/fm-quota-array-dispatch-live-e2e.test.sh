@@ -23,14 +23,14 @@ fail() {
 
 [ -f "$OWNER" ] || fail "quota-array-dispatch skill not found"
 
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-quota-array-dispatch-live.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-quota-array-dispatch-live.XXXXXX") || exit 1
 PROJECT="$LAB/project"
 FAKEBIN="$LAB/fakebin"
 FIXTURE="$LAB/quota.json"
 CALLS="$LAB/quota-axi.calls"
 
 cleanup() {
-  rm -rf "$LAB"
+  fm_test_remove_tree "$LAB"
 }
 trap cleanup EXIT
 

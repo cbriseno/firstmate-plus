@@ -15,7 +15,7 @@ cleanup() {
   local rc=$?
   trap - EXIT
   "$HELPER" teardown "$SESSION" || rc=1
-  rm -rf -- "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
   exit "$rc"
 }
 trap cleanup EXIT

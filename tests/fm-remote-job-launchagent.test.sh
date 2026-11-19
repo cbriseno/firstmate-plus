@@ -10,7 +10,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job-launchagent)
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 ACCOUNT_HOME="$TMP_ROOT/account"
 STATE_ROOT="$TMP_ROOT/state"
@@ -172,7 +171,7 @@ cleanup() {
   stop_pid "$(cat "$FM_TEST_TRACKED" 2>/dev/null)"
   stop_pid "$(cat "$STATE_ROOT/worker.lock/pid" 2>/dev/null)"
   stop_pid "${ORPHAN_PID:-}"
-  rm -rf -- "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
 }
 trap cleanup EXIT
 

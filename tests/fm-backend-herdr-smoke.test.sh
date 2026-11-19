@@ -189,7 +189,7 @@ fm_backend_herdr_kill "$SESSION:$NEW_HUSK_PANE_ID"
 # right after it exercises the true multi-workspace shape, not a
 # possibly-emptied-and-auto-closed primary workspace.
 
-SM_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-smoke-sm.XXXXXX")
+SM_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-smoke-sm.XXXXXX") || exit 1
 SM_HOME="$SM_SCRATCH/secondmate-home"
 mkdir -p "$SM_HOME"
 printf 'smoketest-sm1\n' > "$SM_HOME/.fm-secondmate-home"

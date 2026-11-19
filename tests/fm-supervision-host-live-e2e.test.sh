@@ -23,7 +23,6 @@ fm_live_gate opt-in FM_SUPERVISION_HOST_LIVE_E2E claude node perl git
 
 CLAUDE_VERSION=$(claude --version 2>/dev/null | head -n 1)
 LAB=$(fm_test_tmproot fm-supervision-host-live)
-LAB=$(cd -P "$LAB" && pwd -P)
 FM="$LAB/fm"
 # The session-lock holder must look like a Claude harness to the ancestry walk
 # without shadowing the real claude the engine resolves from PATH.

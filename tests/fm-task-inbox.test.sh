@@ -38,7 +38,6 @@ WATCH="$ROOT/bin/fm-watch.sh"
 TMP_ROOT=$(fm_test_tmproot fm-task-inbox)
 # The doorbell line canonicalizes its paths, so keep the fixture root
 # canonical too (a trailing-slash TMPDIR otherwise yields a double slash).
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 
 # Run one library function against a state dir through a subshell that sources
 # the production library, so the tests exercise the executable surface rather

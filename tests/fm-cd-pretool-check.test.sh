@@ -149,7 +149,7 @@ matrix_case A34 allow 'command -V cd'
 matrix_case A35 allow 'command -pv cd'
 matrix_case A36 allow 'command -vp cd'
 
-MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-cd-policy-matrix.XXXXXX")
+MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-cd-policy-matrix.XXXXXX") || exit 1
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
 
 run_matrix_entry() {

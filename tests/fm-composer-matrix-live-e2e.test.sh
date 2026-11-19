@@ -51,7 +51,7 @@ trap cleanup EXIT
 
 # The library under test, driven against the private socket through a PATH
 # shim so its bare `tmux` calls stay isolated from any live fleet.
-SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-cmx-live.XXXXXX")
+SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-cmx-live.XXXXXX") || exit 1
 REAL_TMUX=$(command -v tmux)
 cat > "$SHIM_DIR/tmux" <<SH
 #!/usr/bin/env bash

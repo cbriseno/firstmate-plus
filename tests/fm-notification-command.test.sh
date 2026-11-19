@@ -35,7 +35,7 @@ PY
 
 # Real disposable tmux panels exercise the watcher, including its primary path.
 if ! command -v tmux >/dev/null 2>&1; then echo 'skip - login panels require tmux'; exit 0; fi
-TASK_TMP=$(mktemp -d "${GOTMPDIR:-${TMPDIR:-/tmp}}/fm-login.XXXXXX")
+TASK_TMP=$(mktemp -d "${GOTMPDIR:-${TMPDIR:-/tmp}}/fm-login.XXXXXX") || exit 1
 LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
 export FM_HOME="$TASK_TMP/home"
 "$LAB_HOME_HELPER" create "$FM_HOME" >/dev/null

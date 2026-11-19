@@ -11,7 +11,7 @@ herdr_forget_inherited_pane
 HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 ORIGINAL_PATH=$PATH
 SESSION=$("$HELPER" name herdr-codex-delayed-live)
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-codex-delayed.XXXXXX")
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-codex-delayed.XXXXXX") || exit 1
 PID=
 sender=
 cleanup() {
@@ -20,7 +20,7 @@ cleanup() {
   [ -z "$PID" ] || kill -CONT "$PID" 2>/dev/null || true
   if [ -n "$sender" ]; then kill "$sender" 2>/dev/null || true; wait "$sender" 2>/dev/null || true; fi
   PATH="$ORIGINAL_PATH" "$HELPER" teardown "$SESSION" || rc=1
-  rm -rf -- "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
   exit "$rc"
 }
 trap cleanup EXIT

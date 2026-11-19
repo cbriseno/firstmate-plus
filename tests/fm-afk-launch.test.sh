@@ -37,7 +37,7 @@ export CLAUDECODE=1 FM_TEST_HARNESS=claude FM_TEST_SEAM=1
 # opts it out (docs/configuration.md "Supervision host"), and the host is that home's
 # away session, so the daemon units run on a Claude home that opted out; the
 # supervision-host units point FM_CONFIG_OVERRIDE at their own home's config.
-OFF_CONFIG=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-off-config.XXXXXX")
+OFF_CONFIG=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-off-config.XXXXXX") || exit 1
 : > "$OFF_CONFIG/supervision-host-off"
 export FM_CONFIG_OVERRIDE="$OFF_CONFIG"
 

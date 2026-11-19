@@ -64,7 +64,7 @@ make_gate_worktree() {
   git init -q -b main "$seed"
   git -C "$seed" commit -q --allow-empty -m init
   git -C "$seed" push -q "$root/origin.git" HEAD:refs/heads/main
-  rm -rf "$seed"
+  fm_test_remove_tree "$seed"
   git clone -q --bare "$root/origin.git" "$root/.no-mistakes/repos/$id.git"
   git -C "$root/.no-mistakes/repos/$id.git" worktree add --detach \
     "$root/.no-mistakes/worktrees/$id/$run" main >/dev/null 2>&1

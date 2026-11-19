@@ -3,8 +3,8 @@ set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 export FM_LIVE=0
-scratch=$(mktemp -d)
-trap 'rm -rf -- "$scratch"' EXIT
+scratch=$(mktemp -d) || exit 1
+trap 'fm_test_remove_tree "$scratch"' EXIT
 script="$ROOT/bin/fm-local-sync.sh"
 git init -q --bare "$scratch/origin.git"
 git init -q -b main "$scratch/work"

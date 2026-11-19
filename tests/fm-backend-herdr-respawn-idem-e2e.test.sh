@@ -52,7 +52,7 @@ herdr_forget_inherited_pane
 
 SESSION="fm-lab-respawn-idem-e2e-$$"
 export HERDR_SESSION="$SESSION"
-SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-respawn-idem.XXXXXX")
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-respawn-idem.XXXXXX") || exit 1
 cleanup_all() {
   herdr_safe_stop_and_delete "$SESSION"
   rm -rf "$SCRATCH"

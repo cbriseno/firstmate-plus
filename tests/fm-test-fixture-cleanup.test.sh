@@ -79,22 +79,154 @@ test_cleanup_registry_resists_precreation() {
   pass "the cleanup registry cannot be injected through path precreation"
 }
 
-test_fixture_registration_failure_rolls_back_root() {
-  local harness failure_tmp registry_dir output leaked_root
+# The usual call runs in a command substitution, so a failed registration must
+# stop the calling test itself, not only the subshell: a test that continued
+# with an empty root once resolved it to its working directory and removed it.
+test_fixture_registration_failure_stops_the_test() {
+  local harness failure_tmp registry_dir output rc leaked_root
   harness=$(fm_test_tmproot fm-test-cleanup-registration-harness)
   failure_tmp="$harness/tmp"
   registry_dir="$harness/registry-dir"
   mkdir -p "$failure_tmp" "$registry_dir"
 
-  if output=$(TMPDIR="$failure_tmp" FM_TEST_CLEANUP_REGISTRY="$registry_dir" \
-    fm_test_tmproot fm-test-cleanup-registration-failure 2>/dev/null); then
-    fail "fm_test_tmproot succeeded after its cleanup registry rejected registration"
-  fi
-  [ -z "$output" ] || fail "fm_test_tmproot published an unregistered fixture root"
+  output=$(TMPDIR="$failure_tmp" bash -c '
+    . "$1"
+    FM_TEST_CLEANUP_REGISTRY=$2
+    d=$(fm_test_tmproot fm-test-cleanup-registration-failure)
+    printf "continued with root [%s]\n" "$d"
+  ' _ "$LIB" "$registry_dir" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a test continued with exit 0 after fm_test_tmproot failed: $output"
+  assert_not_contains "$output" "continued with root" \
+    "a test kept running after fm_test_tmproot could not register its root"
+  assert_contains "$output" "fm_test_tmproot could not create a fixture root" \
+    "a failed fixture root did not report why the test stopped"
   for leaked_root in "$failure_tmp"/fm-test-cleanup-registration-failure.*; do
     [ ! -e "$leaked_root" ] || fail "fm_test_tmproot leaked a root after registration failed"
   done
-  pass "failed fixture registration rolls back the new root"
+  pass "a failed fixture registration rolls back the root and stops the test"
+}
+
+# A disposable copy of the checkout, so the cases below run real suites whose
+# ROOT and working directory are that copy and never this checkout.
+make_checkout_copy() {  # <dir>
+  mkdir -p "$1"
+  cp -R "$ROOT/bin" "$ROOT/tests" "$1/" || fail "could not copy the checkout into $1"
+}
+
+# The reproduction of the lost-checkout incident: the real suite that removed a
+# worker's checkout, run from a copy whose TMPDIR cannot be written, used to
+# pass with exit 0 after its cleanup removed the whole copy.
+test_failed_setup_stops_the_real_suite_and_keeps_its_checkout() {
+  local harness copy ro output rc
+  harness=$(fm_test_tmproot fm-test-cleanup-setup-harness)
+  copy="$harness/checkout"
+  ro="$harness/read-only-tmp"
+  make_checkout_copy "$copy"
+  mkdir -p "$ro"
+  chmod 555 "$ro"
+  if ( : > "$ro/probe" ) 2>/dev/null; then
+    chmod 755 "$ro"
+    pass "skip: this user can write a mode-555 directory, so setup cannot be made to fail"
+    return 0
+  fi
+  output=$(cd "$copy" && TMPDIR="$ro" bash tests/fm-parent-channel-scan-exclusion.test.sh 2>&1)
+  rc=$?
+  chmod 755 "$ro"
+  assert_present "$copy/tests/lib.sh" \
+    "a suite whose setup failed removed the checkout it ran from"
+  [ "$rc" -ne 0 ] || fail "a suite whose setup failed still exited 0: $output"
+  assert_contains "$output" "tests/lib.sh setup failed" \
+    "a failed setup did not report itself"
+  pass "a suite whose setup fails stops red and keeps the checkout it ran from"
+}
+
+# The runner removed a live suite's TMPDIR after tests/lib.sh had loaded, so the
+# suite's next fixture root failed. The suite must stop before its own
+# `cd "$TMP_ROOT"` and cleanup trap can resolve the empty root to its checkout.
+test_deleted_tmpdir_stops_the_suite_and_keeps_its_checkout() {
+  local harness copy tmp output rc
+  harness=$(fm_test_tmproot fm-test-cleanup-deleted-tmp-harness)
+  copy="$harness/checkout"
+  tmp="$harness/runner-worker/tmp"
+  make_checkout_copy "$copy"
+  mkdir -p "$tmp"
+  output=$(cd "$copy" && TMPDIR="$tmp" bash -c '
+    . tests/lib.sh
+    rm -rf -- "$1"
+    TMP_ROOT=$(fm_test_tmproot fm-parent-channel-scan-exclusion)
+    mkdir -p "$TMP_ROOT"
+    TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+    cleanup() { rm -rf -- "$TMP_ROOT"; }
+    trap cleanup EXIT
+    printf "continued with root [%s]\n" "$TMP_ROOT"
+  ' _ "$harness/runner-worker" 2>&1)
+  rc=$?
+  assert_present "$copy/tests/lib.sh" \
+    "a suite whose TMPDIR was removed mid-run removed the checkout it ran from"
+  [ "$rc" -ne 0 ] || fail "a suite whose TMPDIR was removed still exited 0: $output"
+  assert_not_contains "$output" "continued with root" \
+    "a suite kept running after its TMPDIR was removed"
+  pass "a suite whose TMPDIR disappears stops red and keeps its checkout"
+}
+
+# Whatever produced the value, fm_test_remove_tree never reaches the checkout
+# under test or its working directory, and never runs on an empty path.
+test_removal_guard_protects_checkout_and_working_directory() {
+  local harness copy work output rc
+  harness=$(fm_test_tmproot fm-test-cleanup-guard-harness)
+  copy="$harness/checkout"
+  make_checkout_copy "$copy"
+  work=$(mktemp -d "$FM_TEST_TMPDIR/fm-test-cleanup-unmarked-cwd.XXXXXX") ||
+    fail "could not create an unmarked working directory"
+  FM_TEST_CLEANUP_DIRS+=("$work")
+
+  output=$(cd "$copy" && bash -c '
+    . tests/lib.sh
+    TMP_ROOT=""
+    TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+    fm_test_remove_tree "$TMP_ROOT"
+    printf "continued\n"
+  ' 2>&1)
+  rc=$?
+  assert_present "$copy/tests/lib.sh" "an empty root resolved to the working directory removed the checkout"
+  [ "$rc" -ne 0 ] || fail "removing the checkout was not a hard failure: $output"
+  assert_not_contains "$output" "continued" "a test kept running after trying to remove its checkout"
+  assert_contains "$output" "contains the firstmate checkout under test" \
+    "the refusal did not name the checkout"
+
+  output=$(cd "$copy/tests" && bash -c '. ./lib.sh; fm_test_remove_tree ../..; printf "continued\n"' 2>&1)
+  rc=$?
+  assert_present "$copy/tests/lib.sh" "removing a directory above the checkout removed it"
+  [ "$rc" -ne 0 ] || fail "removing a directory above the checkout was not a hard failure: $output"
+  assert_not_contains "$output" "continued" "a test kept running after trying to remove a directory above its checkout"
+
+  output=$(cd "$work" && bash -c '. "$1"; fm_test_remove_tree "$PWD"; printf "continued\n"' _ "$copy/tests/lib.sh" 2>&1)
+  rc=$?
+  assert_present "$work" "a test removed its unmarked working directory"
+  [ "$rc" -ne 0 ] || fail "removing the working directory was not a hard failure: $output"
+  assert_not_contains "$output" "continued" "a test kept running after trying to remove its working directory"
+  assert_contains "$output" "contains the working directory" \
+    "the refusal did not name the working directory"
+
+  output=$(cd "$copy" && bash -c '
+    . tests/lib.sh
+    fm_test_remove_tree "" || printf "empty path status: %s\n" "$?"
+    d=$(fm_test_tmproot fm-test-cleanup-guard-allowed)
+    mkdir -p "$d/sub" && ln -s "$ROOT" "$d/link-to-checkout"
+    fm_test_remove_tree "$d/link-to-checkout" && fm_test_remove_tree "$d/sub"
+    [ -e "$d/link-to-checkout" ] || [ -e "$d/sub" ] || printf "removed ordinary paths\n"
+    cd "$d" && fm_test_remove_tree "$d" && [ ! -e "$d" ] && printf "removed own fixture working directory\n"
+  ' 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "ordinary removals failed under the guard: $output"
+  assert_contains "$output" "empty path status: 1" "removing an empty path did not fail"
+  assert_contains "$output" "refused to remove an empty path" "an empty path was not refused"
+  assert_contains "$output" "removed ordinary paths" "the guard blocked an ordinary fixture removal"
+  assert_contains "$output" "removed own fixture working directory" \
+    "the guard blocked a test removing the fixture root it had entered"
+  assert_present "$copy/tests/lib.sh" "removing a symlink to the checkout removed the checkout"
+  pass "fixture removal refuses empty paths, the checkout, and an unmarked working directory"
 }
 
 test_orphan_sweep_respects_fixture_ownership() {
@@ -140,7 +272,7 @@ test_orphan_sweep_respects_fixture_ownership() {
   wait "$pid" 2>/dev/null
   assert_absent "$active_dir" \
     "the active fixture root survived its owning process's teardown"
-  rm -rf "$fresh_dir"
+  fm_test_remove_tree "$fresh_dir"
   pass "the orphan sweep reaps only old fixtures without a live owner"
 }
 
@@ -247,7 +379,10 @@ test_registries_avoid_git_worktree_root() {
 test_fixture_root_gone_after_normal_exit
 test_fixture_root_gone_after_sigterm
 test_cleanup_registry_resists_precreation
-test_fixture_registration_failure_rolls_back_root
+test_fixture_registration_failure_stops_the_test
+test_failed_setup_stops_the_real_suite_and_keeps_its_checkout
+test_deleted_tmpdir_stops_the_suite_and_keeps_its_checkout
+test_removal_guard_protects_checkout_and_working_directory
 test_orphan_sweep_respects_fixture_ownership
 test_orphan_sweep_reaps_read_only_package_tree
 test_registries_avoid_git_worktree_root

@@ -20,7 +20,6 @@ set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-delta-read)
 mkdir -p "$TMP_ROOT"
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 DELTA_HOME="$TMP_ROOT/home"
 DELTA_LOG_REL=state/replies.status
 mkdir -p "$DELTA_HOME/state"

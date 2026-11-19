@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BIN="$FM_ROOT/bin"
 
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-quota-choose.XXXXXX")
+LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-quota-choose.XXXXXX") || exit 1
 FIXTURE="$LAB/quota.json"
 MALFORMED="$LAB/malformed.json"
 MULTI_JSON="$LAB/multi-json.json"

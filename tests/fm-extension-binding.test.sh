@@ -25,7 +25,7 @@ esac
 HOST="$ROOT/bin/fm-extension.mjs"
 PROCEVENT="$ROOT/bin/fm-procevent.sh"
 TMP_ROOT_RAW=$(fm_test_tmproot fm-extension-binding)
-TMP_ROOT=$(cd "$TMP_ROOT_RAW" && pwd -P)
+TMP_ROOT=$TMP_ROOT_RAW
 first_bind_pid=
 second_bind_pid=
 handshake_orphan_pid=

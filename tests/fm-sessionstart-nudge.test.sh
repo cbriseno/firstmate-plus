@@ -19,7 +19,7 @@ if [ "${FM_SESSIONSTART_TEST_HARNESS:-0}" != 1 ]; then
   FM_SESSIONSTART_TEST_HARNESS=1 "$HARNESS_FIXTURE/codex" \
     -c '"$@"; rc=$?; :; exit "$rc"' _ "$0" "$@"
   HARNESS_STATUS=$?
-  rm -rf "$HARNESS_FIXTURE"
+  fm_test_remove_tree "$HARNESS_FIXTURE"
   exit "$HARNESS_STATUS"
 fi
 

@@ -65,7 +65,7 @@ herdr_forget_inherited_pane
 # fm-spawn no longer needs this as a symlink workaround: fm-spawn-symlink-guard-s8
 # canonicalized project and backend cwd comparisons in the worktree-discovery
 # poll.
-TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-e2e.XXXXXX")
+TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-e2e.XXXXXX") || exit 1
 SESSION="fm-lab-herdr-e2e-$$"
 export HERDR_SESSION="$SESSION"
 WT1=; WT2=

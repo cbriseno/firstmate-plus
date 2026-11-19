@@ -54,7 +54,7 @@ cleanup() {
         || lavish-axi end "$LAB/.lavish/bearings-board.html" >/dev/null 2>&1 || true
       lavish-axi stop >/dev/null 2>&1 || true
     fi
-    rm -rf "$LAB"
+    fm_test_remove_tree "$LAB"
   }
 }
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup; exit 1; }

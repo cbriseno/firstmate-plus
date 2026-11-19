@@ -51,12 +51,12 @@ v0.8.0	0.8.0	above	d53a9f93fccfdfcc55632927bf51002f5add0aa7990bcdf508ffbd84ac658
 EOF
 )
 
-TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-version-floor.XXXXXX")
+TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-version-floor.XXXXXX") || exit 1
 ORIGINAL_PATH=$PATH
 LAB_SESSION=$("$LAB_HELPER" name fm-herdr-version-floor)
 cleanup() {
   local status=$?
-  rm -rf "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
   exit "$status"
 }
 trap cleanup EXIT

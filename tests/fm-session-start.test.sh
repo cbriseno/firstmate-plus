@@ -1529,7 +1529,7 @@ test_perl_timeout_fallback_reports_signal_death_nonzero() {
     [ "$(fm_timeout_mechanism)" = perl ] || { echo "mechanism: $(fm_timeout_mechanism)" >&2; exit 99; }
     fm_run_timed 5 bash -c "kill -KILL \$\$"
   ' _ "$ROOT" || rc=$?
-  rm -rf "$toolbin"
+  fm_test_remove_tree "$toolbin"
   expect_code 137 "$rc" "the perl timeout fallback did not report a SIGKILLed child as 128+9"
 
   pass "the perl timeout fallback reports a signal death as a nonzero status"

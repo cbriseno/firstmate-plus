@@ -9,7 +9,6 @@ command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-handoff)
 mkdir -p "$TMP_ROOT"
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 PARENT="$TMP_ROOT/parent"
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 REMOTE="$TMP_ROOT/remote"
@@ -42,11 +41,11 @@ fm_remote_handoff_teardown() {
   wait 2>/dev/null || true
   i=0
   while [ "$i" -lt 50 ]; do
-    rm -rf -- "$TMP_ROOT" 2>/dev/null && return 0
+    fm_test_remove_tree "$TMP_ROOT" 2>/dev/null && return 0
     sleep 0.02
     i=$((i + 1))
   done
-  rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+  fm_test_remove_tree "$TMP_ROOT" 2>/dev/null || true
 }
 trap fm_remote_handoff_teardown EXIT
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
