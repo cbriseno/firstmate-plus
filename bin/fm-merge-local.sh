@@ -132,9 +132,18 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   exit 1
 fi
 
-wip=$(git -C "$PROJ" log --format='%h %s' "$DEFAULT..$BRANCH" | awk '{ subject=substr($0, index($0, " ") + 1) } (index(subject, "WIP") || subject == "Save pending work before worker close") && !found { print $1; found=1 }')
+# Captain rule 37: no commit whose whole message (subject or body) carries the
+# word WIP, in any case, and no worker-close preservation commit, enters main.
+wip=
+for commit in $(git -C "$PROJ" rev-list "$DEFAULT..$BRANCH"); do
+  message=$(git -C "$PROJ" log -1 --format=%B "$commit")
+  if printf '%s\n' "$message" | grep -Eiqw 'wip' || [ "${message%%$'\n'*}" = "Save pending work before worker close" ]; then
+    wip=$(git -C "$PROJ" rev-parse --short "$commit")
+    break
+  fi
+done
 if [ -n "$wip" ]; then
-  echo "REFUSED: commit $wip has an unfinished-work subject; rewrite the unpublished branch and retry." >&2
+  echo "REFUSED: commit $wip is marked unfinished (WIP); rewrite the unpublished branch and retry." >&2
   exit 1
 fi
 
