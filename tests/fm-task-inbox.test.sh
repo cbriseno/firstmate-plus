@@ -699,6 +699,25 @@ test_watcher_resumes_timed_pause_once() {
   pass "watcher: until/hasta deadlines send one durable resume, surviving acknowledgement and restart"
 }
 
+test_watcher_timed_pause_notice_survives_failed_send() {
+  local dir state rec line n i
+  dir=$(setup_watch_case timed-pause-failed-send)
+  state="$dir/state"; rec="$state/t1.inbox"
+  mkdir -p "$dir/stub" "$rec"
+  # A parked pane has no doorbell: the steer is queued, then fm-send exits nonzero.
+  # shellcheck disable=SC2016 # the stub body expands when it runs
+  printf '#!/usr/bin/env bash\nn=$(find "$FM_STATE_OVERRIDE/t1.inbox" -name "*.msg" | wc -l)\nprintf x > "$FM_STATE_OVERRIDE/t1.inbox/$((n + 1)).msg"\nexit 3\n' > "$dir/stub/fm-send.sh"
+  chmod +x "$dir/stub/fm-send.sh"
+  line="paused [at=1795052481]: wait until 2000-01-01T00:00Z"
+  for i in 1 2 3; do
+    FM_HOME="$dir" FM_STATE_OVERRIDE="$state" bash -c \
+      '. "$1"; SCRIPT_DIR=$3; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$line" "$dir/stub" || true
+  done
+  n=$(find "$rec" -name '*.msg' | wc -l)
+  [ "$n" = 1 ] || fail "failed send re-queued the same deadline $n times"
+  pass "watcher: a deadline notice is sent once per declared at= even when fm-send exits nonzero"
+}
+
 test_watcher_rerings_idle_pane_quietly() {
   local dir state out log pid rec
   dir=$(setup_watch_case rering)
@@ -1244,6 +1263,7 @@ test_fire_and_forget_retry_is_quiet_without_the_flag
 test_ring_ladder_policy
 test_watcher_rerings_idle_pane_quietly
 test_watcher_resumes_timed_pause_once
+test_watcher_timed_pause_notice_survives_failed_send
 test_watcher_waits_on_busy_pane
 test_watcher_busy_budget_resets_on_ring_and_ack
 test_watcher_busy_bookkeeping_failure_surfaces

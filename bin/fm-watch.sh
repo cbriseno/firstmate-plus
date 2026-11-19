@@ -477,23 +477,32 @@ inbox_steer_check() {  # <window> <task>
 # a deadline must not depend on a stale hash or a supervisor handling a wake.
 # fm-send owns durable delivery and the ordinary inbox retry path.
 paused_until_resume() {  # <window> <task> <declared-wait-line>
-  local win=$1 task=$2 last=$3 until marker
+  local win=$1 task=$2 last=$3 until marker key before after
   [ -n "$task" ] || return 0
   marker="$STATE/.paused-resumed-$(window_key "$win")"
   if ! status_is_paused "$last"; then
     rm -f "$marker"
     return 0
   fi
-  [ "$(cat "$marker" 2>/dev/null || true)" != "$last" ] || return 0
+  # One notice per declared line, keyed by its at= (the whole line when it has
+  # none). fm-send can exit nonzero after durably queueing the steer (a parked
+  # pane has no doorbell), so the key is recorded before sending and dropped
+  # only when nothing was queued; otherwise every poll re-queued the notice.
+  key=$(printf '%s' "$last" | sed -n 's/^[^ ]* *\[[^]]*at=\([0-9]*\)[^]]*\].*/\1/p')
+  [ -n "$key" ] || key=$last
+  [ "$(cat "$marker" 2>/dev/null || true)" != "$key" ] || return 0
   until=$(status_paused_until "$last") || return 0
   [ "$(date +%s)" -ge "$until" ] || return 0
+  before=$(find "$STATE/$task.inbox" -maxdepth 2 -name '*.msg' 2>/dev/null | wc -l)
+  printf '%s' "$key" > "$marker"
   if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-send.sh" "$task" \
       "Your declared pause deadline has arrived. Recheck the waiting condition and resume the task if it has cleared; append resolved with the pause's key when resuming, or declare the remaining wait. Pause: $last"; then
-    printf '%s' "$last" > "$marker"
     triage_log "sent timed-pause resume: $win"
   else
-    triage_log "timed-pause resume failed: $win"
+    after=$(find "$STATE/$task.inbox" -maxdepth 2 -name '*.msg' 2>/dev/null | wc -l)
+    [ "$after" -gt "$before" ] || rm -f "$marker"
+    triage_log "timed-pause resume failed: $win (queued=$((after - before)))"
   fi
 }
 
