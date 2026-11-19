@@ -3,12 +3,15 @@
 # composition for portable CI shards, local --jobs for proven-concurrent work,
 # timing markers, and the complete-regression coverage guard.
 #
-# Test runs share host slots across homes and worktrees: two baseline slots,
-# plus one per available GiB above the first, capped at the CPU count (minimum
-# two). Unknown memory retains two slots. When all slots are occupied, a line
-# names their PIDs and FM_TEST_SKIP_HOST_LOCK=1 bypasses the limit. Nested
-# runners inherit their parent's slot. Live-harness and real-Herdr
-# suites additionally use bin/fm-heavy-run.sh's single heavy-session host slot.
+# Machine test budget: every executing test script, serial or concurrent, holds
+# one of N host slots shared by every run in every home and worktree, so the
+# internal --jobs workers of simultaneous runs draw from one pool instead of
+# multiplying. N is two baseline slots plus one per available GiB above the
+# first, capped at the CPU count (minimum two); unknown memory retains two.
+# A run waiting for a slot prints one line naming the holders' runner PIDs and
+# the bypass FM_TEST_SKIP_HOST_LOCK=1. Tests and nested runners execute inside
+# their script's slot. Live-harness and real-Herdr suites additionally use
+# bin/fm-heavy-run.sh's single heavy-session host slot.
 #
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
 # --proven-isolated, or script paths):
@@ -78,6 +81,9 @@
 #                   scripts run serially after all concurrent phases. Default is
 #                   1 (serial) except for plain --changed and a plain list of
 #                   script paths, which use the bounded automatic scheduler.
+#                   Each worker still waits for its machine test slot, so
+#                   simultaneous runs share the host budget instead of
+#                   adding their worker counts together.
 #   --per-script-timeout-secs N
 #                   terminate a script that runs longer than N seconds and
 #                   record it as exit 124 (0 disables, the default). The
@@ -160,7 +166,6 @@
 # tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
 # above those also name individual tests/ files explicitly.
 set -eu
-ORIGINAL_ARGS=("$@")
 
 now_ms() {
   if command -v python3 >/dev/null 2>&1; then
@@ -2260,48 +2265,86 @@ available_memory_kb() {
   esac
 }
 
-# Use the same inherited fcntl lock pattern as fm-lint.
+# One slot per executing script (see header). A holder process owns the lock,
+# so no test or background child can retain it after the script's turn.
+TEST_SLOTS=0
 if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1 ]; then
   available_kb=$(available_memory_kb) || available_kb=
-  case "$available_kb" in ''|*[!0-9]*) slots=2 ;;
-    *) slots=$((2 + available_kb / 1048576 - 1)); [ "$slots" -ge 2 ] || slots=2 ;;
+  case "$available_kb" in ''|*[!0-9]*) TEST_SLOTS=2 ;;
+    *) TEST_SLOTS=$((2 + available_kb / 1048576 - 1)); [ "$TEST_SLOTS" -ge 2 ] || TEST_SLOTS=2 ;;
   esac
   cpus=$(cpu_count)
   [ "$cpus" -ge 2 ] || cpus=2
-  [ "$slots" -le "$cpus" ] || slots=$cpus
-  exec python3 - "$slots" "${BASH:-bash}" "$ROOT/bin/fm-test-run.sh" "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}" <<'PYLOCK'
-import fcntl
-import os
-import sys
-import time
-
+  [ "$TEST_SLOTS" -le "$cpus" ] || TEST_SLOTS=$cpus
+  # Suites have always inherited SIGPIPE ignored (once from the Python lock
+  # wrapper that exec'd this runner); keep it, so a suite stopped together with
+  # its output pipe still reaches its own cleanup trap. Nested runs inherit it.
+  trap '' PIPE
+fi
+export FM_TEST_HOST_LOCKED=1
+# Holder: <slots> <ready-file> <notice-file> <runner-pid>. Takes the first free
+# slot, creates <ready-file>, and keeps the slot until killed or its parent
+# shell exits. <notice-file> makes the waiting line print once per run.
+# shellcheck disable=SC2016
+TEST_SLOT_HOLDER_PY='
+import fcntl, os, sys, time
+slots, ready, notice, runner = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+owner = os.getppid()
 lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
 fds = [os.open(os.path.join(lock_dir, f"firstmate-test-{os.getuid()}-{slot}.lock"),
-               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in range(1, int(sys.argv[1]) + 1)]
-reported = False
-while True:
+               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in range(1, slots + 1)]
+held = None
+while held is None:
     for fd in fds:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             continue
-        os.ftruncate(fd, 0)
-        os.write(fd, str(os.getpid()).encode())
-        os.set_inheritable(fd, True)
-        os.environ["FM_TEST_HOST_LOCKED"] = "1"
-        os.environ["FM_TEST_HOST_LOCK_FD"] = str(fd)
-        os.execvp(sys.argv[2], sys.argv[2:])
-    if not reported:
+        held = fd
+        break
+    if held is not None:
+        break
+    if os.getppid() != owner:
+        sys.exit(1)
+    try:
+        os.close(os.open(notice, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         holders = []
         for fd in fds:
             os.lseek(fd, 0, os.SEEK_SET)
             holders.append(os.read(fd, 32).decode(errors="replace") or "unknown")
         print("fm-test-run.sh: waiting for host test slots held by PIDs " +
               ", ".join(holders) + "; skip: FM_TEST_SKIP_HOST_LOCK=1", file=sys.stderr, flush=True)
-        reported = True
+    except FileExistsError:
+        pass
     time.sleep(0.1)
-PYLOCK
-fi
+os.ftruncate(held, 0)
+os.lseek(held, 0, os.SEEK_SET)
+os.write(held, runner.encode())
+os.close(os.open(ready, os.O_CREAT | os.O_WRONLY, 0o600))
+while os.getppid() == owner:
+    time.sleep(0.2)
+'
+
+# acquire_test_slot <ready-file>: block until this shell holds a slot; sets
+# TEST_SLOT_PID. A no-op when the budget is bypassed or inherited.
+acquire_test_slot() {
+  TEST_SLOT_PID=
+  [ "$TEST_SLOTS" -gt 0 ] || return 0
+  rm -f "$1"
+  python3 -c "$TEST_SLOT_HOLDER_PY" "$TEST_SLOTS" "$1" "$RUN_TMP/slot-wait-noticed" "$$" </dev/null &
+  TEST_SLOT_PID=$!
+  while [ ! -e "$1" ]; do
+    kill -0 "$TEST_SLOT_PID" 2>/dev/null || die "test slot holder exited before acquiring a slot"
+    sleep 0.05
+  done
+}
+
+release_test_slot() {
+  [ -n "${TEST_SLOT_PID:-}" ] || return 0
+  kill "$TEST_SLOT_PID" 2>/dev/null || true
+  wait "$TEST_SLOT_PID" 2>/dev/null || true
+  TEST_SLOT_PID=
+}
 
 # Verify selected scripts exist before starting.
 for s in "${SCRIPTS[@]}"; do
@@ -2550,11 +2593,6 @@ record_script_result() {
 # hung script must become a bounded failure rather than an unbounded suite,
 # because an unbounded suite is what silently outruns its caller's budget.
 run_script_bounded() (  # <script> <out> <stream> <id>
-  # The runner owns the slot; tests and their background children must not.
-  case ${FM_TEST_HOST_LOCK_FD:-} in
-    ''|*[!0-9]*) ;;
-    *) eval "exec ${FM_TEST_HOST_LOCK_FD}>&-"; unset FM_TEST_HOST_LOCK_FD ;;
-  esac
   local script=$1 out=$2 stream=$3 id=$4
   local command=(bash "$script")
   case "$(family_for_basename "$(basename "$script")")" in
@@ -2609,6 +2647,7 @@ run_one_serial() {
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
   out="$RUN_TMP/out.$TOTAL"
+  acquire_test_slot "$RUN_TMP/slot.serial"
   begin_iso=$(now_iso)
   begin_ms=$(now_ms)
 
@@ -2619,6 +2658,7 @@ run_one_serial() {
   # Stream live output while retaining a copy for gate-skip detection.
   run_script_bounded "$script" "$out" 1 "s$TOTAL"
   rc=$?
+  release_test_slot
   set -e
   : "${rc:=1}"
 
@@ -2738,10 +2778,12 @@ else
       unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
         FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
       cd "$ROOT" || exit 1
+      acquire_test_slot "$work/slot"
       begin_ms=$(now_ms)
       set +e
       run_script_bounded "$script" "$work/output" 0 "w$worker_n"
       rc=$?
+      release_test_slot
       set -e
       end_ms=$(now_ms)
       duration=$((end_ms - begin_ms))

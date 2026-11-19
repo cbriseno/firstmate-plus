@@ -1989,6 +1989,60 @@ PYTEST
   pass "host slots wait and resume after release"
 }
 
+test_host_test_budget_spans_runs() {
+  local tmp repo runner evidence fake_bin s max_seen pid1 pid2 rc1 rc2
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget.XXXXXX")
+  repo="$tmp/repo"
+  runner="$repo/bin/fm-test-run.sh"
+  evidence="$tmp/evidence"
+  fake_bin="$tmp/fake-bin"
+  mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin" "$tmp/locks"
+  cp "$RUNNER" "$runner"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  # Two CPUs and ample memory make the machine budget two slots.
+  printf '#!/bin/sh\necho Linux\n' >"$fake_bin/uname"
+  printf '#!/bin/sh\necho 2\n' >"$fake_bin/getconf"
+  # shellcheck disable=SC2016 # the fake awk expands its own arguments
+  printf '#!/bin/sh\nif [ "$2" = /proc/meminfo ]; then echo 8388608; else exec "%s" "$@"; fi\n' \
+    "$(command -v awk)" >"$fake_bin/awk"
+  chmod +x "$fake_bin/uname" "$fake_bin/getconf" "$fake_bin/awk"
+  # Each fixture waits for a partner so concurrency is observed rather than
+  # assumed, then records how many fixtures were running at that moment.
+  for s in fm-brief fm-composer-lib fm-lint fm-supervision-instructions; do
+    cat >"$repo/tests/$s.test.sh" <<'SH'
+#!/usr/bin/env bash
+running() { find "$BUDGET_EVIDENCE" -name 'active.*' | wc -l | tr -d ' '; }
+touch "$BUDGET_EVIDENCE/active.$$"
+waited=0
+while [ "$(running)" -lt 2 ] && [ "$waited" -lt 200 ]; do sleep 0.05; waited=$((waited + 1)); done
+sleep 0.5
+running >>"$BUDGET_EVIDENCE/counts"
+rm -f "$BUDGET_EVIDENCE/active.$$"
+echo "ok - budget fixture"
+SH
+    chmod +x "$repo/tests/$s.test.sh"
+  done
+  (
+    cd "$repo"
+    export PATH="$fake_bin:$PATH" BUDGET_EVIDENCE="$evidence" FM_TEST_LOCK_DIR="$tmp/locks"
+    unset FM_TEST_HOST_LOCKED FM_TEST_SKIP_HOST_LOCK
+    bash "$runner" --jobs 2 tests/fm-brief.test.sh tests/fm-composer-lib.test.sh >"$tmp/out1" 2>&1 &
+    pid1=$!
+    bash "$runner" --jobs 2 tests/fm-lint.test.sh tests/fm-supervision-instructions.test.sh >"$tmp/out2" 2>&1 &
+    pid2=$!
+    rc1=0; wait "$pid1" || rc1=$?
+    rc2=0; wait "$pid2" || rc2=$?
+    [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]
+  ) || { cat "$tmp/out1" "$tmp/out2"; rm -rf "$tmp"; fail "budgeted concurrent runs failed"; }
+  [ "$(wc -l <"$evidence/counts" | tr -d ' ')" -eq 4 ] \
+    || { cat "$tmp/out1" "$tmp/out2"; rm -rf "$tmp"; fail "expected 4 fixture records"; }
+  max_seen=$(sort -n "$evidence/counts" | tail -1)
+  [ "$max_seen" -eq 2 ] \
+    || { cat "$evidence/counts"; rm -rf "$tmp"; fail "two runs with --jobs 2 on a two-slot machine ran $max_seen scripts at once, expected exactly 2"; }
+  rm -rf "$tmp"
+  pass "machine test budget bounds scripts across simultaneous runs"
+}
+
 test_heavy_sessions() {
   python3 - "$ROOT" <<'PYTEST' || fail "heavy-session serialization contract failed"
 import os
@@ -2094,6 +2148,7 @@ case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) echo "invalid s
 if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_heavy_sessions
 test_host_test_slots
+test_host_test_budget_spans_runs
 test_list_all_exact_suite_coverage
 test_family_selection
 fi
