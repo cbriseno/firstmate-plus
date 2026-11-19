@@ -25,6 +25,22 @@ lavish_session() {  # <artifact> [session-url]
   ' "$LAVISH_AXI_STATE_DIR/state.json" "$1" "${2:-http://127.0.0.1:14387/session/0123456789abcdef}"
 }
 
+(
+  # A home that never used Lavish has no store: no board is in use or needs supervision.
+  mkdir -p "$TMP_ROOT/no-store/state"
+  watch() {
+    LAVISH_AXI_STATE_DIR="$TMP_ROOT/no-store/lavish" FM_HOME="$TMP_ROOT/no-store" \
+      FM_STATE_OVERRIDE="$TMP_ROOT/no-store/state" "$ROOT/bin/fm-lavish-watch.sh" "$@"
+  }
+  rc=0; out=$(watch in-use some-task) || rc=$?
+  [ "$rc" = 1 ] && [ -z "$out" ] || fail "in-use without a Lavish store exited $rc ('$out'), expected 1 with no board"
+  rc=0; watch needed || rc=$?
+  [ "$rc" = 1 ] || fail "needed without a Lavish store exited $rc, expected 1"
+  rc=0; out=$(watch owned) || rc=$?
+  [ "$rc" = 0 ] && [ -z "$out" ] || fail "owned without a Lavish store exited $rc ('$out'), expected 0 with no board"
+) || exit 1
+pass "a home without a Lavish store reports no board in use, needed or owned"
+
 BLOCKER="$TMP_ROOT/blocker.sh"
 cat > "$BLOCKER" <<'SH'
 #!/usr/bin/env bash

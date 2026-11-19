@@ -43,7 +43,8 @@ case "${1-}" in
 esac
 
 store="${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json"
-[ -e "$store" ] || { [ "$1" != needed ]; exit $?; }
+# Without a store no board exists: needed and in-use report none, the rest succeed empty.
+[ -e "$store" ] || case "$1" in needed|in-use) exit 1 ;; *) exit 0 ;; esac
 watch_dir="$STATE/lavish-watch"
 if [ "$1" = scan ]; then
   # shellcheck source=bin/fm-pr-lib.sh
