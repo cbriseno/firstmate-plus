@@ -66,6 +66,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
+| `fm-startup-dialogs.sh`  | Answer the harness start-up trust dialogs the operator approved once, for their own or Firstmate's directory, hooks and imports |
 | [`fm-approval-failover.sh`](../bin/fm-approval-failover.sh) | Save a captain-approved managed-approval fallback and recover a worker after observed defeated bypass |
 | `fm-git-strip-ai-trailers.sh` | Install per-launch publication checks and forge wrappers, chain project hooks, and optionally strip AI commit trailers |
 | `fm-git-push-guard.sh`  | Run the publication check, plus external-review shared-origin and branch restrictions, and write the external-review guard record ([design](external-review-forge.md)) |

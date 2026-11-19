@@ -226,6 +226,16 @@ Use the current affected regression tests to refresh this compatibility topic.
 Historical machine-specific probe transcripts are not distributed.
 Use the current affected regression tests to refresh this compatibility topic.
 
+## Start-up dialogs answered at spawn
+
+Recorded 2026-11-18 on Codex 0.169.0 and Claude Code 2.1.328 in a tmux pane, with a fresh `CODEX_HOME` and `CLAUDE_CONFIG_DIR`.
+Codex showed "Folder access" with `1. Trust and continue` selected, then "Hooks need review" with `1. Review hooks` selected and `2. Trust all and continue` below it; Down then Enter reached the composer.
+Claude showed the workspace-trust dialog, then "Allow external CLAUDE.md file imports?" listing each imported file, then the bypass-permissions warning, each with the declining row selected.
+A Codex update is a banner and a Claude update is not shown with auto-update off, so no blocking update dialog exists to skip in these versions.
+`bin/fm-startup-dialogs.sh` answers the first three Codex and Claude dialogs named above inside the captain's approved scope and leaves the others.
+Refresh it by running `bin/fm-startup-dialogs.sh tmux <target> <harness> <launch-dir>` against a pane launched with a fresh config and reading its `startup-dialog:` lines, plus `tests/fm-startup-dialogs.test.sh` for the scope rules.
+Herdr's name for the Down key is not verified, so on Herdr the script's check that the accepting row is selected fails and the dialog stays for the operator.
+
 ## Codex worker editing and native repository skills
 
 Verified 2026-11-11 on Linux with `codex-cli 0.166.0`.

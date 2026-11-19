@@ -17,8 +17,8 @@ Verified on 2026-06-11 with codex-cli 0.139.0 unless a fact gives a newer versio
 | Approval posture | See [`Codex automatic approval review`](../../../../../docs/configuration.md#codex-automatic-approval-review) and [`persistent failover`](../../../../../docs/configuration.md#persistent-managed-policy-failover). |
 | Marker | None; identity comes from ancestry, and `../../../bin/fm-harness.sh` is what keeps a retained foreign `CLAUDECODE` from renaming it. Verified on 2026-09-01 with codex-cli 0.152.0: the pane process is the `node` npm shim and the native `codex` binary runs as its foreground child, so a tool subprocess reaches the native name directly while the shim itself is identified from its script path. |
 
-A directory trust dialog appears on the first run for a repository root: "Do you trust the contents of this directory?"
-With the scoped operator approval required by `references/common/control-and-recovery.md`, accept the displayed directory-trust choice with Enter, then inspect for the separate hook-review dialog before verifying the instructions begin processing.
+A directory trust dialog appears on the first run for a folder ("Folder access ... Trust this folder?", rows "1. Trust and continue" and "2. Back to Agent Command Center", recorded on Codex 0.169.0).
+The captain's standing approval covers it for the directory a spawn launched in, and `../../../bin/fm-startup-dialogs.sh` accepts it with Enter right after launch only when the path shown is that directory; any other folder is left for the operator.
 The decision persists for the repository, so later worktrees of the same project skip it.
 
 ## Parked chat resume
@@ -32,11 +32,10 @@ It never selects the last conversation by directory.
 A second dialog, "Hooks need review - N hooks are new or changed", appears whenever the machine's `~/.codex/hooks.json` or a project's own `.codex/hooks.json` carries a hook Codex has not persisted trust for.
 Its initial selection is "Review hooks", which is neither trusting nor declining.
 For the hook-review dialog observed on macOS, Down then Enter selected the acceptance path successfully; inspect the highlighted choice before Enter, because a different dialog or version may have a different ordering.
-Use that sequence only with operator approval covering the displayed hooks, through a backend that supports arrow keys; the supervisor cannot grant this security consent itself.
-If the choice or approval is unclear, leave the dialog for the operator rather than sending blind keys.
-Writing Codex's own trust store to pre-accept it would manufacture an operator consent that was never given.
-Firstmate ship and scout launches preserve the normal hook layers; Codex may stop at this review until the operator decides whether to trust the displayed hooks.
-Firstmate does not modify the operator's Codex settings, write hook trust, or bypass the review.
+The captain's standing approval covers the operator's own hooks and Firstmate's, and `../../../bin/fm-startup-dialogs.sh` sends that sequence right after launch, checking that "Trust all and continue" is the selected row before the final Enter.
+It leaves the dialog for the operator when the launch directory carries its own `.codex/hooks.json` or `.codex/config.toml` and is not a Firstmate checkout, because those hooks are the project's.
+Firstmate does not write Codex's trust store; the answer is given in the dialog like a person would, through a backend that supports arrow keys (verified on tmux; Herdr's arrow key name is not verified, so there the dialog stays for the operator).
+Firstmate ship and scout launches preserve the normal hook layers.
 The worker notice and approval posture are owned by [`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) ("Codex approval mode"); [runtime verification](../../../../../docs/verification/runtime-backends.md#codex-worker-editing-and-native-repository-skills) records the real editing guard.
 The turn-end signal is the `-c notify=` program on the same launch, and Firstmate's hooks in a project's `.codex/hooks.json` are primary-session infrastructure that stands down in a child worktree.
 A secondmate is a primary in its own home and keeps its hooks, so hook review there can also require the operator's scoped consent.
@@ -44,8 +43,7 @@ A secondmate is a primary in its own home and keeps its hooks, so hook review th
 ## Fresh host-task folders
 
 A projectless host worker starts in a new nonrepository scratch folder, so repository trust reused by later worktrees does not establish approval for that folder.
-Inspect directory trust and hook review separately before treating launch as assignment progress, using the corresponding sequences above only within recorded operator approval.
-Standing approval must cover the new folder scope and the actual hooks; a new task or supervisor decision does not broaden it.
+Inspect directory trust and hook review separately before treating launch as assignment progress; the spawn answers them under the scope rules above and leaves anything outside them for the operator.
 Do not prewrite Codex trust records or weaken managed policy to make startup appear ready.
 
 ## Skill popup

@@ -29,20 +29,19 @@ When the project entry already carries an explicit decline (`hasClaudeMdExternal
 Both flags `false` is Claude Code's default entry for a project never asked, not a decline, and is treated like an absent flag: trust registers and the import dialog still renders.
 The why-two-entries mechanism and the consent-gating logic live in the script's own header comment, which is the one owner for that contract; the fact worth repeating here is that `../../../bin/fm-spawn.sh` refuses the spawn when the trust flag fails to land, rather than launching a worker that would wedge on that dialog.
 
-Never try to answer either dialog with a key.
-The lifecycle key plane carries Enter, Escape, and C-c, while a backend may separately support arrows; no acceptance sequence for these Claude dialogs is verified here.
-Both dialogs render with the cursor on their declining option, so blind Enter does not accept.
-Apply the scoped operator-consent rule in `references/common/control-and-recovery.md` even when backend navigation is available.
+The captain's standing approval covers the external-imports dialog when every listed file lives under the operator's Claude configuration directory or under Firstmate, and `../../../bin/fm-startup-dialogs.sh` answers it right after launch (Down, then Enter once "Yes, allow external imports" is the selected row; recorded on Claude Code 2.1.328).
+It leaves the dialog alone when any listed file is elsewhere ("Never allow this for third-party repositories") and says so on stderr.
+The workspace-trust dialog is not answered by key: both dialogs render with the cursor on their declining option, so a blind Enter does not accept.
 A visible trust dialog means pre-registration did not take effect - inspect the store and the spawn's error output rather than sending keys.
-A visible external-imports dialog is expected, not a failure signal, whenever the project entry has no prior explicit approval on record - the common first-spawn case.
+A visible external-imports dialog after a spawn means its imports are outside that scope or the answer did not land; the `startup-dialog:` line from the spawn names which.
 `fm-control.sh <id> interrupt` delivers Escape, which is the safe way to clear a wedged workspace-trust dialog for inspection without answering it.
 Escape on the external-imports dialog is different: it records a permanent decline (`hasClaudeMdExternalIncludesApproved: false`, `hasClaudeMdExternalIncludesWarningShown: true`) that `../../../bin/fm-claude-trust.sh` preserves on later spawns.
-Leave a pane showing the external-imports dialog alone and have a person answer it interactively instead of interrupting it.
+Leave a pane still showing the external-imports dialog alone and have a person answer it interactively instead of interrupting it.
 To recover from an already-recorded decline, remove both flags from the project's entry in `~/.claude.json` and approve the imports dialog once by hand.
 
 The once-per-machine bypass-permissions confirmation is a third, separate dialog, scoped to the machine rather than the path, and pre-registration does not address it.
 Never send Enter to that one either: it was observed rendering in the same shape as the trust dialog, with the selection on `No, exit` and the footer `Enter to confirm . Esc to cancel`, so Enter ends the session rather than accepting.
-Enter, Escape, and C-c alone cannot select acceptance; an operator handles this machine-scoped dialog, with no verified automated acceptance sequence here.
+Enter, Escape, and C-c alone cannot select acceptance; an operator handles this machine-scoped dialog, because accepting a permission mode is outside the captain's standing approval for trust dialogs and `../../../bin/fm-startup-dialogs.sh` deliberately leaves it.
 A project MCP enablement prompt is a separate connector consent, not external CLAUDE.md import approval; inspect its actual choices and obtain approval for that connector rather than reusing another dialog's keys.
 Inspect the pane to identify which dialog is on screen, and report it rather than answering it.
 A launch under `config/claude-permission-mode=auto` never meets the bypass confirmation, because it does not request bypass mode: on 2.1.269 `claude --permission-mode auto` reached the composer directly with the footer `⏵⏵ auto mode on (shift+tab to cycle)`, so a captain who refuses the bypass dialog selects `auto` there instead of accepting it.

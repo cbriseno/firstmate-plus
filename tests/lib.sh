@@ -94,6 +94,8 @@ FM_TEST_CALL=(--category product-design --challenge fixture --question 'Which wa
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Spawn tests drive fake panes; the start-up dialog watch (bin/fm-startup-dialogs.sh) has its own test.
+export FM_STARTUP_DIALOGS_WINDOW=${FM_STARTUP_DIALOGS_WINDOW:-0}
 
 # --- reporters --------------------------------------------------------------
 

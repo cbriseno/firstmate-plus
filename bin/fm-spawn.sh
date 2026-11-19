@@ -4191,6 +4191,17 @@ fi
 if ! spawn_send_key "$T" Enter; then
   exit 1
 fi
+# The operator's standing approval covers the harness start-up dialogs that ask
+# to trust their own or Firstmate's directory and hooks; the pane is read and
+# those are answered so the agent reaches its brief (bin/fm-startup-dialogs.sh
+# owns which dialogs and under which scope, and always exits 0).
+case "$HARNESS" in
+claude*|codex*)
+  startup_dir=$WT
+  [ "$KIND" != secondmate ] || startup_dir=$PROJ_ABS
+  "$FM_ROOT/bin/fm-startup-dialogs.sh" "$BACKEND" "$T" "$HARNESS" "$startup_dir" "${FM_STARTUP_DIALOGS_WINDOW:-45}" "fm-$ID" || true
+  ;;
+esac
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
     if fm_config_reread_quarantine_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
