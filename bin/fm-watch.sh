@@ -3288,7 +3288,7 @@ spawn_deferred_tick() {
 
 # Queue each changed eligible dispatch opportunity before suppressing duplicates.
 ready_work_tick() {
-  local now capacity free ids marker reason
+  local now capacity free ids marker reason launched failed left id rc out stop=0 fmark
   [ -f "$CONFIG/lane-capacity" ] || { rm -f -- "$STATE/.ready-work-wake"; return 0; }
   now=$(date +%s)
   [ "$((now - ${READY_WORK_PROBED_AT:-0}))" -ge 30 ] || return 0
@@ -3304,8 +3304,39 @@ ready_work_tick() {
   fi
   ids=$(dispatch_ready_ids new | LC_ALL=C sort | tr '\n' ' ') || return 0
   ids=${ids% }
+  launched=; failed=; left=
+  for id in $ids; do
+    if [ -f "$STATE/.autodispatch-failed-$id" ] || [ "$stop" = 1 ]; then left="$left $id"; continue; fi
+    rc=0
+    out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      bash "$SCRIPT_DIR/fm-autodispatch.sh" "$id" 2>&1 </dev/null) || rc=$?
+    case "$rc" in
+      0) launched="$launched $id" ;;
+      75) stop=1 ;;   # capacity full: its deferral marker relaunches it later
+      3) left="$left $id" ;;
+      *) left="$left $id"
+         printf '%s\n' "$out" | tail -n 1 | cut -c1-300 > "$STATE/.autodispatch-failed-$id" || true
+         failed="$failed $id" ;;
+    esac
+  done
+  for fmark in "$STATE"/.autodispatch-failed-*; do
+    [ -f "$fmark" ] || continue
+    case " $ids " in *" ${fmark##*/.autodispatch-failed-} "*) ;; *) rm -f -- "$fmark" ;; esac
+  done
+  # A wake ends this watcher turn, so queue every outcome first and wake once.
+  reason=
+  if [ -n "$launched" ]; then
+    reason="check: ready work launched automatically with its dispatch rules:$launched"
+    fm_wake_append check "autodispatch-${launched# }" "$reason" || return 1
+  fi
+  for id in $failed; do
+    reason="check: automatic launch of ready task $id failed: $(cat "$STATE/.autodispatch-failed-$id" 2>/dev/null); dispatch it manually"
+    fm_wake_append check "autodispatch-failed-$id" "$reason" || return 1
+  done
+  ids=${left# }
   if [ -z "$ids" ]; then
     rm -f -- "$marker"
+    [ -z "$reason" ] || wake "$reason"
     return 0
   fi
   reason="check: ready work with $free free lanes: review and dispatch eligible queued tasks ($ids)"
