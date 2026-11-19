@@ -15,6 +15,14 @@
 # merge, so a captain approval must be recorded as an `answer --release` before
 # this entrypoint is invoked. The lock ends when the fast-forward returns;
 # docs/captain-hold-lifecycle.md owns the accepted merge-to-cleanup residual.
+# After the project's own checkout holds the landed work (the fast-forward, or
+# the rebase of its local integration branch), a project that declares a
+# service in config/restart/<project directory name> gets it restarted and
+# verified, without asking: line `restart=<command>` runs first, then line
+# `verify=<command>` (retried FM_RESTART_VERIFY_TRIES times, default 5, waiting
+# FM_RESTART_VERIFY_WAIT seconds, default 1). Both run with bash in the project
+# checkout. A failure only warns on stderr; it never changes the merge result.
+# A project with no declaration is untouched. docs/configuration.md owns it.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -218,6 +226,31 @@ $refs
 EOF
 }
 reconcile_preserved_branches
+restart_after_landing() {
+  local decl restart verify tries wait n=0
+  decl="$CONFIG/restart/$(basename "$PROJ")"
+  [ -f "$decl" ] || return 0
+  restart=$(sed -n 's/^restart=//p' "$decl" | head -n 1)
+  verify=$(sed -n 's/^verify=//p' "$decl" | head -n 1)
+  [ -n "$restart" ] || return 0
+  if ! (cd "$PROJ" && bash -c "$restart") >&2; then
+    echo "warning: $ID landed, but its restart command failed: $restart" >&2
+    return 0
+  fi
+  echo "restarted $(basename "$PROJ")"
+  [ -n "$verify" ] || return 0
+  tries=${FM_RESTART_VERIFY_TRIES:-5}
+  wait=${FM_RESTART_VERIFY_WAIT:-1}
+  while [ "$n" -lt "$tries" ]; do
+    if (cd "$PROJ" && bash -c "$verify") >/dev/null 2>&1; then
+      echo "verified $(basename "$PROJ") responds"
+      return 0
+    fi
+    n=$((n + 1))
+    [ "$n" -ge "$tries" ] || sleep "$wait"
+  done
+  echo "warning: $ID landed and $(basename "$PROJ") restarted, but it did not answer its verify command: $verify" >&2
+}
 # Retain the ready-head/integration facts through the same presentation owner.
 # A failed publication does not undo a successful merge; reads can reconstruct
 # ancestry and the warning requires reconciliation before cleanup.
@@ -226,11 +259,12 @@ FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" presentation "$ID" --reconcile 
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
-[ -n "$INTEGRATION" ] || exit 0
+[ -n "$INTEGRATION" ] || { restart_after_landing; exit 0; }
 name=$(git -C "$PROJ" config user.name || git -C "$PROJ" show -s --format=%an "$INTEGRATION")
 email=$(git -C "$PROJ" config user.email || git -C "$PROJ" show -s --format=%ae "$INTEGRATION")
 if git -C "$PROJ" -c "user.name=$name" -c "user.email=$email" rebase --quiet "$DEFAULT" >/dev/null; then
   echo "rebased $INTEGRATION onto $DEFAULT in $PROJ"
+  restart_after_landing
 else
   git -C "$PROJ" rebase --abort || true
   echo "warning: $BRANCH landed on $DEFAULT, but rebasing $INTEGRATION onto it conflicted and was aborted; $INTEGRATION is unchanged. Resolve with: git -C $PROJ rebase $DEFAULT" >&2

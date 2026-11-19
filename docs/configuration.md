@@ -878,6 +878,8 @@ An existing linked-worktree home that predates this rule advances through its ma
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
 For a checkout with a private integration branch, run `bin/fm-local-sync.sh <repo> [--restart <command...>]` to fetch `main`, rebase that branch, and optionally restart; `bin/fm-local-branch-lib.sh` owns its declaration shared with teardown and `bin/fm-merge-local.sh`, which lands a local-only task from such a checkout by fast-forwarding `main` without a checkout and then rebasing the integration branch onto it (exit 3, branch unchanged, when that rebase conflicts). After a worker resolves such a conflict on a branch rebased onto `main`, `bin/fm-local-adopt.sh <repo> <branch>` moves the integration branch to it after backing up the old head.
 
+A project that runs a service from its checkout can declare it in `config/restart/<project directory name>`, a file with a `restart=<command>` line and an optional `verify=<command>` line. After `bin/fm-merge-local.sh` has landed local-only work and the checkout holds it (the fast-forward, or the integration rebase; never after an aborted rebase), it runs the restart, then the verify (retried `FM_RESTART_VERIFY_TRIES` times, default 5, `FM_RESTART_VERIFY_WAIT` seconds apart, default 1), both with bash in the checkout. A failure only warns; the merge result is unchanged, and a project with no file is untouched.
+
 ## Harness support
 
 claude and codex are empirically verified for crewmate and secondmate launches.
