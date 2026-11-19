@@ -1807,9 +1807,34 @@ test_workers_flag_independent_work_and_own_monitoring() {
 
 test_workers_flag_independent_work_and_own_monitoring
 test_ship_brief_is_short_and_actionable
+# A publication task's own ask pushes, so the standard "Never push" lines must
+# not stand alone: --publish renders the standard authorized outward effect
+# (publish through the gate, no questions) and a plain scaffold still has none.
+test_publish_flag_authorizes_the_publication_effect() {
+  local home="$TMP_ROOT/publish-home" brief out rc
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-publish-plain some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "plain scaffold failed"
+  grep -q '^Outward effect: ' "$home/data/brief-publish-plain/brief.md" \
+    && fail "a plain scaffold must not carry an outward effect"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-publish-flag some-proj --mode local-only --publish >/dev/null 2>&1 \
+    || fail "--publish scaffold failed"
+  brief="$home/data/brief-publish-flag/brief.md"
+  grep -q '^# Authorized outward effect' "$brief" || fail "--publish must render the authorized outward effect section"
+  grep -q '^Outward effect: publica .*compuerta de publicación, sin pedir autorización adicional' "$brief" \
+    || fail "--publish must name the gate and forbid asking for authority"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-publish-explicit some-proj --mode local-only --publish --effect 'despliega X' >/dev/null 2>&1 \
+    || fail "--publish with --effect failed"
+  grep -q '^Outward effect: despliega X$' "$home/data/brief-publish-explicit/brief.md" || fail "an explicit --effect must win over --publish"
+  out=$(FM_HOME="$home" FM_SECONDMATE_CHARTER=x "$ROOT/bin/fm-brief.sh" brief-publish-sm --secondmate --no-projects --publish 2>&1); rc=$?
+  expect_code 1 "$rc" "--publish must be refused for a secondmate (got: $out)"
+  pass "fm-brief.sh: --publish renders the authorized publication effect"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
+test_publish_flag_authorizes_the_publication_effect
 test_ship_modes_generate_clean_briefs
 test_forge_selection_renders_correct_cli
 test_forge_external_renders_the_review_rail

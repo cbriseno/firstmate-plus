@@ -17,9 +17,9 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--effect <line>] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--effect <line>] [--herdr-lab]
-#        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...] [--effect <line>]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--effect <line>] [--publish] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--effect <line>] [--publish] [--herdr-lab]
+#        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...] [--effect <line>] [--publish]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -108,6 +108,12 @@
 # bin/fm-spawn.sh applies the self-repository publication gate to such a brief
 # even on local-only. Compare the ask's outward actions with the contract before
 # scaffolding; a task whose deliverable is only that action is a host task.
+# --publish is the standard `--effect` for a task whose ask is to publish: it
+# renders the same section with the fixed outward effect "publish through the
+# publication gate without asking", so the standard "Never push" lines never
+# contradict the ask and the worker has no authority question to raise. Pass it
+# instead of `--effect` for every publication task; combine it with `--effect`
+# only to state a different outward action, which then wins.
 # --project <dir> is the task's project directory, used to detect when a ship
 # brief would publish to firstmate's own repository: for such a task this
 # scaffold refuses a publishing mode that the home's role or recorded consent
@@ -258,6 +264,7 @@ PROJECT_DIR=
 PROJECT_DIR_SET=0
 EFFECT=
 EFFECT_SET=0
+PUBLISH=0
 CATEGORY=
 RATIONALE=
 POS=()
@@ -310,6 +317,7 @@ for a in "$@"; do
     --category=*) CATEGORY=${a#--category=} ;;
     --rationale) want_value=rationale ;;
     --rationale=*) RATIONALE=${a#--rationale=} ;;
+    --publish) PUBLISH=1 ;;
     --effect) want_value=effect ;;
     --effect=*) EFFECT=${a#--effect=}; EFFECT_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
@@ -323,6 +331,7 @@ done
 
 # The scaffold records the operator's task classification, never infers it.
 if [ "$KIND" = secondmate ]; then
+  [ "$PUBLISH" -eq 0 ] || { echo 'error: --publish applies only to ship, scout, and host briefs' >&2; exit 1; }
   [ -z "$CATEGORY$RATIONALE" ] || { echo 'error: --category and --rationale apply only to worker briefs' >&2; exit 1; }
 else
   case "$CATEGORY" in *[!a-z0-9-]*) echo 'error: --category requires lowercase letters, digits, or hyphens' >&2; exit 1 ;; esac
@@ -744,6 +753,10 @@ if [ -n "$CATEGORY" ]; then
 Dispatch category: $CATEGORY"
   if [ -n "$RATIONALE" ]; then TASK_SECTION="$TASK_SECTION
 Dispatch rationale: $RATIONALE"; fi
+fi
+if [ "$PUBLISH" -eq 1 ] && [ "$EFFECT_SET" -eq 0 ]; then
+  EFFECT='publica lo integrado por push al remoto del proyecto a través de su compuerta de publicación, sin pedir autorización adicional'
+  EFFECT_SET=1
 fi
 if [ "$EFFECT_SET" -eq 1 ]; then
   case "$KIND" in secondmate) echo "error: --effect applies only to ship, scout, and host briefs" >&2; exit 1 ;; esac
