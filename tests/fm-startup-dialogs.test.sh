@@ -66,7 +66,7 @@ run_case() {
   tmux -f /dev/null new-session -d -s "$name" -x 160 -y 40 -c "$dir" \
     "$TMP_ROOT/fake-agent.sh $(printf '%q ' "$log" "$glyph" "$@")"
   sleep 0.5
-  "$DIALOGS" tmux "$name:0" codex "$dir" 8 2>&1
+  "$DIALOGS" tmux "$name:0" "${CASE_HARNESS:-codex}" "$dir" 8 2>&1
 }
 
 LAUNCH="$TMP_ROOT/launch"
@@ -120,7 +120,7 @@ test_codex_hooks_of_a_firstmate_checkout_are_trusted() {
 
 test_claude_imports_of_the_operators_claude_dir_are_allowed() {
   local log="$TMP_ROOT/log6" out
-  out=$(HOME="$TMP_ROOT/home" run_case imp "$LAUNCH" "$log" '❯' \
+  out=$(CASE_HARNESS=claude HOME="$TMP_ROOT/home" run_case imp "$LAUNCH" "$log" '❯' \
     "Allow external CLAUDE.md file imports?" "External imports:" "    $TMP_ROOT/home/.claude/RTK.md" "Important: Only use Claude Code with files you trust." \
     -- "${IMPORT_ROWS[@]}")
   assert_equals "down
@@ -129,7 +129,7 @@ enter:Yes, allow external imports" "$(cat "$log")" "the operator's own import wa
 
 test_claude_imports_outside_are_left() {
   local log="$TMP_ROOT/log7" out
-  out=$(HOME="$TMP_ROOT/home" run_case impout "$LAUNCH" "$log" '❯' \
+  out=$(CASE_HARNESS=claude HOME="$TMP_ROOT/home" run_case impout "$LAUNCH" "$log" '❯' \
     "Allow external CLAUDE.md file imports?" "External imports:" "    $TMP_ROOT/home/.claude/RTK.md" "    /srv/third-party/notes.md" "Important: Only use Claude Code with files you trust." \
     -- "${IMPORT_ROWS[@]}")
   assert_equals "" "$(cat "$log")" "an import outside the operator's directories was allowed"
@@ -138,7 +138,7 @@ test_claude_imports_outside_are_left() {
 
 test_bypass_warning_is_not_answered() {
   local log="$TMP_ROOT/log8" out
-  out=$(run_case bypass "$LAUNCH" "$log" '❯' "WARNING: Claude Code running in Bypass Permissions mode" -- "No, exit" "Yes, I accept")
+  out=$(CASE_HARNESS=claude run_case bypass "$LAUNCH" "$log" '❯' "WARNING: Claude Code running in Bypass Permissions mode" -- "No, exit" "Yes, I accept")
   assert_equals "" "$(cat "$log")" "the bypass-permissions warning received keys"
 }
 
@@ -146,6 +146,17 @@ test_a_quoted_dialog_in_a_normal_screen_is_not_answered() {
   local log="$TMP_ROOT/log9" out
   out=$(run_case quote "$LAUNCH" "$log" '>' "He wrote: Hooks need review and 2. Trust all and continue" -- "a normal row")
   assert_equals "" "$(cat "$log")" "quoted dialog text was answered"
+}
+
+test_an_unreadable_pane_returns_at_once() {
+  local start end
+  tmux kill-server >/dev/null 2>&1 || true
+  sleep 0.4
+  tmux -f /dev/null new-session -d -s alive -x 80 -y 24 "sleep 30"
+  start=$(date +%s)
+  "$DIALOGS" tmux "nosuch:9" codex "$LAUNCH" 30 >/dev/null 2>&1
+  end=$(date +%s)
+  [ $((end - start)) -le 5 ] || fail "a pane that cannot be read was watched for $((end - start))s"
 }
 
 test_codex_folder_in_launch_dir_is_trusted
@@ -157,4 +168,5 @@ test_claude_imports_of_the_operators_claude_dir_are_allowed
 test_claude_imports_outside_are_left
 test_bypass_warning_is_not_answered
 test_a_quoted_dialog_in_a_normal_screen_is_not_answered
+test_an_unreadable_pane_returns_at_once
 pass "start-up dialogs: trusted inside the approved scope, left outside it"

@@ -4199,7 +4199,7 @@ case "$HARNESS" in
 claude*|codex*)
   startup_dir=$WT
   [ "$KIND" != secondmate ] || startup_dir=$PROJ_ABS
-  "$FM_ROOT/bin/fm-startup-dialogs.sh" "$BACKEND" "$T" "$HARNESS" "$startup_dir" "${FM_STARTUP_DIALOGS_WINDOW:-45}" "fm-$ID" || true
+  "$FM_ROOT/bin/fm-startup-dialogs.sh" "$BACKEND" "$T" "$HARNESS" "$startup_dir" 45 "fm-$ID" || true
   ;;
 esac
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then

@@ -31,9 +31,10 @@
 # above (Codex prints a banner, Claude auto-update is off), so there is nothing
 # to skip; a new blocking one needs its own recorded entry here.
 #
-# FM_STARTUP_DIALOGS_POLL (default 1) sets the seconds between screen reads;
-# the spawn passes FM_STARTUP_DIALOGS_WINDOW (default 45) as the window, and the
-# test library sets it to 0 so fake panes are not watched.
+# A pane that reads back zero bytes twice in a row is not a terminal screen (a
+# real pane always yields its blank rows), so there is nothing to watch and the
+# script returns at once.
+# FM_STARTUP_DIALOGS_POLL (default 1) sets the seconds between screen reads.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -145,9 +146,19 @@ answer() {  # <name>
 }
 
 declare -A tries=()
+empty_reads=0
 deadline=$(( $(date +%s) + WINDOW ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  screen=$(screen_now) || { sleep "$POLL"; continue; }
+  # The appended x keeps trailing newlines, so a pane of blank rows is not "empty".
+  screen=$(screen_now; printf x) || { sleep "$POLL"; continue; }
+  screen=${screen%x}
+  if [ -z "$screen" ]; then
+    empty_reads=$((empty_reads + 1))
+    [ "$empty_reads" -lt 2 ] || exit 0
+    sleep 0.2
+    continue
+  fi
+  empty_reads=0
   name=$(classify "$screen")
   case "$name:$HARNESS" in codex-*:codex*|claude-*:claude*) ;; *) name= ;; esac
   if [ -n "$name" ]; then
