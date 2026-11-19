@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Discover and recover unattended, home-owned Lavish boards.
-# Usage: fm-lavish-watch.sh scan|needed|owned
+# Usage: fm-lavish-watch.sh scan|needed|owned|in-use <task>
 # needed is read-only: exit 0 for an owned open board, 1 for none, 2 on error.
 # owned is read-only too: it prints one tab-separated line per open board
 # (task, artifact, status, pending prompts) - task is - for a home board no task
 # owns - and exits 0 even for none, so closing a delivered worker can tell that
 # a live board still needs its owner; any error exits 2 with nothing printed.
+# in-use <task> is read-only too: it prints each open board the task owns whose
+# agent listener is live, so the captain may be using it. Exit 0 if any, 1 if
+# none, 2 on error. Stopping, pausing, relaunching or closing that worker would
+# strand the board (captain rule 27); fm-control.sh and fm-teardown.sh refuse.
 #
 # Called every fm-watch cycle, even when no process-event registry exists.
 # Reads saved sessions, local server health, and this home's task metadata.
@@ -34,6 +38,7 @@ FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 case "${1-}" in
   scan|needed|owned) [ "$#" -eq 1 ] || exit 2 ;;
+  in-use) [ "$#" -eq 2 ] && [[ "$2" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || exit 2 ;;
   *) sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
 
@@ -160,6 +165,21 @@ fi
 if [ "$mode" = owned ]; then
   awk -F'\t' '{ print $2 "\t" $3 "\t" $4 "\t" $5 }' "$rows"
   exit 0
+fi
+
+if [ "$mode" = in-use ]; then
+  command -v curl >/dev/null 2>&1 || { echo "error: curl is required for Lavish listener discovery" >&2; exit 2; }
+  found=1
+  while IFS=$'\t' read -r id task artifact status _ port; do
+    [ "$task" = "$2" ] && [ "$status" = open ] && [ "$port" -gt 0 ] && [ "$port" -le 65535 ] || continue
+    health=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/health" 2>/dev/null) || continue
+    printf '%s' "$health" | jq -e --arg dir "$(dirname "$store")" --arg key "${id#lavish-}" '
+      .app == "lavish-axi" and .state_dir == $dir and (.listeners | type) == "array"
+      and any(.listeners[]; .key == $key)' >/dev/null 2>&1 || continue
+    printf '%s\n' "$artifact"
+    found=0
+  done < "$rows"
+  exit "$found"
 fi
 
 sources=''

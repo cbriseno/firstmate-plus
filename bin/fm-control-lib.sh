@@ -365,3 +365,25 @@ fm_control_harness_turnend_auth_path() {  # <harness> <token>
     *) return 0 ;;
   esac
 }
+
+# Captain rule 27: never stop, pause, relaunch or close the worker of a Lavish
+# board the captain may be using without checking first. A board counts as in
+# use while its owner task holds a live agent listener on it (fm-lavish-watch.sh
+# in-use). Prints one refusal line and returns 1; FM_LAVISH_IN_USE_OK=1 skips it
+# once the captain has said the board is free. An unreadable Lavish store warns
+# and proceeds, so a broken viewer never blocks every lifecycle action.
+fm_lavish_in_use_refuse() {  # <home> <state-dir> <task> <action>
+  local home=${1-} state=${2-} id=${3-} action=${4-} boards='' rc=0
+  [ "${FM_LAVISH_IN_USE_OK:-}" != 1 ] || return 0
+  boards=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    "${BASH_SOURCE[0]%/*}/fm-lavish-watch.sh" in-use "$id" 2>/dev/null) || rc=$?
+  case "$rc" in
+    0)
+      echo "error: refusing to $action task $id: its worker holds a live Lavish board the captain may be using ($(printf '%s' "$boards" | paste -sd, -)); check with the captain, then retry with FM_LAVISH_IN_USE_OK=1 to skip" >&2
+      return 1
+      ;;
+    1) ;;
+    *) echo "warning: could not check whether task $id's Lavish board is in use; continuing" >&2 ;;
+  esac
+  return 0
+}

@@ -593,6 +593,7 @@ if [ "$FORCE" = --force ] && [ "$(fm_lease_actor)" = branch ]; then
   exit "$FM_LEASE_REFUSE_EXIT"
 fi
 fm_lease_guard "$ID" "teardown (fm-teardown)"
+[ "$KEEP_RUNNING" = 1 ] || fm_lavish_in_use_refuse "$FM_HOME" "$STATE" "$ID" "tear down" || exit 1
 
 META="$STATE/$ID.meta"
 TREEHOUSE_PROJECT_LOCK=

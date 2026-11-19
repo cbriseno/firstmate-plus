@@ -1272,6 +1272,50 @@ PY
   pass 'explicit task job advances after conversation exit and completes once'
 }
 
+# Captain rule 27: a worker holding a live Lavish listener on a board it owns is
+# not stopped, paused, relaunched or interrupted until the captain has been
+# asked; FM_LAVISH_IN_USE_OK=1 is the one-line skip.
+lavish_board_in_use() {  # <case-dir> <task-id> <live|free>
+  local dir=$1 id=$2 board key listeners=''
+  board="$dir/home/data/$id/report.html"
+  printf '<h1>report</h1>\n' > "$board"
+  mkdir -p "$dir/lavish"
+  key=$(perl -MDigest::SHA=sha256_hex -MCwd=realpath -e 'print substr(sha256_hex(realpath(shift)),0,16)' "$board")
+  printf '{"sessions":{"%s":{"key":"%s","file":"%s","status":"open","pending_prompts":0,"url":"http://127.0.0.1:14999/session/%s"}}}\n' \
+    "$key" "$key" "$(cd "$(dirname "$board")" && pwd -P)/report.html" "$key" > "$dir/lavish/state.json"
+  [ "$3" != live ] || listeners="{\"key\":\"$key\"}"
+  printf '#!/usr/bin/env bash\nprintf %%s\\\\n '"'"'{"app":"lavish-axi","state_dir":"%s","listeners":[%s]}'"'"'\n' \
+    "$dir/lavish" "$listeners" > "$dir/fakebin/curl"
+  chmod +x "$dir/fakebin/curl"
+}
+
+test_live_lavish_board_blocks_stop_pause_and_relaunch() {
+  local dir out rc verb
+  dir=$(new_case lavish-in-use)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  lavish_board_in_use "$dir" t1 live
+  for verb in interrupt exit park "relaunch --note n"; do
+    # shellcheck disable=SC2086 # the verb may carry its own flags
+    out=$(LAVISH_AXI_STATE_DIR="$dir/lavish" run_control "$dir" t1 $verb); rc=$?
+    [ "$rc" -ne 0 ] || fail "$verb of a worker with a live Lavish board should be refused"
+    assert_contains "$out" "refusing to ${verb%% *} task t1" "$verb should name the refusal"
+    assert_contains "$out" "FM_LAVISH_IN_USE_OK=1" "$verb refusal should print the skip"
+  done
+  [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] \
+    || fail "a refused lifecycle verb must send nothing to the agent"
+  out=$(LAVISH_AXI_STATE_DIR="$dir/lavish" FM_LAVISH_IN_USE_OK=1 run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "the skip should let exit proceed"$'\n'"$out"
+  assert_contains "$out" "stopped t1" "the skipped check should stop the agent"
+  dir=$(new_case lavish-free)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  lavish_board_in_use "$dir" t1 free
+  out=$(LAVISH_AXI_STATE_DIR="$dir/lavish" run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "a board with no live listener must not block exit"$'\n'"$out"
+  pass "fm-control: a live Lavish board blocks interrupt, exit, park and relaunch until the skip"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit $?
@@ -1281,6 +1325,7 @@ test_relay_generation_and_lost_callback
 test_relay_waits_for_background_work
 test_task_job_survives_worker_scope
 
+test_live_lavish_board_blocks_stop_pause_and_relaunch
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_unverified_harness_is_refused

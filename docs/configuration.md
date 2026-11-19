@@ -2233,6 +2233,8 @@ After 30 seconds of observed missing supervised coverage, the sweep also queues 
 An unacknowledged worker round receives the same bounded reminder to verify handling and eventual re-arm or terminal conclusion; it never authorizes automatic acknowledgement.
 Registered dead listeners still use process-event reconciliation, and a discovery failure itself queues a bounded diagnostic wake.
 The sweep checks local server health and does not itself consume feedback, post replies, reopen or end a session, take over a listener, or accept an answer.
+`bin/fm-lavish-watch.sh in-use <task>` lists the open boards a task owns whose agent listener is live, read-only.
+`fm-control.sh` (`interrupt`, `exit`, `park`, `relaunch`) and `fm-teardown.sh` refuse to act on such a task, because stopping that worker strands a board the captain may be using; ask the captain first, then rerun with `FM_LAVISH_IN_USE_OK=1` to skip the check.
 Its header owns the exact commands and private episode mechanics; `tests/fm-lavish-watch.test.sh` exercises discovery, ownership retention, reminders, restored coverage, and the watcher wake through executables without a network service.
 
 **Retry interrupted Lavish polls**

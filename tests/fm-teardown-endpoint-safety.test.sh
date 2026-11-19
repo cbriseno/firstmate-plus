@@ -1345,6 +1345,35 @@ test_already_gone_endpoint_still_completes_without_a_refusal() {
   pass "fm-teardown: an already-exited endpoint, and a server that is already gone, still complete cleanup silently"
 }
 
+# Captain rule 27: teardown of a worker whose Lavish board is live is refused
+# before anything is closed, even with --force; the skip is FM_LAVISH_IN_USE_OK=1.
+test_live_lavish_board_refuses_teardown_before_mutation() {
+  local dir id=lavish-a board key
+  dir=$(make_case lavish)
+  fm_write_meta "$dir/home/state/$id.meta" "window=isolated:fm-$id" \
+    "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  mkdir -p "$dir/home/data/$id" "$dir/lavish"
+  board="$dir/home/data/$id/report.html"
+  printf '<h1>report</h1>\n' > "$board"
+  key=$(perl -MDigest::SHA=sha256_hex -MCwd=realpath -e 'print substr(sha256_hex(realpath(shift)),0,16)' "$board")
+  printf '{"sessions":{"%s":{"key":"%s","file":"%s","status":"open","url":"http://127.0.0.1:14999/session/%s"}}}\n' \
+    "$key" "$key" "$(cd "$(dirname "$board")" && pwd -P)/report.html" "$key" > "$dir/lavish/state.json"
+  printf '#!/usr/bin/env bash\nprintf %%s\\\\n '"'"'{"app":"lavish-axi","state_dir":"%s","listeners":[{"key":"%s"}]}'"'"'\n' \
+    "$dir/lavish" "$key" > "$dir/fakebin/curl"
+  chmod +x "$dir/fakebin/curl"
+  export LAVISH_AXI_STATE_DIR="$dir/lavish"
+  assert_refused_without_mutation "$dir" "$id" "live Lavish board"
+  assert_contains "$(cat "$dir/stderr")" "refusing to tear down task $id" "teardown should name the live board"
+  assert_contains "$(cat "$dir/stderr")" "FM_LAVISH_IN_USE_OK=1" "teardown refusal should print the skip"
+  set +e
+  FM_LAVISH_IN_USE_OK=1 run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  set -e
+  ! grep -q "refusing to tear down" "$dir/stderr" || fail "the skip should let teardown past the Lavish check"
+  unset LAVISH_AXI_STATE_DIR
+  pass "fm-teardown: a live Lavish board refuses teardown before any change, until the skip"
+}
+
+test_live_lavish_board_refuses_teardown_before_mutation
 test_invalid_endpoint_records_refuse_before_mutation
 test_control_lock_contention_refuses_before_mutation
 test_non_pool_teardown_ignores_task_set_lock

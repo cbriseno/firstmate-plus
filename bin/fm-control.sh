@@ -134,6 +134,10 @@
 #   - A composer that visibly holds pending text refuses before an exit command
 #     is typed, so existing text is preserved instead of being concatenated.
 #
+# Captain rule 27: interrupt, exit, park and relaunch refuse while the task's
+# worker holds a live Lavish listener on a board it owns (the captain may be
+# using it). Ask the captain, then rerun with FM_LAVISH_IN_USE_OK=1 to skip.
+#
 # Environment knobs (all bounded waits, seconds):
 #   FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
 #   FM_CONTROL_SETTLE_WAIT       adapter acknowledgement wait after interrupt (5)
@@ -1217,6 +1221,12 @@ do_relaunch() {
 . "$SCRIPT_DIR/fm-worker-parking-lib.sh"
 
 # --- verbs ------------------------------------------------------------------
+
+case "$VERB" in
+  interrupt|exit|relaunch|park)
+    fm_lavish_in_use_refuse "$FM_HOME" "$STATE" "$ID" "$VERB" || exit 1
+    ;;
+esac
 
 case "$VERB" in
   interrupt)
