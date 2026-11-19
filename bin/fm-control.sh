@@ -48,6 +48,7 @@
 #              Claude's background-work exit picker is cancelled with its own
 #              Esc and exits 75 (exit-deferred): the agent and tasks keep
 #              running, and relaunch rolls back the same way.
+#              A failed stop prints the endpoint's last visible rows.
 #              Already-stopped is success (idempotent). An endpoint that reads
 #              `missing` is put through the control plane's per-backend absence
 #              proof (fm_control_endpoint_absence_verdict) before anything is
@@ -787,11 +788,29 @@ do_exit_agent() {
   printf 'stopped'
 }
 
+# report_agent_screen: print the endpoint's last visible rows to stderr. An
+# agent that does not stop is usually held by something only its screen shows
+# (an update notice, a trust dialog, any prompt no adapter knows), so every
+# failed stop carries it instead of leaving the caller to read the pane.
+report_agent_screen() {
+  local screen
+  screen=$(fm_backend_visible_capture "$BACKEND" "$T" "$LABEL" 2>/dev/null) || {
+    echo "task $ID's screen could not be read" >&2
+    return 0
+  }
+  echo "task $ID's screen (last visible rows):" >&2
+  printf '%s\n' "$screen" | awk 'NF' | tail -n 8 | sed 's/^/  | /' >&2
+}
+
 # Every successful exit path, including an already absent agent, reclaims its
 # worker incarnation before relaunch can publish a replacement.
 do_exit() {
-  local result
-  result=$(do_exit_agent) || return $?
+  local result status
+  result=$(do_exit_agent) || {
+    status=$?
+    report_agent_screen
+    return "$status"
+  }
   python3 "$SCRIPT_DIR/fm-worker-processes.py" cleanup-meta "$META" >&2 || return $?
   printf '%s' "$result"
 }

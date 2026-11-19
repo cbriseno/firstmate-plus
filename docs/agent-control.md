@@ -52,6 +52,7 @@ The clear is refused before anything is sent when the recorded backend cannot de
 Claude's background-work exit picker is cancelled with its own Esc, which keeps the agent and its background tasks running, and `exit` reports `exit-deferred` with status 75; a relaunch rolls back the same way, and the automatic worker relay retries at the agent's next completed turn.
 Any other recognised dialog is refused as `blocked on a prompt` with no key sent.
 A stopped agent whose pane still shows the dialog text is not refused.
+Every failed stop, including one inside `relaunch` or `park`, also prints the endpoint's last visible rows, so a dialog no adapter recognises (an update notice, a trust prompt) is named by its own screen.
 [`fm_composer_blocking_dialog`](../bin/fm-composer-lib.sh) owns the recognised set, which today is only Claude's background-task exit picker; [its verification record](verification/runtime-backends.md#claude-background-task-exit-picker) lists the dialogs that are not covered.
 
 **Teardown and discard are not verbs and will not become verbs.**

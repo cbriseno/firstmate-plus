@@ -1073,6 +1073,37 @@ test_exit_accepts_agent_stopped_by_busy_interrupt() {
   pass "fm-control exit: an interrupt-stopped agent satisfies the gone-state postcondition"
 }
 
+# A Codex pane stopped on its startup update notice has no composer, so exit
+# refuses; the refusal must carry what the screen shows, because that screen
+# is the only place the reason is visible.
+codex_update_screen() {
+  printf '%s\n' \
+    '  Update available! 0.169.0 -> 0.169.1' \
+    '' \
+    '> 1. Update now' \
+    '  2. Skip' \
+    '  3. Skip until next version' \
+    '' \
+    '  Press enter to continue · esc to skip'
+}
+
+test_failed_exit_shows_the_agent_screen() {
+  local dir out rc
+  dir=$(new_case update-notice)
+  add_task "$dir" t1 codex
+  alive_as "$dir" codex
+  codex_update_screen > "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "exit should refuse a codex pane with no composer"$'\n'"$out"
+  assert_contains "$out" "Update available! 0.169.0 -> 0.169.1" \
+    "the refusal should show the dialog the agent is stopped on"
+  assert_contains "$out" "Skip until next version" \
+    "the refusal should show the dialog's options"
+  [ ! -s "$dir/fake/literal" ] || fail "nothing should be typed into the dialog"
+  [ "$(cat "$dir/fake/command")" = codex ] || fail "the agent must keep running"
+  pass "fm-control exit: a refused exit shows the agent's visible screen"
+}
+
 test_agent_that_does_not_stop_fails_closed() {
   local dir out rc gen
   dir=$(new_case stubborn)
@@ -1366,5 +1397,6 @@ test_exit_names_a_picker_that_renders_after_the_submit
 test_interrupt_without_acknowledgement_preserves_busy_state
 test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
+test_failed_exit_shows_the_agent_screen
 test_secondmate_control_command_carries_no_marker
 test_fm_send_still_marks_the_same_secondmate_task
