@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: fm-nudge.sh record --category CATEGORY --text TEXT [--task ID]
+# Usage: fm-nudge.sh record --category CATEGORY --text TEXT [--task ID] [--gap CLASS | --new-gap CLASS]
 # Record one supervisor steering event in the current home's state.
 set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)

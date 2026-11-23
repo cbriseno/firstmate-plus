@@ -16,7 +16,7 @@ Select concrete models from the chosen harness's current authoritative catalog, 
 | --- | --- | --- |
 | Simple lookup or mechanical edit with a known path | Smallest capable available model | low |
 | Bounded implementation, report, or analysis with several interacting steps | Balanced model capable of the whole task | medium to high |
-| Ambiguous design or diagnosis, critical/high-risk work, or large cross-source analysis | Strongest available reasoning model | high to xhigh |
+| Ambiguous design, long or ambiguous diagnosis, critical/high-risk work, or large cross-source analysis | Strongest available reasoning model | high to xhigh |
 
 Judge difficulty from uncertainty, scale, reader needs, and consequences, not whether the output is code; a large spreadsheet edit or nontechnical synthesis can need the strongest class.
 If a configured choice cannot meet the required class, report the mismatch rather than silently downgrading the task or replacing an explicit choice.
@@ -25,6 +25,11 @@ For profile arrays, `quota-array-dispatch` owns selection among candidates that 
 When the existing dispatch rules declare categories, pass `--category <category>` to `fm-brief.sh`, record any omitted model or effort with `--dispatch-model` or `--dispatch-effort`, and supply `--rationale <reason>` for complex work or when the rule requires it; `fm-spawn.sh --help` owns matching, legacy briefs, and the skip mechanics.
 Without a dispatch profile file, record the selected harness, model, and effort with the brief's `--dispatch-harness`, `--dispatch-model`, and `--dispatch-effort` options so automatic dispatch can use the same selection.
 Choose the category from the work itself, including when another requester proposes a model.
+Assess diagnostic scope before scaffolding.
+A long evidence trail or several plausible explanations requires the strongest class even if the eventual fix is small.
+A bounded investigation with a clear question and moderate risk needs the balanced class.
+When the matrix provides `hard` and `standard` for those classes, pass the assessment through `fm-brief.sh --diagnosis-scope` and use the resulting brief category to select the launch profile.
+Follow the normal configured-rule or captain-override precedence for a more specific applicable profile.
 
 Effort precedence is a per-task captain instruction, then applicable dispatch profile or secondmate pin, then the fallback below.
 Never replace either higher-precedence value.

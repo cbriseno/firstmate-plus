@@ -491,9 +491,9 @@ SH
     PATH="$HANDOFF/bin:$PATH" FM_HOME="$HANDOFF/home" FM_LAVISH_POLL_RETRY_DELAY=1 \
       FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=60 "$ROOT/bin/fm-procevent-lavish.sh" arm "$handoff_art" --for "$owner" \
       --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "$owner arm failed"
-    [ "$(cat "$HANDOFF/reply-count")" = 3 ] || fail "startup reply was not retried"
-    [ "$(cat "$HANDOFF/replies")" = $'reply before listening\nBoard ready' ] \
-      || fail "initial readiness did not follow the staged reply"
+    [ "$(cat "$HANDOFF/reply-count")" = 2 ] || fail "startup reply was not retried"
+    [ "$(cat "$HANDOFF/replies")" = 'reply before listening' ] \
+      || fail "initial arm added an unrequested readiness message"
     # Empty ready markers are intentional; poll for existence directly.
     wait_for_exists "$HANDOFF/poll15" || fail "startup poll was not retried"
     touch "$HANDOFF/release15"
@@ -513,8 +513,8 @@ SH
       --agent-reply-file "$HANDOFF/reply" >/dev/null || fail "reply while listening failed"
     [ -f "$HANDOFF/home/state/procevent-inbox/$handoff_id.1.handled" ] || fail "oldest round not acknowledged"
     assert_absent "$HANDOFF/home/state/procevent-inbox/$handoff_id.2.handled" "reply acknowledged unread newer feedback"
-    [ "$(tail -n 2 "$HANDOFF/replies")" = $'reply before listening\nBoard ready' ] \
-      || fail "re-arm did not announce readiness after the completion reply"
+    [ "$(tail -n 1 "$HANDOFF/replies")" = 'reply before listening' ] \
+      || fail "re-arm announced review without a new result"
     touch "$HANDOFF/release17"
     wait_for "$HANDOFF/home/state/procevent-inbox/$handoff_id.3.result" || fail "terminal feedback missing"
     if pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null 2>&1; then
@@ -525,7 +525,7 @@ SH
     pe "$HANDOFF/home" handled "$handoff_id" 3 >/dev/null || fail "terminal acknowledgement failed"
     assert_absent "$HANDOFF/home/state/procevent/$handoff_id.source" "terminal source remained armed"
     [ "$(cat "$HANDOFF/poll-count")" = 17 ] || fail "terminal board was polled again"
-    [ "$(wc -l < "$HANDOFF/replies" | tr -d ' ')" = 6 ] || fail "receipt duplicated or sent on close"
+    [ "$(wc -l < "$HANDOFF/replies" | tr -d ' ')" = 4 ] || fail "receipt duplicated or sent on close"
     pass "$owner recovers beyond thirteen startup failures, keeps listening after feedback and done"
   done
   touch "$HANDOFF/always-fail"
@@ -1443,9 +1443,8 @@ wait_for "$HORPHAN/state/worker-4.inbox/001.msg" \
 pass "a capture interrupted before its result commit does not wedge its source"
 
 # --- end-user-aligned regression: an unresponsive Lavish CLI cannot hold arm --
-# After a task-owned board is listening, arm posts a best-effort readiness note
-# through one-shot Lavish calls. A CLI that never answers them (here every call
-# but poll) once held arm, and the suite running it, for hours.
+# A task-owned arm must not wait on one-shot readiness calls. A CLI that never
+# answers them once held arm, and the suite running it, for hours.
 HSTALL="$TMP_ROOT/hstall"; new_home "$HSTALL"
 STALL_BIN=$(fm_fakebin "$TMP_ROOT/lavish-stall-stub")
 cat > "$STALL_BIN/lavish-axi" <<'SH'
@@ -1468,11 +1467,10 @@ if kill -0 "$stall_arm" 2>/dev/null; then
   kill -TERM "$stall_arm" 2>/dev/null || true
   fail "arm --for was still waiting on an unresponsive Lavish CLI after 60s"
 fi
-wait "$stall_arm" || fail "arm --for failed when only its readiness note could not be posted: $(cat "$TMP_ROOT/stall-arm.err")"
+wait "$stall_arm" || fail "arm --for failed with an unresponsive Lavish CLI: $(cat "$TMP_ROOT/stall-arm.err")"
 assert_contains "$(cat "$TMP_ROOT/stall-arm.out")" "armed:" "arm did not report the listening board"
-assert_contains "$(cat "$TMP_ROOT/stall-arm.err")" "readiness message was not posted" \
-  "arm did not say its readiness note was skipped"
-pass "an unresponsive Lavish CLI cannot hold a task-owned arm past its note bound"
+[ ! -s "$TMP_ROOT/stall-arm.err" ] || fail "arm unexpectedly tried to post a readiness note"
+pass "an unresponsive Lavish CLI cannot hold a task-owned arm for a readiness note"
 
 # --- end-user-aligned regression: an orphaned capture keeps its owner ---------
 # An unacknowledged capture belongs to whoever it was routed to. Retiring the

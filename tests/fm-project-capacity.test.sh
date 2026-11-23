@@ -771,6 +771,45 @@ ROWS
   pass "fresh load and memory verdicts defer ships and scouts without effects, then admit after recovery"
 }
 
+test_sustained_load_defers_only_heavy_work() {
+  local case_dir home fakebin out rc=0 pid
+  command -v jq >/dev/null 2>&1 && [ "$HAVE_TASKS_AXI" = 1 ] ||
+    { printf 'ok - skipped sustained load queue case (jq or tasks-axi absent)\n'; return; }
+  case_dir=$(make_case sustained-load task-c task-light)
+  home="$case_dir/home"
+  fakebin="$case_dir/fakebin"
+  # Use the portable sysctl path so the test controls both load windows.
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in -s) echo Darwin ;; *) exec /usr/bin/uname "$@" ;; esac
+SH
+  cat > "$fakebin/getconf" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = _NPROCESSORS_ONLN ] && echo 4
+SH
+  cat > "$fakebin/sysctl" <<'SH'
+#!/usr/bin/env bash
+[ "$2" = vm.loadavg ] && cat "${0%/*}/loadavg"
+SH
+  chmod +x "$fakebin/uname" "$fakebin/getconf" "$fakebin/sysctl"
+  printf '3.54 17.16 2.00\n' > "$fakebin/loadavg"
+  printf '3\nmax-load1 40\nmax-load5-per-core 4\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  printf 'Dispatch CPU: heavy\n' >> "$home/data/task-c/brief.md"
+  write_capacity_beat "$home" 3.54 4.4
+  out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "heavy work was not deferred under sustained load: $out"
+  assert_contains "$out" 'sustained load 17.16' "the heavy task must be gated by the five-minute load"
+  assert_equals queued "$(row_state "$home" task-c)" "the heavy task must stay queued"
+  out=$(spawn_ship "$case_dir" task-light) || fail "model work did not launch under sustained load: $out"
+  assert_present "$home/state/task-light.meta" "the model worker did not publish its launch record"
+  capacity_watch "$case_dir"; pid=$!
+  wait_poll_cycle "$home/state" "$pid" || fail "the watcher did not hold the heavy task while load remained high"
+  assert_equals queued "$(row_state "$home" task-c)" "retry bypassed the sustained load check"
+  printf '3.54 15.95 2.00\n' > "$fakebin/loadavg"
+  expect_capacity_wake "$home" "$pid"
+  pass "sustained load defers only the heavy task and its retry starts it after load falls"
+}
+
 test_batch_rereads_lane_capacity_after_each_spawn() {
   local case_dir home out rc=0 wt
   command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource batch case (jq absent)\n'; return; }
@@ -806,6 +845,7 @@ fi
 
 test_dispatch_wait_events
 test_resource_verdict_defers_then_admits
+test_sustained_load_defers_only_heavy_work
 test_batch_rereads_lane_capacity_after_each_spawn
 test_undeclared_capacity_keeps_dispatch_uncapped
 test_available_capacity_admits_the_worker

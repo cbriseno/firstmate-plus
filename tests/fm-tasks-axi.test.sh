@@ -306,6 +306,52 @@ test_wrapper_cancel() {
   pass "cancel closes with reason, clears worker presentation and delivery in Deck snapshot, and reopen clears closure"
 }
 
+test_accept_request_files_owned_closure_work() {
+  local dir out before original
+  dir=$(make_split accept-request)
+  cat > "$dir/code/closure.json" <<'EOF'
+[
+  {"id":"verify-real","title":"Verify all ten corrections in the live installation","kind":"scout","owner":"Release lead"},
+  {"id":"check-docs","title":"Verify the upgrade instructions","kind":"scout","owner":"Documentation lead","body":"Check the actual upgrade."}
+]
+EOF
+  wrapper_from_code "$dir" accept phase-one "Phase one" --closure-file closure.json --repo firstmate \
+    || fail "accepting the request did not file its closure criteria"
+  out=$(wrapper_from_code "$dir" show verify-real --full)
+  assert_contains "$out" "Verify all ten corrections in the live installation" "criterion lost its title"
+  assert_contains "$out" "Owner: Release lead" "verification task has no accountable owner"
+  out=$(wrapper_from_code "$dir" show check-docs --full)
+  assert_contains "$out" "Owner: Documentation lead" "second criterion has no accountable owner"
+  out=$(wrapper_from_code "$dir" presentation check-docs)
+  printf '%s' "$out" | jq -e '.presentation.request.id == "phase-one"' >/dev/null \
+    || fail "criterion task was not attached to its request"
+
+  before=$(cat "$dir/home/data/backlog.md")
+  wrapper_from_code "$dir" accept phase-one "Phase one" --closure-file closure.json --repo firstmate \
+    || fail "retry did not recognize the accepted request"
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "retry rewrote or duplicated existing tasks"
+
+  printf '[{"id":"ownerless","title":"Missing owner","kind":"scout"}]\n' > "$dir/code/closure.json"
+  if wrapper_from_code "$dir" accept phase-two "Phase two" --closure-file closure.json; then
+    fail "acceptance succeeded with an ownerless criterion"
+  fi
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "invalid acceptance wrote to the backlog"
+
+  wrapper_from_code "$dir" add phase-three "Existing request" --body "Original record" >/dev/null || fail "add failed"
+  original=$(cat "$dir/home/data/phase-three/creation.json")
+  printf '[{"id":"verify-existing","title":"Verify the existing request","kind":"scout","owner":"Firstmate"}]\n' \
+    > "$dir/code/closure.json"
+  wrapper_from_code "$dir" accept phase-three "Existing request" --closure-file closure.json \
+    || fail "existing request could not be accepted with its closure task"
+  out=$(wrapper_from_code "$dir" presentation verify-existing)
+  printf '%s' "$out" | jq -e '.presentation.request.id == "phase-three"' >/dev/null \
+    || fail "closure task was not linked to the existing request"
+  assert_equals "$original" "$(cat "$dir/home/data/phase-three/creation.json")" "acceptance changed the original creation record"
+  out=$(wrapper_from_code "$dir" show phase-three --full)
+  assert_contains "$out" "Original record" "acceptance overwrote the original request body"
+  pass "request acceptance files every closure criterion with an owner under the same request"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -319,6 +365,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
 test_wrapper_refuses_captain_hold
   test_wrapper_single_home
   test_wrapper_cancel
+  test_accept_request_files_owned_closure_work
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi

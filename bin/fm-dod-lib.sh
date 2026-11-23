@@ -138,10 +138,10 @@
 # reviewers must check all of them against the original, never only the plan.
 # data/<id>/acceptance.json is {"requirements": [{"text": <original line>,
 # "status": "fulfilled"|"deferred", "evidence": <verification reference>,
-# "notice": <reference to explicit notice delivered to captain, if deferred>}]}.
-# Rows follow the same order. Evidence and notice are truthful attestations,
-# not automatically verified external communications. A worker cannot invent
-# notice: firstmate supplies the actual delivered message reference.
+# "notice": {"file": <notice path>, "hold": <captain-held task id>,
+# "occurrence": <positive hold occurrence>}}]}.
+# For a deferral the file must exist and its captain call must link to it.
+# Relative notice paths resolve against the acceptance file's directory.
 # Missing definitions on legacy briefs warn and continue; a defined list fails
 # closed if it differs from the original, or its acceptance is missing/stale.
 fm_brief_requirements() {  # <brief>
@@ -152,17 +152,24 @@ fm_brief_requirements() {  # <brief>
 }
 
 fm_dod_accept_requirements() {  # <brief> <acceptance.json>
-  local brief=$1 acceptance=$2 original listed
+  local brief=$1 acceptance=$2 original listed home=${FM_HOME:-.}
   if ! fm_brief_task_heading_present "$brief" "## Captain's requirements"; then
     printf '%s\n' "warning: requirements list undefined in $brief; continuing legacy task" >&2
     return 0
   fi
   original=$(fm_brief_requirements "$brief")
   listed=$(fm_brief_task_heading_body "$brief" "## Captain's requirements")
-  python3 - "$original" "$listed" "$acceptance" <<'PYREQ'
+  FM_HOME="$home" FM_DATA_OVERRIDE="${FM_DATA_OVERRIDE:-${DATA:-$home/data}}" \
+    FM_STATE_OVERRIDE="${FM_STATE_OVERRIDE:-${STATE:-$home/state}}" \
+    FM_CONFIG_OVERRIDE="${FM_CONFIG_OVERRIDE:-$home/config}" \
+    python3 - "$original" "$listed" "$acceptance" "${BASH_SOURCE[0]%/*}" <<'PYREQ'
 import json
+import os
+from pathlib import Path
+import re
+import subprocess
 import sys
-original, listed, path = sys.argv[1:]
+original, listed, path, scripts = sys.argv[1:]
 try:
     expected = original.splitlines()
     actual = [line for line in listed.splitlines() if line.strip()]
@@ -179,9 +186,50 @@ try:
             raise ValueError(f"requirement {number}: still unmet")
         if not isinstance(row.get("evidence"), str) or not row["evidence"].strip():
             raise ValueError(f"requirement {number}: verification evidence missing")
-        if row["status"] == "deferred" and (not isinstance(row.get("notice"), str) or not row["notice"].strip()):
-            raise ValueError(f"requirement {number}: explicit notice to captain missing")
-except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        if row["status"] == "deferred":
+            notice = row.get("notice")
+            if not isinstance(notice, dict) or not isinstance(notice.get("file"), str) or not notice["file"].strip():
+                raise ValueError(f"requirement {number}: explicit notice to captain missing (file and captain hold required)")
+            notice_path = Path(notice["file"])
+            if not notice_path.is_absolute():
+                notice_path = Path(path).resolve().parent / notice_path
+            notice_path = notice_path.resolve(strict=True)
+            if not notice_path.is_file() or not notice_path.read_text(encoding="utf-8").strip():
+                raise ValueError(f"requirement {number}: notice file is empty or not a file")
+            hold = notice.get("hold")
+            if not isinstance(hold, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", hold):
+                raise ValueError(f"requirement {number}: captain hold missing")
+            occurrence = notice.get("occurrence")
+            if type(occurrence) is not int or occurrence < 1:
+                raise ValueError(f"requirement {number}: captain hold occurrence missing")
+            command = ["bash", str(Path(scripts) / "fm-captain-hold.sh")]
+            result = subprocess.run(command + ["open", hold, "--identity"],
+                                    capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                identity = result.stdout.strip()
+                expected_count = occurrence - 1
+            else:
+                result = subprocess.run(command + ["resolved", hold, str(occurrence), "--identity"],
+                                        capture_output=True, text=True, timeout=300, check=True)
+                identity = result.stdout.strip()
+                expected_count = occurrence
+            hold_set, count = identity.rsplit("#", 1)
+            if int(count) != expected_count:
+                raise ValueError(f"requirement {number}: captain hold occurrence differs")
+            data = Path(os.environ.get("FM_DATA_OVERRIDE") or Path(os.environ["FM_HOME"]) / "data")
+            with (data / hold / "captain-call.json").open(encoding="utf-8") as stream:
+                call = json.load(stream)
+            # Closing a call removes the active hold stamp from the backlog;
+            # its owner retains the matching call record after resolution.
+            if not hold_set and result.returncode == 0 and expected_count == occurrence:
+                hold_set = call.get("hold_set")
+            sys.path.insert(0, scripts)
+            from fm_delivery import validate_captain_call
+            valid = validate_captain_call(call, hold, hold_set)
+            link = (valid or {}).get("call") or {}
+            if not link.get("link") or Path(link["link"]).resolve() != notice_path:
+                raise ValueError(f"requirement {number}: captain hold does not link to notice file")
+except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
     print(f"requirements acceptance refused: {error}; complete the acceptance or disclose deferral through firstmate")
     sys.exit(1)
 PYREQ

@@ -56,7 +56,7 @@
 #   fm-captain-hold.sh followups <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify-followups <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
-#   fm-captain-hold.sh resolved <task-id> <occurrence>
+#   fm-captain-hold.sh resolved <task-id> <occurrence> [--identity]
 #   fm-captain-hold.sh diverged
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
@@ -3188,7 +3188,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 }
 
 command_resolved() {  # <task-id> <occurrence>
-  [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+  [ "$#" -eq 2 ] || { [ "$#" -eq 3 ] && [ "$3" = --identity ]; } || { usage >&2; exit 2; }
   local id=$1 occurrence=$2 show body state mode
   validate_slug task-id "$id"
   case "$occurrence" in ''|*[!0-9]*) return 1 ;; esac
@@ -3202,8 +3202,10 @@ command_resolved() {  # <task-id> <occurrence>
   mode=$(recorded_resolution_mode "$body") || return 1
   case "$mode" in answered|released|repaired|reconciled|routed|declined|action-completed) ;; *) return 1 ;; esac
   state=$(show_field "$show" state)
-  [ "$state" != 'done' ] || return 0
-  [ "$mode" = released ] && [ "$(show_field_value "$show" hold_kind)" != captain ]
+  if [ "$state" != 'done' ]; then
+    [ "$mode" = released ] && [ "$(show_field_value "$show" hold_kind)" != captain ] || return 1
+  fi
+  [ "${3:-}" != --identity ] || hold_lifecycle_identity "$body"
 }
 
 case "${1:-}" in

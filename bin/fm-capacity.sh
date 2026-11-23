@@ -6,8 +6,8 @@
 #   fm-capacity.sh            the report: one key=value line, then a human summary
 #   fm-capacity.sh --json     the fm-lane-capacity.v1 document on stdout
 #   fm-capacity.sh --publish  write that document to state/lane-capacity.json
-#   fm-capacity.sh --admit    this home's own admission verdict as an exit status
-#   fm-capacity.sh --admit-notice  admission with one load point of notice headroom
+#   fm-capacity.sh --admit [--task-brief PATH]  this home's live admission verdict
+#   fm-capacity.sh --admit-notice [--task-brief PATH]  with one load point of notice headroom
 #   fm-capacity.sh --check-load-wait N  exit 0 if N is below an admission limit, 1 otherwise, 2 if unknown
 #
 # It reads this home's state/*.meta, the optional config/lane-capacity, the
@@ -38,8 +38,8 @@
 # With a target, free_lanes is target minus lanes (never below 0), unless a
 # constraint holds, in which case free_lanes=0 and reason names every
 # constraint, comma-separated, in this order:
-#   cpu       configured 5-minute load per core threshold; or probe basis:
-#             1-minute load average >= logical cores
+#   cpu       configured 5-minute load per core threshold for heavy work;
+#             or probe basis: 1-minute load average >= logical cores
 #   memory    probe basis: free-memory percentage < 10; or no lane fits in
 #             memory (see Memory below)
 #   disk      probe basis: free space on the filesystem holding FM_HOME
@@ -127,6 +127,8 @@
 #
 # --admit exits 0 when config/lane-capacity is absent or the verdict admits,
 # and 75 with one `deferred:` line on stderr when it does not.
+# A task brief with an exact "Dispatch CPU: heavy" line selects the sustained
+# load check. Existing briefs and the general lane report use model admission.
 # --admit-notice uses the same verdict but requires load at least 1 below a
 # configured max-load1, reducing false retry wakes as load changes.
 #
@@ -157,6 +159,7 @@ BOOTS_KEPT=10
 
 mode=report
 notice=0
+task_brief=
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
   "") ;;
@@ -167,7 +170,12 @@ case "${1:-}" in
   --check-load-wait) mode=load_wait; [ "$#" = 2 ] || exit 2; wait_threshold=$2 ;;
   *) echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2 ;;
 esac
-[ "$#" -le 1 ] || [ "$mode" = load_wait ] || { echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2; }
+if [ "$mode" = admit ] && [ "$#" = 3 ] && [ "$2" = --task-brief ] && [ -n "$3" ]; then
+  task_brief=$3
+elif [ "$#" -gt 1 ] && [ "$mode" != load_wait ]; then
+  echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2
+  exit 2
+fi
 
 is_uint() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
@@ -567,6 +575,7 @@ add_constraint() {  # <name> <reason> [published reason, default the reason]
 "
 }
 if [ -n "$max_load5_per_core" ] && [ "$load5" != unknown ] && [ "$cores" != unknown ] &&
+  [ -f "$task_brief" ] && grep -Fqx -- 'Dispatch CPU: heavy' "$task_brief" &&
   awk -v l="$load5" -v c="$cores" -v m="$max_load5_per_core" 'BEGIN{exit !(l >= c * m)}'; then
   add_constraint cpu "cpu: sustained load $load5 on $cores cores reaches $max_load5_per_core per core"
 fi

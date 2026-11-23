@@ -505,22 +505,24 @@ for line in sys.stdin:
   return 1
 }
 
-pause_task_released() (  # <same-home dependency>
-  local target=$1 meta="$STATE/$1.meta" project branch base
-  [ ! -L "$meta" ] || return 1
+pause_task_state() (  # <same-home dependency>: see fm_backlog_task_wait_state
+  local target=$1 meta="$STATE/$1.meta" project branch base verb kind
+  [ ! -L "$meta" ] || return 2
   if [ -f "$meta" ]; then
-    [ "$(fm_meta_get "$meta" kind)" = ship ] || return 1
-    if [ -f "$STATE/$target.pr-poll-merge-notified" ] && fm_pr_metadata_identity_parse "$meta" \
+    kind=$(fm_meta_get "$meta" kind)
+    if [ "$kind" = ship ] && [ -f "$STATE/$target.pr-poll-merge-notified" ] && fm_pr_metadata_identity_parse "$meta" \
       && fm_pr_poll_merge_already_notified "$STATE" "$target" \
         "$FM_PR_META_PROVIDER" "$FM_PR_META_HOST" "$FM_PR_META_PATH" "$FM_PR_META_NUMBER"; then
       return 0
     fi
-    [ "$(status_line_verb "$(status_last_phase_line "$STATE/$target.status")")" = 'done' ] || return 1
+    verb=$(status_line_verb "$(status_last_phase_line "$STATE/$target.status")")
+    [ "$verb" != failed ] || return 3
+    [ "$kind" = ship ] && [ "$verb" = 'done' ] || return 1
     project=$(fm_meta_get "$meta" project)
-    [ -d "$project" ] || return 1
+    [ -d "$project" ] || return 2
     branch=$(fm_meta_get "$meta" branch)
     base=$(fm_meta_get "$meta" base_branch)
-    [ -n "$base" ] || base=$(fm_default_branch "$project") || return 1
+    [ -n "$base" ] || base=$(fm_default_branch "$project") || return 2
     fm_local_head_in_base "$project" "$base" "refs/heads/${branch:-fm/$target}"
     return
   fi
@@ -530,7 +532,7 @@ pause_task_released() (  # <same-home dependency>
   . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
   # shellcheck source=/dev/null
   . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-  fm_backlog_task_closed "${FM_DATA_OVERRIDE:-$FM_HOME/data}" "$target"
+  fm_backlog_task_wait_state "${FM_DATA_OVERRIDE:-$FM_HOME/data}" "$target"
 )
 
 # A declared condition gets the same resume steer a human would send, once
@@ -540,8 +542,8 @@ pause_task_released() (  # <same-home dependency>
 # fm-send owns durable delivery; a parked worker with a queued notice needs
 # lifecycle recovery before the ordinary inbox retry can ring its pane.
 paused_until_resume() {  # <window> <task> <declared-wait-line>
-  local win=$1 task=$2 last=$3 until threshold load ceiling marker key before after hold_rc wait_rc legacy stamp age message check_rc due=0 timed=0 valid=1 migration=0 unsafe=0
-  local old_marker notice parked=0 retry=0 reason wait_task
+  local win=$1 task=$2 last=$3 until threshold load ceiling marker key before after hold_rc wait_rc=1 legacy stamp age message check_rc due=0 timed=0 valid=1 migration=0 unsafe=0
+  local old_marker notice parked=0 retry=0 reason wait_task wait_problem='' target visited
   [ -n "$task" ] || return 0
   marker="$STATE/.pause-notice-$task"
   old_marker="$STATE/.paused-resumed-$(window_key "$win")"
@@ -551,8 +553,23 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
     return 0
   fi
   if wait_task=$(status_wait_task_id "$last"); then
-    wait_rc=1
-    if [ "$wait_task" != "$task" ] && pause_task_released "$wait_task"; then wait_rc=0; fi
+    target=$wait_task
+    visited=" $task "
+    while [ -n "$target" ]; do
+      case "$visited" in
+        *" $target "*) wait_problem="Task waits form a cycle through $target." ; break ;;
+      esac
+      wait_rc=0
+      pause_task_state "$target" || wait_rc=$?
+      case "$wait_rc" in
+        0) [ "$target" = "$wait_task" ] || wait_rc=1; break ;;
+        1) ;;
+        3) wait_problem="Dependency $target has no open task or completion."; break ;;
+        *) wait_problem="The state of dependency $target could not be verified."; break ;;
+      esac
+      visited="$visited$target "
+      target=$(status_wait_task_id "$(status_declared_wait_line "$STATE/$target.status")") || target=
+    done
   else
     # A legacy free-text pause gets one recheck without guessing its process.
     wait_rc=2
@@ -588,6 +605,7 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   [ "$timed" = 1 ] && [ "$valid" = 1 ] && due=1
   [ "$wait_rc" != 0 ] || due=1
   [ "$unsafe" = 0 ] || due=1
+  [ -z "$wait_problem" ] || due=1
   if [ "$due" = 0 ] && [ "$timed" = 0 ] && [ "$wait_rc" = 2 ] && [ ! -e "$legacy" ]; then
     stamp=$(printf '%s' "$last" | sed -n 's/.*\[at=\([0-9][0-9]*\)\].*/\1/p')
     if [ -n "$stamp" ]; then age=$(( $(fm_platform_epoch) - stamp )); else age=$(age_of "$STATE/$task.status"); fi
@@ -646,6 +664,8 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
     message="Your load pause cannot be compared with the current admission configuration. Repair the configuration or choose another exit condition. Pause: $last"
   elif [ "$migration" = 1 ]; then
     message="Your older pause has no verifiable reference. Recheck the condition and resume if it cleared. Redeclare with [wait-task=ID] for another task in this home, [wait-job=NAME] for a durable job, or [wait-pid=PID] for a background process. Pause: $last"
+  elif [ -n "$wait_problem" ]; then
+    message="$wait_problem Verify the reference and declare a live exit or resume the task. Pause: $last"
   fi
   if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-send.sh" "$task" "$message"; then
@@ -660,9 +680,12 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
       fi
       triage_log "$reason"
     elif [ "$after" -le "$before" ]; then
-      rm -f "$marker"
-      [ "$migration" != 1 ] || rm -f "$legacy"
-      fm_obligation_clear "pause-$task"
+      reason="check: unverifiable wait for $task: $message The worker could not be reached; reconcile its wait."
+      if ! watch_event_append check "ready-work:primary:pause:$task" "$reason"; then
+        rm -f -- "$marker" "$legacy"
+        return 1
+      fi
+      wake "$reason"
     fi
     triage_log "timed-pause resume failed: $win (queued=$((after - before)))"
   fi
@@ -3578,22 +3601,27 @@ event_wait_or_sleep() {
 }
 
 # Admission reminders are owned by bin/fm-spawn.sh's capacity contract.
-# Closed home admission holds every deferred task, so each shows that cause.
-show_home_deferral_cause() {  # <cause>
-  local held
-  [ -n "$1" ] || return 0
-  for held in "$STATE"/*.spawn-deferred; do
+refresh_spawn_deferral_cause() {  # <cause> <marker>...
+  local held cause=$1
+  shift
+  [ -n "$cause" ] || return 0
+  # The capacity owner decides admission. Its CPU reason is a known gap class.
+  if [[ "$cause" = 'cpu: '* || "$cause" = *'; cpu: '* ]]; then
+    cause="[cpu-admission] $cause"
+  fi
+  for held in "$@"; do
     [ -f "$held" ] || continue
-    [ "$(cat "$held.reason" 2>/dev/null)" = "$1" ] || printf '%s\n' "$1" > "$held.reason" || return 1
+    [ "$(cat "$held.reason" 2>/dev/null)" = "$cause" ] || printf '%s\n' "$cause" > "$held.reason" || return 1
   done
 }
 
-retry_deferred_spawn() {  # <task-id>
+retry_deferred_spawn() {  # <task-id> <task-brief>
   local marker="$STATE/$1.spawn-deferred" id=$1 project capacity_config project_lock reason arg out rc
   local -a args
   if ! out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice 2>&1 >/dev/null); then
-    show_home_deferral_cause "$(printf '%s\n' "$out" | sed -n 's/^deferred: .* does not admit another lane: //p; s/^fm-capacity: config\/lane-capacity: /invalid lane capacity: /p' | head -n 1)" || return 1
+    bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice --task-brief "$2" 2>&1 >/dev/null); then
+    reason=$(printf '%s\n' "$out" | sed -n 's/^deferred: .* does not admit another lane: //p; s/^fm-capacity: config\/lane-capacity: /invalid lane capacity: /p' | head -n 1)
+    refresh_spawn_deferral_cause "$reason" "$marker" || return 1
     return 0
   fi
   project=$(head -n 1 "$marker") || return 0
@@ -3735,7 +3763,7 @@ ready_work_tick() {
     fi
     [[ "$free" =~ ^[0-9]+$ ]] || free=0
     if [ "$free" -eq 0 ] && cause=$(jq -r '.verdict.reasons | join("; ")' <<< "$capacity" 2>/dev/null); then
-      show_home_deferral_cause "$cause" || return 1
+      refresh_spawn_deferral_cause "$cause" "$STATE"/*.spawn-deferred || return 1
     fi
   fi
   launched=; failed=; left=
@@ -3744,7 +3772,7 @@ ready_work_tick() {
     [ "$stop" -eq 0 ] || continue
     if [ -f "$STATE/$id.spawn-deferred" ]; then
       [ ! -f "$CONFIG/lane-capacity" ] || [ "$free" -gt 0 ] || continue
-      result=$(retry_deferred_spawn "$id") || return 1
+      result=$(retry_deferred_spawn "$id" "$data/$id/brief.md") || return 1
       reason=${result:-$reason}
       continue
     fi
@@ -3763,7 +3791,7 @@ ready_work_tick() {
       case "$(cat "$STATE/.autodispatch-failed-$id" 2>/dev/null)" in
         'error: another Treehouse slot allocation or return is in progress for '*) rm -f -- "$STATE/.autodispatch-failed-$id" ;;
         "error: this home's task set is locked by another spawn;"*) rm -f -- "$STATE/.autodispatch-failed-$id" ;;
-        *) left="$left $id"; continue ;;
+        *) continue ;;
       esac
     fi
     rc=0
@@ -3771,15 +3799,19 @@ ready_work_tick() {
       bash "$SCRIPT_DIR/fm-autodispatch.sh" "$id" 2>&1 </dev/null) || rc=$?
     case "$rc" in
       0) launched="$launched $id" ;;
-      75) stop=1 ;;   # capacity full: its deferral marker relaunches it later
+      75)
+        # Only a shared limit can defer all the remaining candidates.
+        FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+          bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || stop=1 ;;
       76) # A supervised waiter can retry without waiting for this cycle.
         if ! python3 "$SCRIPT_DIR/fm-task-job.py" --autodispatch "$STATE" "$id" "$FM_HOME" "$CONFIG" ||
           ! python3 "$SCRIPT_DIR/fm-task-job.py" --dispatch "$STATE"; then
           printf '%s\n' 'error: could not start automatic allocation waiter' > "$STATE/.autodispatch-failed-$id"
           failed="$failed $id"
         fi ;;
-      3) left="$left $id" ;;
-      *) left="$left $id"
+      3) cause=$(printf '%s\n' "$out" | sed -n 's/^not auto-launchable: //p' | tail -n 1)
+         left="${left:+$left; }$id: ${cause:-no automatic dispatch route}" ;;
+      *)
          printf '%s\n' "$out" | tail -n 1 | cut -c1-300 > "$STATE/.autodispatch-failed-$id" || true
          failed="$failed $id" ;;
     esac
@@ -3804,13 +3836,13 @@ ready_work_tick() {
     fm_wake_append check "autodispatch-failed-$id" "$reason" || return 1
   done
   if [ -n "$left" ]; then
-    result="check: ready work with $free free lanes: review and dispatch eligible queued tasks (${left# })"
+    result="check: ready work has free lanes: review and dispatch eligible queued tasks ($left)"
     prior=
     [[ $'\n'"$previous"$'\n' != *$'\n'"$result"$'\n'* ]] || prior=$marker
     fm_obligation_observe ready-dispatch ready-work "$result" "$result" "$prior" || return 1
     next=${next:+"$next"$'\n'}$result
     if [[ $'\n'"$previous"$'\n' != *$'\n'"$result"$'\n'* ]]; then
-      fm_wake_append check ready-work "$result" || return 1
+      fm_wake_append check ready-work:primary:dispatch "$result" || return 1
       reason=$result
     fi
   else

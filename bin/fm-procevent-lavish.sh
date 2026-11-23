@@ -64,7 +64,7 @@
 #            other status when the reply failed or the version is unknown.
 # notify     Post one short line to the board's Conversation panel through
 #            synchronous `lavish-axi reply`: `ack` for a fresh nonterminal
-#            feedback capture, `ready` after a task-owned arm is listening. The
+#            feedback capture, `ready` only when explicitly requested for a new result. The
 #            optional one-line `config/lavish-board-ack` or `lavish-board-ready`
 #            replaces the default text, and an empty file disables it. Callers
 #            treat it as best effort; older clients without synchronous reply
@@ -389,8 +389,6 @@ cmd_arm() {
     [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
     printf 'note: an earlier listener is still live and serving this board; a continuing task listener adopts an unchanged command after capture; other commands take effect after the source is retired and armed again\n'
     [ "$park" -eq 0 ] || request_owner_park "$task"
-    [ -z "$task" ] || notify_bounded "$real" ready "$task" >/dev/null 2>&1 \
-      || printf 'note: the board readiness message was not posted\n' >&2
     exit 0
   fi
   if [ "$listening" -ne 0 ]; then
@@ -401,8 +399,6 @@ cmd_arm() {
   printf 'artifact: %s\n' "$real"
   [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
   [ "$park" -eq 0 ] || request_owner_park "$task"
-  [ -z "$task" ] || notify_bounded "$real" ready "$task" >/dev/null 2>&1 \
-    || printf 'note: the board readiness message was not posted\n' >&2
   [ "$first_arm" = 0 ] || board_notice "$real" "${task:-$review_task}" "$review_occurrence"
 }
 
@@ -463,7 +459,7 @@ cmd_notify() {
     ack)
       [ "$#" -eq 4 ] || usage
       [ "$(cmd_classify "$4")" = feedback ] && ! cmd_terminal "$4" || return 0
-      text='Received. I will reply here when the board is ready for another review.'
+      text='Received. I will reply here with an update.'
       ;;
     ready)
       [ "$#" -eq 3 ] || usage

@@ -193,7 +193,7 @@ $tail"
   "$REAL_TMUX" -L "$SOCKET" new-session -d -s codex-replay -n w -x 80 -y 35 -c "$folder" \
     bash -c 'cat "$1"; IFS= read -r _; echo accepted > "$2"; sleep 10' _ "$lab/screen" "$lab/accepted" || fail "codex $VERSION_OUT: replay failed"
   socket_context=$("$REAL_TMUX" -L "$SOCKET" display-message -p '#{socket_path},#{pid},0')
-  out=$(TMUX="$socket_context" FM_STARTUP_DIALOGS_POLL=0.2 bash "$ROOT/bin/fm-startup-dialogs.sh" tmux codex-replay:w codex "$folder" 5 2>&1)
+  out=$(TMUX="$socket_context" FM_STARTUP_DIALOGS_POLL=0.2 "${FM_DIALOGS_BASH:-bash}" "$ROOT/bin/fm-startup-dialogs.sh" tmux codex-replay:w codex "$folder" 5 2>&1)
   [ -f "$lab/accepted" ] || fail "codex $VERSION_OUT: wrapped real dialog was not accepted: $out"
   "$REAL_TMUX" -L "$SOCKET" kill-session -t codex-replay >/dev/null 2>&1 || true
   CHECKED=$((CHECKED + 1))

@@ -64,8 +64,10 @@ run_capacity() {  # <home> <fakebin>
 }
 
 test_configured_load_admission() {
-  local home fakebin rc
+  local home fakebin rc brief
   home=$(make_home configured-load 4 0)
+  brief="$home/heavy.md"
+  printf 'Dispatch CPU: heavy\n' > "$brief"
   fakebin=$(make_probes "$TMP_ROOT/p-configured-load" 7.00 65 4 20971520 7.00)
   printf '12\nmax-load1 40\nmax-load5-per-core 4\nmin-avail-gb 1\n' > "$home/config/lane-capacity"
   rc=0
@@ -78,8 +80,14 @@ test_configured_load_admission() {
   fakebin=$(make_probes "$TMP_ROOT/p-saturated-load" 5.40 65 4 20971520 16.00)
   rc=0
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
-  expect_code 75 "$rc" "configured sustained load per core must defer at its threshold"
+  expect_code 0 "$rc" "sustained load must leave eligible model work admissible"
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit --task-brief "$brief" >/dev/null 2>&1 || rc=$?
+  expect_code 75 "$rc" "configured sustained load per core must defer heavy work at its threshold"
   fakebin=$(make_probes "$TMP_ROOT/p-configured-load" 7.00 65 4 20971520 7.00)
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit-notice --task-brief "$brief" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "heavy work must become eligible when sustained load falls"
   printf '4\nmax-load1 16\n' > "$home/config/lane-capacity"
   rc=0
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?

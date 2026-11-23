@@ -304,7 +304,11 @@ TABLE
   assert_present "$HOME_DIR/state/nudges.jsonl"
   python3 "$ROOT/bin/fm_nudge.py" import-legacy || fail 'import historical table'
   python3 "$ROOT/bin/fm_nudge.py" import-legacy || fail 'repeat historical import'
-  bash "$ROOT/bin/fm-nudge.sh" record --category dispatch --text 'launch work' --task task-42 || fail 'record mechanical nudge'
+  if bash "$ROOT/bin/fm-nudge.sh" record --category resources --text 'check load'; then
+    fail 'accepted a mechanical nudge without a detector class'
+  fi
+  bash "$ROOT/bin/fm-nudge.sh" record --category dispatch --gap ready-work --text 'launch work' --task task-42 || fail 'record mechanical nudge'
+  bash "$ROOT/bin/fm-nudge.sh" record --category resources --new-gap stale-cpu-probe --task fix-probe --text 'check load' || fail 'file a new detector class'
   bash "$ROOT/bin/fm-nudge.sh" record --category new-orders --text 'new order' || fail 'record new order'
   python3 "$BUDGETS" check >/dev/null || fail 'measure nudges'
   jq -e '.measures.nudges_dispatch_per_day.value == 2 and .measures.nudges_dispatch_per_day.exceeded and .measures["nudges_new-orders_per_day"].value == 1 and .measures["nudges_new-orders_per_day"].limit == null' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'daily category counts or limits'
@@ -313,6 +317,9 @@ TABLE
   jq -e '.measures.nudges_unclassified.value == 2' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'old ambiguous nudges disappeared after their day'
   assert_grep 'tarea-antigua' "$HOME_DIR/state/budget-nudges_unclassified.budget-alarm" 'old ambiguous category is surfaced for classification'
   assert_absent "$HOME_DIR/state/budget-nudges_new-orders_per_day.budget-alarm"
+  jq -e '.measures.supervisor_interventions_per_day | .value == 4 and .limit == 0 and
+       (.detail | contains("ready-work: 1") and contains("stale-cpu-probe: 1"))' \
+    "$HOME_DIR/state/budgets.json" >/dev/null || fail 'daily total did not preserve historical or classified interventions'
   pass 'nudges import once, count by category, and alarm only for mechanical nudges'
 }
 test_nudge_record_import_and_alarm

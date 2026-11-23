@@ -81,6 +81,8 @@ test_watcher_launches_ready_work() {
   local dir=$TMP_ROOT/watch home state out child i
   mkdir -p "$dir"; make_home "$dir"; home="$dir/home"; state="$home/state"; out="$dir/watch.out"
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" update good --priority 0 >/dev/null || fail "fixture: prioritize good"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add verify-work 'Verify phase completion' --repo demo --kind scout >/dev/null ||
+    fail "fixture: the accepted verification must enter the canonical queue"
   fm_test_track_watcher_state "$state"
   date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
   printf '%s\n' 'error: another Treehouse slot allocation or return is in progress for fixture; refusing to race it' > "$state/.autodispatch-failed-good"
@@ -88,8 +90,9 @@ test_watcher_launches_ready_work() {
     FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
     bash "$dir/bin/fm-watch.sh" > "$out" 2>&1 &
   child=$!
-  for ((i=0; i<300; i++)); do
+  for ((i=0; i<900; i++)); do
     grep -qF 'review and dispatch' "$state/.wake-queue" 2>/dev/null && break
+    kill -0 "$child" 2>/dev/null || break
     sleep 0.1
   done
   kill -TERM "$child" 2>/dev/null; for ((i=0; i<50; i++)); do kill -0 "$child" 2>/dev/null || break; sleep 0.1; done; kill -KILL "$child" 2>/dev/null; wait "$child" 2>/dev/null || true
@@ -101,6 +104,10 @@ test_watcher_launches_ready_work() {
   grep -F 'launched automatically' "$state/.wake-queue" | grep -F good >/dev/null || fail "no launch wake: $(cat "$state/.wake-queue" 2>&1; echo OUT; cat "$out"; ls -a "$state")"
   grep -F 'automatic launch of ready task fail-one failed: error: boom' "$state/.wake-queue" >/dev/null || fail "no failure wake: $(cat "$state/.wake-queue")"
   grep -F 'review and dispatch' "$state/.wake-queue" | grep -F plain >/dev/null || fail "unlaunchable task lost its primary wake"
+  grep -F 'ready-work:primary:dispatch' "$state/.wake-queue" |
+    grep -Fq 'plain: brief has no ship delivery contract' ||
+    fail "a free lane wake must send the dispatch diagnosis to the primary"
+  assert_grep 'verify-work (prepare its brief' "$state/.wake-queue" "queued verification must reach the same primary watcher"
   pass "watcher launches ready work itself, reports a failed launch once, and still wakes the primary for the rest"
 }
 
@@ -186,19 +193,41 @@ BRIEF
 )
 
 run_continuation_watch() {
-  local dir=$1 state=$2 expected=$3 child i
+  local dir=$1 state=$2 expected=$3 observation=${4:-$2/.wake-queue} child i
   PATH="$dir/fakebin:$PATH" FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
     bash "$dir/bin/fm-watch.sh" > "$dir/continuation.out" 2>&1 &
   child=$!
   for ((i=0; i<600; i++)); do
-    grep -Fq -- "$expected" "$state/.wake-queue" 2>/dev/null && break
+    grep -Fq -- "$expected" "$observation" 2>/dev/null && break
     kill -0 "$child" 2>/dev/null || break
     sleep 0.1
   done
   kill -TERM "$child" 2>/dev/null || true
   wait_for_exit "$child" 100 || true
-  grep -Fq -- "$expected" "$state/.wake-queue" || fail "missing primary obligation: $expected; $(cat "$dir/continuation.out" "$state/.wake-queue" 2>/dev/null)"
+  grep -Fq -- "$expected" "$observation" || fail "missing watcher observation: $expected; $(cat "$dir/continuation.out" "$observation" 2>/dev/null)"
 }
+
+test_watcher_classifies_cpu_deferral() (
+  local dir=$TMP_ROOT/cpu home="$TMP_ROOT/cpu/home" state="$TMP_ROOT/cpu/home/state"
+  mkdir -p "$dir"
+  make_home "$dir" only-good
+  fm_test_track_watcher_state "$state"
+  printf '2\nmax-load5-per-core 4\n' > "$home/config/lane-capacity"
+  printf 'Dispatch CPU: heavy\n' >> "$home/data/good/brief.md"
+  printf '%s\n' "$dir/proj" > "$state/good.spawn-deferred"
+  printf '#!/bin/sh\necho Darwin\n' > "$dir/fakebin/uname"
+  printf '#!/bin/sh\necho 4\n' > "$dir/fakebin/getconf"
+  cat > "$dir/fakebin/sysctl" <<'SH'
+#!/bin/sh
+[ "$2" = vm.loadavg ] && echo '{ 32.00 30.00 18.00 }'
+SH
+  chmod +x "$dir/fakebin/"{uname,getconf,sysctl}
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    run_continuation_watch "$dir" "$state" 'cpu: sustained load 30.00 on 4 cores' "$state/good.spawn-deferred.reason"
+  assert_grep '[cpu-admission] cpu: sustained load' "$state/good.spawn-deferred.reason" 'the CPU deferral lacks its detector class'
+  [ ! -e "$dir/spawn.log" ] || fail 'CPU classification unexpectedly bypassed admission'
+  pass 'watcher records the CPU class from the admission owner'
+)
 
 test_manual_profile_reaches_launch_and_record() {
   local dir="$TMP_ROOT/manual" home="$TMP_ROOT/manual/home" fakebin id category model effort reason out rc
@@ -445,4 +474,5 @@ test_retry_reports_real_failure
 test_watcher_retries_allocation_after_release || exit $?
 FM_TEST_STOP_WATCHER=1 test_watcher_retries_allocation_after_release || exit $?
 test_watcher_launches_ready_work
+test_watcher_classifies_cpu_deferral
 test_watcher_continues_without_lanes

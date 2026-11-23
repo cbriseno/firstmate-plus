@@ -14,6 +14,7 @@
 # the one site where --force overrides it, and bin/fm-backend.sh's
 # fm_backend_kill owns what each backend can prove about its own close - an
 # already-exited endpoint is not a failure and stays silent.
+# A failed Herdr close appends redacted diagnostics to state/<id>.teardown-close.log.
 # bin/fm-backlog-transition-lib.sh owns the pairing of the backlog transition
 # and record retirement. Teardown stages its pending close before cleanup,
 # then applies the backlog transition under the meta lock before it retires
@@ -3943,6 +3944,7 @@ if [ "$BACKEND" = herdr ] && [ "$KEEP_RUNNING" != 1 ] \
   fi
 fi
 
+HERDR_CLOSE_OUTPUT=
 if [ "$KEEP_RUNNING" = 1 ]; then
   # Header: --keep-running. The endpoint stays exactly as it is.
   :
@@ -3950,29 +3952,26 @@ elif [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   # The presentation lock was acquired before the worktree return above; a
   # contended lock already refused this teardown while everything was intact.
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
-    # stderr is deliberately NOT discarded here. This is the highest-frequency
-    # projected-close call site, and the helper's only stderr output is a real
-    # warning - unverifiable workspace.move support, a refused focus-unsafe
-    # close, an unconfirmed repositioned-workspace removal, or a failed exact
-    # restore.
-    # Swallowing them left a wrong active workspace with no operator-visible
-    # signal at all. The close stays non-fatal exactly as before: the presence
-    # gate below is what decides whether any durable record may be removed.
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || true
+    # Preserve redacted close diagnostics for both the operator and a failed
+    # task's record; the presence gate decides whether cleanup may finish.
+    HERDR_CLOSE_OUTPUT=$(fm_backend_herdr_projection_close_pane_focus_preserving \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" 1 2>&1 \
+      | python3 "$SCRIPT_DIR/fm-redact-log.py") || true
   else
-    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    HERDR_CLOSE_OUTPUT="warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close"
   fi
 elif [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
-    fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
+    HERDR_CLOSE_OUTPUT=$(fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>&1 \
+      | python3 "$SCRIPT_DIR/fm-redact-log.py") || true
   else
-    echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
+    HERDR_CLOSE_OUTPUT="warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked"
   fi
 elif [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
   fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" \
     || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
 fi
+[ -z "$HERDR_CLOSE_OUTPUT" ] || printf '%s\n' "$HERDR_CLOSE_OUTPUT" >&2
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
@@ -3996,6 +3995,10 @@ if [ "$BACKEND" = herdr ] && [ "$KEEP_RUNNING" != 1 ]; then
     exit 1
   fi
   if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+    {
+      printf 'herdr close failed for %s\n' "$T"
+      [ -z "$HERDR_CLOSE_OUTPUT" ] || printf '%s\n' "$HERDR_CLOSE_OUTPUT"
+    } >> "$STATE/$ID.teardown-close.log" || echo "warning: could not save herdr close diagnostics for $ID" >&2
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
   fi

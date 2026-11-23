@@ -133,9 +133,70 @@ def create_task(arguments):
     """Internal add owner; fm-tasks-axi.sh's header owns its durable contract."""
     data = Path(arguments[0])
     command = arguments[2:]
+    if arguments[1] != '--' or not data.is_absolute() or data.is_symlink() or not data.is_dir():
+        raise ValueError('invalid task creation owner arguments')
+    if command[:2] == ['tasks-axi', 'accept']:
+        return accept_request(data, command[2:])
+    return emit_creation(add_task(data, command))
+
+
+def emit_creation(result, *, quiet=False):
+    if not quiet or result.returncode:
+        sys.stdout.buffer.write(result.stdout)
+    sys.stderr.buffer.write(result.stderr)
+    return result.returncode
+
+
+def accept_request(data, args):
+    if len(args) < 4 or args[2] != '--closure-file':
+        raise ValueError('accept requires <id> <title> --closure-file <file>')
+    task_id, title, _, path, *flags = args
+    if any(flag.split('=', 1)[0] in ('--', '--mint', '--backend') for flag in flags):
+        raise ValueError('accept uses explicit task ids and the configured backlog backend')
+    title = title.strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', task_id) or not title.strip() or title.startswith('-'):
+        raise ValueError('accept requires an explicit task id and title')
+    with open(path, encoding='utf-8') as stream:
+        criteria = json.load(stream)
+    if not isinstance(criteria, list) or not criteria:
+        raise ValueError('closure file must contain a nonempty list of criteria')
+    seen = {task_id}
+    for criterion in criteria:
+        if (not isinstance(criterion, dict) or not {'id', 'title', 'kind', 'owner'} <= criterion.keys()
+                or criterion.keys() - {'id', 'title', 'kind', 'owner', 'body'}):
+            raise ValueError('each closure criterion requires id, title, kind and owner')
+        child_id, child_title, kind, owner = (criterion[k] for k in ('id', 'title', 'kind', 'owner'))
+        body = criterion.get('body', '')
+        if (not isinstance(child_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', child_id)
+                or child_id in seen or not plain_line(child_title, 2000) or child_title.lstrip().startswith('-')
+                or not isinstance(kind, str) or not re.fullmatch(r'[a-z][a-z0-9-]*', kind)
+                or not plain_line(owner, 80) or not isinstance(body, str) or '\0' in body):
+            raise ValueError('closure criteria need distinct ids, valid titles and kinds, and named owners')
+        seen.add(child_id)
+        criterion['title'] = child_title.strip()
+
+    result = add_task(data, ['tasks-axi', 'add', task_id, title, *flags, '--json'],
+                      expected=dict(id=task_id, title=title))
+    if emit_creation(result, quiet=True):
+        return result.returncode
+    repo = json.loads(result.stdout)['task']['repo']
+    for criterion in criteria:
+        child_id, child_title, kind, owner = (criterion[k] for k in ('id', 'title', 'kind', 'owner'))
+        body = ('Owner: ' + owner.strip() + '\n\n' + criterion.get('body', '').strip()).rstrip()
+        command = ['tasks-axi', 'add', child_id, child_title, '--kind', kind, '--body', body,
+                   '--request-from', task_id, '--json']
+        if repo:
+            command += ['--repo', repo]
+        result = add_task(data, command, expected=dict(id=child_id, title=child_title, kind=kind, repo=repo, body=body))
+        if emit_creation(result, quiet=True):
+            return result.returncode
+    print(json.dumps(dict(ok=True, task=task_id, criteria=[item['id'] for item in criteria])))
+    return 0
+
+
+def add_task(data, command, *, expected=None):
     public = command[1:3] == ['public-followup', 'add']
-    if (arguments[1] != '--' or not data.is_absolute() or data.is_symlink()
-            or not data.is_dir() or len(command) < 2 or command[:1] != ['tasks-axi']
+    if (len(command) < 2 or command[:1] != ['tasks-axi']
             or (command[1] not in ('add', 'create') and not public)):
         raise ValueError('invalid task creation owner arguments')
     request = None
@@ -173,10 +234,8 @@ def create_task(arguments):
         result = subprocess.run(command, capture_output=True,
                                 pass_fds=(int(inherited),) if inherited.isdigit() else ())
         if result.returncode:
-            sys.stdout.buffer.write(result.stdout)
-            sys.stderr.buffer.write(result.stderr)
             print('task creation was not confirmed; original attempt retained in ' + journal, file=sys.stderr)
-            return result.returncode
+            return result
         output = result.stdout.decode('utf-8')
         try:
             response = json.loads(output)
@@ -184,6 +243,8 @@ def create_task(arguments):
                 raise ValueError('unexpected task creation response')
             task_id, already = response['task']['id'], response.get('already') is True
         except json.JSONDecodeError:
+            if expected is not None:
+                raise ValueError('accept needs a structured backlog creation result') from None
             if public:
                 added = re.match(r'^ok: public-followup add ([A-Za-z0-9][A-Za-z0-9._-]*) ->', output)
                 existing = re.match(r'^ok: public-followup add ([A-Za-z0-9][A-Za-z0-9._-]*) already ->', output)
@@ -195,6 +256,17 @@ def create_task(arguments):
             task_id, already = (added or existing)[1], existing is not None
         if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', task_id):
             raise ValueError('invalid created task identity; original attempt retained in ' + journal)
+        current_request = None
+        if expected is not None:
+            if any(response['task'].get(key) != value for key, value in expected.items()):
+                if already:
+                    pending.unlink()
+                raise ValueError('backlog task conflicts with acceptance: ' + task_id)
+            if already:
+                current_request = read_presentation(data.parent, task_id, data, verify=False)['presentation']['request']
+                if request is not None and current_request not in (None, request):
+                    pending.unlink()
+                    raise ValueError('closure task already belongs to another request: ' + task_id)
         recorded = data / ('.task-creation-' + task_id + '.json')
         if not already:
             receipt = dict(schema='fm-task-creation.v1', id=task_id, source='fm-tasks-axi.public-followup.add' if public else 'fm-tasks-axi.add',
@@ -222,7 +294,7 @@ def create_task(arguments):
                     raise ValueError('creation receipt conflict; original attempt retained in ' + journal) from None
             sync(folder)
             recorded.unlink()
-        if not already:
+        if not already or (expected is not None and current_request is None):
             shown = subprocess.run(['tasks-axi', 'show', task_id, '--full'],
                                    capture_output=True, text=True, check=True)
             row = {}
@@ -260,9 +332,7 @@ def create_task(arguments):
             fleet_event(data.parent, 'task.changed', task_id, dict(task=ledger_rows(data.parent).get(task_id)))
         pending.unlink()
         sync(data)
-        sys.stdout.buffer.write(result.stdout)
-        sys.stderr.buffer.write(result.stderr)
-        return 0
+        return result
     finally:
         os.close(fd)
 

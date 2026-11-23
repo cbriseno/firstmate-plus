@@ -33,6 +33,7 @@ import calendar
 import glob
 import json
 import os
+from collections import Counter
 from pathlib import Path
 import subprocess
 import sys
@@ -59,8 +60,10 @@ MEASURES = {
 for category in CATEGORIES:
     MEASURES[f'nudges_{category}_per_day'] = ('rate', 'nudges', 86400, 0 if CATEGORIES[category] else None, 'home', f'supervisor nudges today: {category}')
 MEASURES['nudges_unclassified'] = ('accumulation', 'nudges', 0, 0, 'home', 'historical nudges needing category review')
+MEASURES['supervisor_interventions_per_day'] = ('rate', 'nudges', 86400, 0, 'home', 'mechanical supervisor interventions today')
 DEFAULT_EXTRA = {'primary_quiet_wakes_per_h': {'limit_idle': 1},
-                 'nudges_new-orders_per_day': {'alarm': False}}
+                 'nudges_new-orders_per_day': {'alarm': False},
+                 'supervisor_interventions_per_day': {'alarm': False}}
 ALARM_EVERY = 86400
 NOTIFY_AFTER = 7200
 RELAPSE_WINDOW = 14 * 86400
@@ -330,6 +333,11 @@ def compute(now, cache, rows):
     today = time.strftime('%Y-%m-%d', time.localtime(now))
     all_nudges = [r for r in nudge_rows(STATE / 'nudges.jsonl') if r.get('time')]
     nudges = [r for r in all_nudges if str(r.get('time', '')).startswith(today)]
+    gaps = Counter(str(r.get('gap') or 'historical unmapped') for r in nudges
+                   if CATEGORIES.get(r.get('category'), True))
+    values['supervisor_interventions_per_day'] = (
+        sum(gaps.values()), ', '.join(f'{gap}: {count}' for gap, count in sorted(gaps.items()))
+        or 'no mechanical interventions today')
     for category in (*CATEGORIES, 'unclassified'):
         matching = ([r for r in all_nudges if r.get('category') not in CATEGORIES]
                     if category == 'unclassified' else [r for r in nudges if r.get('category') == category])

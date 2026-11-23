@@ -21,13 +21,23 @@ sleep 900 & job=$!
 trap 'kill "$job" 2>/dev/null || true; wait "$job" 2>/dev/null || true; fm_test_cleanup' EXIT
 printf '{"state":"running","pid":%s}\n' "$job" > "$state/parked.jobs/build.json"
 round() {
+  local expected=${1:-} i
   PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
     FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: paused · source: status-log · parked' \
     FM_WATCH_HANDLING_SUCCESSOR=1 FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
     FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    "$WATCH" >> "$dir/watch.out" &
+    "$WATCH" >> "$dir/watch.out" 2>&1 &
   local watcher=$!
-  wait_poll_cycle "$state" "$watcher" 600 || { reap "$watcher"; return 1; }
+  if [ -n "$expected" ]; then
+    for ((i=0; i<600; i++)); do
+      [ ! -f "$expected" ] || break
+      kill -0 "$watcher" 2>/dev/null || break
+      sleep 0.1
+    done
+    [ -f "$expected" ] || { reap "$watcher"; cat "$dir/watch.out"; return 1; }
+  else
+    wait_poll_cycle "$state" "$watcher" 600 || { reap "$watcher"; return 1; }
+  fi
   reap "$watcher"
 }
 round || fail 'watcher failed during live job'
@@ -95,3 +105,23 @@ round || fail 'watcher failed for a task already closed'
 [ -f "$state/parked.inbox/004.msg" ] || fail 'a task already closed did not release the wait'
 assert_contains "$(cat "$state/parked.inbox/004.msg")" "wait-task=$target" 'the notice names another dependency'
 pass 'watcher resumes a task wait declared after the other task closed and was archived'
+
+FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-task-status.sh" parked paused \
+  '[wait-task=missing-front] waiting for another task' || fail 'cannot record a broken dependency'
+printf '%s' "$(seen_sig "$state/parked.status")" > "$state/.seen-parked_status"
+round "$state/parked.inbox/005.msg" || fail 'watcher did not deliver the missing dependency diagnostic'
+assert_contains "$(cat "$state/parked.inbox/005.msg" 2>/dev/null)" \
+  'missing-front has no open task or completion' 'the missing task did not get a diagnostic'
+pass 'watcher detects a named dependency with no exit'
+mv "$state/parked.inbox/005.msg" "$state/parked.inbox/handled/"
+
+# Reproduce the recorded policy and pause predating validation of declarations.
+printf '12\nmax-load1 40\nmax-load5-per-core 4\n' > "$dir/config/lane-capacity"
+printf '#!/usr/bin/env bash\necho 4\n' > "$dir/fakebin/getconf"
+chmod +x "$dir/fakebin/getconf"
+printf 'paused: resume with load1 < 4 and one test process\n' > "$state/parked.status"
+printf '%s' "$(seen_sig "$state/parked.status")" > "$state/.seen-parked_status"
+round "$state/parked.inbox/006.msg" || fail 'watcher did not deliver the unreachable load diagnostic'
+assert_contains "$(cat "$state/parked.inbox/006.msg" 2>/dev/null)" \
+  'threshold 4 is below the admission ceiling 16' 'the old load wait did not produce the policy diagnostic'
+pass 'watcher diagnoses the historical load pause under the admission policy in force'

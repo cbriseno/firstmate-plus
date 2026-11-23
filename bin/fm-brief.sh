@@ -68,6 +68,9 @@
 #   required for ship, scout, and host scaffolds; reason_required rules also
 #   require a rationale. Existing briefs without a category need the documented
 #   fm-spawn override or a recorded category before launch.
+# --diagnosis-scope <bounded|long|ambiguous> selects a configured category
+#   from the scope assessed at intake: standard for bounded, hard otherwise.
+#   Use it instead of --category for diagnostics using those categories.
 # --dispatch-effort <level> records the selected effort for automatic dispatch
 #   when the configured profile does not already fix it.
 # --dispatch-harness <name> and --dispatch-model <name> record the other axes
@@ -272,6 +275,8 @@ EFFECT=
 EFFECT_SET=0
 PUBLISH=0
 CATEGORY=
+DIAGNOSIS_SCOPE=
+DIAGNOSIS_SCOPE_SET=0
 RATIONALE=
 DISPATCH_EFFORT=
 DISPATCH_HARNESS=
@@ -294,6 +299,7 @@ for a in "$@"; do
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
       effect) EFFECT=$a; EFFECT_SET=1 ;;
       category) CATEGORY=$a ;;
+      diagnosis-scope) DIAGNOSIS_SCOPE=$a; DIAGNOSIS_SCOPE_SET=1 ;;
       rationale) RATIONALE=$a ;;
       dispatch-effort) DISPATCH_EFFORT=$a ;;
       dispatch-harness) DISPATCH_HARNESS=$a ;;
@@ -328,6 +334,8 @@ for a in "$@"; do
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
     --category) want_value=category ;;
     --category=*) CATEGORY=${a#--category=} ;;
+    --diagnosis-scope) want_value=diagnosis-scope ;;
+    --diagnosis-scope=*) DIAGNOSIS_SCOPE=${a#--diagnosis-scope=}; DIAGNOSIS_SCOPE_SET=1 ;;
     --rationale) want_value=rationale ;;
     --rationale=*) RATIONALE=${a#--rationale=} ;;
     --dispatch-effort) want_value=dispatch-effort ;;
@@ -348,7 +356,18 @@ for a in "$@"; do
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
 
-# The scaffold records the operator's task classification, never infers it.
+# Resolve a diagnosis from its declared scope, before validating the category.
+if [ "$DIAGNOSIS_SCOPE_SET" = 1 ]; then
+  [ "$KIND" != secondmate ] && [ -z "$CATEGORY" ] && [ -f "$CONFIG/crew-dispatch.json" ] || {
+    echo 'error: --diagnosis-scope requires a worker dispatch matrix and replaces --category' >&2; exit 1
+  }
+  case "$DIAGNOSIS_SCOPE" in
+    bounded) CATEGORY=standard ;;
+    long|ambiguous) CATEGORY=hard ;;
+    *) echo 'error: --diagnosis-scope requires bounded, long, or ambiguous' >&2; exit 1 ;;
+  esac
+fi
+
 if [ "$KIND" = secondmate ]; then
   [ "$PUBLISH" -eq 0 ] || { echo 'error: --publish applies only to ship, scout, and host briefs' >&2; exit 1; }
   [ -z "$CATEGORY$RATIONALE$DISPATCH_EFFORT$DISPATCH_HARNESS$DISPATCH_MODEL" ] || { echo 'error: dispatch options apply only to worker briefs' >&2; exit 1; }
@@ -364,7 +383,7 @@ else
   [ -z "$RATIONALE" ] || [ -n "$CATEGORY$DISPATCH_HARNESS" ] || { echo 'error: --rationale requires a category or dispatch profile' >&2; exit 1; }
   if [ -f "$CONFIG/crew-dispatch.json" ]; then
     categories=$(jq -r 'if ((.rules // []) | type) != "array" then error("invalid rules") else any((.rules // [])[]; has("category")) end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || { echo 'error: invalid dispatch categories' >&2; exit 1; }
-    if [ "$categories" = true ]; then
+    if [ "$categories" = true ] || [ "$DIAGNOSIS_SCOPE_SET" = 1 ]; then
       if ! jq -e --arg category "$CATEGORY" --arg rationale "$RATIONALE" '
         (if $category == "default" and has("default") then [{use: .default}] else [.rules[] | select(.category == $category)] end) as $rules |
         ($category | test("^[a-z0-9-]+$")) and ($rules | length == 1) and

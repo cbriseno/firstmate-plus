@@ -75,6 +75,10 @@ set -- "${args[@]}"
 for arg in "$@"; do
   case "$arg" in --session|--session=*) exit 9 ;; esac
 done
+if [ -f "$FOCUS_SWITCH_CONTROL/refuse-close" ] && [ "${1:-} ${2:-}" = 'pane close' ]; then
+  printf '%s\n' 'fixture close failed: exact diagnostic'
+  exit 1
+fi
 if [ -f "$FOCUS_SWITCH_CONTROL/trigger" ] && [ "$*" = "$(cat "$FOCUS_SWITCH_CONTROL/trigger")" ]; then
   rm -f "$FOCUS_SWITCH_CONTROL/trigger"
   env PATH="$ORIGINAL_PATH" "$LAB_HELPER" run "$LAB_SESSION" \
@@ -242,6 +246,43 @@ pane_exists "$PANE_SEVEN_SEEDED" \
   || fail "the seeded prune closed the tab the live viewer was watching"
 pane_exists "$PANE_SEVEN_TASK" || fail "the seeded prune disturbed the task pane"
 pass "attached viewer: the projection seeded-tab prune refuses while a live client watches it"
+
+# Teardown owns a finished task, so it must close that exact active pane even
+# while a real viewer is attached. Other projection cleanup keeps its guard.
+TASK_HOME="$TMP_ROOT/teardown-home"
+mkdir -p "$TASK_HOME/state" "$TASK_HOME/data/viewer-task/work" "$TASK_HOME/config" "$TASK_HOME/projects"
+TOKEN=AbCdEfGhIjKlMnOpQrStUv
+FIXTURE=$(new_workspace "viewer-task · p:$TOKEN") || fail "could not create the teardown workspace"
+IFS=$'\t' read -r TASK_WS TASK_TAB TASK_PANE <<<"$FIXTURE"
+printf 'window=%s:%s\nendpoint_task_id=viewer-task\nworktree=%s/data/viewer-task/work\nproject=%s/data/viewer-task/work\nkind=host\nbackend=herdr\nherdr_session=%s\nherdr_workspace_id=%s\nherdr_tab_id=%s\nherdr_pane_id=%s\nspawn_gen=viewer-task-gen\n' \
+  "$LAB_SESSION" "$TASK_PANE" "$TASK_HOME" "$TASK_HOME" "$LAB_SESSION" "$TASK_WS" "$TASK_TAB" "$TASK_PANE" > "$TASK_HOME/state/viewer-task.meta"
+printf 'version=1\ntask_id=viewer-task\nprojection_id=%s\n' "$TOKEN" > "$TASK_HOME/state/viewer-task.herdr-presentation"
+printf 'done: completed\n' > "$TASK_HOME/state/viewer-task.status"
+lab tab focus "$TASK_TAB" >/dev/null || fail "could not focus the teardown task"
+run_task_teardown() {
+  FM_HOME="$TASK_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$TASK_HOME/state" \
+    FM_DATA_OVERRIDE="$TASK_HOME/data" FM_CONFIG_OVERRIDE="$TASK_HOME/config" \
+    FM_PROJECTS_OVERRIDE="$TASK_HOME/projects" PATH="$FAKEBIN:$ORIGINAL_PATH" \
+    bash "$ROOT/bin/fm-teardown.sh" viewer-task
+}
+# A refused Herdr command must remain visible in the task record and leave
+# the endpoint identity available for an ordinary retry.
+: > "$FOCUS_SWITCH_CONTROL/refuse-close"
+OUT=$(run_task_teardown 2>&1)
+STATUS=$?
+[ "$STATUS" -ne 0 ] || fail "teardown succeeded despite the refused close"
+pane_exists "$TASK_PANE" || fail "refused teardown removed the pane"
+assert_contains "$(cat "$TASK_HOME/state/viewer-task.teardown-close.log")" \
+  'fixture close failed: exact diagnostic' 'teardown did not save the close diagnostic'
+[ -f "$TASK_HOME/state/viewer-task.meta" ] || fail "refused teardown removed task identity"
+rm -f "$FOCUS_SWITCH_CONTROL/refuse-close"
+mkdir -p "$TASK_HOME/data/viewer-task/work"
+OUT=$(run_task_teardown 2>&1)
+STATUS=$?
+[ "$STATUS" -eq 0 ] || fail "teardown did not close the active finished task: $OUT"
+if pane_exists "$TASK_PANE"; then fail "teardown left the active task pane"; fi
+[ ! -e "$TASK_HOME/state/viewer-task.meta" ] || fail "teardown left the task metadata"
+pass "attached viewer: teardown records a refused close and closes the active finished task on retry"
 
 # --- detaching restores the no-client contract the detached tests rely on ---
 

@@ -211,7 +211,7 @@
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   project capacity. Fresh ships and scouts also consult fm-capacity.sh --admit
-#   under the existing home task-set lock before creating launch resources.
+#   with the task brief under the home task-set lock before creating launch resources.
 #   That script owns the opt-in lane ceiling and live resource verdict; exit 75
 #   keeps the item queued, while invalid configuration remains an error.
 #   Either deferral writes state/<id>.spawn-deferred: the absolute project path
@@ -2058,7 +2058,7 @@ spawn_defer_marker() {  # <reason> <project-limit|null>
 if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   spawn_capacity_rc=0
   spawn_capacity_err=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit 2>&1 >/dev/null) || spawn_capacity_rc=$?
+    FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit --task-brief "$BRIEF" 2>&1 >/dev/null) || spawn_capacity_rc=$?
   [ -z "$spawn_capacity_err" ] || printf '%s\n' "$spawn_capacity_err" >&2
   if [ "$spawn_capacity_rc" -ne 0 ]; then
     if [ "$spawn_capacity_rc" -eq 75 ]; then

@@ -655,10 +655,59 @@ PYREQ
 import json, sys
 p = sys.argv[1]
 v = json.load(open(p))
-v['requirements'][1]['notice'] = 'firstmate: mensaje entregado sobre el aplazamiento'
+v['requirements'][1]['notice'] = 'aviso-falla6-ventana-20261123'
 json.dump(v, open(p, 'w'))
 PYREQ
-  fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json" || fail 'disclosed deferral refused'
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'nonexistent notice label was accepted'
+  assert_contains "$reason" 'notice' 'refusal must name the notice'
+  local home="$dir/home"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  fm_test_tasks_toml "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  printf 'Pendiente de verificar.\n' > "$dir/notice.md"
+  export FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config"
+  python3 - "$dir/acceptance.json" "$dir/notice.md" <<'PYNOTICE'
+import json, sys
+p = sys.argv[1]
+v = json.load(open(p))
+v['requirements'][1]['notice'] = {'file': sys.argv[2], 'hold': 'notice-call', 'occurrence': 1}
+json.dump(v, open(p, 'w'))
+PYNOTICE
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'notice without a captain hold was accepted'
+  bash "$ROOT/bin/fm-captain-hold.sh" hold notice-call --title 'Pending requirement' \
+    --reason 'A requirement is pending' --action 'decide follow-up' --category captain-only-fact \
+    --challenge 'The captain decides the follow-up' --question 'How should it proceed?' \
+    --option continue=Continue --option wait=Wait --link "$dir/notice.md" >/dev/null \
+    || fail 'could not create captain hold'
+  fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json" || fail 'notice linked from captain hold refused'
+  printf 'Otro aviso.\n' > "$dir/other.md"
+  python3 - "$dir/acceptance.json" "$dir/other.md" <<'PYNOTICE'
+import json, sys
+p = sys.argv[1]
+v = json.load(open(p))
+v['requirements'][1]['notice']['file'] = sys.argv[2]
+json.dump(v, open(p, 'w'))
+PYNOTICE
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'unrelated notice file was accepted'
+  python3 - "$dir/acceptance.json" "$dir/notice.md" <<'PYNOTICE'
+import json, sys
+p = sys.argv[1]
+v = json.load(open(p))
+v['requirements'][1]['notice']['file'] = sys.argv[2]
+json.dump(v, open(p, 'w'))
+PYNOTICE
+  printf 'Wait for the verification.\n' > "$dir/decision.txt"
+  bash "$ROOT/bin/fm-captain-hold.sh" answer notice-call --decision-file "$dir/decision.txt" >/dev/null \
+    || fail 'could not resolve captain hold'
+  fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json" || fail 'resolved notice refused'
+  mv "$dir/notice.md" "$dir/saved-notice.md"
+  reason=$(fm_dod_accept_requirements "$dir/brief.md" "$dir/acceptance.json") \
+    && fail 'missing notice file was accepted'
+  mv "$dir/saved-notice.md" "$dir/notice.md"
+  unset FM_HOME FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE
   python3 - "$dir/acceptance.json" <<'PYREQ'
 import json, sys
 p = sys.argv[1]

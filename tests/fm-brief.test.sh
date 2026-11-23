@@ -1837,6 +1837,28 @@ test_publish_flag_authorizes_the_publication_effect() {
   pass "fm-brief.sh: --publish renders the authorized publication effect"
 }
 
+test_diagnosis_scope_selects_category_before_launch() {
+  local home="$TMP_ROOT/diagnosis-home" scope expected out rc
+  mkdir -p "$home/config" "$home/data"
+  cat > "$home/config/crew-dispatch.json" <<'JSON'
+{"rules":[{"category":"standard","use":{"harness":"codex","model":"balanced"}},{"category":"hard","use":{"harness":"codex","model":"strong"}}]}
+JSON
+  for scope in ambiguous long bounded; do
+    expected=hard
+    [ "$scope" != bounded ] || expected=standard
+    out=$(FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "diagnosis-$scope" --host \
+      --path "$TMP_ROOT/target" --diagnosis-scope "$scope" 2>&1); rc=$?
+    expect_code 0 "$rc" "scaffolding $scope diagnosis (got: $out)"
+    assert_contains "$(cat "$home/data/diagnosis-$scope/brief.md")" \
+      "Dispatch category: $expected" "$scope diagnosis must dispatch as $expected"
+  done
+  out=$(FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" diagnosis-conflict --host \
+    --path "$TMP_ROOT/target" --diagnosis-scope ambiguous --category standard 2>&1); rc=$?
+  expect_code 1 "$rc" "conflicting classification inputs (got: $out)"
+  pass "diagnostic scope selects the configured category before launch"
+}
+
+test_diagnosis_scope_selects_category_before_launch
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header

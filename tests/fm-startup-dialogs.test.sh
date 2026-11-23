@@ -17,6 +17,7 @@ mkdir -p "$TMUX_TMPDIR"
 trap 'tmux kill-server >/dev/null 2>&1 || true' EXIT
 
 DIALOGS="${DIALOGS_UNDER_TEST:-$ROOT/bin/fm-startup-dialogs.sh}"
+DIALOGS_BASH="${FM_DIALOGS_BASH:-bash}"
 export FM_STARTUP_DIALOGS_POLL=0.2
 
 # The fake agent: fake-agent <log> <cursor-glyph> <heading-line>... -- <row>...
@@ -66,7 +67,7 @@ run_case() {
   tmux -f /dev/null new-session -d -s "$name" -x 160 -y 40 -c "$dir" \
     "$TMP_ROOT/fake-agent.sh $(printf '%q ' "$log" "$glyph" "$@")"
   sleep 0.5
-  "$DIALOGS" tmux "$name:0" "${CASE_HARNESS:-codex}" "$dir" 8 2>&1
+  "$DIALOGS_BASH" "$DIALOGS" tmux "$name:0" "${CASE_HARNESS:-codex}" "$dir" 8 2>&1
 }
 
 LAUNCH="$TMP_ROOT/launch"
@@ -171,10 +172,15 @@ test_an_unreadable_pane_returns_at_once() {
   sleep 0.4
   tmux -f /dev/null new-session -d -s alive -x 80 -y 24 "sleep 30"
   start=$(date +%s)
-  "$DIALOGS" tmux "nosuch:9" codex "$LAUNCH" 30 >/dev/null 2>&1
+  "$DIALOGS_BASH" "$DIALOGS" tmux "nosuch:9" codex "$LAUNCH" 30 >/dev/null 2>&1
   end=$(date +%s)
   [ $((end - start)) -le 5 ] || fail "a pane that cannot be read was watched for $((end - start))s"
 }
+
+if [ "${FM_TEST_HOOKS_ONLY:-0}" = 1 ]; then
+  test_codex_hooks_are_trusted_with_down_then_enter
+  exit 0
+fi
 
 test_codex_folder_in_launch_dir_is_trusted
 test_codex_folder_wrapped_across_lines_is_trusted

@@ -577,17 +577,19 @@ fm_backlog_archive_rows() {  # <archive-file> <exact-id|--list>
 }
 
 # A current row supersedes its archived history, including after reopening.
-fm_backlog_task_closed() {  # <data-dir> <exact-id>
+fm_backlog_task_wait_state() {  # <data-dir> <exact-id>: 0 closed, 1 open, 2 unreadable, 3 missing
   local data=$1 id=$2 archive
   if fm_backlog_row_probe "$data" "$id"; then
     [ "${FM_BACKLOG_ROW_STATE%% *}" = 'done' ]
     return
   fi
-  [ "$FM_BACKLOG_ROW_RESULT" = not_found ] || return 1
-  archive=$(fm_backlog_markdown_archive_path "$data") || return 1
-  [ -f "$archive" ] && [ -r "$archive" ] && [ ! -L "$archive" ] || return 1
+  [ "$FM_BACKLOG_ROW_RESULT" = not_found ] || return 2
+  archive=$(fm_backlog_markdown_archive_path "$data") || return 2
+  [ ! -L "$archive" ] || return 2
+  [ -e "$archive" ] || return 3
+  [ -f "$archive" ] && [ -r "$archive" ] || return 2
   fm_backlog_archive_rows "$archive" "$id" |
-    LC_ALL=C awk 'NR == 1 && /^- \[x\] / { closed = 1 } END { exit !closed }'
+    LC_ALL=C awk 'NR == 1 && /^- \[x\] / { closed = 1 } END { exit (closed ? 0 : 3) }'
 }
 
 # Run one tasks-axi mutation against <home>'s backlog, capturing its first

@@ -152,7 +152,7 @@ answer() {  # <name>
   esac
 }
 
-declare -A tries=()
+tries=(0 0 0)
 empty_reads=0
 deadline=$(( $(date +%s) + WINDOW ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -174,8 +174,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
       note "$name: left for the operator: $why"
       exit 0
     fi
-    tries[$name]=$(( ${tries[$name]:-0} + 1 ))
-    if [ "${tries[$name]}" -gt 3 ]; then
+    case "$name" in codex-folder) index=0 ;; codex-hooks) index=1 ;; claude-imports) index=2 ;; esac
+    tries[index]=$((tries[index] + 1))
+    if [ "${tries[$index]}" -gt 3 ]; then
       note "$name: still on screen after 3 answers; left for the operator"
       exit 0
     fi

@@ -621,12 +621,14 @@ reserve-flag /var/run/fm-reserved.flag host reserved by the captain   # repeatab
 captain-idle 300       # opt-in, macOS: the captain counts as present when input was idle under 300 s
 quota-provider claude  # opt-in: publish that provider's quota runway
 max-load1 20           # keep a raw 1-minute load rule while beats replace it
-max-load5-per-core 4   # defer at 5-minute load of four times the logical cores
+max-load5-per-core 4   # defer CPU-intensive work at 5-minute load of four times the logical cores
 ```
 
 `pressure-file` and `reserve-flag` may repeat and take an absolute or `~/` path; a `reserve-flag` path may be followed by the label it is reported by.
 Every other key may appear at most once.
 `max-load5-per-core` is an optional positive multiplier of logical cores and uses the host five-minute load, even when a pressure file is active; when either measurement is unavailable, it does not constrain admission.
+Declare local CPU-intensive work with a `Dispatch CPU: heavy` line in the task brief to apply that threshold on both dispatch and retry.
+The general lane estimate and tasks without this declaration still use the common limits, including any configured `max-load1`.
 Either configured load limit replaces the generic one-minute load-at-core-count probe.
 An unknown key, a repeated single key, or a malformed value makes the whole file invalid: the report exits 1 naming the line, and the published facts carry the cap as invalid, because the captain's limits are never guessed.
 
@@ -1142,7 +1144,7 @@ Ship and scout briefs pass it to report authors for the links described by the w
 
 ## Lavish board messages (config/lavish-board-ack, config/lavish-board-ready)
 
-The optional local, gitignored one-line files replace the default English receipt and readiness lines a task-owned board posts, for example in the captain's language; an empty file turns that line off.
+The optional local, gitignored one-line files replace the default English receipt and explicitly requested readiness lines, for example in the captain's language; an empty file turns that line off.
 They are not inherited by secondmate homes; [crew-hosted Lavish review boards](#crew-hosted-lavish-review-boards) owns when each line is posted.
 
 ## Lavish server address (config/lavish-axi-host)
@@ -2311,7 +2313,8 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
 - A parked owner receives the same delivery through `bin/fm-send.sh`, which resumes it before ringing, from one task job per round so the listener keeps listening meanwhile; only if that resume fails does the feedback go to the primary inbox as below, and board supervision treats the parked owner's open round as covered.
 - Each fresh nonterminal round on a worker-owned board gets a short receipt in the Conversation panel, regardless of where the feedback is routed.
-  Re-arming posts a readiness line once the board is listening, after the worker's completion reply if supplied; see [Lavish board messages](#lavish-board-messages-configlavish-board-ack-configlavish-board-ready).
+  When work continues, the worker promptly says so in a reply.
+  Arming or re-arming a listener does not imply a new result is ready; the worker announces a new result or decision in its own reply.
 - If the owner has declared `done` or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
 - With synchronous-reply clients (0.1.80 or newer), the detached runner listens again after nonterminal feedback or a browser disconnect, including while the owner is replying or has declared `done`; reconciliation can restore that listener while feedback remains unacknowledged.

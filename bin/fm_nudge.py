@@ -11,6 +11,8 @@ CATEGORIES = {
     'integrate': True, 'new-orders': False, 'dispatch': True, 'restart': True,
     'root-cause': True, 'resources': True, 'model-effort': True, 'prior-rules': True,
 }
+GAPS = ('expired-wait', 'ready-work', 'cpu-admission', 'result', 'stale',
+        'no-progress', 'relay', 'close-refused', 'blocked', 'needs-decision', 'failed')
 
 
 def paths():
@@ -82,6 +84,10 @@ def main():
     record.add_argument('--category', required=True, choices=CATEGORIES)
     record.add_argument('--text', required=True)
     record.add_argument('--task')
+    gap = record.add_mutually_exclusive_group()
+    gap.add_argument('--gap', metavar='CLASS',
+                     help='existing detector class: ' + ', '.join(GAPS))
+    gap.add_argument('--new-gap', metavar='CLASS', help='new detector class with a root-cause task')
     sub.add_parser('import-legacy')
     args = parser.parse_args()
     state, data = paths()
@@ -89,8 +95,21 @@ def main():
     if args.command == 'record':
         if not args.text.strip():
             parser.error('--text must not be empty')
+        name = args.gap or args.new_gap
+        known = name in GAPS or (name and any(
+            row.get('gap') == name and row.get('new_gap') for row in rows(path)))
+        if args.gap and not known:
+            parser.error('unknown detector class; use --new-gap with its root-cause task')
+        if args.new_gap and known:
+            parser.error('detector class already exists; use --gap')
+        if args.new_gap and (not re.fullmatch(r'[a-z][a-z0-9-]*', args.new_gap)
+                             or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._-]*', args.task or '')):
+            parser.error('--new-gap needs a lowercase class and a root-cause --task')
+        if CATEGORIES[args.category] and not (args.gap or args.new_gap):
+            parser.error('record mechanical interventions with --gap or --new-gap and --task')
         added = [dict(time=datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
-                      category=args.category, text=args.text, task=args.task)]
+                      category=args.category, text=args.text, task=args.task,
+                      gap=name, new_gap=bool(args.new_gap))]
     else:
         import_legacy(state, data)
         return

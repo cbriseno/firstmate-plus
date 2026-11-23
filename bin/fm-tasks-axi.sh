@@ -30,6 +30,15 @@
 # closed task when that task declares a request.
 # Existing duplicate adds retain their presentation unchanged.
 #
+# Accept a captain request that has closure criteria:
+#   accept <id> "<title>" --closure-file <file.json> [add flags, except --mint and --backend]
+# Use explicit ids. The file is a nonempty JSON array of {id,title,kind,owner,
+# body?}, one entry per criterion. Each criterion is filed in the request's
+# project and request group, with its accountable owner in the task body.
+# The command confirms acceptance only after all rows are filed and linked.
+# If interrupted, retry with the same ids and content; existing matching rows
+# are reused, and a conflicting row is reported without overwriting it.
+#
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
 # Decoded reasons use quoted strings so embedded line breaks remain intact.
@@ -56,7 +65,7 @@
 #   - tasks-axi missing from PATH;
 #   - a caller-supplied --file, because this command owns the addressing and
 #     tasks-axi would silently let the last --file win;
-#   - `add` (or its `create` alias) with --start, so neither spelling places a
+#   - `add`, `create`, or `accept` with --start, which would place a
 #     row In flight without the dispatch artifacts bin/fm-spawn.sh creates -
 #     the task record, status file, and inbox that go with the row - which such
 #     a row would lack, counting as live work nobody is doing that nothing
@@ -450,6 +459,12 @@ fail() {
 
 # Help is read-only: bypass the creation owner and its transaction lock.
 case "${1:-}" in
+  accept)
+    if [ "${2:-}" = --help ] || [ "${2:-}" = -h ]; then
+      usage
+      exit 0
+    fi
+    ;;
   add|create)
     for arg in "${@:2}"; do
       case "$arg" in
@@ -536,8 +551,8 @@ for arg in "$@"; do
       ;;
     --start)
       case "${1:-}" in
-        add|create)
-          fail "add --start would place a row In flight with no dispatch record; add it Queued and let bin/fm-spawn.sh start it"
+        add|create|accept)
+          fail "$1 --start would place a row In flight with no dispatch record; add it Queued and let bin/fm-spawn.sh start it"
           ;;
       esac
       ARGS+=("$arg")
@@ -575,7 +590,7 @@ if [ "${1:-}" = hold ]; then
   fi
 fi
 case "${1:-}" in
-  add|create) CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data' ;;
+  add|create|accept) CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data' ;;
   public-followup)
     if [ "${2:-}" = add ]; then
       CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data'
@@ -610,7 +625,7 @@ case "${1:-}" in
     ;;
 esac
 case "${1:-}" in
-  add|create)
+  add|create|accept)
     repo_or_help=0
     for arg in "${ARGS[@]}"; do
       case "$arg" in --repo|--repo=*|-h|--help) repo_or_help=1 ;; esac
