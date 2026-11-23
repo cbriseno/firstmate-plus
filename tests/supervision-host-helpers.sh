@@ -95,6 +95,9 @@ if [ "$mode" = hang ]; then
 fi
 drain=$("$FM_REPO/bin/fm-wake-drain.sh" 2>&1)
 printf '%s\n' "$drain" > "$FM_HOME/engine-drain.$n"
+if [ "$mode" = captain-on-wedge ]; then
+  if [[ "$drain" == *'possible wedge, escalation 1'* ]]; then mode=captain; else mode=handle; fi
+fi
 ack=$(printf '%s\n' "$drain" | sed -n 's/^WAKE_ACK_REQUIRED: after handling completes run bin\/fm-wake-drain.sh //p' | tail -1)
 task=$(sed -n 's/^tasks=//p' "$STATE/.supervision-host-turn" | awk '{ print $1 }')
 [ -n "$task" ] || task=fleet
@@ -517,8 +520,8 @@ SH
   FM_TEST_ENGINE_ORIGINAL="$STUB" FM_SUPERVISION_ENGINE_CLAUDE_BIN="$home/engine-delayed" start_hook_session "$home"
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "inherited handling: no watcher started"
-  append_status "$home" 'measurement driver running' paused
-  wait_until "$TURN_WAIT_POLLS" test -e "$home/before-drain.ready" || fail "inherited handling: the first turn never started"
+  append_status "$home" 'first task finished' 'done'
+  wait_until "$TURN_WAIT_POLLS" test -e "$home/before-drain.ready" || fail "inherited handling: the first turn never started: $(cat "$home/state/.watch-info" "$home/state/.supervision-host.log" "$home/state/.wake-queue" "$home/hook.err" 2>/dev/null)"
   successor=$(cat "$home/state/.watch.lock/pid")
   printf 'project=demo\nwindow=fm-beta\nharness=claude\n' > "$home/state/beta.meta"
   printf 'needs-decision [at=%s]: select an export format\n' "$(date +%s)" > "$home/state/beta.status"
@@ -554,45 +557,40 @@ SH
 
 
 # A handled stale event for the idle worker, in the given posture, after the
-# handled paused and resolved signals
+# watcher has observed the paused and resolved signals.
 stale_handled_after_resolved() {  # <home> <posture>
   awk -F '\t' -v posture="posture=$2" '
     $2 != "handled" { next }
-    /signal: .*\/demo\.status$/ { signals++; next }
-    signals >= 2 && index($0, posture) && /stale: firstmate:fm-demo$/ { found = 1 }
+    index($0, posture) && /stale: firstmate:fm-demo/ { found = 1 }
     END { exit !found }
   ' "$1/state/.supervision-host.log" 2>/dev/null
 }
+observed_signals() { awk -F '\t' '$2 == "signal" { n++ } END { exit !(n >= '"$2"') }' "$1/state/.watch-info" 2>/dev/null; }
 
 # Model the same returned driver with monitoring intact, in both postures
 assert_returned_driver_is_caught() {  # <attended|away>
-  local posture=$1 home
+  local posture=$1 home fakecase
   home=$(make_primary_home "hook-returned-driver-$posture")
   ln -s "$ROOT/.agents" "$home/.agents"
   if [ "$posture" = away ]; then
     FM_HOME="$home" "$CONTRACT" enter --words 'keep the worker moving' >/dev/null 2>&1 \
       || fail "returned driver: could not record away posture"
   fi
-  FM_STALE_ESCALATE_SECS=4 start_hook_session "$home"
+  fakecase=$(make_case returned-driver-backend)
+  printf 'measurement driver returned\n' > "$home/pane"
+  FM_STALE_ESCALATE_SECS=4 FM_FAKE_TMUX_WINDOW=firstmate:fm-demo \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_TMUX_CAPTURE="$home/pane" start_hook_session "$home"
   turn_end "$home"
   wait_until 150 watcher_live "$home" || fail "returned driver: no watcher started"
   append_status "$home" 'measurement driver running' paused
-  wait_until "$TURN_WAIT_POLLS" handled_at_least "$home" 1 || fail "returned driver: the paused signal was not handled"
-  cat > "$home/fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list-windows) printf 'fm-demo\n'; exit 0 ;;
-  capture-pane) printf 'Pi idle prompt; measurement driver returned\n'; exit 0 ;;
-  display-message) printf 'node\n'; exit 0 ;;
-esac
-exit 1
-SH
-  chmod +x "$home/fakebin/tmux"
-  printf 'window=firstmate:fm-demo\nproject=demo\nkind=ship\nharness=pi\nbackend=tmux\n' > "$home/state/demo.meta"
+  wait_until "$TURN_WAIT_POLLS" observed_signals "$home" 1 || fail "returned driver: the paused signal was not observed"
   append_status "$home" 'measurement driver returned; inspect receipts' resolved
-  # A hang guard only; the stale event's order after the resolved hand-back is the assertion
+  wait_until "$TURN_WAIT_POLLS" observed_signals "$home" 2 || fail "returned driver: the resolved signal was not observed"
+  cp "$fakecase/fakebin/tmux" "$home/fakebin/tmux"
+  printf 'window=firstmate:fm-demo\nproject=demo\nkind=ship\nharness=claude\nbackend=tmux\n' > "$home/state/demo.meta"
+  # A hang guard only; the stale event must follow the observed resolution.
   wait_until 1200 stale_handled_after_resolved "$home" "$posture" \
-    || fail "returned driver: the idle worker was not stale-handled in posture $posture after its resolved signal: $(cat "$home/state/.supervision-host.log")"
+    || fail "returned driver: the idle worker was not stale-handled in posture $posture after its resolved signal: $(cat "$home/state/.supervision-host.log" "$home/state/.watch-info" "$home/state/.watch-triage.log" "$home/state/.wake-queue" "$home/hook.err" 2>/dev/null)"
   [ ! -s "$home/hook.rc" ] || fail "a routine returned-driver wake reached main"
   wait_until 250 watcher_live "$home" || fail "the returned-driver control lost monitoring"
   stop_home_processes "$home"
@@ -659,7 +657,7 @@ SH
 # A command substitution inside an arm is a forked copy that shows the same
 # command line, so a process whose parent is itself an arm is not counted.
 home_arms() {  # <home>
-  ps -A -o pid= -o ppid= -o command= 2>/dev/null \
+  ps -A -ww -o pid= -o ppid= -o command= 2>/dev/null \
     | awk -v arm="$1/bin/fm-watch-arm.sh" '
         $3 ~ /(^|\/)bash$/ && $4 == arm { ppid[$1] = $2; order[++n] = $1 }
         END { for (i = 1; i <= n; i++) if (!(ppid[order[i]] in ppid)) print order[i], ppid[order[i]] }'
@@ -897,5 +895,5 @@ captain_rows() {  # <home>
 }
 captain_rows_at_least() { [ "$(captain_rows "$1")" -ge "$2" ]; }
 flood_signal() {  # <home>
-  captain_rows_at_least "$1" 2 || grep -qs '	inactive-outcome:' "$1/state/.wake-queue"
+  captain_rows_at_least "$1" 3 || grep -qs '	inactive-outcome:' "$1/state/.wake-queue"
 }

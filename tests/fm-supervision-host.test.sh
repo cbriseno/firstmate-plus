@@ -512,7 +512,7 @@ SH
   echo 0 > "$home/park-clock"
   park_after_stop "$home"
   append_status "$home" 'reaches the boundary'
-  wait_until 400 host_exited "$home" || fail "mirror boundary: the host did not end its park"
+  wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "mirror boundary: the host did not end its park: $(cat "$home/host.out" "$home/state/.supervision-host.log" "$home/state/.watch-info" "$home/state/.wake-queue" 2>/dev/null)"
   assert_re '^supervision-host: cycle boundary - ' "$home/host.out" "fixture: the second host did not exit at its boundary"
   [ "$(engine_calls "$home")" -eq 1 ] || fail "fixture: an engine turn ran at the boundary"
   main_drain_and_ack "$home"

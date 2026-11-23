@@ -1458,6 +1458,13 @@ command_hold() {
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --title|--reason|--repo|--origin|--until|--category|--charge|--challenge|--action|--override-grant|--question|--call-kind|--instruction|--where|--option|--recommended|--context|--link|--no-options)
+        if [ "$#" -lt 2 ]; then
+          [ "$1" != --option ] || fail '--option needs <id>=<label>[|<detail>]'
+          fail "$1 needs a value"
+        fi ;;
+    esac
+    case "$1" in
       --title) shift; title=${1:-} ;;
       --reason) shift; reason=${1:-} ;;
       --repo) shift; repo=${1:-} ;;

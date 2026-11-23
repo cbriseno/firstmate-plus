@@ -3713,32 +3713,14 @@ ready_work_tick() {
   previous=$(cat "$marker" 2>/dev/null || true)
   next=; reason=
   while IFS=$'\t' read -r id task_state; do
-    obligation=
-    case "$task_state" in
-      in_flight)
-        if result=$(ready_local_result "$id"); then
-          obligation="result:$id:$result"
-          result="$id (check acceptance, merge authority and current holds, then use fm-merge-local.sh if approved)"
-        fi ;;
-      queued)
-        if [ ! -f "$data/$id/brief.md" ]; then
-          obligation="brief:$id"
-          result="$id (prepare its brief from the authorized request)"
-        fi ;;
-    esac
-    [ -n "$obligation" ] || continue
+    [ "$task_state" = in_flight ] || continue
+    result=$(ready_local_result "$id") || continue
+    obligation="result:$id:$result"
+    result="$id (check acceptance, merge authority and current holds, then use fm-merge-local.sh if approved)"
     prior=
     [[ $'\n'"$previous"$'\n' != *$'\n'"$obligation"$'\n'* ]] || prior=$marker
-    case "$obligation" in
-      result:*)
-        observed_results="$observed_results result-$id"
-        fm_obligation_observe "ready-result-$id" result "$obligation" "$result" "$prior" || return 1
-        ;;
-      brief:*)
-        observed_results="$observed_results brief-$id"
-        fm_obligation_observe "ready-brief-$id" ready-work "$obligation" "$result" "$prior" || return 1
-        ;;
-    esac
+    observed_results="$observed_results result-$id"
+    fm_obligation_observe "ready-result-$id" result "$obligation" "$result" "$prior" || return 1
     next=${next:+"$next"$'\n'}$obligation
     [[ $'\n'"$previous"$'\n' == *$'\n'"$obligation"$'\n'* ]] && continue
     # If the previous watcher stopped after queueing but before writing the
@@ -3855,7 +3837,7 @@ ready_work_tick() {
       rm -f -- "$marker"
     fi
   fi
-  [ -z "$reason" ] || wake "$reason"
+  [ -z "$reason" ] || fm_obligation_wake "$reason"
 }
 
 # Cheap disk probe only; the dispatched worker owns du and cleanup.
@@ -3895,12 +3877,7 @@ future_hold_tick() {
     reason="check: future hold due: $id (until $until); review ready work"
     watch_event_append check "future-hold-$id" "$reason" || return 1
     printf '%s' "$until" > "$marker" || return 1
-    # The expiry notice already asks the primary to review this ready task.
-    # Share the existing ready-work marker so the next poll does not repeat it.
-    if [ ! -f "$data/$id/brief.md" ] && ! grep -Fxq -- "brief:$id" "$STATE/.ready-work-wake" 2>/dev/null; then
-      printf '%s\n' "brief:$id" >> "$STATE/.ready-work-wake" || return 1
-    fi
-    wake "$reason"
+    fm_obligation_wake "$reason"
   done < <(printf '%s\n' "$rows" | python3 -c '
 import csv, datetime, re, sys
 lines = sys.stdin.read().splitlines()
@@ -3919,6 +3896,17 @@ for line in lines:
     id=${old##*/.obligation-future-}
     case " $observed " in *" $id "*) ;; *) fm_obligation_clear "future-$id" || return 1 ;; esac
   done
+}
+
+# Collect rows from each due scan before wake() exits this watcher turn.
+ready_obligations_tick() {
+  local obligation_batch_reason=''
+  if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+    future_hold_tick || triage_log "future hold check unavailable"
+    obligation_status_tick || return 1
+  fi
+  ready_work_tick || return 1
+  [ -z "$obligation_batch_reason" ] || wake "$obligation_batch_reason"
 }
 
 # Notes and decision resolutions can follow completion without reopening work.
@@ -3951,6 +3939,7 @@ watch_queued_event_actionable() {  # <kind> <key> <payload>
   esac
   case "$kind" in
     check)
+      [[ ! "$key" =~ $FM_WAKE_RETIRED_CHECK_PATTERN ]] || return 1
       case "$key" in
         procevent:*) procevent_queue_key_due "$key"; return ;;
         obligation:*) [ -f "$STATE/.obligation-${key#obligation:}" ]; return ;;
@@ -4504,10 +4493,7 @@ while :; do
       wake "$reason"
     fi
   fi
-  if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
-    future_hold_tick || triage_log "future hold check unavailable"
-  fi
-  ready_work_tick || exit 1
+  ready_obligations_tick || exit 1
 
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.
@@ -4628,7 +4614,6 @@ while :; do
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
-    obligation_status_tick || exit 1
     # Refresh live usage outside work snapshot; the reader skips unchanged sizes.
     for usage_meta in "$STATE"/*.meta; do
       [ -f "$usage_meta" ] || continue

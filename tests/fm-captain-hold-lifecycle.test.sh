@@ -5101,6 +5101,12 @@ test_structured_call_fields_reach_the_snapshots() {
     assert_no_grep sample-refused-call "$home/data/backlog.md" "an invalid call field still created the task: $args"
   done
   rc=0
+  run_captain "$home" hold sample-refused-call --reason "captain choice" --action fixture \
+    --category product-design --challenge fixture --question Pick --option > "$home/refused.out" 2> "$home/refused.err" || rc=$?
+  assert_equals 1 "$rc" "hold accepted an option without a value"
+  assert_grep 'option needs <id>=<label>' "$home/refused.err" "missing option value did not explain the expected syntax"
+  assert_absent "$home/data/sample-refused-call" "a missing option value left a call record behind"
+  rc=0
   run_captain "$home" hold sample-refused-call --title "Refused sample call" --reason "captain choice" \
     --action fixture --category product-design --challenge fixture --question Pick --option north=Go --option south=Go --link "two words" \
     > "$home/refused.out" 2> "$home/refused.err" || rc=$?

@@ -2330,14 +2330,6 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   fi
 fi
 
-if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
-  if [ "$RELAUNCH" -eq 0 ]; then
-    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
-    mkdir -m 700 "$WT" || exit 1
-  fi
-  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
-fi
-
 delivery_rigor_rank() { # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
   no-mistakes) echo 3 ;;
@@ -2822,6 +2814,14 @@ if [ "$BACKLOG_TRANSITION" = 1 ]; then
     echo "error: spawn refused - the supervision branch under the away-posture record may dispatch only queued unblocked work (already queued, or filed by the branch from the captain's away words); task $ID has no dispatchable backlog item in this home" >&2
     exit 1
   fi
+fi
+
+if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
+  if [ "$RELAUNCH" -eq 0 ]; then
+    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
+    mkdir -m 700 "$WT" || exit 1
+  fi
+  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
 fi
 
 # A project whose registry entry links install=<project> gets its installation

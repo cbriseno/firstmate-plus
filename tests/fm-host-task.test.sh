@@ -62,6 +62,25 @@ assert_contains "$OUT" "$ROOT/bin" 'rejected path named'
 OUT=$(FM_HOME="$TASK_HOME" bash "$ROOT/bin/fm-task-status.sh" incomplete bogus note 2>&1) && fail 'invalid status accepted'
 assert_contains "$OUT" 'bogus' 'invalid state named'
 
+# A missing backlog item must not leave scratch that prevents a retry.
+run_brief retry-host --host --path "$TARGET"
+python3 - "$TASK_HOME/data/retry-host/brief.md" <<'PYCODE'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('{TASK}', 'Read a file.').replace('{FIRSTMATE_SPEC}', 'Verify the result.').replace('{CAPTAIN_REQUIREMENTS}', '1. Read a file.'))
+PYCODE
+rm -f "$TASK_HOME/config/backlog-backend"
+printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$TASK_HOME/data/backlog.md"
+printf '%s\n' 'backend = "markdown"' > "$TASK_HOME/.tasks.toml"
+OUT=$(fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/retry-host/work" "$FAKEBIN" retry-host --host --harness codex --model codex-test --effort high --backend tmux) && fail 'missing backlog item launched'
+assert_contains "$OUT" 'no backlog item in this home' 'missing backlog item named'
+[ ! -e "$TASK_HOME/data/retry-host/work" ] || fail 'missing backlog item left scratch'
+tasks-axi add retry-host 'Retry host' --kind host --file "$TASK_HOME/data/backlog.md" >/dev/null
+OUT=$(FM_MODEL_CATEGORY_OVERRIDE=1 fm_test_run_spawn "$TASK_HOME" "$TASK_HOME/data/retry-host/work" "$FAKEBIN" retry-host --host --harness 'printf fixture' --backend tmux) || fail "host retry failed: $OUT"
+[ -d "$TASK_HOME/data/retry-host/work" ] || fail 'retry did not create scratch'
+printf 'manual\n' > "$TASK_HOME/config/backlog-backend"
+pass 'missing backlog item leaves no scratch and retry launches'
+
 run_brief "$TASK_ID" --host --path "$TARGET"
 python3 - "$TASK_HOME/data/$TASK_ID/brief.md" <<'PY'
 import pathlib,sys

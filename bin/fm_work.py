@@ -577,6 +577,8 @@ class Owner:
         for i, row in self.rows.items():
             if not ID.fullmatch(i) or row['state'] not in ('queued', 'in_flight') or self.progress_reporting_held(i):
                 continue
+            if row.get('kind') == 'captain' or self.presentations[i]['presentation'].get('closure'):
+                continue
             if any(b['open'] for b in self.blockers(i, edges)):
                 continue
             in_flight = row['state'] == 'in_flight'

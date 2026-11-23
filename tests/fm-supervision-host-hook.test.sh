@@ -334,7 +334,7 @@ test_pass_through_successor_survives_the_hook_process_group_teardown() {
 # Exercise the real watcher, host, grants, outcomes, acknowledgement and Stop
 # hook. Only the engine's current-state judgment is supplied by the fixture.
 test_observations_stay_on_host_and_actual_failures_rewake_main() {
-  local case_home observation kind key
+  local case_home observation fakecase wait_polls
   case_home=$(make_primary_home hook-observations)
   ln -s "$ROOT/.agents" "$case_home/.agents"
   start_hook_session "$case_home"
@@ -356,18 +356,33 @@ test_observations_stay_on_host_and_actual_failures_rewake_main() {
     case_home=$(make_primary_home "hook-$observation")
     ln -s "$ROOT/.agents" "$case_home/.agents"
     echo captain > "$case_home/stub-mode"
-    start_hook_session "$case_home"
+    # These cases wait for watcher, engine, and hook delivery under host load.
+    wait_polls=3000
+    if [ "$observation" = worker-truly-stuck ]; then
+      echo captain-on-wedge > "$case_home/stub-mode"
+      fakecase=$(make_case hook-stuck-backend)
+      cp "$fakecase/fakebin/tmux" "$case_home/fakebin/tmux"
+      printf 'project=demo\nwindow=test:fm-demo\nharness=claude\nbackend=tmux\n' > "$case_home/state/demo.meta"
+      printf 'working: stalled\n' > "$case_home/state/demo.status"
+      prime_status_seen "$case_home/state" "$case_home/state/demo.status"
+      printf 'unresponsive worker\n' > "$case_home/pane"
+      FM_STALE_ESCALATE_SECS=1 FM_FAKE_TMUX_WINDOW=test:fm-demo \
+        FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_TMUX_CAPTURE="$case_home/pane" start_hook_session "$case_home"
+    else
+      start_hook_session "$case_home"
+    fi
     turn_end "$case_home"
     wait_until 150 watcher_live "$case_home" || fail "$observation: no watcher"
-    kind=check key=coverage
-    if [ "$observation" = worker-truly-stuck ]; then kind=stale; key=fm-demo; fi
     if [ "$observation" = real-blocker ]; then
       append_status "$case_home" 'recovery exhausted; MAIN action required' blocked
-    else
-      append_wake "$case_home/state" "$kind" "$key" "$kind: $observation; recovery exhausted; MAIN action required"
+    elif [ "$observation" != worker-truly-stuck ]; then
+      append_wake "$case_home/state" check coverage "check: $observation; recovery exhausted; MAIN action required"
     fi
-    wait_until "$TURN_WAIT_POLLS" hook_exited "$case_home" || fail "$observation: no MAIN wake"
+    wait_until "$wait_polls" hook_exited "$case_home" || fail "$observation: no MAIN wake"
     assert_rewoke_main "$case_home" "$observation"
+    if [ "$observation" = worker-truly-stuck ]; then
+      grep -Fq 'possible wedge, escalation 1' "$case_home"/engine-drain.* || fail "worker: no produced wedge reached the engine: $(cat "$case_home"/engine-drain.* "$case_home/state/.supervision-host.log" "$case_home/hook.err" 2>/dev/null)"
+    fi
     assert_re '^supervision-host: branch-outcome:' "$case_home/hook.err" "$observation: outcome missing"
     assert_grep '"verdict":"captain"' "$case_home/state/branch-outcomes.jsonl" "$observation: no durable outcome"
     stop_home_processes "$case_home"

@@ -38,7 +38,16 @@ fm_obligation_observe() {  # <key> <category> <identity> <reason> [<prior-observ
   watch_event_append check "obligation:$key" "$message" || return 1
   printf '%s\n%s\n%s\n' "$first" "$now" "$identity" > "$file" || return 1
   if declare -F fm_diag_emit >/dev/null; then fm_diag_emit obligation.overdue "category=$category" "obligation=$key" || true; fi
-  wake "$message"
+  fm_obligation_wake "$message"
+}
+
+# The watcher can collect notices in a dynamically scoped batch before waking.
+fm_obligation_wake() {
+  if [ -n "${obligation_batch_reason+x}" ]; then
+    obligation_batch_reason=$1
+  else
+    wake "$1"
+  fi
 }
 
 fm_obligation_clear() {  # <key>

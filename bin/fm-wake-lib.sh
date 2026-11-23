@@ -10,6 +10,8 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
+# Missing-brief notices in older queues carry no dispatch authorization.
+FM_WAKE_RETIRED_CHECK_PATTERN='^(ready-work:primary:brief:|obligation:ready-brief-)'
 # shellcheck source=bin/fm-path-lib.sh
 . "$FM_WAKE_LIB_DIR/fm-path-lib.sh"
 # Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
@@ -2500,7 +2502,8 @@ fm_wake_queue_prune_task() {  # <state> <task-id> [target]
 
 fm_wake_print_deduped() {
   local file=$1
-  awk -F '\t' '
+  awk -F '\t' -v retired="$FM_WAKE_RETIRED_CHECK_PATTERN" '
+    $3 == "check" && $4 ~ retired { next }
     NF >= 5 {
       dedupe = $3 SUBSEP $4
       if ($3 == "heartbeat") {

@@ -1067,10 +1067,12 @@ awk -F '\t' -v seqs="$ACTOR_ROWS_FILE" '
   BEGIN { while ((getline line < seqs) > 0) keep[line]=1 }
   NF >= 5 && ($2 in keep)
 ' "$FM_WAKE_QUEUE" > "$DRAIN_VIEW_TMP" || exit 1
+# Acknowledgement covers the full view, including retired check rows that
+# should be consumed without being presented as current instructions.
+ACK_THROUGH=$(awk -F '\t' '$2 ~ /^[0-9]+$/ && $2 > max { max=$2 } END { print (max == "" ? 0 : max) }' "$DRAIN_VIEW_TMP") || exit 1
 RAW_ROWS=$(fm_wake_print_deduped "$DRAIN_VIEW_TMP") || exit "$?"
 rm -f -- "$DRAIN_VIEW_TMP" || exit 1
 DRAIN_VIEW_TMP=
-ACK_THROUGH=$(printf '%s\n' "$RAW_ROWS" | awk -F '\t' '$2 ~ /^[0-9]+$/ && $2 > max { max=$2 } END { print (max == "" ? 0 : max) }') || exit 1
 case "${FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT:-0}" in
   0) ;;
   ''|*[!0-9]*) ;;

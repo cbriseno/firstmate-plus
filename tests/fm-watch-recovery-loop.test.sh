@@ -209,11 +209,11 @@ PYFIX
     fail "eligible dispatch waited for the information batch: $(cat "$out")"
   fi
   wait "$child" 2>/dev/null || true
-  grep -F 'check: ready work' "$out" | grep -F '(demo)' >/dev/null || fail "wrong dispatch candidates: $(cat "$out")"
-  [ "$(awk -F '\t' '$3=="check" && $4=="ready-work"{n++} END{print n+0}' "$state/.wake-queue")" -eq 1 ] \
+  grep -F 'check: ready work' "$out" | grep -F '(demo:' >/dev/null || fail "wrong dispatch candidates: $(cat "$out")"
+  [ "$(awk -F '\t' '$3=="check" && $4=="ready-work:primary:dispatch"{n++} END{print n+0}' "$state/.wake-queue")" -eq 1 ] \
     || fail "dispatch wake was not queued exactly once"
-  grep -F $'check\tready-work:primary:brief:missing\tcheck: ready work for the primary: missing (prepare its brief' "$state/.wake-queue" >/dev/null ||
-    fail "the missing brief was not assigned to the primary"
+  ! grep -F 'ready-work:primary:brief:missing' "$state/.wake-queue" >/dev/null ||
+    fail "a queued row with a missing brief was assigned to the primary"
   for id in held grouped; do
     [ -f "$state/$id.spawn-deferred" ] || fail "paused retry reminder was retired: $id"
   done
@@ -236,7 +236,7 @@ PYFIX
     fail 'acknowledged ready work was not reminded after its deadline'
   fi
   wait "$child" 2>/dev/null || true
-  grep -F 'still unattended for' "$out" | grep -F '(demo)' >/dev/null || fail "wrong reminder: $(cat "$out")"
+  grep -F 'still unattended for' "$out" | grep -F '(demo:' >/dev/null || fail "wrong reminder: $(cat "$out")"
   jq -e 'select(.e == "obligation.overdue" and .category == "ready-work")' "$dir/diag/firstmate/events.jsonl" >/dev/null || fail 'reminder did not record its category'
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
   sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
@@ -255,7 +255,67 @@ PYFIX
   kill -TERM "$child" 2>/dev/null || true
   wait "$child" 2>/dev/null || true
   ! grep -F 'still unattended for' "$out" >/dev/null || fail 'resolved work woke the primary'
-  pass "ready work bypasses the information batch, routes missing briefs and respects holds, group pauses and dependencies"
+  pass "ready work bypasses the information batch, ignores unbriefed rows and respects holds, group pauses and dependencies"
+}
+
+test_upgraded_queue_batches_due_obligations() {
+  local dir home state id digest child out drain
+  dir=$(make_case upgraded-queue)
+  home="$dir/home"; state="$home/state"
+  mkdir -p "$home/data" "$home/config" "$state"
+  printf 'backend = "markdown"\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
+  digest=$(printf '%064d' 0)
+  cat > "$home/data/backlog.md" <<EOF
+# Tasks
+
+## In flight
+
+## Queued
+
+- [ ] answered - Previously answered question (kind: captain)
+  Resolution recorded by fm-captain-hold.
+  Decision digest: $digest
+  Resolution mode: answered
+
+- [ ] deferred - Set aside until a later conversation
+  Deferred until the captain asks to resume.
+
+## Done
+EOF
+  # Legacy notices can have been queued by the old watcher just before upgrade.
+  printf '1\n1\nbrief:answered\n' > "$state/.obligation-ready-brief-answered"
+  printf 'brief:answered\n' > "$state/.ready-work-wake"
+  append_wake "$state" check ready-work:primary:brief:answered 'check: legacy brief notice'
+  append_wake "$state" check obligation:ready-brief-answered 'check: legacy brief reminder'
+
+  for id in alpha beta; do
+    FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add "$id" "$id dated work" --repo firstmate >/dev/null 2>&1 ||
+      fail "fixture: add $id"
+    FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold "$id" --kind future --reason date --until 2020-01-01 >/dev/null ||
+      fail "fixture: hold $id"
+    printf '2020-01-01\n' > "$state/.future-hold-$id"
+    touch -t 202001010000 "$state/.future-hold-$id"
+  done
+  out="$dir/watch.out"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_BUDGETS=0 FM_POLL=1 FM_CHECK_INTERVAL=1 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
+    bash "$WATCH" > "$out" 2>&1 &
+  child=$!
+  wait_for_exit "$child" 600 || fail "watcher failed: $(cat "$out")"
+  assert_contains "$(cat "$out")" 'still unattended for' 'first delivered wake should be for a due obligation'
+  [ "$(wc -l < "$out")" -eq 1 ] || fail "more than one wake: $(cat "$out")"
+  for id in alpha beta; do
+    grep -Fq "obligation:future-$id" "$state/.wake-queue" ||
+      fail "the first wake left a due obligation behind: $id"
+  done
+  [ ! -e "$state/.obligation-ready-brief-answered" ] &&
+    [ ! -e "$state/.obligation-ready-brief-deferred" ] ||
+    fail 'an unbriefed queued record retained or created a reminder'
+  drain=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" 2>"$dir/drain.err") ||
+    fail "wake drain failed: $(cat "$dir/drain.err")"
+  ! printf '%s\n' "$drain" | grep -Fq 'legacy brief' || fail 'drain showed retired notices'
+  printf '%s\n' "$drain" | grep -Fq 'obligation:future-alpha' || fail 'drain lost a current notice'
+  pass 'upgraded queue delivers both due obligations in one wake and skips legacy brief notices'
 }
 
 test_ready_result_reminded_until_integrated() {
@@ -288,6 +348,11 @@ test_ready_result_reminded_until_integrated() {
   }
   out=$(result_tick) || fail "first result check failed: $out"
   assert_contains "$out" 'ready work for the primary: result' 'first result wake'
+  # An interrupted watcher can leave a durable result without its marker.
+  rm -f -- "$state/.ready-work-wake"
+  out=$(result_tick) || fail "pending result check failed: $out"
+  [ -z "$out" ] && [ "$(grep -Fc 'ready-work:primary:result:result:' "$state/.wake-queue")" -eq 1 ] ||
+    fail "queued result was duplicated: $out"
   acknowledge_result
   # Simulate an installation upgrading after it already acknowledged this result.
   python3 - "$state/.obligation-ready-result-result" "$state/.ready-work-wake" <<'PY'
@@ -345,6 +410,7 @@ test_queued_check_row_resurfaces_before_scanners() {
   pass "a check row queued before arming is delivered before the poll scanners"
 }
 
+test_upgraded_queue_batches_due_obligations
 test_ready_work_wakes_once
 test_ready_result_reminded_until_integrated
 test_handling_successor_does_not_go_blind

@@ -162,15 +162,15 @@ BRIEF
   result=$(bash "$dir/bin/fm-capacity.sh" --json | jq -r '.verdict.free_lanes')
   [ "$result" = 0 ] || fail "fixture did not fill the lanes"
 
-  run_continuation_watch "$dir" "$state" 'prepare (prepare its brief'
+  run_continuation_watch "$dir" "$state" 'result (check acceptance'
   [ "$(awk -F '\t' '$4 ~ /^ready-work:primary:/ {print $4}' "$state/.wake-queue")" = \
-    "$(printf 'ready-work:primary:result:result:%s\nready-work:primary:brief:prepare' "$ready_head")" ] ||
-    fail "result and brief did not reach the primary in priority order"
+    "ready-work:primary:result:result:$ready_head" ] ||
+    fail "the ready local result did not reach the primary on its own"
   mkdir "$dir/branch-state"
   awk -F '\t' '$4 ~ /^ready-work:primary:/ ' "$state/.wake-queue" > "$dir/branch-state/.wake-queue"
   FM_STATE_OVERRIDE="$dir/branch-state" node "$dir/bin/fm-branch-dispatch.mjs" scope --afk |
     grep -Fx 'rows=' >/dev/null || fail "optional supervision claimed a primary obligation"
-  ! grep -F 'ready work for the primary:' "$state/.wake-queue" | grep -Eq ' (dependent|validating|held) \(' ||
+  ! grep -F 'ready work for the primary:' "$state/.wake-queue" | grep -Eq ' (dependent|validating|held|prepare) \(' ||
     fail "a blocked task or live validation was marked ready"
   [ ! -e "$dir/spawn.log" ] || fail "watcher launched a worker without lanes"
   [ "$(git -C "$dir/proj" rev-parse HEAD)" = "$before" ] || fail "watcher bypassed the primary merge gate"
@@ -181,15 +181,9 @@ BRIEF
   bash "$ROOT/bin/fm-tasks-axi.sh" presentation result --json |
     jq -e --arg head "$ready_head" '.presentation.request.id == "approved-work" and .lifecycle.gates.integrated.head == $head' >/dev/null ||
     fail "landed head and approved request were not reconciled together"
-  bash "$ROOT/bin/fm-tasks-axi.sh" add new-brief 'Added after recovery' --repo demo >/dev/null || fail "fixture: add after recovery"
-  # Recover a pending wake even if the former watcher stopped before its marker was saved.
-  rm -f -- "$state/.ready-work-wake"
-  run_continuation_watch "$dir" "$state" 'new-brief (prepare its brief'
-  [ "$(grep -Fc 'result (check acceptance' "$state/.wake-queue")" = 1 ] || fail "result was queued again"
-  [ "$(grep -Fc $'\tready-work:primary:brief:prepare\t' "$state/.wake-queue")" = 1 ] || fail "old brief obligation was queued again"
   [ "$(cat "$state/validating.status")" = 'paused: existing validation is running' ] || fail "existing validation was changed"
   [ ! -e "$dir/spawn.log" ] || fail "a worker was launched during the zero-lane replay"
-  pass "watcher routes ready results and old and new brief obligations without lanes, preserving holds and running validation"
+  pass "watcher routes and integrates ready results without lanes, preserving holds and running validation"
 )
 
 run_continuation_watch() {

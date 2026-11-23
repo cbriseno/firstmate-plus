@@ -440,7 +440,7 @@ test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes() {
 }
 
 test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
-  local home cycle old pid watcher
+  local home cycle old pid watcher record fingerprint
   home=$(make_home away-held-once away)
   echo captain > "$home/stub-mode"
   mkdir -p "$home/projects/held"
@@ -474,6 +474,13 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
   assert_grep 'child=held' "$home/state/branch-outcomes.jsonl" "held: the escalation did not name the held task's outcome: $(cat "$home"/engine-drain.* "$home/state/.supervision-host.log")"
   wait_until 150 handled_at_least "$home" 1 || fail "held: the escalating turn never finished"
   assert_no_grep '	inactive-outcome:' "$home/state/.wake-queue" "held: the branch acknowledgement left the presentation row queued"
+  wait_until "$TURN_WAIT_POLLS" captain_rows_at_least "$home" 2 \
+    || fail "held: the independent cleanup disposition did not reach the captain"
+  assert_grep 'cleanup-disposition:' "$home/state/branch-outcomes.jsonl" "held: the second event did not request a cleanup disposition"
+  record=$(find "$home/state/terminal-outcomes" -name '*.presented' -type f | head -1)
+  fingerprint=$(sed -n 's/^fingerprint=//p' "$record")
+  FM_HOME="$home" "$ROOT/bin/fm-inactive-reconcile.sh" disposition "$fingerprint" retained 'held for review' \
+    || fail "held: could not record the cleanup disposition"
 
   for cycle in 1 2 3 4; do
     old=$(( $(date +%s) - 120 ))
@@ -484,13 +491,13 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
     ! wait_until 10 flood_signal "$home" \
       || fail "held: cadence $cycle re-escalated the unchanged held outcome: $(cat "$home/state/branch-outcomes.jsonl")"
   done
-  [ "$(captain_rows "$home")" -eq 1 ] || fail "held: the unchanged situation reached the captain $(captain_rows "$home") times"
+  [ "$(captain_rows "$home")" -eq 2 ] || fail "held: the unchanged situation reached the captain $(captain_rows "$home") times"
   [ -s "$home/host.rc" ] && fail "held: the host handed a wake to main: $(cat "$home/host.out")"
 
   printf 'needs-decision [key=merge-153]: merge PR 153 now or hold it for the return?\n' >> "$home/state/held.status"
-  wait_until "$TURN_WAIT_POLLS" captain_rows_at_least "$home" 2 \
+  wait_until "$TURN_WAIT_POLLS" captain_rows_at_least "$home" 3 \
     || fail "held: the new decision never reached the captain path: $(cat "$home/state/branch-outcomes.jsonl")"
-  [ "$(captain_rows "$home")" -eq 2 ] || fail "held: the decision escalated $(captain_rows "$home") rows, not one"
+  [ "$(captain_rows "$home")" -eq 3 ] || fail "held: the decision escalated $(captain_rows "$home") rows, not one"
   [ "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" list --recent 1 | sed -n 's/.*"task":"\([^"]*\)".*"verdict":"\([a-z]*\)".*/\1 \2/p')" = 'held captain' ] \
     || fail "held: the decision was not recorded as a captain outcome for the held task: $(cat "$home/state/branch-outcomes.jsonl")"
   unset FM_FAKE_CREW_STATE_held FM_INACTIVE_CREW_STATE_BIN FM_INACTIVE_RECONCILE_SECS
