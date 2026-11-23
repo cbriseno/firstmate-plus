@@ -21,6 +21,9 @@ Limits: the defaults below, overridden per installation by CONFIG/budgets.json
 with `limits`, so tests and monitoring use the same numbers. A null limit means
 the p90 of that measure's last 14 days of history, once 72 hourly points exist.
 Skip: FM_BUDGETS=0 disables `check`; "alarm": false keeps a measure measured.
+Delivery and test-slot observations are included in the current snapshot.
+The watcher routes overdue work and slot pressure as operational work and
+rechecks it even if an earlier wake was acknowledged.
 
 Paths follow FM_HOME (default: this checkout), FM_STATE_OVERRIDE,
 FM_CONFIG_OVERRIDE and FM_DATA_OVERRIDE. Diagnostic-log measures come from
@@ -35,20 +38,29 @@ import subprocess
 import sys
 import time
 
+from fm_integration import DEADLINE, snapshot as delivery_snapshot
+from fm_test_slots import sample as slot_snapshot
+from fm_nudge import CATEGORIES, rows as nudge_rows
+
 # key: family, unit, window seconds, default limit, scope, meaning
 MEASURES = {
     'primary_quiet_wakes_per_h': ('rate', 'wakes', 3600, 4, 'home', 'heartbeat and informational-summary wakes delivered to the primary; limit_idle applies while no worker is working'),
-    'worker_messages_per_h_max': ('rate', 'messages', 3600, 6, 'home', 'steering messages plus process-event results for the busiest single worker'),
+    'obligations_overdue_per_day': ('rate', 'obligations', 86400, 0, 'machine', 'mechanical obligations still unresolved after their deadline'),
+    'worker_messages_per_h_max': ('rate', 'messages', 3600, 6, 'home', 'inbox messages to the busiest single worker; the first notice of a wait it declared is its own requested wake, not counted'),
     'wake_attention_p95_s': ('latency', 's', 3600, 600, 'machine', 'p95 wait of acknowledged wake rows'),
     'hook_run_p95_ms': ('latency', 'ms', 3600, 2000, 'machine', 'p95 of blocking hook runs'),
     'work_snapshot_p95_ms': ('latency', 'ms', 3600, 10000, 'machine', 'p95 of work snapshots'),
     'worker_zombies_sustained_max': ('accumulation', 'zombies', 900, 2, 'machine', 'fewest unreaped zombies a worker kept across 15 min, worst worker'),
     'state_growth_mb_per_day': ('accumulation', 'MB', 86400, 1, 'home', 'net growth of the state directory'),
-    'home_summary_age_s': ('freshness', 's', 0, 900, 'home', 'age of state/home-summary.json'),
+    'home_summary_age_s': ('freshness', 's', 0, 900, 'home', 'age of the home summary when last read'),
     'task_usd_per_h_max': ('spend', 'USD', 3600, None, 'home', 'list-price spend of the costliest task in the last hour'),
     'usd_per_day': ('spend', 'USD', 86400, None, 'home', 'list-price spend of all tasks in the last 24 h'),
 }
-DEFAULT_EXTRA = {'primary_quiet_wakes_per_h': {'limit_idle': 1}}
+for category in CATEGORIES:
+    MEASURES[f'nudges_{category}_per_day'] = ('rate', 'nudges', 86400, 0 if CATEGORIES[category] else None, 'home', f'supervisor nudges today: {category}')
+MEASURES['nudges_unclassified'] = ('accumulation', 'nudges', 0, 0, 'home', 'historical nudges needing category review')
+DEFAULT_EXTRA = {'primary_quiet_wakes_per_h': {'limit_idle': 1},
+                 'nudges_new-orders_per_day': {'alarm': False}}
 ALARM_EVERY = 86400
 NOTIFY_AFTER = 7200
 RELAPSE_WINDOW = 14 * 86400
@@ -90,6 +102,8 @@ def limits():
         item.update(DEFAULT_EXTRA.get(key, {}))
         if isinstance(over.get(key), dict):
             item.update({k: v for k, v in over[key].items() if k in ('limit', 'limit_idle', 'alarm')})
+        if key == 'nudges_new-orders_per_day':
+            item.update(limit=None, alarm=False)
         out[key] = item
     return out
 
@@ -174,30 +188,40 @@ def quiet_wakes(since):
     return count, f'{count} quiet of {matched} wakes delivered in the window'
 
 
+# bin/fm-watch.sh paused_until_resume opens this notice (older installations
+# wrote the second form) and ends it with "Pause: <the declared status line>".
+WAIT_NOTICES = ('Your declared pause condition has been reached.', 'Your declared pause deadline has arrived.')
+
+
 def worker_messages(since):
-    counts = {}
+    """Count each worker's inbox records in the window.
+
+    Every message that reached a worker is an inbox record, including Lavish
+    results delivered to their owner (bin/fm-procevent.sh), so procevent-inbox
+    results are not counted again. The first notice of a declared wait is the
+    wake the worker asked for; a repeated notice of the same wait still counts.
+    """
+    counts, first, waits = {}, {}, {}
     for path in glob.glob(str(STATE / '*.inbox' / '*.msg')) + glob.glob(str(STATE / '*.inbox' / 'handled' / '*.msg')):
         task = Path(path.split('.inbox', 1)[0]).name
         try:
-            head = Path(path).read_text(errors='replace')[:200]
+            head, _, body = Path(path).read_text(errors='replace').partition('\n--\n')
             at = next(line[3:] for line in head.splitlines() if line.startswith('at='))
             stamp = calendar.timegm(time.strptime(at, '%Y-%m-%dT%H:%M:%SZ'))
         except (OSError, StopIteration, ValueError):
             continue
+        wait = body.startswith(WAIT_NOTICES) and body.partition('Pause: ')[2].strip()
+        if wait and (stamp, path) < first.get((task, wait), (stamp + 1, '')):
+            first[(task, wait)] = (stamp, path)
         if stamp >= since:
-            counts[task] = counts.get(task, 0) + 1
-    for result in (STATE / 'procevent-inbox').glob('*.result'):
-        try:
-            if result.stat().st_mtime < since:
-                continue
-            task = result.with_suffix('.owner-task').read_text().strip() or '(unowned)'
-        except OSError:
-            task = '(unowned)'
-        counts[task] = counts.get(task, 0) + 1
-    if not counts:
+            counts.setdefault(task, []).append((path, wait))
+    for task, records in counts.items():
+        waits[task] = sum(1 for path, wait in records if wait and first[(task, wait)][1] == path)
+        counts[task] = len(records) - waits[task]
+    if not any(counts.values()):
         return 0, 'no messages in the window'
     task = max(counts, key=counts.get)
-    return counts[task], f'busiest worker {task}'
+    return counts[task], f'busiest worker {task} ({waits[task]} requested wait notices not counted)'
 
 
 def spend(cache, now):
@@ -270,6 +294,13 @@ def compute(now, cache, rows):
     working = fleet_working()
     value, detail = quiet_wakes(now - 3600)
     values['primary_quiet_wakes_per_h'] = (value, detail + ('; fleet working' if working else '; fleet idle or paused'))
+    # An open obligation is re-paged every period; count obligations, not pages.
+    # Pages written before they carried an identity count one each.
+    overdue = [e for e in diag_events(now - 86400) if e.get('e') == 'obligation.overdue']
+    distinct = len({e.get('obligation') or i for i, e in enumerate(overdue)})
+    diagnosed = any((diag_dir() / name).is_file() for name in ('events.jsonl', 'events.1.jsonl'))
+    values['obligations_overdue_per_day'] = (distinct if diagnosed else None,
+                                             f'{distinct} overdue obligations ({len(overdue)} pages)' if diagnosed else 'no diagnostic log')
     values['worker_messages_per_h_max'] = worker_messages(now - 3600)
     acks = [e.get('age_s') for e in by('wake.ack')]
     values['wake_attention_p95_s'] = (p95(acks), f'{len(acks)} acknowledged wakes')
@@ -287,20 +318,36 @@ def compute(now, cache, rows):
     state_bytes = dir_bytes(STATE)
     old = day_ago(rows, 'state_bytes', now)
     values['state_growth_mb_per_day'] = (None if old is None else round((state_bytes - old) / 1e6, 2), f'state is {state_bytes / 1e6:.1f} MB')
-    try:
-        values['home_summary_age_s'] = (int(now - (STATE / 'home-summary.json').stat().st_mtime), 'mtime of the home summary')
-    except OSError:
-        values['home_summary_age_s'] = (None, 'no home summary')
+    read = load_json(STATE / '.home-summary-read.json', {})
+    age = read.get('age_seconds') if isinstance(read, dict) else None
+    values['home_summary_age_s'] = (age if isinstance(age, int) and not isinstance(age, bool) and age >= 0 else None,
+                                    'age observed when the home summary was read')
     worst, detail, usd_total = spend(cache, now)
     values['task_usd_per_h_max'] = (worst, detail)
     old = day_ago(rows, 'usd_total', now)
     values['usd_per_day'] = (None if old is None else round(max(0.0, usd_total - old), 2), f'{usd_total:.0f} USD recorded in total')
 
+    today = time.strftime('%Y-%m-%d', time.localtime(now))
+    all_nudges = [r for r in nudge_rows(STATE / 'nudges.jsonl') if r.get('time')]
+    nudges = [r for r in all_nudges if str(r.get('time', '')).startswith(today)]
+    for category in (*CATEGORIES, 'unclassified'):
+        matching = ([r for r in all_nudges if r.get('category') not in CATEGORIES]
+                    if category == 'unclassified' else [r for r in nudges if r.get('category') == category])
+        details = [(('[' + ' '.join(str(r.get('legacy_category', '')).split()) + '] ')
+                    if category == 'unclassified' else '') + ' '.join(str(r.get('text', '')).split()) +
+                   (' (task: ' + ' '.join(str(r.get('task') or 'create a root-cause task').split()) + ')'
+                    if category != 'new-orders' else '') for r in matching]
+        detail = '; '.join(details) or 'no nudges today'
+        if category == 'unclassified' and matching:
+            detail = 'classify historical categories; ' + detail
+        key = 'nudges_unclassified' if category == 'unclassified' else f'nudges_{category}_per_day'
+        values[key] = (len(matching), detail)
+
     table = {}
     for key, item in lim.items():
         value, detail = values[key]
         limit = item['limit_idle'] if key == 'primary_quiet_wakes_per_h' and not working else item['limit']
-        if limit is None:
+        if limit is None and key != 'nudges_new-orders_per_day':
             past = sorted(r['value'] for r in rows if r.get('key') == key and isinstance(r.get('value'), (int, float)) and r.get('t', 0) >= now - RELAPSE_WINDOW)
             limit = past[len(past) * 9 // 10] if len(past) >= 72 else None
         exceeded = None if value is None or limit is None else value > limit
@@ -313,6 +360,58 @@ def print_table(table):
     for key, row in table.items():
         verdict = 'unmeasured' if row['value'] is None else ('no limit' if row['limit'] is None else ('EXCEEDED' if row['exceeded'] else 'ok'))
         print(f'{key:30} {str(row["value"]):>10} {str(row["limit"]):>8}  {verdict:10} {row["detail"]}')
+
+
+def print_operations(delivery, slots):
+    if slots:
+        print(f'Test runs: {slots["runs"]}, turns: {slots["slots"]}, in use: {slots["occupied"]}, '
+              f'oldest wait (s): {slots["oldest_wait_s"]}, publication wait (s): {slots["priority_wait_s"]}')
+    else:
+        print('Test runs and turns: unmeasured')
+    for project, data in delivery['projects'].items():
+        scopes = {project: data, **{f'{project}/{key}': value for key, value in data['requests'].items()}}
+        for name, clock in scopes.items():
+            print(f'Integration {name}: age (s) {clock["since_s"]}, interval (s) {clock["between_s"]}')
+
+
+def capture_operations(now):
+    os.environ.setdefault('FM_HOME', str(HOME))
+    delivery = delivery_snapshot(HOME, now)
+    slots = slot_snapshot()
+    return delivery, slots
+
+
+def operational_alarm(now, cache, delivery, slots):
+    overdue = delivery['overdue']
+    alarm = STATE / 'budget-operational-progress.budget-alarm'
+    identity, reasons = [], []
+    if overdue:
+        first = overdue[0]
+        task = first['tasks'][0]
+        identity.extend([first['project'], first['request'], first['since'], task])
+        reasons.append(f'integration overdue ({DEADLINE // 3600} h) for request {first["request"]}, '
+                       f'project {first["project"]}, next task {task}; owner primary: {first["next_step"]}, '
+                       'take the next authorized step or record the blocker, owner and next opportunity before acknowledging.')
+    if slots and slots['runs'] > slots['slots']:
+        identity.append('test-slots')
+        reasons.append(f'{slots["runs"]} test runs for {slots["slots"]} host test slots; '
+                       'owner primary: use the existing test priority for the captain’s next delivery '
+                       'and reuse its live run before starting more tests.')
+    if not identity:
+        cache.pop('operational', None)
+        alarm.unlink(missing_ok=True)
+        return
+    prior = cache.get('operational', {})
+    next_check = prior.get('next', now) if prior.get('identity') == identity else now
+    if next_check > now:
+        return
+    recheck = now + 1800
+    until = time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(recheck))
+    tmp = alarm.with_suffix('.tmp')
+    tmp.write_text('check: ' + ' '.join(reasons)
+                   + f' Evidence: {STATE}/budgets.json. Recheck by {until}.\n', encoding='utf-8')
+    os.replace(tmp, alarm)
+    cache['operational'] = dict(identity=identity, next=recheck)
 
 
 def recent_commits():
@@ -339,6 +438,7 @@ def check(now):
     hist_path = STATE / 'budgets-history.jsonl'
     rows = history(hist_path)
     table, counters = compute(now, cache, rows)
+    delivery, slots = capture_operations(now)
     episodes = cache.setdefault('episodes', {})
     for key, row in table.items():
         ep = episodes.setdefault(key, {'alarms': []})
@@ -354,7 +454,7 @@ def check(now):
                        ' provider read every producer of this measure and propose what to delete or merge') if ep['alarms'] else ''
             reason = (f'check: behavior budget exceeded: {key}={row["value"]} {row["unit"]} over limit {row["limit"]}'
                       f' since {time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(ep["since"]))} ({row["family"]}, {row["detail"]});'
-                      f' commits in last 24h: {recent_commits()}{relapse}; delegate the root cause without asking the captain and'
+                      f' commits in last 24h: {recent_commits()}{relapse}; review the listed task or create a root-cause task without asking the captain;'
                       f' name {key} in its brief; evidence {STATE}/budgets.json; skip: FM_BUDGETS=0, or "alarm": false for'
                       f' {key} in {CONFIG}/budgets.json')
             alarm = STATE / f'budget-{key}.budget-alarm'
@@ -377,7 +477,9 @@ def check(now):
         os.replace(tmp, hist_path)
         cache['history_hour'] = hour
     write_json(STATE / 'budgets.json', dict(schema='fm-budgets.v1', generated_epoch=now,
-                                            generated=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)), measures=table))
+                                            generated=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
+                                            measures=table, integration=delivery, test_slots=slots))
+    operational_alarm(now, cache, delivery, slots)
     write_json(STATE / '.budgets-cache.json', cache)
     return table
 
@@ -389,6 +491,7 @@ def main():
         print(json.dumps(limits(), indent=1, sort_keys=True))
     elif command == 'table':
         print_table(compute(now, load_json(STATE / '.budgets-cache.json', {}), history(STATE / 'budgets-history.jsonl'))[0])
+        print_operations(*capture_operations(now))
     elif command == 'check':
         if os.environ.get('FM_BUDGETS', '1') == '0':
             return 0

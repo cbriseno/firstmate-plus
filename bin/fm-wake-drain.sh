@@ -426,14 +426,9 @@ EOF
 # including the empty-queue fast path - so a buried answer cannot be swallowed
 # when the fold later advances the cursor. Prints nothing when nothing is
 # unread, which is the common case.
-print_unread_status_section() {
-  local snapshot=${1:-} unread task line shown=0
+print_unread_status_section() {  # <task-TAB-line rows from status_scan_presented_snapshot>
+  local unread=${1:-} task line shown=0
 
-  if [ -n "$snapshot" ]; then
-    unread=$(scan_unread_surface_snapshot "$STATE" "$snapshot") || return 1
-  else
-    unread=$(scan_unread_surface_lines "$STATE") || return 1
-  fi
   [ -n "$unread" ] || return 0
 
   while IFS=$(printf '\t') read -r task line; do
@@ -753,17 +748,21 @@ cap_outcome_line() {  # <line> <max-bytes>
 }
 
 print_status_sections() {
-  local snapshot=${1:-} fully_presented=${2:-} acknowledged prepared progress_obligations
+  local snapshot=${1:-} fully_presented=${2:-} prepared progress_obligations unknown
   progress_obligations=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-check 2>/dev/null) || progress_obligations='progress reader unavailable; retry the existing owner read'
   if [ -n "$progress_obligations" ]; then
     printf 'PROGRESS RECONCILIATION (firstmate-owned; ask the worker for a truthful checkpoint, including unchanged steps; do not infer completion):\n%s\n' "$progress_obligations"
   fi
+  for unknown in "$STATE"/.progress-unknown-*; do
+    [ -f "$unknown" ] || continue
+    printf 'DELIVERABLE PROGRESS UNKNOWN: %s has no usable deliverable declaration.\n' "${unknown##*/.progress-unknown-}"
+  done
   if [ -z "$snapshot" ]; then snapshot=$(status_presentation_snapshot "$STATE") || return 1; fi
   [ -n "$snapshot" ] || return 0
-  acknowledged=$(status_acknowledge_presented_snapshot "$STATE" "$snapshot" "$fully_presented") || return 1
+  status_scan_presented_snapshot "$STATE" "$snapshot" "$fully_presented" || return 1
   prepared=$(mktemp "$STATE/.status-presentation.prepared.XXXXXX") || return 1
   if ! {
-    print_unread_status_section "$snapshot" \
+    print_unread_status_section "$STATUS_SCAN_UNREAD" \
       && print_status_outcome_backstop_section "$snapshot" \
       && print_open_decisions_section "$snapshot" \
       && print_record_divergence_section
@@ -778,7 +777,7 @@ print_status_sections() {
     rm -f -- "$prepared"
     return 1
   fi
-  if ! status_commit_presentation_snapshot "$STATE" "$acknowledged"; then
+  if ! status_commit_presentation_snapshot "$STATE" "$STATUS_SCAN_ACKNOWLEDGED"; then
     rm -f -- "$prepared"
     return 1
   fi

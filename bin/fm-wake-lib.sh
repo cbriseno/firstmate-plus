@@ -425,11 +425,22 @@ fm_lock_owner_dir() {
   mktemp -d "${lock_abs}.owner.XXXXXX" 2>/dev/null
 }
 
+# Read a lock value without letting a disappearing file terminate an errexit shell.
+# Preserve embedded newlines and trim trailing newlines, like command substitution.
+fm_lock_read_value() {  # <output-variable> <path>
+  local fm_lock_output=$1 fm_lock_file=$2 fm_lock_value=
+  if IFS= read -r -d '' fm_lock_value 2>/dev/null < "$fm_lock_file"; then
+    fm_lock_value=
+  fi
+  while [[ "$fm_lock_value" == *$'\n' ]]; do fm_lock_value=${fm_lock_value%$'\n'}; done
+  printf -v "$fm_lock_output" '%s' "$fm_lock_value"
+}
+
 fm_lock_prepare_owner() {
   local ownerdir=$1 mypid back
   fm_current_pid mypid || return 1
   printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  { back=$(< "$ownerdir/pid"); } 2>/dev/null || back=
+  fm_lock_read_value back "$ownerdir/pid"
   [ "$back" = "$mypid" ]
 }
 
@@ -481,7 +492,7 @@ fm_lock_claim() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  { back=$(< "$ownerdir/pid"); } 2>/dev/null || back=
+  fm_lock_read_value back "$ownerdir/pid"
   if [ "$back" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -598,7 +609,7 @@ fm_lock_recheck_stale_owner() {
   elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 1
   fi
-  { actual_pid=$(< "$lockdir/pid"); } 2>/dev/null || actual_pid=
+  fm_lock_read_value actual_pid "$lockdir/pid"
   [ "$actual_pid" = "$expected_pid" ] || return 1
   if fm_pid_alive "$actual_pid"; then
     return 1
@@ -1133,7 +1144,7 @@ fm_lock_reap_dead_link() {
   owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null) || return 1
   fm_current_pid current || return 1
   if [ -d "$owner" ]; then
-    { pid=$(< "$owner/pid"); } 2>/dev/null || pid=
+    fm_lock_read_value pid "$owner/pid"
     fm_lock_recheck_stale_owner "$lockdir" "$owner" "$pid" || return 1
     token=$owner
   else
@@ -1187,7 +1198,7 @@ fm_lock_try_acquire() {
   fi
 
   fm_current_pid current || return 1
-  { pid=$(< "$lockdir/pid"); } 2>/dev/null || pid=
+  fm_lock_read_value pid "$lockdir/pid"
   if [ -n "$pid" ] && [ "$pid" = "$current" ]; then
     # The recorded holder is THIS very process. Single-threaded bash can only
     # observe that when an interrupting trap abandoned the frame that held the
@@ -1201,7 +1212,7 @@ fm_lock_try_acquire() {
     if fm_lock_try_create "$lockdir"; then
       return 0
     fi
-    { FM_LOCK_HELD_PID=$(< "$lockdir/pid"); } 2>/dev/null || FM_LOCK_HELD_PID=
+    fm_lock_read_value FM_LOCK_HELD_PID "$lockdir/pid"
     return 1
   fi
   if fm_pid_alive "$pid"; then
@@ -1215,13 +1226,13 @@ fm_lock_try_acquire() {
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire_steal_mutex "$steal"; then
-    { FM_LOCK_HELD_PID=$(< "$lockdir/pid"); } 2>/dev/null || FM_LOCK_HELD_PID=
+    fm_lock_read_value FM_LOCK_HELD_PID "$lockdir/pid"
     FM_LOCK_OWNER_DIR=
     return 1
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 
-  { cur=$(< "$lockdir/pid"); } 2>/dev/null || cur=
+  fm_lock_read_value cur "$lockdir/pid"
   if fm_pid_alive "$cur"; then
     fm_lock_release "$steal"
     FM_LOCK_HELD_PID=$cur
@@ -1236,7 +1247,7 @@ fm_lock_try_acquire() {
   fi
   if ! fm_lock_points_to_owner "$steal" "$steal_owner"; then
     fm_lock_release "$steal"
-    { FM_LOCK_HELD_PID=$(< "$lockdir/pid"); } 2>/dev/null || FM_LOCK_HELD_PID=
+    fm_lock_read_value FM_LOCK_HELD_PID "$lockdir/pid"
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -1245,10 +1256,10 @@ fm_lock_try_acquire() {
   if [ -L "$lockdir" ]; then
     primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
   fi
-  { cur=$(< "$lockdir/pid"); } 2>/dev/null || cur=
+  fm_lock_read_value cur "$lockdir/pid"
   if ! fm_lock_recheck_stale_owner "$lockdir" "$primary_owner" "$cur"; then
     fm_lock_release "$steal"
-    { FM_LOCK_HELD_PID=$(< "$lockdir/pid"); } 2>/dev/null || FM_LOCK_HELD_PID=
+    fm_lock_read_value FM_LOCK_HELD_PID "$lockdir/pid"
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -1269,7 +1280,7 @@ fm_lock_try_acquire() {
   fi
   if [ "$rc" -ne 0 ]; then
     # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
-    { FM_LOCK_HELD_PID=$(< "$lockdir/pid"); } 2>/dev/null || FM_LOCK_HELD_PID=
+    fm_lock_read_value FM_LOCK_HELD_PID "$lockdir/pid"
     FM_LOCK_OWNER_DIR=
   fi
   fm_lock_release "$steal"
@@ -1337,7 +1348,7 @@ _fm_lock_acquire_wait_handoff() {  # <lockdir> <caller-pid>
     ownerdir=$lockdir
   fi
   fm_current_pid current || { fm_lock_release "$lockdir"; return 1; }
-  { back=$(< "$ownerdir/pid"); } 2>/dev/null || back=
+  fm_lock_read_value back "$ownerdir/pid"
   if [ "$back" != "$current" ] \
     || ! printf '%s\n' "$caller_pid" > "$ownerdir/pid" 2>/dev/null \
     || [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" != "$caller_pid" ]; then
@@ -1378,7 +1389,7 @@ fm_lock_acquire_wait_bounded() {
     rc=$?
   fi
 
-  { owner_pid=$(< "$lockdir/pid"); } 2>/dev/null || owner_pid=
+  fm_lock_read_value owner_pid "$lockdir/pid"
   if [ "$owner_pid" = "$caller_pid" ]; then
     return 0
   fi
@@ -1390,7 +1401,7 @@ fm_lock_acquire_wait_bounded() {
     return 0
   fi
   if [ "$rc" -eq 124 ]; then
-    { owner_pid=$(< "$lockdir/pid"); } 2>/dev/null || owner_pid=
+    fm_lock_read_value owner_pid "$lockdir/pid"
     case "$owner_pid" in
       ''|*[!0-9]*|0) ;;
       *)
@@ -1413,14 +1424,14 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    fm_lock_read_value pid "$ownerdir/pid"
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_value pid "$lockdir/pid"
   [ "$pid" = "$current" ] || return 0
   fm_lock_clean_known_files "$lockdir"
   rmdir "$lockdir" 2>/dev/null || true
@@ -1615,21 +1626,10 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 
 # Slot-owner claim: which task a Treehouse pool slot currently belongs to.
 #
-# Treehouse can record ownership durably: `treehouse get --lease --lease-holder`
-# reserves a slot under a label until `treehouse return --if-lease-holder`
-# releases it, and Firstmate uses exactly that for secondmate homes
-# (bin/fm-home-seed.sh). Crewmate spawns do not take that path: they acquire
-# their slot through the interactive pane-driven `treehouse get`, whose state
-# entry is a live process lease (owner_pid plus owner_started_at, and `treehouse
-# status` reports in-use from the processes actually running under the path).
-# That answers "is anything running here", never "which task owns this", and it
-# is released by the very event that makes a task record stale - the worker
-# exiting - so a slot whose lease has lapsed reads identical whether it is still
-# this task's or has since been handed to another one. Firstmate therefore keeps
-# its own claim on top: one file naming the task that took the slot, written by
-# bin/fm-spawn.sh under the same project lock that allocates the slot and
-# released by bin/fm-teardown.sh when the slot goes back to the pool. Moving
-# crewmate spawns onto the durable lease is separate follow-up work.
+# Firstmate reserves new and existing task slots durably before allocation can
+# reuse them. The claim also identifies a slot reassigned before durable task
+# reservations existed, so teardown can preserve the newer owner's work. Spawn
+# writes it under the project lock; teardown releases it on return.
 #
 # The claim lives at <pool>/<slot>/.fm-slot-owner - a sibling of the repo
 # checkout rather than a file inside it - so claiming a slot can never dirty the
@@ -2619,7 +2619,7 @@ fm_wake_rows_queued() {  # <seq>...
 # state/.seen-* marker.
 # fm-classify-lib.sh's header owns the status marker contract, including its
 # independent reported signature and classified position.
-# These helpers own wake-facing marker routing, the legacy turn-ended signature,
+# These helpers own wake-facing marker routing, the turn-ended signature,
 # drain-time staleness checks, and guarded bookkeeping writes.
 
 fm_wake_signal_sig() {  # <file> -> reported-state signature
@@ -2627,6 +2627,12 @@ fm_wake_signal_sig() {  # <file> -> reported-state signature
     *.status)
       _fm_wake_require_classify || return 1
       status_observed_signature "$1"
+      ;;
+    *.turn-ended)
+      # Reclassify existing turn ends once after introducing message inspection.
+      local signature
+      if [ "$_FM_UNAME" = Darwin ]; then signature=$(/usr/bin/stat -f '%z:%Fm' "$1" 2>/dev/null); else signature=$(stat -c '%s:%Y' "$1" 2>/dev/null); fi || return 1
+      printf '%s:message-v1\n' "$signature"
       ;;
     *)
       if [ "$_FM_UNAME" = Darwin ]; then /usr/bin/stat -f '%z:%Fm' "$1" 2>/dev/null; else stat -c '%s:%Y' "$1" 2>/dev/null; fi

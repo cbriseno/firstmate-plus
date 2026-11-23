@@ -389,13 +389,14 @@ test_pending_results_and_return_relays_are_primary_obligations() {
       --summary 'requested result still awaiting delivery' >/dev/null || fail "undelivered: save failed"
     if [ "$verdict" = routine ]; then
       append_wake "$case_home/state" check supervision-host-return:1 'check: relay the outcome missed by the return brief'
+      append_status "$case_home" 'a task finished' 'done'
     elif [ "$scenario" = captain-empty ]; then
       FM_HOME="$case_home" FM_STATE_OVERRIDE="$case_home/state" bash -c '
         . "$1"
         fm_recovery_marker_publish "$2"
       ' _ "$ROOT/bin/fm-wake-lib.sh" "$case_home/state/.watcher-down" || fail "undelivered: no recovery"
     else
-      append_wake "$case_home/state" check observation 'check: current state unchanged'
+      append_status "$case_home" 'a task finished' 'done'
     fi
     wait_until "$TURN_WAIT_POLLS" hook_exited "$case_home" || fail "undelivered: MAIN was not woken"
     assert_rewoke_main "$case_home" undelivered

@@ -14,15 +14,11 @@
 # the one site where --force overrides it, and bin/fm-backend.sh's
 # fm_backend_kill owns what each backend can prove about its own close - an
 # already-exited endpoint is not a failure and stays silent.
-# Removing state/<id>.meta and landing the backlog transition are one step, not
-# two: bin/fm-backlog-transition-lib.sh owns that invariant, and both halves run
-# under the task's own meta lock before this script reports success. Because the
-# completion links (the PR, the report path, a local-main note) live only in the
-# record being removed, the intended transition is recorded in
-# state/<id>.backlog-close first, so a process killed between the halves leaves
-# the next session start enough to finish it; a landed close removes that record.
-# A close that fails is fatal and loud, preserves its pending-close record, and
-# is retried by the next session start. The transition is skipped on a
+# bin/fm-backlog-transition-lib.sh owns the pairing of the backlog transition
+# and record retirement. Teardown stages its pending close before cleanup,
+# then applies the backlog transition under the meta lock before it retires
+# the status and meta. A failed transition preserves the records and is
+# retried by the next session start. The transition is skipped on a
 # config/backlog-backend=manual home and in a markdown home that keeps no
 # data/backlog.md; those cases print the manual follow-up. A configured
 # non-markdown adapter remains active without a markdown file; any active
@@ -85,7 +81,8 @@
 # product. Changed scouts are backed up under data/<id>/worktree-backup.*
 # before cleanup; restore with `bash <backup>/restore.sh <new-copy>`. A failed
 # backup refuses cleanup, even with --force. Teardown proceeds only once the report exists and the shared
-# unresolved-decision completion gate verifies its captain-held inventory.
+# unresolved-decision completion gate verifies its captain-held inventory and
+# its recommended follow-ups have been inventoried.
 # A scratch copy (kind=scout) and a --force run discard untracked content.
 # Treehouse's return resets with `git clean -fd`, which never deletes a nested
 # git repository, so the pool slot stays dirty and later checkouts skip it.
@@ -202,11 +199,14 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
-# Usage: fm-teardown.sh <task-id> [--preserve | --force] [--legacy-record]
+# Usage: fm-teardown.sh <task-id> [--landed | --preserve | --force] [--legacy-record]
 #                       [--residual "<what is left>" [--keep-running]]
 #        fm-teardown.sh <task-id> --repair-missing-record
 #   --repair-missing-record closes only an orphan backlog row whose metadata
 #   is absent, without cleaning endpoints or files. Captain-held rows refuse.
+#   --landed is the watcher's close for a ship declared done whose current
+#   commit is in the local base. It saves pending files under
+#   data/<id>/worktree-backup.* before the ordinary delivered close.
 #   --residual closes delivered work whose only remaining reason to stay open
 #   is something kept alive to protect it or a real-world check that may never
 #   happen. It runs every ordinary gate unchanged and, before the first
@@ -359,6 +359,19 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-diag.sh
+. "$SCRIPT_DIR/fm-diag.sh" 2>/dev/null || {
+  fm_diag_stage_begin() { :; }
+  fm_diag_stage_end() { :; }
+  fm_diag_stage_next() { :; }
+}
+fm_diag_stage_begin cleanup resolve
+teardown_diag_exit() {
+  local rc=$?
+  fm_diag_stage_end "$rc"
+  return "$rc"
+}
+trap teardown_diag_exit EXIT
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -520,6 +533,7 @@ fi
 ID=$1
 TEARDOWN_LOST_SLOT_EXIT=4
 FORCE=
+LANDED=0
 PRESERVE=0
 PRESERVED_BRANCH=
 PRESERVED_HEAD=
@@ -532,6 +546,7 @@ shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
+    --landed) LANDED=1 ;;
     --preserve) PRESERVE=1 ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
     --repair-missing-record) REPAIR_MISSING_RECORD=1 ;;
@@ -549,6 +564,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+if [ "$LANDED" = 1 ] && { [ -n "$FORCE" ] || [ "$PRESERVE" = 1 ] ||
+    [ "$RESIDUAL_GIVEN" = 1 ] || [ "$REPAIR_MISSING_RECORD" = 1 ]; }; then
+  echo "error: --landed requires an ordinary delivered close" >&2
+  exit 2
+fi
 if [ "$PRESERVE" = 1 ] && { [ -n "$FORCE" ] || [ "$REPAIR_MISSING_RECORD" = 1 ]; }; then
   echo "error: --preserve cannot combine with --force or --repair-missing-record" >&2
   exit 2
@@ -630,7 +650,7 @@ DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
 DESCENDANT_TREEHOUSE_LOCK_PATHS=()
 teardown_release_locks() {
-  local status=$? i
+  local status=${1:-$?} i
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
     teardown_release_herdr_locks || true
   fi
@@ -669,7 +689,14 @@ teardown_release_locks() {
   fm_lease_guard_release || true
   return "$status"
 }
-trap teardown_release_locks EXIT
+teardown_diag_and_release() {
+  local rc=$?
+  teardown_release_locks "$rc" || true
+  fm_diag_stage_end "$rc"
+  return "$rc"
+}
+trap teardown_diag_and_release EXIT
+fm_diag_stage_next validate
 fm_lock_try_acquire "$CONTROL_LOCK" || {
   echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
   exit 1
@@ -1344,7 +1371,9 @@ fi
 CLEANUP_RECOVERY=$TEARDOWN_CLEANUP_RECOVERY
 
 KIND=$TEARDOWN_META_KIND
-if [ "$PRESERVE" = 1 ] && { [ "$KIND" = secondmate ] || [ "$KIND" = host ]; }; then
+INSTALLATION=$(fm_meta_get "$META" installation_audit)
+[ "$INSTALLATION" = 1 ] || INSTALLATION=0
+if [ "$PRESERVE" = 1 ] && { [ "$KIND" = secondmate ] || [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; }; then
   echo "error: --preserve requires a ship or scout task with a task branch" >&2
   exit 2
 fi
@@ -2232,24 +2261,40 @@ report_worktree_dirt() {
 
 # Preserve the net diff from the base, including new files, before scratch is erased.
 # The untracked archive also retains nested clones, which Git patches represent only as gitlinks.
-teardown_backup_scout() {
-  local WT=${1:-$WT} PROJ=${2:-$PROJ} BASE_BRANCH=${3-$BASE_BRANCH} backup_id=${4:-$ID}
+teardown_backup_worktree() {
+  local WT=${1:-$WT} PROJ=${2:-$PROJ} BASE_BRANCH=${3-$BASE_BRANCH} backup_id=${4:-$ID} landed=${5:-0}
   local name base head dirty backup repo
-  name=${BASE_BRANCH:-}
-  [ -n "$name" ] || name=$(default_branch) || return 1
-  base=$(git -C "$WT" merge-base HEAD "refs/remotes/origin/$name" 2>/dev/null) \
-    || base=$(git -C "$WT" merge-base HEAD "$name") || return 1
   head=$(git -C "$WT" rev-parse HEAD) || return 1
-  dirty=$(git -C "$WT" status --porcelain --untracked-files=all) || return 1
+  if [ "$landed" = 1 ]; then
+    base=$head
+    repo=$PROJ
+    dirty=$(git -C "$WT" status --porcelain=v2 --untracked-files=all --ignore-submodules=none) || return 1
+    # Git patches cannot carry edits inside a submodule or conflicted index stages.
+    if printf '%s\n' "$dirty" | grep -Eq '^(u |[12] [^ ]+ S[CMU.]*[CMU])'; then
+      echo "REFUSED: cannot archive submodule changes or an unmerged index in $WT." >&2
+      return 1
+    fi
+  else
+    name=${BASE_BRANCH:-}
+    [ -n "$name" ] || name=$(default_branch) || return 1
+    base=$(git -C "$WT" merge-base HEAD "refs/remotes/origin/$name" 2>/dev/null) \
+      || base=$(git -C "$WT" merge-base HEAD "$name") || return 1
+    repo=$(git -C "$WT" remote get-url origin 2>/dev/null) || repo=$PROJ
+    dirty=$(git -C "$WT" status --porcelain --untracked-files=all) || return 1
+  fi
   [ "$head" != "$base" ] || [ -n "$dirty" ] || return 0
   mkdir -p "$DATA/$backup_id" || return 1
   backup=$(mktemp -d "$DATA/$backup_id/worktree-backup.XXXXXX") || return 1
-  repo=$(git -C "$WT" remote get-url origin 2>/dev/null) || repo=$PROJ
   printf '%s\n' "$base" > "$backup/base" || return 1
   printf '%s\n' "$repo" > "$backup/repository" || return 1
-  GIT_INDEX_FILE="$backup/index" git -C "$WT" read-tree HEAD || return 1
-  GIT_INDEX_FILE="$backup/index" git -C "$WT" add -A -- . || return 1
-  GIT_INDEX_FILE="$backup/index" git -C "$WT" diff --cached --binary "$base" -- > "$backup/changes.patch" || return 1
+  if [ "$landed" = 1 ]; then
+    git -C "$WT" diff --binary --no-ext-diff --no-textconv "$base" -- > "$backup/changes.patch" || return 1
+    git -C "$WT" diff --cached --binary --no-ext-diff --no-textconv "$base" -- > "$backup/staged.patch" || return 1
+  else
+    GIT_INDEX_FILE="$backup/index" git -C "$WT" read-tree HEAD || return 1
+    GIT_INDEX_FILE="$backup/index" git -C "$WT" add -A -- . || return 1
+    GIT_INDEX_FILE="$backup/index" git -C "$WT" diff --cached --binary "$base" -- > "$backup/changes.patch" || return 1
+  fi
   git -C "$WT" ls-files --others --exclude-standard -z > "$backup/untracked.paths" || return 1
   tar -C "$WT" -cf "$backup/untracked.tar" --null -T "$backup/untracked.paths" || return 1
   cat > "$backup/restore.sh" <<'RESTORE' || return 1
@@ -2260,10 +2305,24 @@ dest=${1:?usage: restore.sh <new-copy>}
 git clone --no-checkout -- "$(cat "$backup/repository")" "$dest"
 git -C "$dest" checkout --detach "$(cat "$backup/base")"
 [ ! -s "$backup/changes.patch" ] || git -C "$dest" apply --binary "$backup/changes.patch"
+[ ! -s "$backup/staged.patch" ] || git -C "$dest" apply --cached --binary "$backup/staged.patch"
 tar -C "$dest" -xf "$backup/untracked.tar"
 RESTORE
   rm -f -- "$backup/index" "$backup/untracked.paths" || return 1
-  printf 'Scout backup: %s; restore: bash %q <new-copy>\n' "$backup" "$backup/restore.sh"
+  printf 'Worktree backup: %s; restore: bash %q <new-copy>\n' "$backup" "$backup/restore.sh"
+}
+
+teardown_verify_landed_close() {
+  local base=$BASE_BRANCH
+  [ -n "$base" ] || base=$(default_branch)
+  if [ "$KIND" = ship ] && teardown_owns_worktree &&
+    [ "$(status_line_verb "$(status_last_phase_line "$STATE/$ID.status")")" = 'done' ] &&
+    [ -z "$(find "$STATE/$ID.inbox" -maxdepth 1 -name '*.msg' -print -quit 2>/dev/null)" ] &&
+    fm_local_head_in_base "$WT" "$base"; then
+    return 0
+  fi
+  echo "REFUSED: --landed needs a completed ship with its current commit in the local base and no unread steering." >&2
+  return 1
 }
 
 # Scratch and --force copies are scrubbed before Treehouse return. See the
@@ -3413,7 +3472,7 @@ cleanup_firstmate_home_children() {
       else
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
         if [ "$child_kind" = scout ]; then
-          teardown_backup_scout "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
+          teardown_backup_worktree "$child_wt" "$child_proj" "$(meta_value "$child_meta" base_branch)" "$archive_parent/children/$child_id" || return 1
         fi
         rm -f "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.opencode/plugins/fm-busy-state.js" \
@@ -3483,7 +3542,7 @@ remove_secondmate_registry_entry() {
 }
 
 # A host task owns only its exact scratch directory, never its outside targets.
-if [ "$KIND" = host ]; then
+if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
   # shellcheck source=bin/fm-host-task-lib.sh
   . "$SCRIPT_DIR/fm-host-task-lib.sh"
   fm_host_scratch_valid "$WT" || { echo 'REFUSED: host task scratch path is unsafe' >&2; exit 1; }
@@ -3561,6 +3620,12 @@ fi
 
 if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ "$PRESERVE" != 1 ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify-followups "$ID" >/dev/null; then
+    echo "REFUSED: scout task $ID has not recorded its recommended follow-ups." >&2
+    echo "Inventory recommendations and record their tasks or decisions with fm-captain-hold.sh followups." >&2
+    exit 1
+  fi
+  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
@@ -3619,7 +3684,9 @@ if [ "$PRESERVE" = 1 ]; then
   fi
 fi
 
-if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+if [ "$LANDED" = 1 ]; then
+  teardown_verify_landed_close || exit 1
+elif [ "$INSTALLATION" != 1 ] && teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
   else
@@ -3633,8 +3700,8 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
-if [ "$KIND" = scout ] && [ "$PRESERVE" != 1 ] && [ "$KEEP_RUNNING" != 1 ] && teardown_owns_worktree && [ -d "$WT" ]; then
-  teardown_backup_scout || { echo 'REFUSED: scout backup failed; worktree and task records retained.' >&2; exit 1; }
+if [ "$KIND" = scout ] && [ "$INSTALLATION" != 1 ] && [ "$PRESERVE" != 1 ] && [ "$KEEP_RUNNING" != 1 ] && teardown_owns_worktree && [ -d "$WT" ]; then
+  teardown_backup_worktree || { echo 'REFUSED: scout backup failed; worktree and task records retained.' >&2; exit 1; }
 fi
 
 # A Herdr close may reposition shared workspace order, so the whole
@@ -3654,10 +3721,22 @@ if [ "$BACKEND" = herdr ] && [ "$KEEP_RUNNING" != 1 ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+fm_diag_stage_next quiesce
+
 # Every refusal has passed and nothing is destroyed yet, so a residual that
 # cannot be recorded stops here with every record intact (header: --residual).
 if [ "$RESIDUAL_GIVEN" = 1 ] && [ "$PRESERVE" != 1 ]; then
   teardown_record_residual || exit 1
+fi
+
+if [ "$LANDED" = 1 ]; then
+  conclude_task_no_mistakes_run "$WT"
+  reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
+  teardown_verify_landed_close || exit 1
+  teardown_backup_worktree "$WT" "$PROJ" "$BASE_BRANCH" "$ID" 1 || {
+    echo 'REFUSED: integrated worktree backup failed; worktree and task records retained.' >&2
+    exit 1
+  }
 fi
 
 BACKLOG_CLOSED=0
@@ -3746,7 +3825,9 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
+if [ "$LANDED" = 1 ]; then
+  : # The copy was quiesced before archiving its pending files.
+elif [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
   [ "$KEEP_RUNNING" = 1 ] || reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 elif [ "$KIND" != secondmate ] && [ "$KEEP_RUNNING" != 1 ]; then
@@ -3762,6 +3843,8 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
+fm_diag_stage_next worktree
+
 # Preserve saved and forced-close branches; ordinary landed cleanup drops its branch.
 if [ "$PRESERVE" = 1 ] && teardown_owns_worktree; then
   verify_preserved_worktree || exit 1
@@ -3774,6 +3857,10 @@ if [ "$KEEP_RUNNING" = 1 ]; then
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
     remove_harness_worktree_wiring "$WT"
   fi
+elif [ "$INSTALLATION" = 1 ]; then
+  fm_host_scratch_valid "$WT" || { echo 'REFUSED: installation audit scratch changed before cleanup' >&2; exit 1; }
+  # Keep the task's scratch in place so a later cleanup retry cannot lose it.
+  printf 'Scout backup: %s\n' "$WT"
 elif [ "$KIND" = host ]; then
   fm_host_scratch_valid "$WT" || { echo 'REFUSED: host scratch changed before cleanup' >&2; exit 1; }
   rm -rf -- "$WT"
@@ -3798,10 +3885,10 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
   post_lock_cleanup_check=
-  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+  if [ "$LANDED" = 0 ] && [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
   fi
-  if [ "$KIND" = scout ] || [ "$FORCE" = "--force" ]; then
+  if [ "$LANDED" = 1 ] || [ "$KIND" = scout ] || [ "$FORCE" = "--force" ]; then
     teardown_scrub_scratch_copy "$WT" || exit 1
   fi
   wt_pool_slot=0
@@ -3818,6 +3905,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
 
+fm_diag_stage_next endpoint
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 # teardown_herdr_journal_orphaned: true when the task's own journal names
 # nothing the session-start sweep could still close - a version 1 attempt whose
@@ -3983,6 +4071,19 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
+fm_diag_stage_next records
+if [ "$BACKLOG_CLOSED" = 1 ]; then
+  BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
+  if ! fm_backlog_apply_close "$BACKLOG_TRANSITION" "$DATA" "$ID" \
+      "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}"; then
+    if [ "$BACKLOG_TRANSITION" = retain ]; then
+      echo "error: $ID's captain-held backlog item could not be returned to Queued ($FM_BACKLOG_TRANSITION_ERROR); task records retained for retry" >&2
+    else
+      echo "error: $ID's backlog item could not be closed ($FM_BACKLOG_TRANSITION_ERROR); task records retained for retry" >&2
+    fi
+    exit 1
+  fi
+fi
 teardown_retire_status "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
 rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
@@ -4000,6 +4101,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.${BUSY_GEN:-}.claude-context.json" \
   "$STATE/$ID.polytoken-busy.sh" \
   "$STATE/.$ID.branch-outcome-index" \
+  "$STATE/.worker-relaunch-incarnation-$ID" "$STATE/.secondmate-relaunch-@worker-$ID" \
   "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
 # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
 # retired endpoint; teardown only runs after landing is confirmed, so any
@@ -4027,25 +4129,7 @@ if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ];
     echo "warning: retaining herdr presentation journal for $ID; it still names a projected workspace the session-start sweep owns, not the closed endpoint" >&2
   fi
 fi
-# The record is gone, so the backlog must not still show this task in flight
-# when teardown reports success. Still under this task's meta lock, so a steer
-# racing the same id stays serialized exactly as it was before. A captain-held
-# row takes the retain transition here instead of the close: same record, same
-# ordering, the row returns to Queued with its deliverable recorded.
-if [ "$BACKLOG_CLOSED" = 1 ]; then
-  BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
-  if ! fm_backlog_atomic_transition "$BACKLOG_TRANSITION" "$STATE/$ID.meta" "$BACKLOG_CLOSE_MARKER" \
-      "$DATA" "$ID" "$STATE" "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}"; then
-    fm_lock_release "$META_LOCK"
-    META_LOCK_HELD=0
-    if [ "$BACKLOG_TRANSITION" = retain ]; then
-      echo "error: $ID's endpoint and local copy are cleaned up, but its captain-held backlog item could not be returned to Queued atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending retention is recorded and the next session start retries it" >&2
-    else
-      echo "error: $ID's endpoint and local copy are cleaned up, but its backlog item could not be closed atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending close is recorded and the next session start retries it" >&2
-    fi
-    exit 1
-  fi
-elif [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
+if [ "$KIND" = secondmate ] && [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
   # A nested remote retirement can keep its route record inside the home being
   # removed. remove_firstmate_home above already performed that physical
   # deletion; do not turn its confirmed absence into a false cleanup failure.
@@ -4057,6 +4141,10 @@ else
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
   fi
+fi
+if [ "$BACKLOG_CLOSED" = 1 ] && ! fm_backlog_close_marker_remove "$BACKLOG_CLOSE_MARKER" "$STATE"; then
+  echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+  exit 1
 fi
 # A preserved task returns to the queue with its branch as the deliverable.
 # Re-dispatching that same task must check out the saved branch, not try to

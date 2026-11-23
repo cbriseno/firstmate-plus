@@ -95,7 +95,7 @@ set -u
 # Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status; the
 # EXIT trap below records it.
 # shellcheck source=bin/fm-diag.sh
-. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin stop-guard
+. "${BASH_SOURCE[0]%/*}/fm-diag.sh" 2>/dev/null && { fm_diag_hook_begin stop-guard; fm_diag_stage_begin stop-guard input; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -145,7 +145,13 @@ record_parent_stop_state() {
   "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" >/dev/null 2>&1 || true
 }
 if declare -F fm_diag_hook_end >/dev/null; then
-  trap 'fm_diag_hook_end; record_parent_stop_state' EXIT
+  guard_diag_exit() {
+    local guard_status=$?
+    fm_diag_stage_end "$guard_status"
+    fm_diag_hook_end "$guard_status"
+    record_parent_stop_state
+  }
+  trap guard_diag_exit EXIT
 else
   trap record_parent_stop_state EXIT
 fi
@@ -176,18 +182,27 @@ if fm_hook_payload_is_foreign_host "$PAYLOAD"; then
   exit 0
 fi
 
-# Capture before loop allowances or supervision handoff can end this Stop path.
-if [ -e "$CONFIG/fleet-ledger" ]; then
-  final_harness=claude
-  if [ "$CLAUDE_MODE" -eq 0 ]; then
-    final_harness=$(bash "$SCRIPT_DIR/fm-harness.sh")
+# Review each primary final once: indirect questions have no reliable syntax.
+# Turn state is cleared at the next user prompt, not at an intermediate Stop.
+case "$PAYLOAD" in
+  *'"last_assistant_message"'*|*'"last-assistant-message"'*) has_primary_final=1 ;;
+  *) has_primary_final=0 ;;
+esac
+if [ "$has_primary_final" = 1 ] && fm_primary_scope_matches "$FM_ROOT" "$STATE"; then
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+  fm_harness_cache_ancestry
+  if fm_session_lock_owned_by_self "$STATE"; then
+    owner=$(cat "$STATE/.lock" 2>/dev/null || true)
+    held=$(cat "$STATE/.captain-hold-turn" 2>/dev/null || true)
+    blocked=$(cat "$STATE/.captain-question-block" 2>/dev/null || true)
+    final=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // .["last-assistant-message"] // empty' 2>/dev/null || true)
+    if [ -n "$final" ] && [ -n "$owner" ] && [ "$held" != "$owner" ] && [ "$blocked" != "$owner" ]; then
+      printf '%s\n' "$owner" > "$STATE/.captain-question-block"
+      echo 'Si tu respuesta pide una decisión, usa fm-captain-hold.sh hold para consultar las autorizaciones o decide y repórtalo. Si no pide una decisión, termina normalmente.' >&2
+      exit 2
+    fi
   fi
-  case "$final_harness" in
-    claude|codex)
-      printf '%s' "$PAYLOAD" | bash "$SCRIPT_DIR/fm-primary-final.sh" "$final_harness" \
-        || echo 'fm-turnend-guard: primary final capture failed; supervision check continues' >&2
-      ;;
-  esac
 fi
 
 # The already-registered Stop entrypoint must enforce the same opt-in boundary
@@ -220,6 +235,8 @@ if [ "$CLAUDE_MODE" -eq 0 ] && [ "$STOP_HOOK_ACTIVE" = "true" ]; then
   exit 0
 fi
 
+declare -F fm_diag_stage_next >/dev/null && fm_diag_stage_next scope
+
 # --- scope precisely to a PRIMARY checkout ----------------------------------
 # A genuinely-marked secondmate home runs its OWN primary firstmate session, so
 # force-INCLUDE it as a guarded primary whether treehouse leased it as a linked
@@ -237,7 +254,7 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-if [ "$CLAUDE_MODE" -eq 1 ]; then
+if [ "$CLAUDE_MODE" -eq 1 ] && ! declare -F fm_session_lock_foreign_owner_live >/dev/null; then
   # shellcheck source=bin/fm-session-lock-lib.sh
   . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 fi
@@ -263,6 +280,7 @@ allow_supervised_stop() {
   exit 2
 }
 
+declare -F fm_diag_stage_next >/dev/null && fm_diag_stage_next watcher
 if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
   allow_supervised_stop
 fi
@@ -285,8 +303,17 @@ if [ "$(fm_path_age "$STATE/.last-watcher-beat")" -lt "$AFK_GRACE" ] \
   allow_supervised_stop
 fi
 
-# A proven live supervisor is sufficient regardless of the fleet contents.
-# Read the task owner only on the repair path; a healthy Stop needs no snapshot.
+# The async hook checks need before claiming recovery. A verified open claim
+# already covers this home, so the synchronous guard can skip the work query.
+# Away mode, foreign ownership and failure accounting keep their usual path.
+if [ "$CLAUDE_MODE" -eq 1 ] && [ ! -e "$STATE/.afk" ] && [ ! -e "$FAILURE_NOTICE" ] \
+  && fm_autoarm_claim_open "$STATE" "$GRACE" \
+  && ! fm_session_lock_foreign_owner_live "$STATE"; then
+  exit 0
+fi
+
+# With coverage unproven, read the task owner before allowing an idle stop.
+declare -F fm_diag_stage_next >/dev/null && fm_diag_stage_next supervision
 fm_supervision_status "$STATE" "$GRACE"
 if [ "$FM_SUP_NEEDED" = false ]; then
   [ -e "$FAILURE_NOTICE" ] || budget_reset
@@ -552,6 +579,7 @@ failure_episode_verified() {
 }
 
 # Bound elapsed time too: predicate work can dominate the poll sleeps under load.
+declare -F fm_diag_stage_next >/dev/null && fm_diag_stage_next autoarm
 sync_deadline=$((SECONDS + (SYNC_WAIT_MS + 999) / 1000))
 i=0
 while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ] && [ "$SECONDS" -lt "$sync_deadline" ]; do

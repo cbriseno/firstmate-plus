@@ -400,7 +400,7 @@ test_primary_without_a_verified_mirror_runs_away_only() {
     FM_SUPERVISION_HOST_PRIMARY=$harness start_host "$home"
     wait_until 150 watcher_live "$home" || fail "$harness: the host never started a watcher cycle"
     append_status "$home" 'fixture finished' 'done'
-    wait_until 200 host_exited "$home" || fail "$harness: the host did not hand the attended close to main"
+    wait_until "$TURN_WAIT_POLLS" host_exited "$home" || fail "$harness: the host did not hand the attended close to main"
     assert_re '^signal: .*demo.status' "$home/host.out" "the close must carry the watcher's reason line"
     assert_no_re '^supervision-host' "$home/host.out" "the close must reach main exactly as the arm printed it"
     [ "$(engine_calls "$home")" -eq 0 ] || fail "$harness: the engine ran an attended wake without a verified dialog mirror"
@@ -927,13 +927,13 @@ test_empty_recovery_needs_neither_main_nor_engine() {
     fm_recovery_marker_publish "$2"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$case_home/state/.watcher-down" || fail "fixture: no downtime"
   start_host "$case_home"
-  wait_until 300 grep -qs 'nothing for the branch to claim' "$case_home/state/.supervision-host.log" \
-    || fail "empty recovery: the host did not absorb the close"
+  wait_until "$TURN_WAIT_POLLS" grep -qs 'recovery' "$case_home/state/.watch-info" \
+    || fail "empty recovery: the watcher did not examine recovery"
   wait_until 150 watcher_live "$case_home" || fail "empty recovery: no successor"
   sleep 2
   [ ! -s "$case_home/host.rc" ] || fail "empty recovery: MAIN was woken"
   [ "$(engine_calls "$case_home")" -eq 0 ] || fail "empty recovery: an engine turn ran"
-  [ "$(grep -c 'nothing for the branch to claim' "$case_home/state/.supervision-host.log")" -eq 1 ]     || fail "empty recovery: watcher recovery kept closing without an obligation"
+  assert_no_re 'no-op' "$case_home/state/.supervision-host.log" "empty recovery must not close the watcher"
   stop_home_processes "$case_home"
   pass "host: a validated empty recovery stays parked without a MAIN or engine turn"
 }

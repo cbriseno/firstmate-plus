@@ -13,6 +13,11 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-spawn-pool-base-freshen)
 
+configure_fixture_identity() {  # <project>
+  git -C "$1" config user.name 'Firstmate Tests'
+  git -C "$1" config user.email 'tests@example.invalid'
+}
+
 make_case() {
   local name=$1 id=$2 default=${3:-main} case_dir home project origin pool publisher fakebin initial
   case_dir="$TMP_ROOT/$name"
@@ -29,6 +34,7 @@ make_case() {
   touch "$home/state/.last-watcher-beat"
 
   git init --quiet -b "$default" "$project"
+  configure_fixture_identity "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
   git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
@@ -56,7 +62,7 @@ run_spawn() {
   local id=$1
   shift
   fm_test_run_spawn "$HOME_DIR" "$POOL_DIR" "$FAKEBIN_DIR" \
-    "$id" "$PROJECT_DIR" "$@"
+    "$id" "$PROJECT_DIR" --model codex-test --effort high "$@"
 }
 
 test_remote_seeded_home_spawns_from_treehouse_pool() {
@@ -229,6 +235,7 @@ make_originless_case() {  # <name> <id>
   touch "$home/state/.last-watcher-beat"
 
   git init --quiet -b main "$project"
+  configure_fixture_identity "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
   git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
@@ -574,6 +581,7 @@ make_submodule_case() {  # <name> <id>
   git -C "$sub" checkout --quiet "$subpin1"
 
   git init --quiet -b main "$project"
+  configure_fixture_identity "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
   git -C "$project" -c protocol.file.allow=always -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
@@ -610,7 +618,7 @@ strand_submodule_pin_via_spawn() {  # <seed-id>
   fm_test_spawn_brief "$HOME_DIR" "$id"
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
-  expect_code 0 "$status" "the spawn that moves the submodule pin should succeed"
+  expect_code 0 "$status" "the spawn that moves the submodule pin should succeed: $out"
   assert_contains "$out" "spawned $id" "the spawn that moves the submodule pin did not report success"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$ADVANCED_SHA" ] \
     || fail "the first spawn did not move the pooled base across the moved submodule pin"
@@ -767,6 +775,39 @@ test_stale_pin_beside_other_dirt_reports_one_verdict() {
 # Re-lay a case's pooled worktree as a managed Treehouse slot: <pool>/<slot>/<repo>
 # with the pool's state file beside the slot, which is the shape fm-spawn claims
 # for its task. Rewrites POOL_DIR to the relocated checkout.
+# Simulate Treehouse's lease owner in synthetic pool scenarios. An optional
+# world directory also implements recycling the idle slot used by that case.
+install_pool_lease_fixture() {  # <fakebin> <slot-path> <lease-file> [<recycle-world>]
+  local fakebin=$1 slot=$2 lease=$3 world=${4:-}
+  printf '#!/usr/bin/env bash\nslot_path=%q\nlease_file=%q\nworld=%q\n' \
+    "$slot" "$lease" "$world" > "$fakebin/treehouse"
+  cat >> "$fakebin/treehouse" <<'SH'
+case "${1:-}:${2:-}" in
+  lease:--help) printf '%s\n' '--lease-holder';;
+  status:--help) printf '%s\n' '--json';;
+  status:--json)
+    holder=$(cat "$lease_file" 2>/dev/null || true)
+    [ -z "$holder" ] && lease='' || lease=fixture-lease
+    jq -nc --arg path "$slot_path" --arg holder "$holder" --arg lease "$lease" \
+      '[{name:"1",status:"available",path:$path,processes:[],lease_holder:$holder,lease_id:$lease}]';;
+  lease:1)
+    [ "${3:-}" = --lease-holder ] && [ -n "${4:-}" ] && [ ! -s "$lease_file" ] || exit 1
+    printf '%s' "$4" > "$lease_file"
+    printf '%s\n' "$slot_path";;
+  return:*)
+    if [ "${3:-}" = --if-lease-holder ]; then
+      [ "$(cat "$lease_file" 2>/dev/null)" = "${4:-}" ] || exit 1
+    fi
+    if [ -n "$world" ]; then
+      git -C "$slot_path" switch -q --detach && touch "$world/recycled" || exit 1
+    fi
+    : > "$lease_file";;
+  *) exit 1;;
+esac
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
 lay_out_as_pool_slot() {
   local slot_root="$CASE_DIR/slots"
   mkdir -p "$slot_root/1"
@@ -775,6 +816,7 @@ lay_out_as_pool_slot() {
     > "$slot_root/treehouse-state.json"
   POOL_DIR="$slot_root/1/project"
   SLOT_CLAIM="$slot_root/1/.fm-slot-owner"
+  install_pool_lease_fixture "$FAKEBIN_DIR" "$POOL_DIR" "$slot_root/1/fixture-lease"
 }
 
 # The spawn side of the slot-owner claim that bin/fm-teardown.sh later reads:
@@ -798,6 +840,8 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
     || fail "the slot claim does not name the spawned task: $(cat "$SLOT_CLAIM")"
   grep -Fxq -- "home=$HOME_DIR" "$SLOT_CLAIM" \
     || fail "the slot claim does not name the spawning home: $(cat "$SLOT_CLAIM")"
+  [ "$(cat "$(dirname "$SLOT_CLAIM")/fixture-lease")" = "firstmate:$id" ] \
+    || fail "the Treehouse lease does not name the spawned task"
 
   id='pool-slot-unclaimable-r1'
   rec=$(make_case slot-unclaimable "$id")
@@ -832,6 +876,8 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the aborted spawn published task metadata"
   [ ! -e "$SLOT_CLAIM" ] && [ ! -L "$SLOT_CLAIM" ] \
     || fail "the aborted spawn left a slot claim naming a task with no record: $(cat "$SLOT_CLAIM")"
+  [ ! -s "$(dirname "$SLOT_CLAIM")/fixture-lease" ] \
+    || fail "the aborted spawn left its Treehouse lease reserved"
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
@@ -927,15 +973,17 @@ test_refused_launch_keeps_its_window() {
   git -C "$slot_root/1/project" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   world="$CASE_DIR/tmux-world"
   install_pool_world_tmux "$FAKEBIN_DIR" "$world" "$slot_root"
+  install_pool_lease_fixture "$FAKEBIN_DIR" "$slot_root/1/project" "$slot_root/1/fixture-lease"
 
   out=$(run_spawn "$id" --harness codex --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "a codex launch on a slot with an unusable origin should refuse"
   assert_contains "$out" "could not fetch origin" "the codex refusal message changed"$'\n'"$out"
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the refused codex launch published a task record"
-  [ -e "$world/fm-$id.id" ] || fail "a retained-harness refusal closed its window, unlike main"
+  [ ! -e "$world/fm-$id.id" ] || fail "a refused launch left its newly created window open"
   [ ! -e "$slot_root/1/.fm-slot-owner" ] || fail "the refused codex launch left its slot claim"
-  pass "a retained-harness launch refused after its slot claim keeps main's abort behavior"
+  [ ! -s "$slot_root/1/fixture-lease" ] || fail "the refused codex launch left its lease reserved"
+  pass "a refused launch closes its new window and releases its slot"
 }
 
 # install_isolation_flip_git <fakebin> <worktree>: a git that answers every
@@ -1115,8 +1163,129 @@ test_scout_base_branch_refused_on_gerrit_forge() {
   pass "a based scout on a forge=gerrit project is refused at spawn"
 }
 
+test_full_pool_retries_spawn_after_recycling() {
+  local rec id out status slot_root world saved
+  id="pool-recycle-dispatch"
+  rec=$(make_originless_case recycle-dispatch "$id")
+  read_case_record "$rec"
+  slot_root="$CASE_DIR/slots"
+  mkdir -p "$slot_root/1"
+  git -C "$PROJECT_DIR" worktree move "$POOL_DIR" "$slot_root/1/project"
+  POOL_DIR="$slot_root/1/project"
+  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$POOL_DIR" > "$slot_root/treehouse-state.json"
+  git -C "$POOL_DIR" switch -qc saved
+  git -C "$POOL_DIR" -c user.name=Fixture -c user.email=fixture@example.invalid commit -q --allow-empty -m saved
+  saved=$(git -C "$POOL_DIR" rev-parse HEAD)
+  world="$CASE_DIR/tmux-world"
+  install_pool_world_tmux "$FAKEBIN_DIR" "$world" "$slot_root"
+  python3 - "$FAKEBIN_DIR/tmux" <<'PYTMUX'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace('if [ "$text" = "treehouse get Enter" ]; then',
+    'if [ "$text" = "treehouse get Enter" ]; then\n      [ -f "$world/recycled" ] || exit 0')
+open(p, 'w').write(s)
+PYTMUX
+  install_pool_lease_fixture "$FAKEBIN_DIR" "$POOL_DIR" "$slot_root/1/fixture-lease" "$world"
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+  out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_spawn "$id" --scout)
+  status=$?
+  expect_code 0 "$status" "dispatch should retry after recycling"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "dispatch did not launch after recycling"
+  [ "$(git -C "$PROJECT_DIR" rev-parse saved)" = "$saved" ] || fail "dispatch lost the saved commit"
+  assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" "dispatch recorded the wrong copy"
+  [ "$(cat "$slot_root/1/fixture-lease")" = "firstmate:$id" ] \
+    || fail "the recycled slot was not reserved for the dispatched task"
+  pass "dispatch retries the full pool after recycling a saved idle copy"
+}
+
+test_existing_and_new_task_copies_remain_reserved() {
+  local dir="$TMP_ROOT/reservation" home project pool fakebin failed_bin treehouse a b c mate out status
+  treehouse=$(command -v treehouse) || { echo '# skip: treehouse unavailable'; return; }
+  home="$dir/home"; project="$dir/project"; pool="$dir/pool"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config" "$project" "$pool"
+  printf 'codex\n' > "$home/config/crew-harness"
+  git -C "$project" init -q -b main
+  configure_fixture_identity "$project"
+  printf 'base\n' > "$project/base"
+  git -C "$project" add base
+  git -C "$project" commit -qm initial
+  a=$(cd "$project" && "$treehouse" --root "$pool" get --lease --no-fetch --lease-holder setup-a) || fail 'could not create A'
+  b=$(cd "$project" && "$treehouse" --root "$pool" get --lease --no-fetch --lease-holder setup-b) || fail 'could not create B'
+  (cd "$project" && "$treehouse" --root "$pool" return --force "$a" && "$treehouse" --root "$pool" return --force "$b") >/dev/null || fail 'could not prepare old copies'
+  printf 'kind=ship\nproject=%s\nworktree=%s\n' "$project" "$a" > "$home/state/old-a.meta"
+  printf 'park_phase=parked\n' > "$home/state/old-a.parked"
+  printf 'kind=ship\nproject=%s\nworktree=%s\n' "$project" "$a" > "$home/state/stale.meta"
+  fm_test_spawn_brief "$home" new-b
+  touch "$home/state/.last-watcher-beat"
+  fakebin=$(make_spawn_fakebin "$dir/fake")
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+exec "$FM_TEST_TREEHOUSE" --root "$FM_TEST_TREEHOUSE_ROOT" "$@"
+SH
+  chmod +x "$fakebin/treehouse"
+  mkdir -p "$home/user-home"
+  out=$(FM_TEST_TREEHOUSE="$treehouse" FM_TEST_TREEHOUSE_ROOT="$pool" \
+    FM_HOME="$home" HOME="$home/user-home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$b" \
+    TMUX='fake,1,0' PATH="$fakebin:$PATH" \
+    "${FM_TEST_SPAWN_UNDER_TEST:-$ROOT/bin/fm-spawn.sh}" new-b "$project" --mode local-only --yolo off \
+    --harness codex --model gpt-6.1-sol --effort low 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail 'spawn accepted an unclaimed copy named by two tasks'
+  assert_contains "$out" 'multiple tasks name unclaimed Treehouse slot' 'ambiguous old records must refuse before allocation'
+  [ ! -e "$home/state/new-b.meta" ] || fail 'ambiguous records published a worker'
+  printf 'task=old-a\nhome=%s\n' "$home" > "$(dirname "$a")/.fm-slot-owner"
+  (cd "$project" && "$treehouse" --root "$pool" lease 1 --lease-holder setup-a && "$treehouse" --root "$pool" lease 2 --lease-holder setup-b) >/dev/null || fail 'could not protect slots while preparing a secondmate'
+  mate=$(cd "$project" && "$treehouse" --root "$pool" get --lease --no-fetch --lease-holder mate-home) || fail 'could not prepare a secondmate home'
+  (cd "$project" && "$treehouse" --root "$pool" return --force "$a" && "$treehouse" --root "$pool" return --force "$b") >/dev/null || fail 'could not restore task slots'
+  printf 'kind=secondmate\nproject=%s\nworktree=%s\n' "$project" "$mate" > "$home/state/mate.meta"
+  out=$(FM_TEST_TREEHOUSE="$treehouse" FM_TEST_TREEHOUSE_ROOT="$pool" \
+    FM_HOME="$home" HOME="$home/user-home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$b" \
+    TMUX='fake,1,0' PATH="$fakebin:$PATH" \
+    "${FM_TEST_SPAWN_UNDER_TEST:-$ROOT/bin/fm-spawn.sh}" new-b "$project" --mode local-only --yolo off \
+    --harness codex --model gpt-6.1-sol --effort low 2>&1)
+  status=$?
+  expect_code 0 "$status" "spawn should reserve both task copies"$'\n'"$out"
+  out=$(cd "$project" && "$treehouse" --root "$pool" status --json) || fail 'could not inspect reservations'
+  printf '%s' "$out" | jq -e --arg a "$a" --arg b "$b" --arg mate "$mate" \
+    'any(.[]; .path == $a and .lease_holder == "firstmate:old-a") and any(.[]; .path == $b and .lease_holder == "firstmate:new-b") and any(.[]; .path == $mate and .lease_holder == "mate-home")' >/dev/null \
+    || fail 'task copies and the secondmate home must keep their own durable reservations'
+  c=$(cd "$project" && "$treehouse" --root "$pool" get --lease --no-fetch --lease-holder setup-c) || fail 'could not create C'
+  (cd "$project" && "$treehouse" --root "$pool" return --force "$c") >/dev/null || fail 'could not prepare C'
+  git -C "$project" config --unset user.name
+  git -C "$project" config --unset user.email
+  fm_test_spawn_brief "$home" failed-c
+  failed_bin=$(make_spawn_fakebin "$dir/failed")
+  cp "$fakebin/treehouse" "$failed_bin/treehouse"
+  out=$(FM_TEST_TREEHOUSE="$treehouse" FM_TEST_TREEHOUSE_ROOT="$pool" \
+    FM_HOME="$home" HOME="$home/user-home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$c" \
+    TMUX='fake,1,0' PATH="$failed_bin:$PATH" \
+    "${FM_TEST_SPAWN_UNDER_TEST:-$ROOT/bin/fm-spawn.sh}" failed-c "$project" --mode local-only --yolo off \
+    --harness codex --model gpt-6.1-sol --effort low 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail 'spawn unexpectedly accepted a missing Git identity'
+  assert_contains "$out" 'configure public git user.name and user.email' 'failed spawn must reach the Git identity check'
+  out=$(cd "$project" && "$treehouse" --root "$pool" status --json) || fail 'could not inspect failed spawn'
+  printf '%s' "$out" | jq -e --arg a "$a" --arg b "$b" --arg c "$c" \
+    'any(.[]; .path == $a and .lease_holder == "firstmate:old-a") and any(.[]; .path == $b and .lease_holder == "firstmate:new-b") and any(.[]; .path == $c and (.lease_id // "") == "")' >/dev/null \
+    || fail 'failed spawn must release only its own reservation'
+  [ ! -e "$(dirname "$c")/.fm-slot-owner" ] || fail 'failed spawn left its owner claim'
+  pass 'spawn reserves an existing parked task and the new task before allocation can reuse them'
+}
+
+if [ "${FM_SPAWN_RESERVATION_ONLY:-0}" = 1 ]; then
+  test_existing_and_new_task_copies_remain_reserved
+  exit 0
+fi
+test_existing_and_new_task_copies_remain_reserved
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_full_pool_retries_spawn_after_recycling
 test_refused_launch_keeps_its_window
 test_treehouse_isolation_refusal_points_at_what_survives
 test_linked_spawning_home_rejects_primary_before_refresh

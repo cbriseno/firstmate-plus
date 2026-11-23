@@ -93,6 +93,7 @@ def explain(snapshot, statuses):
         sections[section].append(key)
         task['placement'] = dict(section=section, code=code, unit='task', attention=kinds,
             reason=control['reason'] if section == 'capacity' and capacity_wait else
+                dispatch.get('reason') if section == 'capacity' and dispatch.get('reason') else
                 task.get('reason') or (declared['reason'] if section == 'waiting' else None) or code,
             inputs=dict(question_open=question['open'], filing_required=question.get('filing_required', False), backlog_state=task['backlog_state'], task_state=state, hold=pause.get('condition') or own or None, own_pause=own or None,
                 inherited_pause=inherited, blockers=blocks, declared=declared, worker=worker,

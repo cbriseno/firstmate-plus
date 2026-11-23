@@ -25,8 +25,18 @@ TMP_ROOT=$(fm_test_tmproot fm-calm-claude-mod)
 
 command -v node >/dev/null 2>&1 || { echo "skip: node not found for the Claude Code Calm mod checks"; exit 0; }
 
+# Claude resolves extensionless TypeScript imports; teach Node the same resolution
+# for these portable policy checks while still executing the tracked sources.
+cat > "$TMP_ROOT/ts-loader.mjs" <<'JS'
+export async function resolve(specifier, context, next) {
+  if (specifier.startsWith("./") && !/\.[^/]+$/.test(specifier)) {
+    return next(specifier + ".ts", context);
+  }
+  return next(specifier, context);
+}
+JS
 run_node() {  # <script-file>
-  node --input-type=module <"$1"
+  node --experimental-loader "$TMP_ROOT/ts-loader.mjs" --input-type=module <"$1"
 }
 
 # js_string <value>: a JavaScript string literal for a shell value, for the

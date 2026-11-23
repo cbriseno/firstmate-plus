@@ -2,11 +2,14 @@
 """Worker turn-end adapter for relay-lite; Python 3.9/stdlib, Linux/macOS.
 
 Usage: fm-worker-relay.py HOME STATE ID BUSY_GEN CHECKER
+       fm-worker-relay.py --status HOME HARNESS MODEL
 Claude Stop and Codex notify call this with the current launch generation.
 CHECKER is relay-lite's relay-check executable (FM_RELAY_CHECK at spawn, then
 PATH, then $XDG_DATA_HOME/firstmate-extensions/runtime/context-relay-lite/relay-check).
 Thresholds and measurement belong exclusively to that checker. Missing inputs
 emit the existing diagnostic event and leave the worker running.
+Status probes the same checker with disposable worker measurements and reports
+configured thresholds, not successful activation or a live measurement.
 
 At the first reached limit, request the manual handoff note through fm-send.
 At its next completed turn, a nonempty launch-specific note permits fm-control
@@ -34,9 +37,62 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent
+
+
+def checker_path():
+    return os.environ.get('FM_RELAY_CHECK') or shutil.which('relay-check') or str(
+        Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+        / 'firstmate-extensions/runtime/context-relay-lite/relay-check')
+
+
+def relay_status(home, harness, model):
+    """Ask the installed checker about this worker, independently of primary settings."""
+    checker = checker_path()
+    if harness not in ('claude', 'codex'):
+        return 'unsupported harness'
+    if not Path(checker).is_file():
+        return 'checker missing'
+    if not (Path(home) / 'config/relay-lite.json').is_file():
+        return 'worker thresholds disabled (configuration absent)'
+    if not model or model == 'default':
+        return 'requested model unknown; readiness unknown'
+    with tempfile.TemporaryDirectory(prefix='fm-relay-status-') as tmp:
+        transcript = Path(tmp) / 'session.jsonl'
+        if harness == 'claude':
+            transcript.write_text(json.dumps({'type': 'assistant', 'sessionId': 'probe',
+                'message': {'model': model or 'claude', 'usage': {'input_tokens': 10,
+                'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0, 'output_tokens': 1}}}) + '\n')
+            payload = {'cwd': tmp, 'transcript_path': str(transcript), 'statusline': {
+                'session_id': 'probe', 'transcript_path': str(transcript),
+                'model': {'id': model or 'claude'}, 'context_window': {'context_window_size': 200000}}}
+        else:
+            transcript.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'probe', 'cwd': tmp}}) + '\n' +
+                json.dumps({'type': 'turn_context', 'payload': {'model': model}}) + '\n' +
+                json.dumps({'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {
+                    'total_token_usage': {'input_tokens': 10, 'cached_input_tokens': 0, 'output_tokens': 1,
+                                          'reasoning_output_tokens': 0, 'total_tokens': 11},
+                    'last_token_usage': {'input_tokens': 10, 'cached_input_tokens': 0, 'output_tokens': 1,
+                                         'reasoning_output_tokens': 0, 'total_tokens': 11},
+                    'model_context_window': 200000}}}) + '\n')
+            payload = {'cwd': tmp, 'transcript_path': str(transcript)}
+        try:
+            result = subprocess.run([sys.executable, checker, '--json', home], input=json.dumps(payload),
+                text=True, capture_output=True, timeout=10,
+                env=dict(os.environ, FM_TASK_ID='relay-status-probe'))
+            data = json.loads(result.stdout)
+            if result.returncode or data.get('schema') != 'relay-lite.check.v1' or data.get('role') != 'worker' \
+                    or data.get('harness') != harness or data.get('state') not in ('below', 'reached'):
+                return 'checker unavailable or incompatible'
+            if any(isinstance(data.get(k), (int, float)) and not isinstance(data.get(k), bool)
+                   and data[k] > 0 for k in ('threshold_tokens', 'threshold_percent')):
+                return 'ready for requested model; actual session measurement required'
+            return 'worker thresholds disabled'
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return 'checker unavailable or incompatible'
 
 
 def meta(state, task):
@@ -68,6 +124,24 @@ def status(state, task, message):
 
 
 def main():
+    if sys.argv[1:2] == ['--inflight']:
+        for path in Path(sys.argv[2]).glob('relay-request-*'):
+            try:
+                with path.open('r') as request:
+                    try:
+                        fcntl.flock(request, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        sys.exit(0)
+            except OSError:
+                sys.exit(2)
+        sys.exit(1)
+    if sys.argv[1:2] == ['--status']:
+        home, harness, model = sys.argv[2:5]
+        print('worker context relay (' + harness + ', requested model ' + (model or 'unknown') + '): ' +
+              relay_status(home, harness, model))
+        print('installation: firstmate-extensions bin/fm-extension install --home <home> --harness ' + harness)
+        print('Linux: tested; macOS: relay with Herdr unverified; see https://github.com/cbriseno/firstmate-extensions')
+        return
     if sys.argv[1:2] == ['--retire']:
         state, task, current_gen = sys.argv[2:5]
         inbox = Path(state) / (task + '.inbox')
@@ -119,9 +193,7 @@ def main():
                         request.write(message + '\n')
                         (Path(state) / (task + '.relay-result')).write_text(message)
                         event(dict(os.environ, FM_HOME=home), task, 'incomplete', 'activity-unavailable')
-        checker = os.environ.get('FM_RELAY_CHECK') or shutil.which('relay-check') or str(
-            Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
-            / 'firstmate-extensions/runtime/context-relay-lite/relay-check')
+        checker = checker_path()
         for path in Path(state).glob('*.meta'):
             task = path.stem
             record = meta(Path(state), task)
@@ -149,7 +221,6 @@ def main():
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), home, state, task,
                               gen, checker, '--control', str(pid)], env=env, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            ready.unlink()
         return
     home, state, task, gen, checker = sys.argv[1:6]
     home, state = Path(home), Path(state)
@@ -216,6 +287,11 @@ def main():
         fcntl.flock(request, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return
+    if mode == ['--control']:
+        ready = state / (task + '.relay-ready')
+        if not ready.exists():
+            return
+        ready.unlink()
     record = eligible(state, task, gen)
     if not record:
         return

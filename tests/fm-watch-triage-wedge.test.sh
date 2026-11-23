@@ -86,25 +86,34 @@ test_parked_decision_signal_wakes_without_stale_repeats() {
 # puts every round at the threshold, so a round either escalates or is deferred;
 # the real 240s default only changes how long that takes.
 # <mode> `exit` requires the watcher to surface and exit, `absorb` requires it to
-# survive whole poll cycles at the threshold. Returns 1 when it does the other.
-# The endpoint this lane's window resolves to is a live grok agent unless a case
+# survive whole poll cycles at the threshold. In `batch` mode, the fleet
+# summary is already due and must deliver exactly one recorded wait recheck.
+# The endpoint this lane's window resolves to is a live Claude agent unless a case
 # drives it elsewhere with FM_TEST_PANE_COMMAND (the pane's foreground command)
 # and FM_TEST_TMUX_WINDOWS (the session inventory the recorded window must appear
 # in), which is how the dead-endpoint cases below reach `dead` and `missing`.
-wedge_threshold_round() {  # <state> <fakebin> <out> <capture> <window> <verdict> <exit|absorb>
+wedge_threshold_round() {  # <state> <fakebin> <out> <capture> <window> <verdict> <exit|absorb|batch>
   local state=$1 fakebin=$2 out=$3 capture=$4 window=$5 verdict=$6 mode=$7 pid cycles=0
+  if [ "$mode" = batch ]; then
+    : > "$out"
+    printf '1\n' > "$state/.last-info-summary"
+  fi
+  # Keep the separate unattended-decision reminder outside this wedge scenario.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
     FM_CONFIG_OVERRIDE="$(dirname "$state")/config" \
     FM_FAKE_TMUX_CURRENT_COMMAND="${FM_TEST_PANE_COMMAND-claude}" \
     FM_FAKE_TMUX_WINDOWS="${FM_TEST_TMUX_WINDOWS-}" FM_FAKE_CREW_STATE="$verdict" \
-    FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_WATCH_HANDLING_SUCCESSOR=1 FM_INFO_SUMMARY_SECS=3600 FM_OBLIGATION_SECONDS=86400 \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_PAUSE_RESURFACE_SECS="${FM_TEST_PAUSE_RESURFACE:-999}" FM_STALE_ESCALATE_SECS="${FM_TEST_STALE_ESCALATE:-1}" \
     FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
   pid=$!
-  if [ "$mode" = exit ]; then
+  if [ "$mode" != absorb ]; then
     wait_for_exit "$pid" 600 || { reap "$pid"; return 1; }
+    if [ "$mode" = batch ]; then
+      grep -Eq '^check: informational summary: (.* )?wait=1 ' "$out" || return 1
+    fi
     return 0
   fi
   while [ "$cycles" -lt 3 ]; do
@@ -162,11 +171,18 @@ wedge_stale_wakes() {  # <state> <window>
     "$1/.wake-queue" 2>/dev/null || echo 0
 }
 
-# The wait age the deferral PUBLISHES to the captain, read back off the wake it
-# emitted. The wake reason is the watcher's supervisor-facing output contract, so
+# Count the detailed wait records referenced by the fleet summary.
+wedge_wait_rechecks() {  # <state> <window>
+  awk -v prefix="absorbed benign stale: $2 (" \
+    'index($0, prefix) && /rechecked on a long cadence/ { n++ } END { print n + 0 }' \
+    "$1/.watch-triage.log"
+}
+
+# The wait age the deferral reports, read from the summary's detail log.
+# The recheck reason is the watcher's supervisor-facing output contract, so
 # the number in it is the thing under test: it must describe the wait that is
 # actually holding the lane, not whatever unrelated record happened to be handy.
-wedge_reported_wait_secs() {  # <watch-out>
+wedge_reported_wait_secs() {  # <triage-log>
   sed -n 's/.*waiting \([0-9][0-9]*\)s.*/\1/p' "$1" | head -1
 }
 
@@ -218,18 +234,18 @@ test_wedge_threshold_defers_to_a_backlog_captain_hold() {
     || fail "could not build a backlog captain-hold wedge fixture"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
-    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" batch \
     || fail "a backlog-held lane was never rechecked at the threshold: $(cat "$out")"
-  grep -F 'awaiting the captain' "$out" >/dev/null \
+  grep -F 'awaiting the captain' "$state/.watch-triage.log" >/dev/null \
     || fail "the backlog-hold recheck did not name the captain: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "a backlog-held lane was reported as a possible wedge: $(cat "$out")"
-  grep -E ', waiting [0-9]+s' "$out" >/dev/null \
+  grep -E ', waiting [0-9]+s' "$state/.watch-triage.log" >/dev/null \
     && fail "the backlog-hold recheck published the status line's age as the hold's: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the backlog-hold recheck"
 
   # Inside the recheck cadence the hold is absorbed whole, threshold after threshold.
-  queued=$(wedge_stale_wakes "$state" "$window")
+  queued=$(wedge_wait_rechecks "$state" "$window")
   n=1
   while [ "$n" -le 3 ]; do
     FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
@@ -237,8 +253,8 @@ test_wedge_threshold_defers_to_a_backlog_captain_hold() {
       || fail "a backlog-held lane wedge-escalated at threshold $n: $(cat "$out")"
     n=$((n + 1))
   done
-  [ "$(wedge_stale_wakes "$state" "$window")" -eq "$queued" ] \
-    || fail "a backlog-held lane queued a further wake inside its recheck cadence: $(cat "$state/.wake-queue")"
+  [ "$(wedge_wait_rechecks "$state" "$window")" -eq "$queued" ] \
+    || fail "a backlog-held lane recorded a further wait inside its cadence: $(cat "$state/.watch-triage.log")"
   [ ! -e "$state/.wedge-escalations-$key" ] \
     || fail "a backlog-held lane counted $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
 
@@ -250,9 +266,9 @@ test_wedge_threshold_defers_to_a_backlog_captain_hold() {
     || fail "could not build a backlog captain-hold wedge fixture"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
-    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" batch \
     || fail "a backlog-held lane behind an elapsed pause was never rechecked: $(cat "$out")"
-  grep -F 'awaiting the captain' "$out" >/dev/null \
+  grep -F 'awaiting the captain' "$state/.watch-triage.log" >/dev/null \
     || fail "a backlog-held lane behind an elapsed pause was not rechecked as a wait on the captain: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "a backlog-held lane behind an elapsed pause was reported as a possible wedge: $(cat "$out")"
@@ -338,38 +354,38 @@ working: still parked at that gate'
   dir=$(wedge_threshold_fixture parked-gate-human "$escalated" 2000)
   arm_parked_gate "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" exit \
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" batch \
     || fail "a gate awaiting a human was never rechecked at the threshold: $(cat "$out")"
-  grep -F 'verified wait at a parked gate' "$out" >/dev/null \
+  grep -F 'verified wait at a parked gate' "$state/.watch-triage.log" >/dev/null \
     || fail "the parked-gate recheck did not name its evidence: $(cat "$out")"
-  grep -F "awaiting firstmate's ask-user decision" "$out" >/dev/null \
+  grep -F "awaiting firstmate's ask-user decision" "$state/.watch-triage.log" >/dev/null \
     || fail "the parked-gate recheck did not name firstmate as the one the wait is on: $(cat "$out")"
-  grep -F "decide the gate's ask-user finding and relay the decision to the crewmate" "$out" >/dev/null \
+  grep -F "decide the gate's ask-user finding and relay the decision to the crewmate" "$state/.watch-triage.log" >/dev/null \
     || fail "the parked-gate recheck did not name the action that clears the lane: $(cat "$out")"
-  grep -F 'awaiting the captain' "$out" >/dev/null \
+  grep -F 'awaiting the captain' "$state/.watch-triage.log" >/dev/null \
     && fail "the parked-gate recheck named the captain for a decision firstmate owns: $(cat "$out")"
-  grep -F 'confirm the wait still holds' "$out" >/dev/null \
+  grep -F 'confirm the wait still holds' "$state/.watch-triage.log" >/dev/null \
     && fail "a parked gate borrowed the external-wait action, which does not clear it: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "a gate awaiting a human was reported as a possible wedge: $(cat "$out")"
   # No wait age is published, because no record of when this wait began exists:
   # the status file is an unrelated line, and the idle window this deferral
   # resets every pass would report the same small number forever.
-  grep -E ', waiting [0-9]+s' "$out" >/dev/null \
+  grep -E ', waiting [0-9]+s' "$state/.watch-triage.log" >/dev/null \
     && fail "the parked-gate recheck published a wait age it has no record for: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the parked-gate recheck"
 
   # Long cadence, not a ladder: every further threshold inside the cadence is
   # absorbed whole, with no escalation counted and nothing queued.
-  queued=$(wedge_stale_wakes "$state" "$window")
+  queued=$(wedge_wait_rechecks "$state" "$window")
   n=1
   while [ "$n" -le 3 ]; do
     wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" absorb \
       || fail "a gate awaiting a human wedge-escalated at threshold $n: $(cat "$out")"
     n=$((n + 1))
   done
-  [ "$(wedge_stale_wakes "$state" "$window")" -eq "$queued" ] \
-    || fail "a gate awaiting a human queued a further wake inside its recheck cadence: $(cat "$state/.wake-queue")"
+  [ "$(wedge_wait_rechecks "$state" "$window")" -eq "$queued" ] \
+    || fail "a gate awaiting a human recorded a further wait inside its cadence: $(cat "$state/.watch-triage.log")"
   [ ! -e "$state/.wedge-escalations-$key" ] \
     || fail "a gate awaiting a human counted $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
 
@@ -400,24 +416,24 @@ working: still parked at that gate'
   arm_parked_gate "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   write_away_record "$state"
-  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" exit \
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" batch \
     || fail "a parked gate owed firstmate's decision was silenced while the away-posture record existed: $(cat "$out")"
-  grep -F "awaiting firstmate's ask-user decision" "$out" >/dev/null \
+  grep -F "awaiting firstmate's ask-user decision" "$state/.watch-triage.log" >/dev/null \
     || fail "the away-posture parked-gate recheck did not name firstmate: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "an away-posture parked gate was reported as a possible wedge: $(cat "$out")"
   grep -F 'never rechecked while the away-posture record exists' "$state/.watch-triage.log" >/dev/null \
     && fail "a parked gate owed firstmate took the captain-away silence: $(cat "$state/.watch-triage.log")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the away-posture parked-gate recheck"
-  queued=$(wedge_stale_wakes "$state" "$window")
+  queued=$(wedge_wait_rechecks "$state" "$window")
   n=1
   while [ "$n" -le 3 ]; do
     wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" absorb \
       || fail "an away-posture parked gate wedge-escalated at threshold $n: $(cat "$out")"
     n=$((n + 1))
   done
-  [ "$(wedge_stale_wakes "$state" "$window")" -eq "$queued" ] \
-    || fail "an away-posture parked gate queued a further wake inside its recheck cadence: $(cat "$state/.wake-queue")"
+  [ "$(wedge_wait_rechecks "$state" "$window")" -eq "$queued" ] \
+    || fail "an away-posture parked gate recorded a further wait inside its cadence: $(cat "$state/.watch-triage.log")"
   [ ! -e "$state/.wedge-escalations-$key" ] \
     || fail "an away-posture parked gate counted $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
 
@@ -507,7 +523,7 @@ working: still parked at that gate'
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.calls"
   : > "$FM_FAKE_CREW_STATE_LOG"
-  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" exit \
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$human" batch \
     || fail "the armed control was never rechecked: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the armed control recheck"
   armed_probes=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" | tr -d ' ')
@@ -625,15 +641,15 @@ blocked: need the API key for the staging account' 0 600)
   dir=$(wedge_threshold_fixture worker-blocker-aged 'blocked: need the API key for the staging account' 2000 600)
   arm_worker_wait "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" batch \
     || fail "a worker blocker older than the recheck cadence was never rechecked: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the worker-blocker recheck"
-  reported=$(wedge_reported_wait_secs "$out")
+  reported=$(wedge_reported_wait_secs "$state/.watch-triage.log")
   [ -n "$reported" ] && [ "$reported" -ge 1900 ] \
     || fail "the worker-blocker recheck reported '${reported}'s rather than the blocker's age: $(cat "$out")"
-  grep -F 'declared blocker, awaiting firstmate' "$out" >/dev/null \
+  grep -F 'declared blocker, awaiting firstmate' "$state/.watch-triage.log" >/dev/null \
     || fail "the worker-blocker recheck did not name its evidence and firstmate: $(cat "$out")"
-  grep -F 'clear the reported blocker' "$out" >/dev/null \
+  grep -F 'clear the reported blocker' "$state/.watch-triage.log" >/dev/null \
     || fail "the worker-blocker recheck lost its blocker-specific action: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "the worker-blocker recheck was worded as a possible wedge: $(cat "$out")"
@@ -643,12 +659,12 @@ blocked: need the API key for the staging account' 0 600)
   dir=$(wedge_threshold_fixture worker-decision-aged 'needs-decision [key=scope]: ship the narrow fix or the broad one' 2000 600)
   arm_worker_wait "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" batch \
     || fail "a worker decision older than the recheck cadence was never rechecked: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the worker-decision recheck"
-  grep -F 'declared decision, awaiting firstmate' "$out" >/dev/null \
+  grep -F 'declared decision, awaiting firstmate' "$state/.watch-triage.log" >/dev/null \
     || fail "the worker-decision recheck did not name its evidence and firstmate: $(cat "$out")"
-  grep -F 'answer the reported decision' "$out" >/dev/null \
+  grep -F 'answer the reported decision' "$state/.watch-triage.log" >/dev/null \
     || fail "the worker-decision recheck lost its decision-specific action: $(cat "$out")"
 
   # Each of these ends or never starts the deferral, so the lane keeps the ladder:
@@ -831,20 +847,20 @@ test_wedge_threshold_defers_to_an_executing_validation_run() {
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   printf '01RUNLIVE' > "$state/.validating-since-$key"
   set_mtime "$(( $(date +%s) - 2000 ))" "$state/.validating-since-$key"
-  FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" exit \
+  FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" batch \
     || fail "a validation run older than the recheck cadence was never rechecked: $(cat "$out")"
-  grep -F 'no-mistakes run 01RUNLIVE validating (running)' "$out" >/dev/null \
+  grep -F 'no-mistakes run 01RUNLIVE validating (running)' "$state/.watch-triage.log" >/dev/null \
     || fail "the validating recheck did not name its run: $(cat "$out")"
-  grep -F 'rechecked on a long cadence not a wedge; confirm the run is still progressing' "$out" >/dev/null \
+  grep -F 'rechecked on a long cadence not a wedge; confirm the run is still progressing' "$state/.watch-triage.log" >/dev/null \
     || fail "the validating recheck lost its action: $(cat "$out")"
   grep -F 'possible wedge' "$out" >/dev/null \
     && fail "the validating recheck was worded as a possible wedge: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge the validating recheck"
-  queued=$(wedge_stale_wakes "$state" "$window")
+  queued=$(wedge_wait_rechecks "$state" "$window")
   FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" absorb \
     || fail "the validating recheck repeated inside its cadence: $(cat "$out")"
-  [ "$(wedge_stale_wakes "$state" "$window")" -eq "$queued" ] \
-    || fail "the validating recheck queued a further wake inside its cadence"
+  [ "$(wedge_wait_rechecks "$state" "$window")" -eq "$queued" ] \
+    || fail "the validating recheck recorded a further wait inside its cadence"
 
   # A replacement run starts its own chain, so an old run's age cannot make the
   # new one re-surface at once.
@@ -1001,8 +1017,8 @@ test_gone_endpoint_reports_once_instead_of_escalating_forever() {
   pass "a record whose endpoint is dead or missing reports itself once and is never re-escalated"
 }
 
-# An elapsed timer observes inactivity; it does not establish pending action.
-# This is the installed incident: a live worker's tool hook holds its pane still.
+# An enriched wedge on a proven live endpoint must reach the primary; an
+# unproven endpoint remains informational until its state is known.
 test_live_and_unproven_endpoints_stay_informational() {
   local dir state fakebin out capture window spec verdict comm inventory
   local working='state: working · source: run-step · ci running'
@@ -1013,18 +1029,20 @@ test_live_and_unproven_endpoints_stay_informational() {
     state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
     FM_TEST_PANE_COMMAND=$comm FM_TEST_TMUX_WINDOWS=$inventory
     export FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
-    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
-      || fail "an elapsed $verdict observation woke without pending action: $(cat "$out")"
-    [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
-      || fail "an elapsed $verdict observation queued a recovery request"
-    # An unproven endpoint can be absorbed before a timer event is produced.
-    # The verified live endpoint must exercise publication and the batch.
     if [ "$verdict" = alive ]; then
-      [ -s "$state/.watch-info" ] || fail "the live timer was not retained for the fleet batch"
+      wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+        || fail "a confirmed live wedge did not wake: $(cat "$out")"
+      [ "$(wedge_stale_wakes "$state" "$window")" -eq 1 ] \
+        || fail "the confirmed live wedge did not queue exactly one wake"
+    else
+      wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
+        || fail "an unproven $verdict observation woke: $(cat "$out")"
+      [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
+        || fail "an unproven $verdict observation queued a wake"
     fi
     unset FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
   done
-  pass "elapsed live-operation timers and unproven observations remain informational"
+  pass "confirmed live wedges escalate while unproven observations stay informational"
 }
 
 # --- opt-in operator guards consulted at the wedge threshold -----------------
@@ -1391,11 +1409,54 @@ test_identical_dead_display_of_a_successor_still_reports() {
   pass "a successor's byte-identical dead display reports in full, and the same incarnation still absorbs"
 }
 
+test_dead_worker_auto_relaunch_bound() {
+  local dir state fakebin out window saved_watch n
+  window=test:fm-wedge
+  dir=$(wedge_threshold_fixture auto-relaunch 'working: compiling' 0)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  mkdir -p "$dir/repo"
+  cp -R "$ROOT/bin" "$dir/repo/bin"
+  cat > "$dir/repo/bin/fm-control.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_STATE_OVERRIDE/control-calls"
+SH
+  chmod +x "$dir/repo/bin/fm-control.sh"
+  saved_watch=$WATCH; WATCH="$dir/repo/bin/fm-watch.sh"
+  gone_endpoint_env dead; export FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
+  wedge_threshold_round "$state" "$fakebin" "$out" "$dir/pane.txt" "$window" '' absorb \
+    || fail "dead working worker woke before relaunch: $(cat "$out")"
+  [ "$(wc -l < "$state/control-calls")" -eq 1 ] || fail 'expected one relaunch'
+  grep -F 'wedge relaunch --if-dead' "$state/control-calls" >/dev/null || fail 'control did not receive the relaunch command'
+  for n in 2 3; do
+    "$ROOT/bin/fm-busy-event.sh" arm "$state" wedge >/dev/null || fail 'cannot arm successor'
+    if [ "$n" -eq 2 ]; then
+      wedge_threshold_round "$state" "$fakebin" "$out" "$dir/pane.txt" "$window" '' absorb || fail 'second relaunch failed'
+    else
+      wedge_threshold_round "$state" "$fakebin" "$out" "$dir/pane.txt" "$window" '' exit || fail 'limit did not wake'
+    fi
+  done
+  [ "$(wc -l < "$state/control-calls")" -eq 2 ] || fail 'more than two relaunches'
+  grep -F 'relanzado 2 veces, sigue cayendo' "$out" >/dev/null || fail 'missing limit warning'
+  ack_stopped_cycle "$state" || fail 'cannot acknowledge warning'
+  awk -F '\t' 'BEGIN { OFS="\t" } { $1=1; print }' "$state/.secondmate-relaunch-@worker-wedge" > "$dir/old-attempts"
+  mv "$dir/old-attempts" "$state/.secondmate-relaunch-@worker-wedge"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$dir/pane.txt" "$window" '' absorb || fail 'expired limit did not rearm'
+  [ "$(wc -l < "$state/control-calls")" -eq 3 ] || fail 'expired limit did not allow a new attempt'
+  printf 'done: completed\n' > "$state/wedge.status"
+  printf '%s' "$(seen_sig "$state/wedge.status")" > "$state/.seen-wedge_status"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$dir/pane.txt" "$window" '' absorb || fail 'done worker woke'
+  [ "$(wc -l < "$state/control-calls")" -eq 3 ] || fail 'done worker relaunched'
+  unset FM_TEST_PANE_COMMAND FM_TEST_TMUX_WINDOWS
+  WATCH=$saved_watch
+  pass 'dead workers relaunch twice at most and done workers stay stopped'
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit $?
 fi
 
+test_dead_worker_auto_relaunch_bound
 test_parked_decision_signal_wakes_without_stale_repeats
 
 test_gone_endpoint_reports_once_instead_of_escalating_forever

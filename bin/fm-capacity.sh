@@ -8,6 +8,7 @@
 #   fm-capacity.sh --publish  write that document to state/lane-capacity.json
 #   fm-capacity.sh --admit    this home's own admission verdict as an exit status
 #   fm-capacity.sh --admit-notice  admission with one load point of notice headroom
+#   fm-capacity.sh --check-load-wait N  exit 0 if N is below an admission limit, 1 otherwise, 2 if unknown
 #
 # It reads this home's state/*.meta, the optional config/lane-capacity, the
 # pressure files and reserve flags that file names, and the host's own probes.
@@ -37,10 +38,10 @@
 # With a target, free_lanes is target minus lanes (never below 0), unless a
 # constraint holds, in which case free_lanes=0 and reason names every
 # constraint, comma-separated, in this order:
-#   cpu       probe basis: 1-minute load average >= logical cores
-#   memory    probe basis: free-memory percentage < 10; or, with min-avail-gb
-#             set, available memory minus min-avail-gb is under the 1 GB a
-#             default lane needs
+#   cpu       configured 5-minute load per core threshold; or probe basis:
+#             1-minute load average >= logical cores
+#   memory    probe basis: free-memory percentage < 10; or no lane fits in
+#             memory (see Memory below)
 #   disk      probe basis: free space on the filesystem holding FM_HOME
 #             < 5120 MB; or a disk row under min-disk-gb
 #   pressure  beat basis: the pressure level is warn or critical
@@ -48,6 +49,16 @@
 #   reserve   a reserve-flag file exists
 #   battery   a fresh beat reports the machine on battery
 # Otherwise reason is ok when free_lanes > 0 and full when it is 0.
+#
+# Memory. The lanes that fit are floor((available - reserve) / footprint),
+# and free_lanes never exceeds them. available is the beat's avail_gb, else
+# this host's probe. reserve is min-avail-gb, else max(1, 10% of total) GB.
+# footprint is lane-footprint-gb when set; otherwise it is measured as the
+# 90th percentile of the resident memory of each live lane's whole process
+# tree (bin/fm-worker-processes.py footprint), never under 0.3 GB, and 0.5 GB
+# while no lane can be measured. Unknown available memory evaluates nothing.
+# On Darwin available memory is hw.memsize x kern.memorystatus_level / 100;
+# its match to memory a lane can use is unmeasured on a real Mac.
 # The human "Constrained" hold line is printed only when config/lane-capacity
 # exists; without it the report is counts and host figures only, with no
 # dispatch advice.
@@ -77,7 +88,8 @@
 #   .fm-secondmate-home), machine (the first readable beat's host, else the
 #   short host name),
 #   lanes {count, pr_ready (records with a pr= line), ids}; agents proven dead
-#   by the existing recovery classifier release their lane; unknowns retain it.
+#   and fully parked workers with a confirmed missing endpoint release their lane;
+#   uncertain identities and lifecycle operations retain it.
 #   cap {target (number or null), status ok|none|invalid},
 #   projects (clone directory names under projects/),
 #   pressure {level ok|warn|critical|unknown, why[], basis beat|probe|none,
@@ -94,7 +106,11 @@
 #   quota null | {provider, runway} (the all_models runway status from
 #     quota-axi --json --provider <p> --max-age 15m, bounded to 5 s; unknown
 #     when it cannot be read),
-#   limits {min_avail_gb, min_disk_gb, max_load1} (null when unset),
+#   limits {min_avail_gb, lane_footprint_gb, min_disk_gb, max_load1, max_load5_per_core} (null
+#     when unset),
+#   memory {reserve_gb, lane_footprint_gb, footprint_basis configured|measured|
+#     default, measured_lanes, lanes_fit} (the Memory rule's figures; null
+#     when available memory is unknown),
 #   verdict {admit, free_lanes, reasons[]}.
 # verdict.admit is true only with a valid cap, lanes under it, and no
 # constraint; its reasons are the constraints in words. The document carries
@@ -134,7 +150,8 @@ PUBLISHED="$STATE/lane-capacity.json"
 
 MEM_FREE_MIN_PCT=10
 DISK_FREE_MIN_MB=5120
-LANE_FOOTPRINT_GB=1
+LANE_FOOTPRINT_DEFAULT_GB=0.5
+LANE_FOOTPRINT_FLOOR_GB=0.3
 QUOTA_TIMEOUT=5
 BOOTS_KEPT=10
 
@@ -147,9 +164,10 @@ case "${1:-}" in
   --publish) mode=publish ;;
   --admit) mode=admit ;;
   --admit-notice) mode=admit; notice=1 ;;
+  --check-load-wait) mode=load_wait; [ "$#" = 2 ] || exit 2; wait_threshold=$2 ;;
   *) echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2 ;;
 esac
-[ "$#" -le 1 ] || { echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2; }
+[ "$#" -le 1 ] || [ "$mode" = load_wait ] || { echo "usage: fm-capacity.sh [--json|--publish|--admit|--admit-notice|--help]" >&2; exit 2; }
 
 is_uint() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
@@ -205,6 +223,14 @@ for meta in "$STATE"/*.meta; do
     if fm_backend_validate_task_endpoint "$meta" "$lane_id" >/dev/null 2>&1; then
       lane_state=$(fm_backend_agent_state "$FM_BACKEND_VALIDATED_BACKEND" "$FM_BACKEND_VALIDATED_TARGET" 2>/dev/null) || lane_state=unknown
       [ "$lane_state" != dead ] || continue
+      if [ "$lane_state" = missing ] && [ ! -e "$STATE/.control-$lane_id.lock" ] && [ ! -L "$STATE/.control-$lane_id.lock" ]; then
+        parked="$STATE/$lane_id.parked"
+        lane_gen=$(fm_backend_meta_exact_value "$meta" spawn_gen 2>/dev/null) || lane_gen=
+        parked_gen=$(fm_backend_meta_exact_value "$parked" spawn_gen 2>/dev/null) || parked_gen=
+        if [ -n "$lane_gen" ] && [ "$lane_gen" = "$parked_gen" ] && [ "$(fm_meta_get "$parked" park_phase)" = parked ]; then
+          continue
+        fi
+      fi
     fi
     lanes=$((lanes + 1))
     lane_ids="$lane_ids$(basename "$meta" .meta)
@@ -217,8 +243,10 @@ done
 target=none
 target_error=
 min_avail_gb=
+lane_footprint_gb=
 min_disk_gb=
 max_load1=
+max_load5_per_core=
 captain_idle=
 quota_provider=
 pressure_files=
@@ -253,7 +281,7 @@ parse_lane_config() {
     [ "$key" = "$line" ] || rest=$(printf '%s' "${line#* }" | sed 's/^ *//')
     value=${rest%% *}
     case "$key" in
-      min-avail-gb|min-disk-gb|max-load1|captain-idle|quota-provider|pressure-file|reserve-flag) ;;
+      min-avail-gb|lane-footprint-gb|min-disk-gb|max-load1|max-load5-per-core|captain-idle|quota-provider|pressure-file|reserve-flag) ;;
       *) config_error "$lineno" "unknown key" "'$key'"; return 1 ;;
     esac
     case "$key" in
@@ -272,6 +300,18 @@ parse_lane_config() {
           min-disk-gb) min_disk_gb=$value ;;
           max-load1) max_load1=$value ;;
         esac
+        ;;
+      max-load5-per-core)
+        if ! is_num "$value" || ! num_lt 0 "$value"; then
+          config_error "$lineno" "max-load5-per-core needs a positive number"; return 1
+        fi
+        max_load5_per_core=$value
+        ;;
+      lane-footprint-gb)
+        if ! is_num "$value" || ! num_lt 0 "$value"; then
+          config_error "$lineno" "lane-footprint-gb needs a positive number"; return 1
+        fi
+        lane_footprint_gb=$value
         ;;
       captain-idle)
         is_uint "$value" && [ "${#value}" -le 9 ] && [ "$((10#$value))" -gt 0 ] || { config_error "$lineno" "captain-idle needs a positive number of seconds"; return 1; }
@@ -303,20 +343,42 @@ if [ -e "$LANE_CONFIG" ]; then
     target_error="config/lane-capacity: $target_error"
     target_reason="config/lane-capacity: $target_reason"
     target=invalid
-    min_avail_gb='' min_disk_gb='' max_load1='' captain_idle='' quota_provider='' pressure_files='' reserve_flags=''
+    min_avail_gb='' lane_footprint_gb='' min_disk_gb='' max_load1='' max_load5_per_core='' captain_idle='' quota_provider='' pressure_files='' reserve_flags=''
   fi
+fi
+
+# A load wait below the strictest configured admission ceiling can starve as
+# admission continues to add work. Unknown configuration must not be guessed.
+if [ "$mode" = load_wait ]; then
+  is_num "$wait_threshold" || exit 2
+  [ "$target" != invalid ] || exit 2
+  ceiling=$max_load1
+  if [ -n "$max_load5_per_core" ]; then
+    cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null) || cores=
+    is_uint "$cores" || cores=$(sysctl -n hw.logicalcpu 2>/dev/null) || cores=
+    is_uint "$cores" && [ "$cores" -gt 0 ] || exit 2
+    cpu_ceiling=$(awk -v c="$cores" -v m="$max_load5_per_core" 'BEGIN {print c * m}')
+    if [ -z "$ceiling" ] || num_lt "$cpu_ceiling" "$ceiling"; then ceiling=$cpu_ceiling; fi
+  fi
+  [ -n "$ceiling" ] || exit 1
+  num_lt "$wait_threshold" "$ceiling" || exit 1
+  printf '%s\n' "$ceiling"
+  exit 0
 fi
 
 # --- host probes ------------------------------------------------------------
 os=$(uname -s 2>/dev/null) || os=unknown
 
-load1=unknown
+load1=unknown load5=unknown
 if [ "$os" = Darwin ]; then
-  v=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')
+  loads=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}')
 else
-  v=$(awk '{print $1}' /proc/loadavg 2>/dev/null)
+  loads=$(cat /proc/loadavg 2>/dev/null)
 fi
+v=$(printf '%s\n' "$loads" | awk '{print $1}')
 case "$v" in [0-9]*) load1=$v ;; esac
+v=$(printf '%s\n' "$loads" | awk '{print $2}')
+case "$v" in [0-9]*) load5=$v ;; esac
 
 cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null) || cores=
 is_uint "$cores" || cores=$(sysctl -n hw.logicalcpu 2>/dev/null) || cores=
@@ -504,10 +566,14 @@ add_constraint() {  # <name> <reason> [published reason, default the reason]
   pub_reasons="$pub_reasons${3-$2}
 "
 }
+if [ -n "$max_load5_per_core" ] && [ "$load5" != unknown ] && [ "$cores" != unknown ] &&
+  awk -v l="$load5" -v c="$cores" -v m="$max_load5_per_core" 'BEGIN{exit !(l >= c * m)}'; then
+  add_constraint cpu "cpu: sustained load $load5 on $cores cores reaches $max_load5_per_core per core"
+fi
 if [ "$basis" = probe ]; then
-  # A configured max-load1 is the explicit load rule and replaces this generic
-  # load-at-core-count probe; memory and disk probes still apply.
-  [ "$probe_cpu" -eq 0 ] || [ -n "$max_load1" ] || add_constraint cpu "cpu: load $load1 on $cores cores"
+  # A configured load limit replaces this generic load-at-core-count probe;
+  # memory and disk probes still apply.
+  [ "$probe_cpu" -eq 0 ] || [ -n "$max_load1" ] || [ -n "$max_load5_per_core" ] || add_constraint cpu "cpu: load $load1 on $cores cores"
   [ "$probe_mem" -eq 0 ] || add_constraint memory "memory: $mem_free_pct% free"
   [ "$probe_disk" -eq 0 ] || add_constraint disk "disk: $disk_free_mb MB free"
 fi
@@ -515,10 +581,28 @@ lim_avail=${avail_gb:-$probe_avail_gb}
 lim_load1=$p_load1
 [ -n "$lim_load1" ] || [ "$load1" = unknown ] || lim_load1=$load1
 lim_disks=${disks:-$probe_disks}
-if [ -n "$min_avail_gb" ] && [ -n "$lim_avail" ]; then
-  if num_lt "$(awk -v a="$lim_avail" -v k="$min_avail_gb" 'BEGIN{print a - k}')" "$LANE_FOOTPRINT_GB"; then
-    add_constraint memory "memory: no room for a $LANE_FOOTPRINT_GB GB lane: $lim_avail GB available, $min_avail_gb GB kept"
+lim_total=${total_gb:-$probe_total_gb}
+reserve_gb=$min_avail_gb
+[ -n "$reserve_gb" ] || [ -z "$lim_total" ] || reserve_gb=$(awk -v t="$lim_total" 'BEGIN{r = t / 10; if (r < 1) r = 1; print int(r * 100 + 0.5) / 100}')
+footprint_gb=$lane_footprint_gb footprint_basis=configured measured_lanes=0
+if [ -z "$footprint_gb" ]; then
+  footprint_gb=$LANE_FOOTPRINT_DEFAULT_GB footprint_basis=default
+  rss_kb=
+  [ "$lanes" -eq 0 ] || rss_kb=$(python3 "$SCRIPT_DIR/fm-worker-processes.py" footprint "$STATE" 2>/dev/null | awk '$2 ~ /^[0-9]+$/ {print $2}')
+  measured_lanes=$(printf '%s' "$rss_kb" | grep -c . 2>/dev/null) || measured_lanes=0
+  if [ "$measured_lanes" -gt 0 ]; then
+    footprint_basis=measured
+    footprint_gb=$(printf '%s\n' "$rss_kb" | sort -n | awk -v f="$LANE_FOOTPRINT_FLOOR_GB" '
+      {v[NR] = $1} END {i = int(NR * 0.9); if (i < NR * 0.9) i++; g = int(v[i] / 1048576 * 100 + 0.5) / 100; if (g < f) g = f; print g}')
   fi
+fi
+footprint_text="$footprint_basis"
+[ "$footprint_basis" != measured ] || footprint_text="measured over $measured_lanes lanes"
+lanes_fit=
+if [ -n "$lim_avail" ] && [ -n "$reserve_gb" ]; then
+  lanes_fit=$(awk -v a="$lim_avail" -v r="$reserve_gb" -v f="$footprint_gb" 'BEGIN{n = int((a - r) / f + 1e-9); if (n < 0) n = 0; print n}')
+  [ "$lanes_fit" -gt 0 ] ||
+    add_constraint memory "memory: no room for a $footprint_gb GB lane ($footprint_text): $lim_avail GB available, $reserve_gb GB kept"
 fi
 if [ -n "$min_disk_gb" ]; then
   while IFS='	' read -r dlabel dfree; do
@@ -551,6 +635,7 @@ case "$target" in
   *)
     free_lanes=$((target - lanes))
     [ "$free_lanes" -ge 0 ] || free_lanes=0
+    [ -z "$lanes_fit" ] || [ "$lanes_fit" -ge "$free_lanes" ] || free_lanes=$lanes_fit
     if [ -n "$constraints" ]; then
       free_lanes=0
       reason=$constraints
@@ -591,6 +676,7 @@ if [ "$mode" = report ]; then
   mem_text="${mem_free_pct}%"; [ "$mem_free_pct" != unknown ] || mem_text=unknown
   disk_text="$disk_free_mb MB"; [ "$disk_free_mb" != unknown ] || disk_text=unknown
   echo "Host: load $load1 on $cores cores, memory free $mem_text, disk free $disk_text."
+  [ -z "$lanes_fit" ] || echo "Memory: $lim_avail GB available, $reserve_gb GB kept, $footprint_gb GB per lane ($footprint_text): room for $lanes_fit more."
   if [ -n "$pressure_files" ]; then
     why_text=$(printf '%s' "$why" | paste -sd ';' - | sed 's/;/; /g')
     echo "Pressure: $level from $basis${why_text:+ ($why_text)}."
@@ -702,7 +788,10 @@ doc=$(jq -n \
   --arg new_boot "$new_boot" --argjson kept "$BOOTS_KEPT" --arg watcher_age "$watcher_age" \
   --arg reserve_flag "$reserve_flag" --arg reserve_label "$reserve_label" \
   --arg captain "$captain" --argjson quota "$quota_json" \
+  --arg reserve "$reserve_gb" --arg footprint "$footprint_gb" --arg footprint_basis "$footprint_basis" \
+  --arg measured_lanes "$measured_lanes" --arg lanes_fit "$lanes_fit" --arg lane_footprint "$lane_footprint_gb" \
   --arg min_avail "$min_avail_gb" --arg min_disk "$min_disk_gb" --arg max_load1 "$max_load1" \
+  --arg max_load5_per_core "$max_load5_per_core" \
   --arg admit "$admit" --arg free_lanes "$free_lanes" --arg reasons "$verdict_reasons" '
   def num: if . == "" then null else tonumber + 0 end;
   def lines: split("\n") | map(select(. != ""));
@@ -720,7 +809,11 @@ doc=$(jq -n \
    watcher_beat_age_s: ($watcher_age | num),
    reserve: {flag: $reserve_flag, label: (if $reserve_label == "" then null else $reserve_label end)},
    captain: $captain, quota: $quota,
-   limits: {min_avail_gb: ($min_avail | num), min_disk_gb: ($min_disk | num), max_load1: ($max_load1 | num)},
+   limits: {min_avail_gb: ($min_avail | num), lane_footprint_gb: ($lane_footprint | num),
+     min_disk_gb: ($min_disk | num), max_load1: ($max_load1 | num),
+     max_load5_per_core: ($max_load5_per_core | num)},
+   memory: {reserve_gb: ($reserve | num), lane_footprint_gb: ($footprint | num), footprint_basis: $footprint_basis,
+     measured_lanes: ($measured_lanes | tonumber), lanes_fit: ($lanes_fit | num)},
    verdict: {admit: ($admit == "true"), free_lanes: ($free_lanes | if . == "unknown" then null else tonumber end),
      reasons: ($reasons | lines)}}') || {
   echo "fm-capacity: could not assemble the lane capacity document" >&2

@@ -12,9 +12,11 @@ HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name worker-parking)
 export FM_HOME
 export TMPDIR="$TMP_ROOT"
 FM_HOME="$TMP_ROOT/home"
+background_pid=
 cleanup() {
  local rc=$?
  trap - EXIT
+ if [ -n "$background_pid" ]; then kill "$background_pid" 2>/dev/null || true; wait "$background_pid" 2>/dev/null || true; fi
  export PATH="${ORIGINAL_PATH:-$PATH}"
  "$LAB_HOME_HELPER" teardown "$FM_HOME" || rc=1
  "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || rc=1
@@ -87,7 +89,7 @@ for harness in codex claude; do
  python3 - "$FM_HOME/data/$id/brief.md" <<'PY'
 import sys
 from pathlib import Path
-p=Path(sys.argv[1]);s=p.read_text().replace('{TASK}', 'This is a tiny lifecycle pilot. Remember the word MARIGOLD. On every launch, first inspect the steering inbox. If there is a pending message, read it, reply with MARIGOLD and its requested token, and acknowledge it by moving it into handled. If no message exists, reply P03-READY and wait. Do not do other work or ask questions.').replace('{FIRSTMATE_SPEC}', 'No implementation; only one short reply and wait. Do not initialize a presentation. The enclosing test owns all status updates.');p.write_text(s)
+p=Path(sys.argv[1]);s=p.read_text().replace('{TASK}', 'This is a tiny lifecycle pilot. Remember the word MARIGOLD. On every launch, first inspect the steering inbox. If there is a pending message, read it, reply with MARIGOLD and its requested token, and acknowledge it by moving it into handled. If no message exists, reply P03-READY and wait. Do not do other work or ask questions.').replace('{CAPTAIN_REQUIREMENTS}', '1. Exercise automatic parking and resumption.').replace('{FIRSTMATE_SPEC}', 'No implementation; only one short reply and wait. Do not initialize a presentation. The enclosing test owns all status updates.');p.write_text(s)
 PY
  if [ "$harness" = codex ]; then model=gpt-6.1-sol; else model=haiku; fi
  bash "$ROOT/bin/fm-spawn.sh" "$id" --host --harness "$harness" --model "$model" --effort low --backend herdr
@@ -105,7 +107,39 @@ PY
  done
  printf '%s\n' "$screen"
  printf 'needs-decision [at=%s]: waiting for pilot answer\n' "$(date +%s)" >> "$FM_HOME/state/$id.status"
- bash "$ROOT/bin/fm-control.sh" "$id" park
+ bash "$ROOT/bin/fm-capacity.sh" --json | jq -e --arg id "$id" '.lanes.ids | index($id) != null' >/dev/null || fail 'live worker did not occupy a lane'
+ scope=$(sed -n 's/^process_scope=//p' "$meta")
+ env FM_WORKER_PROCESS_SCOPE="$scope" sleep 120 &
+ background_pid=$!
+ for n in $(seq 1 120); do
+  if python3 - "$ROOT/bin/fm-worker-processes.py" "$scope" "$background_pid" <<'CHECK_CHILD'
+import importlib.util, sys
+spec=importlib.util.spec_from_file_location('worker_processes',sys.argv[1])
+module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+sys.exit(0 if int(sys.argv[3]) in module.owned(sys.argv[2]) else 1)
+CHECK_CHILD
+  then break; fi
+  [ "$n" -lt 120 ] || fail 'scoped process was not observed'
+  sleep 1
+ done
+ bash -c '. "$1"; worker_completion_tick' _ "$ROOT/bin/fm-watch.sh"
+ kill -0 "$background_pid" 2>/dev/null || fail 'parking interrupted the scoped process'
+ [ ! -f "$FM_HOME/state/$id.parked" ] || fail 'worker was parked with scoped work running'
+ kill "$background_pid"; wait "$background_pid" 2>/dev/null || true
+ background_pid=
+ for n in $(seq 1 120); do
+  bash -c '. "$1"; worker_completion_tick' _ "$ROOT/bin/fm-watch.sh"
+  [ ! -f "$FM_HOME/state/$id.parked" ] || break
+  [ "$n" -lt 120 ] || fail 'idle worker was not automatically parked'
+  sleep 1
+ done
+ python3 - "$ROOT/bin/fm-worker-processes.py" "$scope" <<'CHECK_SCOPE'
+import importlib.util, sys
+spec=importlib.util.spec_from_file_location('worker_processes',sys.argv[1])
+module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+assert not module.owned(sys.argv[2]), 'park left worker processes alive'
+CHECK_SCOPE
+ bash "$ROOT/bin/fm-capacity.sh" --json | jq -e --arg id "$id" '.lanes.ids | index($id) == null' >/dev/null || fail 'parked worker still occupies a lane'
  bash "$ROOT/bin/fm-crew-state.sh" "$id" --json
  original_session=$(python3 "$ROOT/bin/fm_task_sessions.py" resume-id "$FM_HOME/state" "$id" || true)
  printf claude > "$FM_HOME/config/crew-harness"

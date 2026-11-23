@@ -9,7 +9,7 @@ import sys
 import time
 
 
-def acquire(data, wait_seconds=5):
+def acquire(data, wait_seconds=5, *, read_only=False):
     path = Path(data) / '.work.lock'
     if Path(data).is_symlink() or path.is_symlink():
         raise ValueError('unsafe work lock path')
@@ -24,12 +24,14 @@ def acquire(data, wait_seconds=5):
         except OSError:
             pass
         raise ValueError('invalid inherited work lock')
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    access = os.O_RDONLY if read_only else os.O_WRONLY
+    mode = fcntl.LOCK_SH if read_only else fcntl.LOCK_EX
+    fd = os.open(path, os.O_CREAT | access | os.O_NOFOLLOW, 0o600)
     try:
-        deadline = time.monotonic() + wait_seconds
+        deadline = time.monotonic() + (0 if read_only else wait_seconds)
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, mode | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 remaining = deadline - time.monotonic()

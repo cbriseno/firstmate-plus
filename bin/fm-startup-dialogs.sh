@@ -75,9 +75,16 @@ classify() {
     }'
 }
 
-# Codex prints the directory on the line after "Folder access".
+# Codex may wrap the displayed directory across indented terminal rows.
+# Keep internal spaces and compare the complete reconstructed path exactly.
 dialog_path() {  # <screen>
-  printf '%s\n' "$1" | awk '/Folder access/ { f = 1; next } f && NF { sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print; exit }'
+  printf '%s\n' "$1" | awk '
+    /Folder access/ { f=1; next }
+    f && !started && NF { match($0, /[^ \t]/); indent=RSTART-1; started=1 }
+    f && started && (!NF || /Trust this folder\?/) { print path; printed=1; exit }
+    f && started { part=substr($0, indent+1); sub(/[ \t]+$/, "", part); path=path part }
+    END { if (started && !printed) print path }
+  '
 }
 
 # Claude lists the imported files between "External imports:" and "Important:".

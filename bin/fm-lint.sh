@@ -60,7 +60,7 @@
 # process runs under an enforced envelope: a wall deadline
 # (FM_LINT_ROOT_SECONDS, default 1200), a terminate-then-kill cleanup grace
 # (FM_LINT_ROOT_GRACE, default 5), and a per-process address-space limit
-# (FM_LINT_ROOT_MEMORY_KIB, default 12582912 = 12 GiB of virtual address
+# (FM_LINT_ROOT_MEMORY_KIB, CI default 12582912 = 12 GiB of virtual address
 # space per analysis process). The sizing rationale and RSS reduction threshold
 # live beside ROOT_MEMORY_KIB below. This is not a resident-memory ceiling;
 # check aggregate runner RSS in CI. The watchdog uses the shared
@@ -72,9 +72,10 @@
 # FM_LINT_REQUIRE_BOUNDS (a local developer lint, where hosts like macOS
 # cannot apply the address-space limit at all) each root still runs in its
 # own ShellCheck process with identical diagnostics and the local memory cap below.
-# Local runs attempt a 1536 MiB address-space cap (FM_LINT_LOCAL_MEMORY_KIB).
-# Hosts that reject ulimit -v, including macOS, explicitly report protection
-# unknown; the portable host lock still serializes their ShellCheck processes.
+# Local runs attempt a 1536 MiB address-space cap. FM_LINT_LOCAL_MEMORY_KIB
+# (or FM_LINT_ROOT_MEMORY_KIB with bounds required) can lower that cap locally.
+# Hosts that reject ulimit -v, including macOS, use fast local analysis.
+# Full-only CI and partition runs refuse if they cannot apply the limit.
 # This cap bounds virtual memory, not only the heap; exhaustion fails lint.
 # Use --fast explicitly for a smaller local analysis, never raw shellcheck.
 #
@@ -122,6 +123,7 @@ set -u
 
 ORIGINAL_ARGS=("$@")
 REQUIRED_SHELLCHECK=0.11.0
+LOCAL_MEMORY_CEILING_KIB=1572864
 # Cross-file codes that need --external-sources. No-source checks (local
 # changed-file mode and memory fallback) cannot judge them.
 LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
@@ -961,13 +963,6 @@ if [ "$resolved" != "$REQUIRED_SHELLCHECK" ]; then
     "$REQUIRED_SHELLCHECK" "$resolved" "$REQUIRED_SHELLCHECK" >&2
   exit 1
 fi
-if [ "$FAST" -eq 1 ]; then
-  printf 'fm-lint.sh: fast local mode; ShellCheck extended analysis disabled\n' >&2
-elif [ "$FOLLOW_SOURCES" -eq 0 ]; then
-  printf 'fm-lint.sh: local changed-file mode; ShellCheck source following disabled\n' >&2
-else
-  printf 'fm-lint.sh: full ShellCheck extended analysis enabled\n' >&2
-fi
 
 if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   printf 'fm-lint.sh: no changed lint targets\n'
@@ -985,6 +980,18 @@ if [ -n "$TELEMETRY" ]; then
   }
 fi
 
+# A local override may tighten the cap, including when a wall deadline is
+# required. Check length first so oversized values cannot overflow the test.
+fm_lint_clamp_local_memory() {  # <setting-name> <positive-kib>
+  local setting=$1 requested=$2
+  if [ "${#requested}" -gt "${#LOCAL_MEMORY_CEILING_KIB}" ] || [ "$requested" -gt "$LOCAL_MEMORY_CEILING_KIB" ]; then
+    printf 'fm-lint.sh: %s=%s exceeds the local memory ceiling; using %s KiB.\n' \
+      "$setting" "$requested" "$LOCAL_MEMORY_CEILING_KIB" >&2
+    requested=$LOCAL_MEMORY_CEILING_KIB
+  fi
+  printf '%s\n' "$requested"
+}
+
 # Per-root bounded-execution envelope. Under FM_LINT_REQUIRE_BOUNDS=1 the
 # watchdog is probed and the host's acceptance of ulimit -v is checked before
 # any root starts; failed checks refuse with a named error. A required-bounds run
@@ -992,22 +999,37 @@ fi
 # ShellCheck process with a separately probed local memory cap.
 LOCAL_MEMORY_KIB=
 if [ "${FM_LINT_REQUIRE_BOUNDS:-0}" != 1 ]; then
-  local_memory_requested=${FM_LINT_LOCAL_MEMORY_KIB:-1572864}
+  local_memory_requested=${FM_LINT_LOCAL_MEMORY_KIB:-$LOCAL_MEMORY_CEILING_KIB}
   case "$local_memory_requested" in
     ''|0*|*[!0-9]*)
       printf 'fm-lint.sh: FM_LINT_LOCAL_MEMORY_KIB must be a positive integer.\n' >&2
       exit 2 ;;
   esac
+  local_memory_requested=$(fm_lint_clamp_local_memory FM_LINT_LOCAL_MEMORY_KIB "$local_memory_requested")
   if ( ulimit -v "$local_memory_requested" ) 2>/dev/null; then
     LOCAL_MEMORY_KIB=$local_memory_requested
     printf 'fm-lint.sh: local address-space cap %s KiB per ShellCheck\n' "$LOCAL_MEMORY_KIB" >&2
   else
-    printf 'fm-lint.sh: local memory protection UNKNOWN (ulimit -v unavailable); host lock still applies.\n' >&2
+    if [ -n "$PARTITION" ] || [ "${CI:-}" = true ] || [ "${GITHUB_ACTIONS:-}" = true ]; then
+      printf 'fm-lint.sh: memory limit unavailable; refusing full-only lint.\n' >&2
+      exit 2
+    fi
+    FAST=1
+    ANALYSIS_MODE=fast
+    printf 'fm-lint.sh: memory limit unavailable; using fast local analysis.\n' >&2
   fi
 fi
+if [ "$FAST" -eq 1 ]; then
+  printf 'fm-lint.sh: fast local mode; ShellCheck extended analysis disabled\n' >&2
+elif [ "$FOLLOW_SOURCES" -eq 0 ]; then
+  printf 'fm-lint.sh: local changed-file mode; ShellCheck source following disabled\n' >&2
+else
+  printf 'fm-lint.sh: full ShellCheck extended analysis enabled\n' >&2
+fi
+
 ROOT_SECONDS=${FM_LINT_ROOT_SECONDS:-1200}
 ROOT_GRACE=${FM_LINT_ROOT_GRACE:-5}
-# 12 GiB of virtual address space per analysis process. ulimit -v caps
+# 12 GiB of virtual address space per CI analysis process. ulimit -v caps
 # address space, not resident memory; ShellCheck's GHC runtime reserves about
 # a third of that space, leaving ~8 GiB usable heap per root. Measured x86_64
 # demand for the heaviest roots is near 5.5-6 GiB: the 8 GiB address-space
@@ -1015,14 +1037,16 @@ ROOT_GRACE=${FM_LINT_ROOT_GRACE:-5}
 # tests/fm-pending-reply.test.sh, and
 # tests/fm-launch-prompt-signals-live-e2e.test.sh. CI runs one root per
 # lint job, so worst-case resident demand is ~8 GiB plus runner overhead,
-# inside the 16 GiB runner. Local lint defaults to two workers; two such
-# caps allow ~16 GiB resident plus host overhead, so use FM_LINT_JOBS=1 on
-# smaller local machines. A root that exceeds its cap fails by name.
+# inside the 16 GiB runner. A root that exceeds its cap fails by name.
 # Never disable, narrow, or redirect source-following to fit a root under
 # the cap. The roots sidecar records each root's peak RSS; roots peaking
 # above about 3 GiB resident are reduction candidates,
 # bin/fm-pending-reply-lib.sh first (its separate dedup fix is PR 5753).
-ROOT_MEMORY_KIB=${FM_LINT_ROOT_MEMORY_KIB:-12582912}
+root_memory_default=$LOCAL_MEMORY_CEILING_KIB
+if [ "${CI:-}" = true ] || [ "${GITHUB_ACTIONS:-}" = true ]; then
+  root_memory_default=12582912
+fi
+ROOT_MEMORY_KIB=${FM_LINT_ROOT_MEMORY_KIB:-$root_memory_default}
 for bound_pair in \
   "FM_LINT_ROOT_SECONDS=$ROOT_SECONDS" \
   "FM_LINT_ROOT_GRACE=$ROOT_GRACE" \
@@ -1038,6 +1062,9 @@ done
 
 BOUND_MECH=none
 if [ "${FM_LINT_REQUIRE_BOUNDS:-0}" = 1 ]; then
+  if [ "$root_memory_default" = "$LOCAL_MEMORY_CEILING_KIB" ]; then
+    ROOT_MEMORY_KIB=$(fm_lint_clamp_local_memory FM_LINT_ROOT_MEMORY_KIB "$ROOT_MEMORY_KIB")
+  fi
   bounds_problems=()
   if declare -F fm_exec_timed >/dev/null 2>&1; then
     # perl is mandatory above, so fm_exec_timed always takes its perl watchdog.

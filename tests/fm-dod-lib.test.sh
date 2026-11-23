@@ -484,6 +484,8 @@ test_worker_role_is_task_specific() {
   assert_grep 'Do not use `request_user_input`, `request_user_input_async`, or native question selectors' "$ROOT/worker/AGENTS.md" \
     "worker contract allows a question selector invisible to firstmate"
   assert_grep 'wait for the reply in your steering inbox' "$ROOT/worker/AGENTS.md" "worker contract does not name the reply channel"
+  assert_grep 'Never wait for other test runs to finish or for an idle machine before starting your own' "$ROOT/worker/AGENTS.md" \
+    "worker contract lets a worker wait for a machine with no other test runs"
   pass "launch role is task-specific and the worker contract owns the role"
 }
 

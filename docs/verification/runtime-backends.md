@@ -65,7 +65,7 @@ The lost-callback variant uses `FM_WORKER_RELAY_DROP_CALLBACK=1 FM_WORKER_RELAY_
 It replaces only the disposable native callback and requires evidence that the safe-point callback was omitted; the watcher still runs the production adapter against the real Codex activity source.
 When that source is unavailable, the guard requires an actionable owner notification before using its native-callback safe-point evidence for an explicit manual relaunch.
 On 2026-11-17, Linux with Herdr 0.9.5 and codex-cli 0.169.0 repeated the normal automatic continuation, then exercised this unavailable-activity path.
-The classifier intentionally returned `unknown codex-unverified` because its activity qualification remains pinned to 0.166.0; this verification does not expand that qualification.
+The classifier intentionally returned `unknown codex-unverified` on that build; the [Codex worker activity](#codex-worker-activity) section records later qualifications.
 The unavailable verdict reached the owner's queue once and preserved the note for manual recovery, rather than remaining silently at handoff requested.
 A successful relay is observed in the watcher information log rather than requiring an immediate wake-queue entry.
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-host-task.test.sh` covers unknown checker results, replayed callbacks, retired generations, profile/note preservation, control failure, terminal tasks, mid-turn threshold requests and teardown of relay signals.
@@ -153,8 +153,8 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ### Agent liveness name sources
 
-Verified 2026-11-13 on Linux with Claude Code 2.1.323 and codex-cli 0.166.0.
-Run `FM_HARNESS_LIVENESS_DRIFT=1 FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh` to refresh this token-free guard in disposable tmux resources.
+Verified 2026-11-23 on Linux with Claude Code 2.1.330 and codex-cli 0.169.0.
+Run `FM_HARNESS_LIVENESS_DRIFT=1 bash bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh` to refresh this token-free guard in disposable tmux resources.
 Both installed binaries classified alive and were identified at `comm` ancestry strength.
 The guard reported `checked 2 installed harness(es)` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
 
@@ -234,6 +234,7 @@ Claude showed the workspace-trust dialog, then "Allow external CLAUDE.md file im
 A Codex update is a banner and a Claude update is not shown with auto-update off, so no blocking update dialog exists to skip in these versions.
 `bin/fm-startup-dialogs.sh` answers the first three Codex and Claude dialogs named above inside the captain's approved scope and leaves the others.
 Refresh it by running `bin/fm-startup-dialogs.sh tmux <target> <harness> <launch-dir>` against a pane launched with a fresh config and reading its `startup-dialog:` lines, plus `tests/fm-startup-dialogs.test.sh` for the scope rules.
+On 2026-11-20, Codex 0.169.0 on Linux rendered a folder path across multiple rows; the startup dialog handler accepted the exact reconstructed launch path. The `tests/fm-launch-prompt-signals-live-e2e.test.sh` live guard captures that real dialog and replays it in a private pane without writing the trust store. Refresh with `FM_LAUNCH_PROMPT_SIGNALS_LIVE=1 bash bin/fm-test-run.sh tests/fm-launch-prompt-signals-live-e2e.test.sh`.
 Herdr's name for the Down key is not verified, so on Herdr the script's check that the accepting row is selected fails and the dialog stays for the operator.
 
 ## Codex worker editing and native repository skills
@@ -462,9 +463,12 @@ The callback uses filesystem metadata on Linux and macOS, independently of the L
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-codex-session-bind.test.sh tests/fm-busy-state.test.sh` refreshes the portable callback and existing native-server ownership regressions.
 
 Durable worker transcript binding was separately verified on 2026-11-14 on Linux with `codex-cli 0.169.0` in an isolated Herdr session.
-`FM_CODEX_SESSION_BIND_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-session-bind-live-e2e.test.sh` refreshes that credentialed proof.
-The verdict is `ok - codex-cli 0.169.0: real worker transcript bound; activity qualification unchanged`.
-The portable binding regression includes a newer CLI rollout; the real guard also requires that recording it leaves the newer runtime's activity verdict `unknown codex-unverified`.
+`FM_CODEX_SESSION_BIND_LIVE=1 bash bin/fm-heavy-run.sh bash tests/fm-codex-session-bind-live-e2e.test.sh` refreshes that credentialed proof and checks that an unsupported version remains unknown.
+The Linux activity classifier supports Codex CLI 0.166.0 and 0.169.0.
+On 2026-11-20, a Codex CLI 0.169.0 worker in an isolated tmux home published its result and completed its turn; the watcher observed `idle codex-rollout` and freed its task record, scratch copy, and process through ordinary teardown.
+With the same isolated launch upgraded during a live turn, the native completion callback bound the old launch to the live process, and the watcher again freed all three resources.
+`FM_CODEX_ACTIVITY_LIVE=1 FM_CODEX_ACTIVITY_NOTIFY_ONLY=1 bash bin/fm-heavy-run.sh bash bin/fm-test-run.sh tests/fm-codex-activity-live-e2e.test.sh` checks that a foreground tool keeps the turn busy and that normal completion settles it and reaches the notification hook.
+On 0.169.0 the tmux fixture left the second prompt in the composer, so the rest of the live matrix was unmeasured.
 
 ## Shared publication boundary
 
@@ -510,3 +514,9 @@ The current semantic activity limits remain explicit: unknown activity or an unc
 `FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-control.test.sh tests/fm-send-inbox.test.sh tests/fm-herdr-lab.test.sh` refreshes the portable wait kinds, preserved work, pending response, supervision lease and lab recovery checks.
 The initial lab snapshot lost during a canceled fixture was not reconstructed; explicit helper recovery verified the current default unchanged across its subsequent teardown.
 No macOS execution is claimed by these results.
+
+On 2026-11-21, Linux with Herdr 0.9.5, Codex CLI 0.169.0 and Claude Code 2.1.330 exercised automatic parking through the same live guard.
+Both workers released their process scopes and lanes, and their pending inbox messages were acknowledged after continuation; Codex resumed its transcript and the Claude case continued through a Codex takeover.
+The guard also kept each worker running while an additional scoped process was alive, then parked it after that process ended.
+`FM_LIVE=0 bash bin/fm-test-run.sh tests/fm-worker-park-safe.test.sh` checks that a live child delays parking and an unverified scope is not treated as safe.
+On macOS the process-scope check returns unknown and automatic parking waits; it has not been measured on a Mac.

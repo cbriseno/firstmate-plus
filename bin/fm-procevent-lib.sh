@@ -547,8 +547,14 @@ fm_procevent_extension_registration_load_locked() {  # <state> <source-id>
 
 # Exact legacy registration comparison used by conditional built-in retirement.
 fm_procevent_registration_matches_locked() {  # <state> <adapter> <source-id> <argv...>
-  local state=$1 adapter=$2 id=$3 reg dest tmp arg status=1
+  local state=$1 adapter=$2 id=$3
   shift 3
+  fm_procevent_registration_context_matches_locked "$state" "$adapter" "$id" '' '' "$@"
+}
+
+fm_procevent_registration_context_matches_locked() {  # <state> <adapter> <source-id> <review-task> <review-occurrence> <argv...>
+  local state=$1 adapter=$2 id=$3 review_task=$4 review_occurrence=$5 reg dest tmp arg status=1
+  shift 5
   fm_procevent_adapter_valid "$adapter" || return 1
   fm_procevent_source_id_valid "$id" || return 1
   [ "$#" -ge 1 ] || return 1
@@ -562,6 +568,10 @@ fm_procevent_registration_matches_locked() {  # <state> <adapter> <source-id> <a
   tmp=$(umask 077; mktemp "$reg/.source-match.XXXXXX") || return 1
   if {
     printf 'adapter=%s\n' "$adapter"
+    if [ -n "$review_task" ]; then
+      printf 'review_task=%s\n' "$review_task"
+      printf 'review_occurrence=%s\n' "$review_occurrence"
+    fi
     printf 'argc=%s\n' "$#"
     printf 'argv:\n'
     printf '%s\n' "$@"

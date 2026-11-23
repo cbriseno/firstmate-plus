@@ -191,17 +191,17 @@ fi
 ok "help renders the complete header only"
 
 # 1. First candidate with positive effective quota.
-out=$(call_choose --snapshot "$LAB/captured.json" --candidate default --candidate codex:model:codex_bengalfox --candidate claude:claude-3-5-sonnet)
+out=$(call_choose --snapshot "$LAB/captured.json" --candidate claude:fable --candidate codex:model:codex_bengalfox --candidate claude:claude-3-5-sonnet)
 [ "$out" = "claude claude-3-5-sonnet" ] || fail "first positive: expected 'claude claude-3-5-sonnet', got '$out'"
 ok "first positive candidate wins"
 
 # 2. Exhausted provider is skipped.
-out=$(call_choose --snapshot "$LAB/captured.json" --candidate default --candidate claude:claude-3-5-sonnet)
+out=$(call_choose --snapshot "$LAB/captured.json" --candidate claude:fable --candidate claude:claude-3-5-sonnet)
 [ "$out" = "claude claude-3-5-sonnet" ] || fail "exhausted skip: expected 'claude claude-3-5-sonnet', got '$out'"
 ok "exhausted provider is skipped"
 
 # 3. No candidates have positive quota.
-if out=$(call_choose --snapshot "$LAB/captured.json" --candidate default 2>/dev/null); then
+if out=$(call_choose --snapshot "$LAB/captured.json" --candidate claude:fable 2>/dev/null); then
   fail "no positive: expected exit 1, got exit 0 with '$out'"
 fi
 [ "$out" = "none" ] || fail "no positive: expected 'none', got '$out'"
@@ -517,7 +517,9 @@ fi
 [ "$out" = "none" ] || fail "quoted exhausted model scope returned: $out"
 ok "quoted TOON scope vetoes dispatch"
 
-if out=$(call_choose --snapshot "$LAB/captured.json" --candidate cursor:default 2>/dev/null); then
+jq '.providers |= map(if .provider == "codex" then .quotaSemantics = {"status":"unknown","effectiveAvailability":[]} else . end)' \
+  "$LAB/captured.json" > "$LAB/unknown-provider.json"
+if out=$(call_choose --snapshot "$LAB/unknown-provider.json" --candidate codex:default 2>/dev/null); then
   fail "provider-level unknown quota unexpectedly dispatched"
 fi
 [ "$out" = "none" ] || fail "provider-level unknown quota returned: $out"
@@ -620,18 +622,18 @@ cat > "$SCHEMA6" <<'JSON'
   "generatedAt": "2030-01-01T00:00:00Z",
   "schemaVersion": 6,
   "providers": [
-    { "provider": "claude", "accountKey": "default", "quotaSemantics": { "status": "unknown", "effectiveAvailability": [] } },
+    { "provider": "cursor", "accountKey": "default", "quotaSemantics": { "status": "unknown", "effectiveAvailability": [] } },
     { "provider": "codex", "accountKey": "openai-codex", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 3, "runway": { "status": "projected_exhaustion" } } ] } },
     { "provider": "codex", "accountKey": "openai-codex-work", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 11, "runway": { "status": "projected_exhaustion" } } ] } },
-    { "provider": "cursor", "accountKey": "default", "quotaSemantics": { "status": "known", "effectiveAvailability": [
+    { "provider": "claude", "accountKey": "default", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 24, "runway": { "status": "projected_exhaustion" } } ] } }
   ]
 }
 JSON
-out=$(call_choose --snapshot "$SCHEMA6" --candidate codex:default --candidate cursor:default)
-[ "$out" = "cursor default" ] || fail "schema 6 snapshot returned: $out"
+out=$(call_choose --snapshot "$SCHEMA6" --candidate codex:default --candidate claude:default)
+[ "$out" = "claude default" ] || fail "schema 6 snapshot returned: $out"
 ok "native Codex never infers an account from a Pi lane"
 
 SCHEMA6_NATIVE="$LAB/schema6-native.json"
@@ -645,31 +647,31 @@ jq '
       .quotaSemantics.effectiveAvailability |= map(.effectivePercentRemaining = 80 | .runway.status = "through_reset"))]
 ' "$SCHEMA6" > "$SCHEMA6_NATIVE"
 for model in default gpt-5.6-sol; do
-  out=$(call_choose --snapshot "$SCHEMA6_NATIVE" --candidate "codex:$model" --candidate cursor:default)
+  out=$(call_choose --snapshot "$SCHEMA6_NATIVE" --candidate "codex:$model" --candidate claude:default)
   [ "$out" = "codex $model" ] || fail "native Codex did not select codex-home for $model: $out"
 done
 jq '.providers |= reverse' "$SCHEMA6_NATIVE" > "$LAB/schema6-reversed.json"
-out=$(call_choose --snapshot "$LAB/schema6-reversed.json" --candidate codex:default --candidate cursor:default)
+out=$(call_choose --snapshot "$LAB/schema6-reversed.json" --candidate codex:default --candidate claude:default)
 [ "$out" = "codex default" ] || fail "native Codex selection depended on row order: $out"
 
 jq '.providers |= map(select(.provider != "codex" or .accountKey != "default") |
   if .accountKey == "codex-home" then .accountKey = "default" else . end)' "$SCHEMA6_NATIVE" > "$LAB/schema6-default.json"
-out=$(call_choose --snapshot "$LAB/schema6-default.json" --candidate codex:default --candidate cursor:default)
+out=$(call_choose --snapshot "$LAB/schema6-default.json" --candidate codex:default --candidate claude:default)
 [ "$out" = "codex default" ] || fail "native Codex did not fall back to the default row: $out"
 ok "native Codex binds to codex-home before default, independently of model and row order"
 
 jq '.schemaVersion = 5 | .providers |= unique_by(.provider) | del(.providers[].accountKey)' "$SCHEMA6" > "$SCHEMA5_PAIR"
-out=$(call_choose --snapshot "$SCHEMA5_PAIR" --candidate codex:default --candidate cursor:default)
+out=$(call_choose --snapshot "$SCHEMA5_PAIR" --candidate codex:default --candidate claude:default)
 [ "$out" = "codex default" ] || fail "schema 5 pair snapshot returned: $out"
 ok "the same path still selects from a schema 5 snapshot by provider alone"
 
 jq 'del(.providers[1].accountKey)' "$SCHEMA6" > "$SCHEMA6_KEYLESS"
-if err=$(call_choose --snapshot "$SCHEMA6_KEYLESS" --candidate cursor:default 2>&1); then
+if err=$(call_choose --snapshot "$SCHEMA6_KEYLESS" --candidate claude:default 2>&1); then
   fail "schema 6 row without accountKey unexpectedly dispatched"
 fi
 [ "$err" = "error: invalid quota-axi provider data" ] || fail "keyless schema 6 row returned: $err"
 jq '.providers[2].accountKey = "openai-codex"' "$SCHEMA6" > "$SCHEMA6_DUPLICATE"
-if err=$(call_choose --snapshot "$SCHEMA6_DUPLICATE" --candidate cursor:default 2>&1); then
+if err=$(call_choose --snapshot "$SCHEMA6_DUPLICATE" --candidate claude:default 2>&1); then
   fail "duplicate provider + accountKey unexpectedly dispatched"
 fi
 [ "$err" = "error: invalid quota-axi provider data" ] || fail "duplicate schema 6 key returned: $err"
@@ -682,17 +684,17 @@ generatedAt: "2030-01-01T00:00:00Z"
 quota[3]{provider,accountKey,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
   codex,openai-codex,all_models,3,-1.4788,projected_exhaustion,established,weekly,"2030-01-03T00:00:00Z"
   codex,openai-codex-work,all_models,11,-5.6818,projected_exhaustion,established,weekly,"2030-01-07T00:00:00Z"
-  cursor,default,all_models,24,0.3917,projected_exhaustion,established,auto_usage,"2030-01-12T00:00:00Z"
+  claude,default,all_models,24,0.3917,projected_exhaustion,established,auto_usage,"2030-01-12T00:00:00Z"
 exhaustion[2]{provider,accountKey,scope,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId}:
   codex,openai-codex,all_models,11644,"2030-01-01T03:00:00Z",weekly
   codex,openai-codex-work,all_models,11447,"2030-01-01T03:00:00Z",weekly
 attention[1]{provider,accountKey,scope,kind,detail,remedy}:
-  claude,default,all,auth_required,keychain_prompt_required · reason keychain_access_required,quota-axi --allow-keychain-prompt
+  cursor,default,all,auth_required,keychain_prompt_required · reason keychain_access_required,quota-axi --allow-keychain-prompt
 help[1]:
   Run `quota-axi --full` for windows, pace, reserve, and account evidence
 TOON
-out=$(call_choose --snapshot "$SCHEMA6_TOON" --candidate claude:default --candidate codex:default --candidate cursor:default)
-[ "$out" = "cursor default" ] || fail "schema 6 TOON snapshot returned: $out"
+out=$(call_choose --snapshot "$SCHEMA6_TOON" --candidate codex:default --candidate claude:default)
+[ "$out" = "claude default" ] || fail "schema 6 TOON snapshot returned: $out"
 ok "schema 6 TOON with the accountKey column is accepted"
 
 [ "$(wc -l < "$CALLS" | tr -d '[:space:]')" = 1 ] || fail "helper took an additional quota snapshot"

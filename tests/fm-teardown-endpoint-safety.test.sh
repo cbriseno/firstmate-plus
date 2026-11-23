@@ -183,7 +183,10 @@ test_non_pool_teardown_ignores_task_set_lock() {
     fm_lock_try_acquire "$lock" || exit 1
     trap 'fm_lock_release "$lock"' EXIT
     : > "$ready"
-    sleep 30
+    deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+    while kill -0 "$FM_TEST_SUITE_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+      sleep 0.1
+    done
   ) &
   holder=$!
   while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
@@ -465,7 +468,13 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
   # Staged in this shell, not a command substitution: a background child of a
   # $(...) subshell does not outlive it, and the point of this worker is to be
   # alive in the slot while teardown runs.
-  ( cd "$dir/worktree" && exec sleep 30 ) &
+  (
+    cd "$dir/worktree" || exit 1
+    deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+    while kill -0 "$FM_TEST_SUITE_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+      sleep 0.1
+    done
+  ) &
   worker=$!
 
   set +e

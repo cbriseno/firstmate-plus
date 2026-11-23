@@ -261,6 +261,7 @@ case "${1:-}" in
   pane)
     case "${2:-}" in
       read)
+        [ -z "${FM_FAKE_HERDR_READ_LOG:-}" ] || printf "read\n" >> "$FM_FAKE_HERDR_READ_LOG"
         [ "${FM_FAKE_HERDR_MISSING:-0}" = 1 ] && exit 1
         [ "${FM_FAKE_HERDR_READ_FAIL:-0}" = 1 ] && exit 1
         if [ "${FM_FAKE_HERDR_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
@@ -2742,7 +2743,8 @@ test_no_run_herdr_unknown_uses_backend_capture() {
   FM_FAKE_TMUX_MISSING=1
   FM_FAKE_HERDR_BUSY=1
   FM_FAKE_HERDR_AGENT_STATUS=working
-  local out; out=$(run_crew_state "$d" feat-herdr)
+  local out; out=$(FM_FAKE_HERDR_READ_LOG="$d/reads" run_crew_state "$d" feat-herdr)
+  [ "$(wc -l < "$d/reads" | tr -d " ")" = 1 ] || fail "one state observation should read the pane once"
   assert_contains "$out" "state: working" "herdr native busy -> working"
   assert_contains "$out" "source: pane" "herdr native busy -> pane source"
   assert_contains "$out" "herdr-native" "the herdr verdict names its native source"

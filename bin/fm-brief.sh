@@ -19,6 +19,7 @@
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--effect <line>] [--publish] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--effect <line>] [--publish] [--herdr-lab]
+#        fm-brief.sh <task-id> --scout --installation [--effect <line>]
 #        fm-brief.sh <task-id> --host --path <absolute-or-HOME-relative-path> [--path <path>...] [--effect <line>] [--publish]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -36,12 +37,11 @@
 #   omitting both still fails loudly so an accidental omission is never silent.
 #   Set FM_SECONDMATE_CHARTER='<charter>' to fill the charter text.
 #   Set FM_SECONDMATE_SCOPE='<scope>' to write a routing scope distinct from the charter text.
-#   --herdr-lab is mandatory when the task will issue Herdr lifecycle commands.
-#   It adds the hard isolation contract backed by bin/fm-herdr-lab.sh.
-#   The flag must be explicit because {TASK} and {FIRSTMATE_SPEC} are filled
-#   after scaffolding and the caller-supplied repo string cannot reliably
-#   identify this repo. Briefs made without it carry a loud declaration so an
-#   omitted contract cannot be silent.
+#   --herdr-lab explicitly requests the hard isolation contract backed by
+#   bin/fm-herdr-lab.sh when the task will issue Herdr lifecycle commands.
+#   Ship and scout scaffolds include the isolation contract by default, so a
+#   later acceptance requirement cannot leave the worker without a safe lab.
+#   The contract is used only when Herdr lifecycle operations are necessary.
 # For ship tasks, --mode is REQUIRED and shapes the definition of done. Firstmate
 # resolves it per task at intake (SUPERVISOR.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never reads it:
@@ -68,6 +68,10 @@
 #   required for ship, scout, and host scaffolds; reason_required rules also
 #   require a rationale. Existing briefs without a category need the documented
 #   fm-spawn override or a recorded category before launch.
+# --dispatch-effort <level> records the selected effort for automatic dispatch
+#   when the configured profile does not already fix it.
+# --dispatch-harness <name> and --dispatch-model <name> record the other axes
+#   when no configured profile supplies them.
 # --base-branch <branch> starts the task from origin's <branch> instead of the
 # repository default, for work that belongs on a named integration, feature, or
 # release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
@@ -208,6 +212,7 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
    Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` to the status file.
    Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.
+   A load wait below the current admission ceiling is rejected; choose another exit condition.
    Do not declare active implementation or reasoning as a wait.
    Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
    When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time; for your own background job or command with a timeout, that time is its start plus its timeout, rounded up to the minute.
@@ -248,6 +253,7 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 . "$SCRIPT_DIR/fm-host-task-lib.sh"
 HERDR_LAB=0
 NO_PROJECTS=0
+INSTALLATION=0
 MODE=
 MODE_SET=0
 BRANCH_PREFIX=fm/
@@ -267,6 +273,9 @@ EFFECT_SET=0
 PUBLISH=0
 CATEGORY=
 RATIONALE=
+DISPATCH_EFFORT=
+DISPATCH_HARNESS=
+DISPATCH_MODEL=
 POS=()
 want_value=
 for a in "$@"; do
@@ -286,6 +295,9 @@ for a in "$@"; do
       effect) EFFECT=$a; EFFECT_SET=1 ;;
       category) CATEGORY=$a ;;
       rationale) RATIONALE=$a ;;
+      dispatch-effort) DISPATCH_EFFORT=$a ;;
+      dispatch-harness) DISPATCH_HARNESS=$a ;;
+      dispatch-model) DISPATCH_MODEL=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -296,6 +308,7 @@ for a in "$@"; do
     --path) want_value=path ;;
     --path=*) HOST_PATHS+=("${a#--path=}") ;;
     --scout) KIND=scout ;;
+    --installation) INSTALLATION=1 ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
@@ -317,6 +330,12 @@ for a in "$@"; do
     --category=*) CATEGORY=${a#--category=} ;;
     --rationale) want_value=rationale ;;
     --rationale=*) RATIONALE=${a#--rationale=} ;;
+    --dispatch-effort) want_value=dispatch-effort ;;
+    --dispatch-effort=*) DISPATCH_EFFORT=${a#--dispatch-effort=} ;;
+    --dispatch-harness) want_value=dispatch-harness ;;
+    --dispatch-harness=*) DISPATCH_HARNESS=${a#--dispatch-harness=} ;;
+    --dispatch-model) want_value=dispatch-model ;;
+    --dispatch-model=*) DISPATCH_MODEL=${a#--dispatch-model=} ;;
     --publish) PUBLISH=1 ;;
     --effect) want_value=effect ;;
     --effect=*) EFFECT=${a#--effect=}; EFFECT_SET=1 ;;
@@ -332,11 +351,17 @@ done
 # The scaffold records the operator's task classification, never infers it.
 if [ "$KIND" = secondmate ]; then
   [ "$PUBLISH" -eq 0 ] || { echo 'error: --publish applies only to ship, scout, and host briefs' >&2; exit 1; }
-  [ -z "$CATEGORY$RATIONALE" ] || { echo 'error: --category and --rationale apply only to worker briefs' >&2; exit 1; }
+  [ -z "$CATEGORY$RATIONALE$DISPATCH_EFFORT$DISPATCH_HARNESS$DISPATCH_MODEL" ] || { echo 'error: dispatch options apply only to worker briefs' >&2; exit 1; }
 else
   case "$CATEGORY" in *[!a-z0-9-]*) echo 'error: --category requires lowercase letters, digits, or hyphens' >&2; exit 1 ;; esac
   case "$RATIONALE" in *$'\n'*|*$'\r'*) echo 'error: --rationale must be one line' >&2; exit 1 ;; esac
-  [ -z "$RATIONALE" ] || [ -n "$CATEGORY" ] || { echo 'error: --rationale requires --category' >&2; exit 1; }
+  case "$DISPATCH_EFFORT" in ''|low|medium|high|xhigh|max) ;; *) echo 'error: invalid --dispatch-effort' >&2; exit 1 ;; esac
+  case "$DISPATCH_HARNESS" in *[!a-z0-9-]*) echo 'error: invalid --dispatch-harness' >&2; exit 1 ;; esac
+  case "$DISPATCH_MODEL" in *$'\n'*|*$'\r'*) echo 'error: --dispatch-model must be one line' >&2; exit 1 ;; esac
+  if [ -z "$CATEGORY" ] && [ -n "$DISPATCH_EFFORT$DISPATCH_HARNESS$DISPATCH_MODEL" ]; then
+    [ -n "$DISPATCH_EFFORT" ] && [ -n "$DISPATCH_HARNESS" ] && [ -n "$DISPATCH_MODEL" ] || { echo 'error: without a category record all three dispatch axes' >&2; exit 1; }
+  fi
+  [ -z "$RATIONALE" ] || [ -n "$CATEGORY$DISPATCH_HARNESS" ] || { echo 'error: --rationale requires a category or dispatch profile' >&2; exit 1; }
   if [ -f "$CONFIG/crew-dispatch.json" ]; then
     categories=$(jq -r 'if ((.rules // []) | type) != "array" then error("invalid rules") else any((.rules // [])[]; has("category")) end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || { echo 'error: invalid dispatch categories' >&2; exit 1; }
     if [ "$categories" = true ]; then
@@ -465,6 +490,11 @@ if [ "$KIND" = host ]; then
 elif [ "${#HOST_PATHS[@]}" -gt 0 ]; then
   echo 'error: --path requires --host' >&2; exit 2
 fi
+if [ "$INSTALLATION" -eq 1 ]; then
+  [ "$KIND" = scout ] && [ "${#POS[@]}" -eq 1 ] && [ "$BASE_BRANCH_SET" -eq 0 ] || {
+    echo 'error: --installation requires --scout with no project or base branch' >&2; exit 2;
+  }
+fi
 BRANCH="$BRANCH_PREFIX$ID"
 if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
   echo "error: --branch-prefix and task id must form a valid git branch (got '$BRANCH')" >&2
@@ -551,9 +581,8 @@ fi
 # path here remains the fallback for a worker launched without that export.
 # The doorbell itself is self-describing, so this section is reinforcement
 # for the natural-checkpoint habit, not the only carrier of the instruction.
-# config/wait-no-turns (docs/configuration.md) adds the line that a waiting
-# worker does not poll the inbox: checkpoint checks happen during active work,
-# so waiting still spends no turns.
+# config/wait-no-turns keeps decision waits turn-free; active monitoring
+# checks the inbox between bounded waits.
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Declared progress and safe pauses
 $PROGRESS_CONTRACT
@@ -570,27 +599,32 @@ if [ "$KIND" = secondmate ]; then
   INBOX_SECTION="# Firstmate instruction inbox$INBOX_SECTION"
 fi
 if [ -e "$CONFIG/wait-no-turns" ]; then
-  INBOX_SECTION+="Do not poll or list the inbox while waiting; a waiting instruction rings."$'\n'
+  if [ "$KIND" = secondmate ]; then
+    INBOX_SECTION+="Do not poll or list the inbox while waiting; a waiting instruction rings."$'\n'
+  else
+    INBOX_SECTION+="During active monitoring, check the inbox between bounded waits as the worker contract requires."$'\n'
+  fi
 fi
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
 SHORT_INBOX="# Firstmate instruction inbox${INBOX_SECTION#*"# Firstmate instruction inbox"}"
 
-# How a crewmate or scout waits. Every model turn resends the whole context, so
-# a wait must cost no turns: a decision wait ends the turn, and an external
-# wait sleeps in one bounded blocking shell command sized to the harness.
+# How a crewmate or scout waits. A decision wait ends the turn; active
+# monitoring checks the inbox between bounded waits while other external
+# waits use a blocking shell command sized to the harness.
 # Emitted only when config/wait-no-turns is present.
 IFS= read -r -d '' WAIT_SECTION <<'EOF' || true
 # Waiting
-Every turn you take resends your whole context, so a wait must cost no turns.
+Every turn you take resends your whole context, so a decision wait must cost no turns.
 When rule 5 or 6 requires stopping, end your turn at once: do not check the inbox, the status file, or anything else, because the answer arrives as a terminal message that starts your next turn.
-Wait on anything external - a pipeline gate, PR checks, a heavy-test slot - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh pr checks <pr> --watch`, or `until <condition>; do sleep 30; done` for anything else.
-Never spend turns on `sleep` followed by a status check, and never background a command in order to poll it.
+For active monitoring of a running build or other task, bound each blocking wait to 30 seconds and check the inbox before the next wait or task step.
+Keep the running work alive while checking; use the harness's bounded process wait or a task job when the work must survive a conversation relaunch.
+Wait on other external conditions with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh pr checks <pr> --watch`, or `until <condition>; do sleep 30; done` for anything else.
 In Claude Code that `until` loop in a single Bash call is the sanctioned foreground wait: when the harness refuses a sleep-then-check command and points you at backgrounding instead, reissue the wait as the loop rather than accepting the background.
 Bound that command by what your harness lets one command run: in Pi pass the bash tool a `timeout` of at most 2700 seconds, because Pi sets none by default; in Claude Code pass the Bash tool its maximum `timeout` of 600000 ms, because its default is 2 minutes; in Codex keep waiting on a still-running command with empty `write_stdin` polls of up to 300000 ms; elsewhere pass your shell tool its largest timeout and assume at most 10 minutes.
 Give any `--wait` a duration a little under that bound.
-When the bound passes with nothing changed, run the same blocking command again, with no status check in between.
+When the bound passes with nothing changed, run the same blocking command again; active monitoring follows the inbox check above.
 The one exception is `respond`: it sent its answer before it began waiting, so reattach with `no-mistakes axi run --wait` instead, and never send the same `respond` again, because it would answer whichever gate parks next without you reading it.
-A wait your shell can watch this way needs no `paused:` line, except your own pipeline run, a long foreground command, or your own validation round, which you declare once just before its blocking hold: append `paused:` once just before its first blocking command, then stay in the command, and never append it again as you reissue that command.
+A wait your shell can watch this way needs no `paused:` line, except your own pipeline run, a long foreground command, or your own validation round, which you declare once just before its blocking hold: append `paused:` once just before its first blocking command, then continue the wait, and never append it again as you reissue that command.
 EOF
 WAIT_SECTION=${WAIT_SECTION%$'\n'}
 WAIT_BLOCK=
@@ -698,32 +732,10 @@ fi
 
 REPO=${POS[1]:-host}
 
-if [ "$HERDR_LAB" -eq 1 ]; then
-HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
-# shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
-HERDR_SECTION=$(printf '%s\n' \
-'# Herdr isolation - HARD SAFETY CONTRACT' \
-'This brief was explicitly scaffolded with `--herdr-lab` because the task will drive Herdr lifecycle behavior.' \
-'On Herdr 0.7.3 the API socket is not relocatable by `HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME`, or `HOME`.' \
-'A named non-`default` session plus an explicit `--session <name>` Herdr option on every call is the only viable local isolation.' \
-'' \
-'For tmux-based lab primaries, `bin/fm-lab-home.sh` owns the short private socket directory; do not place `TMUX_TMPDIR` under the lab home or worktree.' \
-'Use `LAB_HOME_HELPER='"$(shell_quote "$FM_ROOT/bin/fm-lab-home.sh")"'`, then `LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$FM_HOME")` and launch tmux with `TMUX_TMPDIR="$LAB_TMUX_DIR"`.' \
-'Your single EXIT cleanup trap must kill only the server addressed through that `TMUX_TMPDIR`, call `"$LAB_HOME_HELPER" teardown "$FM_HOME"`, and call the Herdr teardown below; do not install a second trap that replaces either cleanup.' \
-'' \
-'1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name '"$ID"')`.' \
-'   Install the combined EXIT cleanup before provisioning, then provision only with `"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"`.' \
-'2. Run every task-specific non-lifecycle Herdr command through `"$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" <arguments...>`.' \
-'   The helper supplies the required `--session "$HERDR_LAB_SESSION"` as a Herdr option, before any `--` delimiter; `HERDR_SESSION` alone is never accepted as isolation.' \
-'3. Teardown only through `"$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION"`.' \
-'   It re-checks refuse-default immediately before stop and again immediately before delete, and fails closed on ambiguity.' \
-'4. If an experiment requires a deliberate mid-run session stop, use only `"$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION"`; it performs the same immediate refuse-default check.' \
-'5. Forbidden commands: direct `herdr server stop`, every other server-global operation such as `herdr server live-handoff` or reload/update operations, direct `herdr session stop`, direct `herdr session delete`, and any Herdr call scoped only by ambient or inline `HERDR_SESSION`.' \
-'6. The helper records the live default session before provisioning and verifies the identical fleet state after teardown.' \
-'   A missing, stopped, or changed default session is a hard tripwire failure, never a cleanup warning to ignore.' \
-'' \
-'Never bypass the helper, even for a read-only lifecycle probe or cleanup after failure.' \
-'The captain fleet uses the running `default` session.')
+if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$HERDR_LAB" -eq 1 ]; then
+# shellcheck source=bin/fm-herdr-contract-lib.sh
+. "$SCRIPT_DIR/fm-herdr-contract-lib.sh"
+HERDR_SECTION=$(fm_herdr_contract "$FM_ROOT" "$ID")
 else
 IFS= read -r -d '' HERDR_SECTION <<'EOF' || true
 # Herdr lifecycle declaration - NOT ENABLED
@@ -744,20 +756,28 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 
 ## Firstmate spec
 {FIRSTMATE_SPEC}
-After filling intent, replace the requirements placeholder with the output of `fm-brief.sh --requirements <this-brief>`; bin/fm-dod-lib.sh owns acceptance.
-For complex work, list the independent deliverables and how they integrate in this spec before dispatch.
+
+Report language: use the language of the request above; if it is unspecified, use the installation language. Carry it into the report, actions, and checks.
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 if [ -n "$CATEGORY" ]; then
   TASK_SECTION="$TASK_SECTION
 Dispatch category: $CATEGORY"
-  if [ -n "$RATIONALE" ]; then TASK_SECTION="$TASK_SECTION
-Dispatch rationale: $RATIONALE"; fi
 fi
+if [ -n "$RATIONALE" ]; then TASK_SECTION="$TASK_SECTION
+Dispatch rationale: $RATIONALE"; fi
+if [ -n "$DISPATCH_HARNESS" ]; then TASK_SECTION="$TASK_SECTION
+Dispatch harness: $DISPATCH_HARNESS"; fi
+if [ -n "$DISPATCH_MODEL" ]; then TASK_SECTION="$TASK_SECTION
+Dispatch model: $DISPATCH_MODEL"; fi
+if [ -n "$DISPATCH_EFFORT" ]; then TASK_SECTION="$TASK_SECTION
+Dispatch effort: $DISPATCH_EFFORT"; fi
 if [ "$PUBLISH" -eq 1 ] && [ "$EFFECT_SET" -eq 0 ]; then
   EFFECT='publica lo integrado por push al remoto del proyecto a través de su compuerta de publicación, sin pedir autorización adicional'
   EFFECT_SET=1
 fi
+if [ "$PUBLISH" -eq 1 ]; then TASK_SECTION="$TASK_SECTION
+Publication task: yes"; fi
 if [ "$EFFECT_SET" -eq 1 ]; then
   case "$KIND" in secondmate) echo "error: --effect applies only to ship, scout, and host briefs" >&2; exit 1 ;; esac
   case "$EFFECT" in ''|*$'\n'*|*$'\r'*) echo "error: --effect needs one line naming the exact outward action the task's own ask performs" >&2; exit 1 ;; esac
@@ -818,15 +838,27 @@ Append done with a numeric at stamp only when the requested operation is complet
 Teardown removes scratch only; it never removes the authorized outside paths.
 EOF
   append_brief_include
-  echo "scaffolded: $BRIEF (host; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (host; replace {TASK} and {FIRSTMATE_SPEC}, then generate {CAPTAIN_REQUIREMENTS} with fm-brief.sh --requirements)"
   exit 0
 fi
 
+if [ "$INSTALLATION" -eq 1 ]; then
+  SETUP_BASE="Installation audit: read the Firstmate installation at $FM_HOME without borrowing a project.
+Working directory: $DATA/$ID/work
+This directory is not a Git repository. Read the installation; do not modify it."
+fi
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
   LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: create or resume one board with lavish-axi --no-open <artifact.html>, give its URL once, reuse that session through feedback rounds, never launch its URL in a browser, and end it with lavish-axi end <artifact.html> when finished. Then arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id> --park; never run lavish-axi poll yourself. Re-arm with --park after each nonterminal round, with a reply that answers the captain directly in one or two sentences before any status line or escalation, to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL while you wait for the reviewer, and end your turn: --park closes your idle session and the next round resumes it. Stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor); still deliver the required standalone HTML report, and ask firstmate to arrange any requested review.'
+fi
+if [ "$INSTALLATION" -eq 1 ]; then
+  # shellcheck disable=SC2016 # The worker must receive the variable literally.
+  SCOUT_SCRATCH_RULE='Keep the installation read-only. Put scratch output in the task tmpdir (the parent of `$GOTMPDIR`), which teardown deletes.'
+else
+  # shellcheck disable=SC2016 # The worker must receive the variable literally.
+  SCOUT_SCRATCH_RULE='Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of `$GOTMPDIR`), which teardown deletes.'
 fi
 cat > "$BRIEF" <<EOF
 $TASK_SECTION
@@ -836,12 +868,13 @@ $HERDR_SECTION
 
 # Setup
 $SETUP_BASE
+$(if [ "$INSTALLATION" -eq 1 ]; then printf "Installation audit: read-only\n"; fi)
 This is a SCOUT task: deliver a written report, not a PR.
-The worktree is disposable; teardown preserves local changes in a recoverable backup, but the report must stand alone.
+The task copy is disposable; teardown preserves local changes in a recoverable backup, but the report must stand alone.
 
 # Task-specific rules and paths
 Never push or open a PR.
-Keep project edits inside this worktree; put labs, installations, copies, and other scratch output in the task tmpdir (the parent of \`\$GOTMPDIR\`), which teardown deletes.
+$SCOUT_SCRATCH_RULE
 Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
 Status command: \`$STATUS_REPORT\`
 $SHORT_INBOX
@@ -858,7 +891,7 @@ When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\`
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 append_brief_include
-echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC}, then generate {CAPTAIN_REQUIREMENTS} with fm-brief.sh --requirements)"
 exit 0
 fi
 
@@ -900,6 +933,8 @@ $RULE1
    Keep only reports, logs, and captures under \`$DATA/$ID/\`; outside the worktree, also write the status, card, and steering-inbox records authorized below.
    Leave the worktree clean before reporting done.
 3. $FORGE_RULE_LINE
+4. Before handing off a code change, run its regression test that fails without the change, the project's check, and a short run of the critical flow.
+   For Firstmate itself, run \`bin/fm-test-run.sh --changed --base origin/main\` once per batch before publication, from a clean checkout of main.
 Status command: \`$STATUS_REPORT\`
 $SHORT_INBOX
 Declared external-wait status: $PAUSED_VERB
@@ -909,9 +944,9 @@ $DOD
 EOF
 append_brief_include
 if [ "$FORGE" = none ]; then
-  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC}, then generate {CAPTAIN_REQUIREMENTS} with fm-brief.sh --requirements)"
 elif [ "$FORGE" = gerrit ]; then
-  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE; replace {TASK} and {FIRSTMATE_SPEC}, then generate {CAPTAIN_REQUIREMENTS} with fm-brief.sh --requirements)"
 else
-  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE; replace {TASK} and {FIRSTMATE_SPEC}, then generate {CAPTAIN_REQUIREMENTS} with fm-brief.sh --requirements)"
 fi

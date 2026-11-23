@@ -12,6 +12,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+TEST_ORIGINAL_PATH=$PATH
 TMP_ROOT=$(fm_test_tmproot fm-timeout-lib)
 
 # A PATH with perl and the shell tools the bounded commands use, and no
@@ -367,6 +368,46 @@ test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace() {
   pass "fm_exec_timed's GNU timeout fallback kills a TERM-ignoring command once the grace has passed"
 }
 
+# fm_run_timed's own status wrapper dies at the bound's TERM at once, while the
+# command it runs is still in its TERM trap. A test suite sweeping its detached
+# listeners there must get the grace, not an immediate KILL of the group.
+test_run_timed_lets_a_term_trap_finish_within_the_grace() {
+  local dir rc=0
+  if ! command -v timeout >/dev/null 2>&1; then
+    pass "fm_run_timed TERM-trap grace (skipped: no timeout binary on this host)"
+    return 0
+  fi
+  dir="$TMP_ROOT/run-grace"
+  mkdir -p "$dir"
+  (
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    FM_TIMEOUT_WAIT_CLEANUP=1 FM_TIMEOUT_GRACE=10 fm_run_timed 1 bash -c \
+      'trap "sleep 2; touch \"\$1/cleaned\"; exit 143" TERM; sleep 300 & wait' _ "$dir"
+  ) || rc=$?
+  [ "$rc" -eq 124 ] || fail "a bounded command that cleaned up on TERM did not report the bound (rc=$rc)"
+  [ -e "$dir/cleaned" ] || fail "fm_run_timed killed the command's TERM cleanup before the grace"
+  pass "fm_run_timed lets a TERM trap finish within the grace before killing the group"
+}
+
+test_scratch_owner_missing_fields_fail_closed_quietly() {
+  [ -r "/proc/$$/stat" ] || { pass "scratch owner identity remains unknown without Linux process data"; return; }
+  local tool fake marker output rc
+  marker="$TMP_ROOT/owner-marker"
+  : > "$marker"
+  for tool in getconf stat awk; do
+    fake="$TMP_ROOT/missing-$tool"
+    mkdir -p "$fake"
+    printf '#!/bin/sh\nexit 0\n' > "$fake/$tool"
+    chmod +x "$fake/$tool"
+    rc=0
+    output=$( . "$ROOT/bin/fm-timeout-lib.sh"; PATH="$fake:$TEST_ORIGINAL_PATH" fm_scratch_owner_gone "$$" "$marker" 2>&1 ) || rc=$?
+    [ "$rc" -eq 1 ] || fail "missing $tool data must leave the owner unknown (rc=$rc, output=$output)"
+    [ -z "$output" ] || fail "missing $tool data must not print an error: $output"
+    [ -e "$marker" ] || fail "the live owner's scratch was removed"
+  done
+  pass "missing process identity data leaves a live owner unknown without errors"
+}
+
 test_scratch_sweep_frees_only_scratch_of_ended_owners() {
   local dir="$TMP_ROOT/sweep" live dead
   mkdir -p "$dir"
@@ -470,4 +511,6 @@ test_refuses_rather_than_running_unbounded
 test_rejects_malformed_bounds_before_running_anything
 test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace
 test_timed_out_names_exactly_the_bound_statuses
+test_scratch_owner_missing_fields_fail_closed_quietly
 test_scratch_sweep_frees_only_scratch_of_ended_owners
+test_run_timed_lets_a_term_trap_finish_within_the_grace

@@ -57,6 +57,7 @@ if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   inventory glab optional unknown no 'GitLab operations'
   inventory tea optional unknown no 'Forgejo operations'
   inventory gerrit-axi optional unknown no 'Gerrit operations'
+  inventory ruby development unknown 'not assured' 'YAML contract tests'
   inventory shellcheck development 0.11.0 no 'shell lint'
   inventory actionlint development 1.7.12 no 'workflow lint'
   inventory codex agent unknown no 'Codex agent'
@@ -85,6 +86,13 @@ fm_platform_require || exit 2
 fm_backend_validate "$backend" || exit 2
 printf 'backend: %s\n' "$backend"
 result=0
+grant_data=${FM_DATA_OVERRIDE:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$SCRIPT_DIR/..}}/data}
+if grant_count=$(python3 "$SCRIPT_DIR/fm-standing-grants.py" count "$grant_data/standing-grants.json"); then
+  printf 'standing grants: %s\n' "$grant_count"
+else
+  printf 'invalid: standing grants\n'
+  result=1
+fi
 # Directory claims, wake writes and checkpoint deadlines rely on GNU semantics
 # on Linux. A kernel classification alone cannot establish that tool contract.
 case "$(fm_platform_name)" in
@@ -127,6 +135,7 @@ optional() {
   command -v "$tool" >/dev/null 2>&1 && availability=available
   printf 'optional: %s (%s; unavailable if missing: %s)\n' "$tool" "$availability" "$effect"
 }
+optional ruby 'YAML contract tests'
 optional gh 'GitHub operations'
 optional gh-axi 'GitHub integration'
 optional no-mistakes 'no-mistakes delivery when explicitly requested'

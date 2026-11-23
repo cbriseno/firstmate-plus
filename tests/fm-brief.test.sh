@@ -213,9 +213,17 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
+    assert_grep 'regression test that fails without the change' "$brief" "$id: brief missing change-specific regression"
+    assert_grep "the project's check, and a short run of the critical flow" "$brief" "$id: brief missing local checks"
+    assert_grep '--changed --base origin/main' "$brief" "$id: brief missing the Firstmate publication check"
+    assert_grep 'once per batch before publication' "$brief" "$id: brief missing the boundary for the publication check"
     assert_grep 'never a bare number such as "PR 108"' "$ROOT/worker/AGENTS.md" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$ROOT/worker/AGENTS.md" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
+    assert_grep 'attribute the deterioration to the change before reverting' "$ROOT/worker/AGENTS.md" "$id: global metrics trigger an unattributed rollback"
+    assert_grep 'Unattributed or inconclusive deterioration is not a pass' "$ROOT/worker/AGENTS.md" "$id: inconclusive attribution incorrectly passes acceptance"
+    assert_grep "read the owning home's diagnostics and task-relevant records" "$ROOT/worker/AGENTS.md" "$id: worker cannot read its own diagnostics"
+    assert_grep 'decide reversible actions within the task scope and record the decision and reason' "$ROOT/worker/AGENTS.md" "$id: reversible decisions still require intervention"
     assert_grep 'stop retrying that path' "$ROOT/worker/AGENTS.md" "$id: no bounded retry rule"
     assert_grep 'Continue independent authorized work' "$ROOT/worker/AGENTS.md" "$id: an optional obstacle parks the whole ship"
     assert_grep 'failed path; evidence; affected work; next action needed from firstmate' "$ROOT/worker/AGENTS.md" "$id: technical escalation has no scope or action owner"
@@ -711,21 +719,18 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
-    assert_grep "# Herdr lifecycle declaration - NOT ENABLED" "$brief" \
-      "$kind brief silently omitted the Herdr declaration"
-    assert_grep "regenerate the brief with \`--herdr-lab\` before dispatch" "$brief" \
-      "$kind brief missing the fail-visible regeneration instruction"
+    assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$brief" \
+      "$kind brief omitted the safe lab contract"
+    assert_grep "do not provision a lab otherwise" "$brief" \
+      "$kind brief should use the lab only when required"
   done
-  pass "fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible"
+  pass "fm-brief.sh: ship and scout scaffolds provide safe lab access without provisioning it"
 }
 
 # Regression (issue #2575): SUPERVISOR.md section 11 and this script's own help tell
-# firstmate to fill `{TASK}` and `{FIRSTMATE_SPEC}`. The unguarded Herdr gate used
-# to quote `{TASK}` in its own prose, so that documented global replace spliced
-# the whole task body into the middle of the gate's sentence - silently
-# destroying the one contract that exists precisely because the scaffold cannot
-# see the task text. Each placeholder must exist only at its genuine fill site,
-# so the documented fill leaves the gate intact and each body appears once.
+# firstmate to fill `{TASK}` and `{FIRSTMATE_SPEC}`. A Herdr declaration once
+# quoted `{TASK}` in its own prose, so a global replace corrupted the safety
+# text. Each placeholder must appear only at its genuine fill site.
 test_documented_global_replace_leaves_the_herdr_gate_intact() {
   local home id brief kind count content filled body spec
   home="$TMP_ROOT/task-fill-site-home"
@@ -756,7 +761,7 @@ test_documented_global_replace_leaves_the_herdr_gate_intact() {
     count=$(printf '%s\n' "$filled" | grep -c -F "$spec")
     [ "$count" = 1 ] \
       || fail "$kind brief: the {FIRSTMATE_SPEC} replace duplicated the spec body $count times"
-    printf '%s\n' "$filled" | grep -qF 'this scaffold cannot inspect the task text' \
+    printf '%s\n' "$filled" | grep -qF 'Herdr isolation - HARD SAFETY CONTRACT' \
       || fail "$kind brief: the Herdr safety gate did not survive the documented fill"
   done
   pass "fm-brief.sh: the documented {TASK} and {FIRSTMATE_SPEC} fills cannot corrupt the Herdr safety gate"
@@ -1100,7 +1105,7 @@ test_ship_and_scout_teach_validation_round_pause() {
     brief="$home/data/$id/brief.md"
     assert_grep "your own validation round, which you declare once just before its blocking hold" "$brief" \
       "$kind brief did not teach workers to declare their validation-round wait before holding it"
-    assert_grep "append \`paused:\` once just before its first blocking command, then stay in the command" "$brief" \
+    assert_grep "append \`paused:\` once just before its first blocking command, then continue the wait" "$brief" \
       "$kind brief's Waiting section does not declare the validation round once and then hold it"
     assert_no_grep "is not a \`paused:\` wait" "$brief" \
       "$kind brief still tells workers never to declare a wait they hold in a command"
@@ -1240,9 +1245,8 @@ test_inbox_listing_command_is_safe_on_empty_inbox() {
   pass "fm-brief: inbox listing is silent on empty/absent inbox and numerically ordered"
 }
 
-# Contract: a waiting worker spends no turns. A decision wait ends the turn, an
-# external wait sleeps in one bounded blocking shell command sized per harness,
-# and a waiting worker neither polls its inbox nor polls a pipeline between holds.
+# A decision wait ends the turn; active monitoring checks the inbox between
+# bounded waits while other external waits retain their harness-specific limits.
 test_workers_wait_without_spending_turns() {
   local home id brief
   home="$TMP_ROOT/wait-home"
@@ -1266,8 +1270,10 @@ test_workers_wait_without_spending_turns() {
       "$id: the wait a Claude Code worker may use is not named"
     assert_grep "reattach with \`no-mistakes axi run --wait\` instead, and never send the same \`respond\` again" "$brief" \
       "$id: a timed-out respond must reattach with axi run, never resend its answer"
-    assert_grep "Do not poll or list the inbox while waiting; a waiting instruction rings." "$brief" \
-      "$id: polling the inbox while waiting is not forbidden"
+    assert_grep "During active monitoring, check the inbox between bounded waits" "$brief" \
+      "$id: active monitoring must check for instructions"
+    assert_grep "bound each blocking wait to 30 seconds" "$brief" \
+      "$id: active monitoring waits must be bounded"
     assert_grep "natural checkpoint" "$brief" "$id: the flag dropped the natural-checkpoint inbox check"
   done
   brief="$home/data/brief-wait-ship/brief.md"
@@ -1282,7 +1288,7 @@ test_workers_wait_without_spending_turns() {
   assert_grep "Do not poll or list the inbox while waiting; a waiting instruction rings." "$brief" \
     "secondmate: polling the inbox while waiting is not forbidden"
   assert_grep "natural checkpoint" "$brief" "secondmate: the flag dropped the natural-checkpoint inbox check"
-  pass "fm-brief: workers end the turn on a decision, wait in one bounded shell command, and never poll"
+  pass "fm-brief: workers check instructions during active monitoring and end decision waits"
 }
 
 # Without config/wait-no-turns the scaffold matches the pre-flag brief and drive text.

@@ -3076,12 +3076,15 @@ test_pane_is_busy_herdr_native_busy_state() {
 test_primary_busy_guard_is_harness_scoped() {
   (
     fm_backend_busy_state() { printf 'unknown'; }
-    fm_backend_capture() { printf 'esc interrupt\n'; }
-    if FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr; then
-      fail "OpenCode's rendered signature must not classify a Claude primary busy"
+    fm_backend_capture() { printf '✢ Pollinating… (16s · thinking)\n'; }
+    if FM_DAEMON_PRIMARY_HARNESS=codex pane_is_busy "default:w1:p2" herdr; then
+      fail "Claude's rendered signature must not classify a Codex primary busy"
     fi
-    FM_DAEMON_PRIMARY_HARNESS=opencode pane_is_busy "default:w1:p2" herdr \
-      || fail "OpenCode's rendered signature should classify an OpenCode primary busy"
+    FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
+      || fail "Claude's rendered signature should classify a Claude primary busy"
+    if FM_DAEMON_PRIMARY_HARNESS=opencode pane_is_busy "default:w1:p2" herdr; then
+      fail "an unverified harness must not borrow Claude's busy signature"
+    fi
   ) || fail "harness-scoped primary busy guard subshell failed"
   pass "primary busy guard isolates rendered signatures by detected harness"
 }
@@ -3090,10 +3093,10 @@ test_pane_is_busy_defaults_to_tmux_when_backend_omitted() {
   local dir fakebin capture
   dir=$(make_supercase busy-default-backend)
   fakebin="$dir/fakebin"; capture="$dir/pane.txt"
-  printf 'Ctrl+c:cancel\n' > "$capture"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=grok pane_is_busy "fakepane" \
+  printf 'esc to interrupt\n' > "$capture"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=codex pane_is_busy "fakepane" \
     || fail "pane_is_busy with no backend arg should still default to tmux"
-  pass "pane_is_busy: omitted backend defaults to tmux for Grok's isolated fallback"
+  pass "pane_is_busy: omitted backend defaults to tmux for Codex's isolated fallback"
 }
 
 test_pane_input_pending_herdr_dispatch() {

@@ -1436,6 +1436,9 @@ test_squash_merged_forgejo_pr_allows_when_main_moved_on() {
     git -C "$tmp" -c user.email=t@t -c user.name=t commit -q -m "main rewords shared"
     git -C "$tmp" push -q origin main
     rm -rf "$tmp"
+    # The safety check starts with local remote-tracking refs, so the fixture
+    # must expose the later main commit before expecting a forge lookup.
+    git -C "$case_dir/project" fetch -q origin
     printf '%s\n' \
       'pr=https://git.example.org/team/repo/pulls/7' \
       "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
@@ -1830,7 +1833,42 @@ prepare_scout_teardown() {
   mkdir -p "$case_dir/data/task-x1"
   printf '%s\n' 'Scout report.' > "$case_dir/data/task-x1/report.md"
   printf '%s\n' '<!doctype html><title>Scout report</title>' > "$case_dir/data/task-x1/report.html"
-  printf '%s\n' 'decisions_reviewed=1' >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' 'decisions_reviewed=1' 'followups_reviewed=1' >> "$case_dir/state/task-x1.meta"
+}
+
+test_scout_requires_followup_inventory() {
+  local case_dir rc=0
+  case_dir=$(make_case scout-missing-followups)
+  write_meta "$case_dir" local-only scout
+  prepare_scout_teardown "$case_dir"
+  printf '%s\n' 'followups_reviewed=0' >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' 'Recommendation: implement the fix.' > "$case_dir/data/task-x1/report.md"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "scout with an unreviewed recommendation must not close"
+  assert_grep 'recommended follow-ups' "$case_dir/stderr" "missing follow-up diagnostic"
+  assert_present "$case_dir/state/task-x1.meta" "missing follow-up inventory removed records"
+  pass "scout cannot close before recommendations are inventoried"
+}
+
+test_scout_followup_inventory_checks_tasks() {
+  local case_dir rc=0
+  case_dir=$(make_case scout-followup-task)
+  write_meta "$case_dir" local-only scout
+  seed_backlog_in_flight "$case_dir" scout
+  tasks-axi add task-fix "Implement recommendation" --kind ship --file "$case_dir/data/backlog.md" >/dev/null
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" bash "$ROOT/bin/fm-captain-hold.sh" \
+    followups task-x1 missing-task > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "a missing follow-up must not be accepted"
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" bash "$ROOT/bin/fm-captain-hold.sh" \
+    followups task-x1 task-fix > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "existing follow-up was rejected: $(cat "$case_dir/stderr")"
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" bash "$ROOT/bin/fm-captain-hold.sh" \
+    verify-followups task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "recorded follow-up did not verify: $(cat "$case_dir/stderr")"
+  pass "scout follow-up inventory requires a real task"
 }
 
 test_scout_requires_html_report() {
@@ -1939,6 +1977,64 @@ test_scout_backup_restores_local_changes() {
       || fail "scout backup: wrong base"
   done
   pass "scout backup reapplies committed and local changes, new binary files, and nested clones"
+}
+
+test_integrated_codex_closes_without_verified_turn() {
+  local case_dir out backup
+  case_dir=$(make_case integrated-codex)
+  write_meta "$case_dir" local-only ship
+  printf 'harness=codex-wrapper\n' >> "$case_dir/state/task-x1.meta"
+  seed_backlog_in_flight "$case_dir"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -eu
+[ "$1" != return ] || { git -C "$3" reset --hard -q HEAD; git -C "$3" clean -fdq; }
+SH
+  wt_commit_file "$case_dir" fix.txt integrated
+  printf '%s\n' 'needs-decision [key=acceptance]: review this delivery' 'done: shipped' \
+    > "$case_dir/state/task-x1.status"
+  completion_tick() {
+    FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_CONFIG_OVERRIDE="$case_dir/config" \
+      LAVISH_AXI_STATE_DIR="$case_dir/lavish" PATH="$case_dir/fakebin:$PATH" \
+      FM_TEST_ACTIVITY="$1" bash -c '
+        . "$1"
+        if [ -n "$FM_TEST_ACTIVITY" ]; then
+          fm_busy_classify_meta() { printf "%s\n" "$FM_TEST_ACTIVITY"; }
+        else
+          [ "$(fm_busy_classify_meta "$STATE/task-x1.meta" task-x1 "$STATE")" = "unknown codex-unverified" ] || exit 1
+        fi
+        wake() { printf "%s\n" "$1"; }
+        worker_completion_tick
+      ' _ "$ROOT/bin/fm-watch.sh"
+  }
+  completion_tick '' || fail 'unintegrated tick failed'
+  assert_present "$case_dir/state/task-x1.meta" 'the unknown turn lost an unintegrated worker'
+  assert_grep 'turn completion could not be verified' "$case_dir/state/.worker-kept-task-x1" 'unintegrated worker has no retained reason'
+  git -C "$case_dir/project" merge --quiet --ff-only fm/task-x1 || fail 'fixture integration failed'
+  printf 'staged\n' > "$case_dir/wt/fix.txt"
+  git -C "$case_dir/wt" add -- fix.txt
+  printf 'unstaged\n' > "$case_dir/wt/fix.txt"
+  printf 'untracked\n' > "$case_dir/wt/new.txt"
+  printf '%s\n' 'resolved [key=acceptance]: delivery verified' 'note: validation evidence recorded' \
+    >> "$case_dir/state/task-x1.status"
+  cp "$case_dir/state/task-x1.status" "$case_dir/finished.status"
+  printf 'working: reopened\n' >> "$case_dir/state/task-x1.status"
+  completion_tick 'unknown codex-unverified' || fail 'reopened tick failed'
+  assert_present "$case_dir/state/task-x1.meta" 'a reopened worker was closed'
+  cp "$case_dir/finished.status" "$case_dir/state/task-x1.status"
+  completion_tick 'busy codex-hook' || fail 'busy tick failed'
+  assert_present "$case_dir/state/task-x1.meta" 'a verified busy turn was interrupted'
+  out=$(completion_tick '') || fail "completion tick failed: $out"
+  assert_absent "$case_dir/state/task-x1.meta" "integrated Codex worker stayed open: $out"
+  assert_absent "$case_dir/state/.worker-kept-task-x1" 'stale retained reason survived successful close'
+  [ "$(backlog_row_state "$case_dir")" = 'done' ] || fail 'integrated task returned to the queue'
+  [ -z "$(git -C "$case_dir/wt" status --porcelain)" ] || fail 'returned copy still has pending edits'
+  backup=$(find "$case_dir/data/task-x1" -maxdepth 1 -type d -name 'worktree-backup.*')
+  bash "$backup/restore.sh" "$case_dir/restored" || fail 'could not restore pending edits'
+  [ "$(git -C "$case_dir/restored" show :fix.txt)" = staged ] || fail 'staged edit lost'
+  [ "$(cat "$case_dir/restored/fix.txt")" = unstaged ] || fail 'unstaged edit lost'
+  [ "$(cat "$case_dir/restored/new.txt")" = untracked ] || fail 'untracked file lost'
+  pass 'an integrated Codex wrapper with an unknown turn closes after informational status events and retains recoverable edits'
 }
 
 test_scout_backup_failure_preserves_worktree() {
@@ -6007,6 +6103,10 @@ test_status_archive_missing_status_noop() {
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
     FM_CONFIG_OVERRIDE="$case_dir/config" PATH="$case_dir/fakebin:$PATH" \
     fm_run_timed 20 "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    cat "$case_dir/stdout" "$case_dir/stderr" >&2
+    find "$case_dir/state" -maxdepth 1 -print >&2
+  fi
   expect_code 0 "$rc" "local missing-status retirement"
   cmp -s "$case_dir/cursor.before" "$case_dir/state/.status-presentation-cursor" || fail "missing-status no-op rewrote neighboring cursor"
   assert_present "$case_dir/state/.status-presentation-lock" "missing-status no-op contended with presentation lock"
@@ -6224,8 +6324,11 @@ test_tracked_edit_refusal_diagnostic
 test_mixed_refusal_diagnostic
 test_scout_requires_html_report
 test_scout_requires_report_actions
+test_scout_requires_followup_inventory
+test_scout_followup_inventory_checks_tasks
 test_ship_and_host_require_report_actions
 test_scout_backup_restores_local_changes
+test_integrated_codex_closes_without_verified_turn
 test_scout_backup_failure_preserves_worktree
 test_scout_nested_clone_returns_with_no_untracked_entries
 test_ship_nested_clone_is_refused_and_bytes_stay

@@ -92,6 +92,7 @@ init_changed_fixture_repo() {
   local repo=$1 script
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
@@ -126,7 +127,6 @@ init_changed_fixture_repo() {
   : >"$repo/tests/fm-backend-herdr-eventwait.test.py"
   : >"$repo/bin/fm-supervisor-target-lib.sh"
   : >"$repo/bin/fm-control-lib.sh"
-  : >"$repo/bin/fm-timeout-lib.sh"
   : >"$repo/bin/fm-procevent-quota.sh"
   : >"$repo/bin/fm-quota-axi-lib.sh"
   : >"$repo/bin/fm-quota-choose.sh"
@@ -279,6 +279,7 @@ init_primary_and_linked_worktree() {
   for tree in "$repo" "$linked"; do
     mkdir -p "$tree/bin" "$tree/tests"
     cp "$RUNNER" "$tree/bin/fm-test-run.sh"
+    cp "$ROOT/bin/fm-timeout-lib.sh" "$tree/bin/"
     cp "$ROOT/tests/git-config-helpers.sh" "$tree/tests/"
     chmod +x "$tree/bin/fm-test-run.sh"
     cat >"$tree/tests/probe.test.sh" <<PROBE
@@ -594,6 +595,8 @@ test_changed_codex_activity_selects_its_subjects() {
 test_changed_uses_bounded_automatic_concurrency() {
   local tmp repo script serial_shape parallel_shape timeout_repo timeout_script expected_jobs rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-consent.XXXXXX")
+  # These fixtures exercise scheduler policy while the host can be fully booked.
+  local -x FM_TEST_LOCK_DIR="$tmp" FM_TEST_HOST_LOCKED=0
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
@@ -719,15 +722,14 @@ SH
 
 # A local verification round names the subjects it cares about. Exercise begin/end
 # markers from real fixture processes to prove that a plain list of script paths
-# gets bounded automatic scheduling without changing its per-script timeout
-# contract, so verifying several subjects is one bounded concurrent run rather
+# gets bounded automatic scheduling, so verifying several subjects is one bounded concurrent run rather
 # than a serial chain of separate `bash tests/X.test.sh` invocations.
 test_script_list_uses_bounded_automatic_concurrency() {
   local tmp repo script parallel_shape serial_shape mixed_shape expected_jobs
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-script-list.XXXXXX")
+  local -x FM_TEST_LOCK_DIR="$tmp" FM_TEST_HOST_LOCKED=0
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
-  rm -f "$repo/bin/fm-timeout-lib.sh"
   # fm-cd-pretool-check and fm-pr-merge are individually proven isolated;
   # fm-spawn-worktree-settle is not, so it must still land in the serial tail.
   for script in fm-cd-pretool-check.test.sh fm-pr-merge.test.sh fm-spawn-worktree-settle.test.sh; do
@@ -791,6 +793,7 @@ PYJSON
 test_family_proofs_run_in_separate_concurrent_phases() {
   local tmp repo script
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-family-phases.XXXXXX")
+  local -x FM_TEST_LOCK_DIR="$tmp" FM_TEST_HOST_LOCKED=0
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
@@ -1203,6 +1206,7 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   for script in "${scripts[@]}"; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
     chmod +x "$repo/$script"
@@ -1428,6 +1432,7 @@ test_unmapped_new_test_never_inherits_family_concurrency() {
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   chmod +x "$repo/bin/fm-test-run.sh"
   # Two members of the proven residual family, plus a test basename the family
@@ -1513,8 +1518,8 @@ test_changed_shared_fixture_selects_its_readers() {
   pass "a changed shared test fixture selects its readers while an unread tests/ path still refuses"
 }
 
-# Workers are handed scripts in order, so the slowest script must start first or
-# it runs alone at the tail and throws away most of the concurrency.
+# Workers are handed scripts in order, so the slowest script is queued first
+# and has the earliest chance to take a host slot.
 test_concurrent_runs_are_ordered_longest_first() {
   local tmp repo runner first script rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-order.XXXXXX")
@@ -1533,11 +1538,11 @@ test_concurrent_runs_are_ordered_longest_first() {
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "concurrent ordering fixture failed: $(cat "$tmp/err")"
-  first=$(grep -m1 '^FM_TEST_BEGIN' "$tmp/out" | awk '{print $3}')
+  first=$(grep -m1 '^FM_TEST_QUEUE' "$tmp/out" | awk '{print $3}')
   [ "$first" = tests/fm-task-inbox.test.sh ] \
-    || fail "concurrent run did not start the longest script first, started: $first"
+    || fail "concurrent run did not queue the longest script first, queued: $first"
   fm_test_remove_tree "$tmp"
-  pass "a concurrent run starts the longest-hint script first"
+  pass "a concurrent run queues the longest-hint script first"
 }
 
 # --max-wall-ms is checked after the run, so it cannot end a run that never
@@ -1648,6 +1653,43 @@ SH
   pass "the automatic --changed bound gives the slow watcher suite at least 1500s"
 }
 
+# A plain list of scripts left tests/fm-procevent.test.sh hung for 8.5 hours
+# because only the automatic --changed path had a bound. Every selection gets
+# the default unless the caller names one, and an explicit 0 still disables it.
+test_every_selection_gets_the_default_bound() {
+  local tmp repo script args bound
+  tmp=$(mktemp -d)
+  repo="$tmp/repo"
+  script=tests/fm-plain-list-fixture.test.sh
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  cat >"$repo/bin/fm-timeout-lib.sh" <<'SH'
+fm_run_timed() {
+  printf '%s\n' "$1" >bound-secs
+  shift
+  "$@"
+}
+SH
+  printf '#!/usr/bin/env bash\necho "ok - plain fixture"\n' >"$repo/$script"
+  chmod +x "$repo/bin/fm-test-run.sh" "$repo/$script"
+  for args in "$script" "--jobs 1 $script"; do
+    rm -f "$repo/bound-secs"
+    # shellcheck disable=SC2086 # $args deliberately splits into runner arguments
+    (cd "$repo" && bin/fm-test-run.sh $args) >"$tmp/out" 2>"$tmp/err" \
+      || fail "plain run '$args' failed: $(cat "$tmp/out" "$tmp/err")"
+    [ -s "$repo/bound-secs" ] || fail "plain run '$args' ran its script without a bound"
+    bound=$(cat "$repo/bound-secs")
+    [ "$bound" -eq 1500 ] || fail "plain run '$args' got bound ${bound}s, expected the 1500s default"
+  done
+  rm -f "$repo/bound-secs"
+  (cd "$repo" && bin/fm-test-run.sh --per-script-timeout-secs 0 "$script") >"$tmp/out" 2>"$tmp/err" \
+    || fail "an explicitly unbounded run failed: $(cat "$tmp/out" "$tmp/err")"
+  [ ! -e "$repo/bound-secs" ] || fail "--per-script-timeout-secs 0 still bounded the script"
+  fm_test_remove_tree "$tmp"
+  pass "every selection runs its scripts under the default bound unless 0 is named"
+}
+
 test_max_wall_ms_is_a_result_not_advice() {
   local tmp repo runner fast rc summary_duration budget_duration
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget.XXXXXX")
@@ -1656,6 +1698,7 @@ test_max_wall_ms_is_a_result_not_advice() {
   fast=tests/fm-budget-fixture.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cat >"$repo/$fast" <<'SH'
 #!/usr/bin/env bash
@@ -1721,6 +1764,7 @@ test_jobs_parallel_scheduler_and_failure_propagation() {
   d=tests/fm-supervision-instructions.test.sh
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cat >"$fake_bin/stat" <<'SH'
 #!/usr/bin/env bash
@@ -1769,8 +1813,10 @@ echo "ok - replacement fixture started before slow fixture finished"
 SH
   chmod +x "$runner" "$repo/$a" "$repo/$b" "$repo/$c" "$fake_bin/stat"
   set +e
+  # These tiny fixtures must run together to test scheduler refill; host slot
+  # admission has its own tests and can otherwise prevent that dependency.
   PATH="$fake_bin:$PATH" SCHED_EVIDENCE="$evidence" SCHED_WAIT_FOR_REPLACEMENT=1 \
-    "$runner" --jobs 2 --json "$tmp/timing.json" \
+    FM_TEST_SKIP_HOST_LOCK=1 "$runner" --jobs 2 --json "$tmp/timing.json" \
     "$a" "$b" "$c" >"$tmp/out" 2>"$tmp/err"
   rc=$?
   set -e
@@ -1888,6 +1934,7 @@ test_host_test_slots() {
   python3 - "$RUNNER" <<'PYTEST' || fail "host test slots did not wait and release"
 import fcntl
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -1927,6 +1974,7 @@ with tempfile.TemporaryDirectory() as tmp:
     env.pop("FM_TEST_SKIP_HOST_LOCK", None)
     with tempfile.TemporaryFile(mode="w+") as log:
         proc = subprocess.Popen(["bash", sys.argv[1], fixture], stdout=log, stderr=log, env=env)
+        waiting = []
         try:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -1938,14 +1986,62 @@ with tempfile.TemporaryDirectory() as tmp:
             else:
                 raise AssertionError("no waiting message")
             assert proc.poll() is None
+            source = Path(sys.argv[1]).resolve().parent.parent
+            copy = Path(tmp) / "independent-copy"
+            (copy / "bin").mkdir(parents=True)
+            (copy / "tests").mkdir()
+            for relative in ("bin/fm-test-run.sh", "bin/fm-timeout-lib.sh", "tests/git-config-helpers.sh"):
+                shutil.copy2(source / relative, copy / relative)
+            tests = ["tests/fm-brief.test.sh", "tests/fm-composer-lib.test.sh"]
+            for test in tests:
+                shutil.copy2(fixture, copy / test)
+            copy_tmp = copy / "tmp"
+            copy_tmp.mkdir()
+            copy_env = dict(env, FM_HOME=str(copy), TMPDIR=str(copy_tmp), FM_TEST_HOST_LOCKED="1")
+            copy_env.pop("FM_TEST_SLOT_TOKEN", None)
+            copy_log = copy / "run.log"
+            with copy_log.open("w") as output:
+                waiting.append(subprocess.Popen(
+                    ["bash", str(copy / "bin/fm-test-run.sh"), "--jobs", "2", *tests],
+                    cwd=copy, env=copy_env, stdout=output, stderr=output,
+                ))
+            waiting.append(subprocess.Popen(["bash", sys.argv[1], fixture], env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            deadline = time.monotonic() + 20
+            while True:
+                output = copy_log.read_text()
+                assert waiting[0].poll() is None, "independent runner bypassed the occupied host slots"
+                assert "FM_TEST_BEGIN " not in output, "independent runner reported starting without a slot"
+                demand = {record.split()[0] for path in Path(lock_dir.name).glob(
+                    f"firstmate-test-{os.getuid()}-run-*") if (record := path.read_text()).strip()}
+                if demand == {str(child.pid) for child in [proc, *waiting]} and "waiting for host test slots" in output:
+                    break
+                assert time.monotonic() < deadline, "three live runs did not register demand"
+                time.sleep(0.1)
+            home = Path(tmp)
+            for subdir in ("data", "state", "config"):
+                (home / subdir).mkdir()
+            budgets = Path(sys.argv[1]).with_name("fm-budgets.py")
+            report_env = dict(env, FM_HOME=tmp, FM_STATE_OVERRIDE=str(home / "state"),
+                              FM_CONFIG_OVERRIDE=str(home / "config"), FM_DATA_OVERRIDE=str(home / "data"),
+                              FM_DIAGNOSTICS_HOME=str(home / "diag"), FM_BUDGETS="1")
+            subprocess.run([sys.executable, str(budgets), "check"], env=report_env,
+                           stdout=subprocess.DEVNULL, check=True, timeout=15)
+            alarm = home / "state/budget-operational-progress.budget-alarm"
+            assert "3 test runs for 2 host test slots" in alarm.read_text(), "slot pressure did not reach budgets"
             for fd in fds:
                 os.close(fd)
             fds.clear()
-            assert proc.wait(timeout=20) == 0
+            result = proc.wait(timeout=20)
+            log.seek(0)
+            assert result == 0, log.read()
+            assert all(child.wait(timeout=20) == 0 for child in waiting)
+            assert copy_log.read_text().count("FM_TEST_BEGIN ") == len(tests)
         finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
+            for child in [proc, *waiting]:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
             for fd in fds:
                 os.close(fd)
     # With the first two slots occupied, both supported probes admit a third.
@@ -1998,6 +2094,7 @@ test_host_test_budget_spans_runs() {
   fake_bin="$tmp/fake-bin"
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin" "$tmp/locks"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   # Two CPUs and ample memory make the machine budget two slots.
   printf '#!/bin/sh\necho Linux\n' >"$fake_bin/uname"
@@ -2039,6 +2136,52 @@ SH
   max_seen=$(sort -n "$evidence/counts" | tail -1)
   [ "$max_seen" -eq 2 ] \
     || { cat "$evidence/counts"; rm -rf "$tmp"; fail "two runs with --jobs 2 on a two-slot machine ran $max_seen scripts at once, expected exactly 2"; }
+  # A nested parallel runner may reuse the parent's one slot only once.
+  cat >"$repo/tests/fm-lint.test.sh" <<'SH'
+#!/usr/bin/env bash
+exec bash "$NESTED_RUNNER" --jobs 2 tests/fm-brief.test.sh tests/fm-composer-lib.test.sh
+SH
+  for s in fm-brief fm-composer-lib fm-supervision-instructions; do
+    cat >"$repo/tests/$s.test.sh" <<'SH'
+#!/usr/bin/env bash
+touch "$BUDGET_EVIDENCE/active.$BASHPID"
+while [ ! -e "$BUDGET_EVIDENCE/release" ]; do sleep 0.1; done
+SH
+  done
+  python3 - "$repo" "$fake_bin" "$evidence" "$tmp/locks" <<'PYTEST' || fail "nested runners exceeded host test slots"
+import os, pathlib, subprocess, sys, time
+repo, fake, evidence, locks = map(pathlib.Path, sys.argv[1:])
+env = dict(os.environ, PATH=str(fake) + os.pathsep + os.environ["PATH"],
+           BUDGET_EVIDENCE=str(evidence), FM_TEST_LOCK_DIR=str(locks),
+           NESTED_RUNNER=str(repo / "bin/fm-test-run.sh"))
+for name in ("FM_TEST_HOST_LOCKED", "FM_TEST_SLOT_TOKEN", "FM_TEST_SKIP_HOST_LOCK"):
+    env.pop(name, None)
+for path in evidence.glob("active.*"):
+    path.unlink()
+processes = [subprocess.Popen(["bash", env["NESTED_RUNNER"], test], cwd=repo,
+                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+             for test in ("tests/fm-lint.test.sh", "tests/fm-supervision-instructions.test.sh")]
+try:
+    for _ in range(300):
+        active = len(list(evidence.glob("active.*")))
+        if active >= 3 or (active >= 2 and
+                len(list(locks.glob("firstmate-test-*-run-*"))) >= 4):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("two tests never started")
+    time.sleep(1)
+    assert len(list(evidence.glob("active.*"))) == 2, "more than two tests ran"
+finally:
+    (evidence / "release").touch()
+    for process in processes:
+        try:
+            assert process.wait(timeout=30) == 0
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            process.wait()
+            raise
+PYTEST
   rm -rf "$tmp"
   pass "machine test budget bounds scripts across simultaneous runs"
 }
@@ -2053,6 +2196,7 @@ test_host_slot_holder_is_detached_from_waiting_shells() {
   runner="$repo/bin/fm-test-run.sh"
   mkdir -p "$repo/bin" "$repo/tests" "$tmp/locks"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   for s in fm-brief fm-composer-lib fm-lint; do
     cat >"$repo/tests/$s.test.sh" <<'SH'
@@ -2060,11 +2204,11 @@ test_host_slot_holder_is_detached_from_waiting_shells() {
 # Only the runner's own shells wait for suites; an outer subreaper may adopt holders.
 ancestors=" " pid=$$
 while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
-  case "$(ps -o args= -p "$pid")" in *fm-test-run.sh*) ancestors="$ancestors$pid " ;; esac
+  case "$(ps -ww -o args= -p "$pid")" in *fm-test-run.sh*) ancestors="$ancestors$pid " ;; esac
   pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
 done
 [ "$ancestors" != " " ] || { echo "not ok - no runner shell among the suite's ancestors"; exit 1; }
-ps -A -o ppid= -o args= | while read -r ppid args; do
+ps -ww -A -o ppid= -o args= | while read -r ppid args; do
   case "$ancestors" in *" $ppid "*) ;; *) continue ;; esac
   case "$args" in *firstmate-test-*) echo "not ok - slot holder is a child of suite ancestor $ppid"; exit 1 ;; esac
 done || exit 1
@@ -2130,7 +2274,7 @@ with tempfile.TemporaryDirectory() as tmp:
             repo = lab / str(i)
             (repo / "bin").mkdir(parents=True)
             (repo / "tests").mkdir()
-            for script in ("fm-test-run.sh", "fm-heavy-run.sh"):
+            for script in ("fm-test-run.sh", "fm-heavy-run.sh", "fm-timeout-lib.sh"):
                 shutil.copy(root / "bin" / script, repo / "bin" / script)
             shutil.copy(root / "tests/git-config-helpers.sh", repo / "tests")
             (repo / "tmp").mkdir()
@@ -2187,6 +2331,75 @@ PYTEST
 case "${FM_TEST_SUITE_PART:-0}" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) echo "invalid suite part" >&2; exit 2 ;; esac
 if [ "${FM_TEST_SUITE_PART:-0}" = 0 ]; then
 test_heavy_sessions
+# A publication run must take the next free slot ahead of runs already waiting.
+test_publish_run_takes_next_slot_first() {
+  python3 - "$RUNNER" <<'PYTEST' || fail "publication run did not take the next free slot first"
+import fcntl, os, subprocess, sys, tempfile, time
+
+runner = sys.argv[1]
+with tempfile.TemporaryDirectory() as tmp:
+    locks = os.path.join(tmp, "locks")
+    os.mkdir(locks)
+    fds = []
+    for slot in (1, 2):
+        fd = os.open(os.path.join(locks, f"firstmate-test-{os.getuid()}-{slot}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fds.append(fd)
+    fakebin = os.path.join(tmp, "bin")
+    os.mkdir(fakebin)
+    import shutil
+    for name, body in {"uname": "echo Linux", "getconf": "echo 2",
+                       "awk": 'if [ "$2" = /proc/meminfo ]; then echo 8388608; else exec "' + shutil.which("awk") + '" "$@"; fi'}.items():
+        path = os.path.join(fakebin, name)
+        with open(path, "w") as out:
+            out.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
+    order = os.path.join(tmp, "order")
+    env = os.environ.copy()
+    env.update(PATH=fakebin + os.pathsep + env["PATH"], FM_TEST_LOCK_DIR=locks, ORDER=order)
+    env.pop("FM_TEST_HOST_LOCKED", None)
+    env.pop("FM_TEST_SKIP_HOST_LOCK", None)
+    env.pop("FM_TEST_PUBLISH", None)
+    procs = []
+    def start(name, extra):
+        fixture = os.path.join(tmp, name + ".test.sh")
+        with open(fixture, "w") as out:
+            out.write(f"#!/usr/bin/env bash\necho {name} >>\"$ORDER\"\nsleep 1.5\n")
+        log = open(os.path.join(tmp, name + ".log"), "w+")
+        procs.append((subprocess.Popen(["bash", runner, *extra, fixture], stdout=log, stderr=log, env=env), log))
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            log.seek(0)
+            if "waiting for host test slots" in log.read():
+                return
+            time.sleep(0.05)
+        raise AssertionError(name + " never waited")
+    try:
+        for n in range(4):
+            start(f"ordinary{n}", [])
+        start("publish", ["--publish"])
+        time.sleep(0.5)
+        os.close(fds.pop())  # exactly one slot frees up
+        deadline = time.monotonic() + 20
+        while not os.path.exists(order) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        first = open(order).read().split()[0]
+        assert first == "publish", f"first to run was {first}, expected publish"
+        os.close(fds.pop())
+        for proc, _ in procs:
+            assert proc.wait(timeout=60) == 0
+    finally:
+        for proc, _ in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        for fd in fds:
+            os.close(fd)
+PYTEST
+  pass "publication run takes the next free slot before waiting ordinary runs"
+}
+
+test_publish_run_takes_next_slot_first
 test_host_test_slots
 test_host_test_budget_spans_runs
 test_host_slot_holder_is_detached_from_waiting_shells
@@ -2246,6 +2459,7 @@ if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
+test_every_selection_gets_the_default_bound
 test_max_wall_ms_is_a_result_not_advice
 fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 10 ]; then

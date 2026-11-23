@@ -86,6 +86,23 @@ test_codex_folder_in_launch_dir_is_trusted() {
   assert_contains "$out" "codex-folder: answered" "the answer was not reported"
 }
 
+test_codex_folder_wrapped_across_lines_is_trusted() {
+  local log="$TMP_ROOT/log-wrapped" out split first second
+  split=$((${#LAUNCH} / 2))
+  first=${LAUNCH:0:split}; second=${LAUNCH:split}
+  out=$(run_case wrapped "$LAUNCH" "$log" '›' "Folder access" "  $first" "  $second" "" "Trust this folder? Codex can read." -- "${FOLDER_ROWS[@]}")
+  assert_contains "$(cat "$log")" 'enter:1. Trust and continue' 'the wrapped launch path was not accepted'
+  assert_contains "$out" 'codex-folder: answered' 'the wrapped folder answer was not reported'
+  out=$(run_case wrapped-other "$LAUNCH" "$log" '›' "Folder access" "  $first" "  ${second}other" "" "Trust this folder? Codex can read." -- "${FOLDER_ROWS[@]}")
+  assert_equals '' "$(cat "$log")" 'a different wrapped path received keys'
+  pass 'wrapped folder paths are matched exactly'
+}
+
+if [ "${FM_TEST_WRAPPED_FOLDER_ONLY:-0}" = 1 ]; then
+  test_codex_folder_wrapped_across_lines_is_trusted
+  exit 0
+fi
+
 test_codex_folder_elsewhere_is_left() {
   local log="$TMP_ROOT/log2" out
   out=$(run_case other "$LAUNCH" "$log" '›' "Folder access" "/somewhere/else" "Trust this folder? Codex can read." -- "${FOLDER_ROWS[@]}")
@@ -160,6 +177,7 @@ test_an_unreadable_pane_returns_at_once() {
 }
 
 test_codex_folder_in_launch_dir_is_trusted
+test_codex_folder_wrapped_across_lines_is_trusted
 test_codex_folder_elsewhere_is_left
 test_codex_hooks_are_trusted_with_down_then_enter
 test_codex_hooks_of_a_foreign_project_are_left

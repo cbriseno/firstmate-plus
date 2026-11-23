@@ -1311,17 +1311,48 @@ PYMEM
     out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 "$LINT" "$tmp/good.sh" 2>&1) \
       || fail "local lint did not enforce its default cap"$'\n'"$out"
     assert_contains "$out" "local-cap-enforced" "root never checked its inherited memory cap"
+    out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 FM_LINT_LOCAL_MEMORY_KIB=8388608 \
+      "$LINT" "$tmp/good.sh" 2>&1) \
+      || fail "an oversized local setting raised the root's cap"$'\n'"$out"
+    assert_contains "$out" "local-cap-enforced" "oversized setting bypassed the root cap check"
+    if fm_lint_bounds_supported; then
+      out=$(PATH="$fakebin:$PATH" CI='' GITHUB_ACTIONS='' FM_LINT_REQUIRE_BOUNDS=1 \
+        FM_LINT_ROOT_MEMORY_KIB=8388608 "$LINT" "$tmp/good.sh" 2>&1) \
+        || fail "bounded local lint raised the root's cap"$'\n'"$out"
+      assert_contains "$out" "local-cap-enforced" "bounded lint bypassed the root cap check"
+    fi
   else
     # Do not claim a memory guarantee on a host that rejects the adapter.
     fm_lint_stub_shellcheck "$fakebin" "$tmp/stub.log"
     out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 "$LINT" "$tmp/good.sh" 2>&1) \
       || fail "portable lock-only lint failed"$'\n'"$out"
-    assert_contains "$out" "memory protection UNKNOWN" "unsupported adapter silently ran uncapped"
+    assert_contains "$out" "memory limit unavailable; using fast" "unsupported adapter did not select fast analysis"
   fi
   out=$(PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 FM_LINT_LOCAL_MEMORY_KIB=invalid \
     "$LINT" "$tmp/good.sh" 2>&1) || rc=$?
   [ "$rc" -eq 2 ] || fail "invalid local memory cap accepted"
-  pass "local memory protection is enforced or explicitly unknown, never silent"
+  pass "local memory protection is enforced or fast analysis is selected"
+}
+
+test_unavailable_memory_cap_defaults_to_fast() {
+  local tmp fakebin out rc=0
+  tmp=$(fm_test_tmproot fm-lint-no-memory-cap)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_shellcheck "$fakebin" "$tmp/args"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/good.sh"
+  # shellcheck disable=SC2329 # Exported to the lint process.
+  out=$(ulimit() { return 1; }; export -f ulimit
+    PATH="$fakebin:$PATH" FM_TEST_MODE_LOG="$tmp/mode" FM_LINT_REQUIRE_BOUNDS=0 CI='' GITHUB_ACTIONS='' \
+      "$LINT" "$tmp/good.sh" 2>&1) || fail "uncapped local lint failed"$'\n'"$out"
+  assert_contains "$out" "memory limit unavailable; using fast" "missing fallback notice"
+  [ "$(cat "$tmp/mode")" = off ] || fail "uncapped lint did not disable extended analysis"
+  : > "$tmp/args"
+  # shellcheck disable=SC2329 # Exported to the lint process.
+  out=$(ulimit() { return 1; }; export -f ulimit
+    PATH="$fakebin:$PATH" FM_LINT_REQUIRE_BOUNDS=0 CI=true "$LINT" "$tmp/good.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "uncapped full-only lint was not refused"
+  [ ! -s "$tmp/args" ] || fail "full-only lint invoked ShellCheck without a cap"
+  pass "unavailable limits select fast locally and refuse full-only lint"
 }
 
 test_host_lock_serializes_homes_and_worktrees() {
@@ -1890,7 +1921,7 @@ test_pinned_shellcheck_memory_limit() {
   # limit - this is what proves the address-space cap leaves GHC enough head
   # room instead of discovering the conflict mid-partition in CI.
   rc=0
-  out=$(FM_LINT_REQUIRE_BOUNDS=1 "$LINT" \
+  out=$(CI=true FM_LINT_REQUIRE_BOUNDS=1 "$LINT" \
     --telemetry "$telemetry" "$fixture" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "pinned ShellCheck did not lint under the default memory limit"$'\n'"$out"
   grep -q $'^meta\tbounds_enforced\t1$' "$roots_log" \
@@ -2087,6 +2118,7 @@ test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
 test_local_memory_cap
+test_unavailable_memory_cap_defaults_to_fast
 test_host_lock_serializes_homes_and_worktrees
 test_worker_trees_stop_on_signal
 test_root_deadline_names_the_root_and_reaps_the_tree

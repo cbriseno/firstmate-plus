@@ -321,13 +321,15 @@ run_spawn() {
       FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
       FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX=fake,1,0 \
       PATH="$fakebin:$PATH" "$@" \
-      "$SPAWN" "$id" "$proj" codex --mode no-mistakes --yolo off ) 2>&1
+      "$SPAWN" "$id" "$proj" codex --model codex-test --effort high --mode no-mistakes --yolo off ) 2>&1
 }
 
 test_spawn_refuses_and_admits() {
   local home proj fakebin wt out rc
   home="$TMP/spawn-home"; mkdir -p "$home/data"
   proj=$(make_normal_repo "$TMP/spawn-proj")
+  git -C "$proj" config user.name "Firstmate Tests"
+  git -C "$proj" config user.email tests@example.invalid
   fm_git_add_origin "$proj" "$TMP/spawn-origin.git"
   fakebin=$(make_spawn_fakebin "$TMP/spawn-fake")
   wt="$TMP/spawn-wt"
@@ -347,7 +349,7 @@ test_spawn_refuses_and_admits() {
 
   # no-regression: neutral cwd, marker UNSET, genuine isolated worktree.
   out=$(run_spawn "$NORMAL_CWD" "$home" spawn-ok "$proj" "$wt" "$fakebin"); rc=$?
-  expect_code 0 "$rc" "spawn: a normal session must still spawn"
+  expect_code 0 "$rc" "spawn: a normal session must still spawn: $out"
   assert_contains "$out" "spawned spawn-ok" "spawn: normal launch should report success"
   assert_not_contains "$out" "$ENV_MSG" "spawn: normal launch must not print the gate refusal"
   assert_not_contains "$out" "$PATH_MSG" "spawn: normal launch must not print the backstop refusal"

@@ -557,7 +557,9 @@ The receipt prevents accidental publication through supported paths; it proves c
 ## Waiting worker spends no turns (config/wait-no-turns)
 
 The optional local, gitignored `config/wait-no-turns` presence flag opts this home into keeping a waiting worker from spending turns until it is answered.
-With it present, ship and scout briefs gain the `# Waiting` section and the foreground no-mistakes drive text, every brief's inbox section keeps the natural-checkpoint check and adds that a waiting worker does not poll or list its inbox because a waiting instruction rings, a pending-reply recovery waits while that mate has its own open decision or blocker, and a fire-and-forget steer whose doorbell did not land gets one later ring.
+With it present, ship and scout briefs gain the `# Waiting` section and the foreground no-mistakes drive text.
+Workers check the inbox between bounded waits while actively monitoring running work; secondmate briefs retain their waiting inbox behavior.
+Pending-reply recovery waits while that mate has its own open decision or blocker, and a fire-and-forget steer whose doorbell did not land gets one later ring.
 With the file absent, generated briefs omit the waiting section and the no-poll inbox line, the drive text backgrounds the call, recovery sends during an open decision, and a fire-and-forget steer is not owed a retry ring.
 The flag is a home-local preference and is not inherited by secondmate homes.
 
@@ -611,22 +613,28 @@ Optional lines follow, one key and its value per line, with `#` starting a comme
 
 ```text
 12                     # the cap: lanes this home runs at once
-min-avail-gb 5         # keep this much memory available; a 1 GB lane must fit above it
+min-avail-gb 5         # keep this much memory available; default: 10% of RAM, at least 1 GB
+lane-footprint-gb 0.6  # memory one lane needs; default: measured from the live lanes
 min-disk-gb 60         # every disk row must stay above this many GB
 pressure-file ~/.cache/lookout-beat/beat.json      # repeatable; a lookout.beat 1.x document
 reserve-flag /var/run/fm-reserved.flag host reserved by the captain   # repeatable; admit nothing while the file exists
 captain-idle 300       # opt-in, macOS: the captain counts as present when input was idle under 300 s
 quota-provider claude  # opt-in: publish that provider's quota runway
 max-load1 20           # keep a raw 1-minute load rule while beats replace it
+max-load5-per-core 4   # defer at 5-minute load of four times the logical cores
 ```
 
 `pressure-file` and `reserve-flag` may repeat and take an absolute or `~/` path; a `reserve-flag` path may be followed by the label it is reported by.
 Every other key may appear at most once.
+`max-load5-per-core` is an optional positive multiplier of logical cores and uses the host five-minute load, even when a pressure file is active; when either measurement is unavailable, it does not constrain admission.
+Either configured load limit replaces the generic one-minute load-at-core-count probe.
 An unknown key, a repeated single key, or a malformed value makes the whole file invalid: the report exits 1 naming the line, and the published facts carry the cap as invalid, because the captain's limits are never guessed.
 
 A pressure file is any producer of the `lookout.beat` 1.x shape, read by its own file age on this machine; a missing, stale, or unreadable one is skipped with its reason and the host's own probes stand in, so a broken beat never blocks anything.
 `captain-idle` reads input idle time locally and publishes only `present`, `idle`, or `away` (an away record), never the idle time itself.
 `quota-provider` is the only key that makes the script reach the network, through `quota-axi`, bounded to five seconds.
+Memory admits as many lanes as fit between the available memory and the kept reserve, each sized by `lane-footprint-gb` or, without it, by the measured resident memory of this home's live lanes; a task refused for any limit shows that cause on its card until it launches.
+On macOS the available figure is `hw.memsize` times `kern.memorystatus_level` percent; how closely that level tracks memory a lane can really use has not been measured on a Mac, so read it there and set `min-avail-gb` from what you see.
 
 While the file exists, the watcher runs `bin/fm-capacity.sh --publish` detached at most every 30 seconds, writing this home's lane facts to `state/lane-capacity.json`: its lanes, its cap and limits, its machine's pressure and boots, its watcher's freshness, and its own admission verdict.
 Publishing is best-effort and never changes what the watcher does; spawns do not use the cached document.
@@ -1161,13 +1169,15 @@ The text is static and never executed or expanded; secondmate charters never tak
 
 ## Herdr lifecycle spawn guard (config/herdr-lifecycle-spawn-guard)
 
-The optional local, gitignored `config/herdr-lifecycle-spawn-guard` presence flag opts this home into refusing, at spawn, a ship or scout brief that drives Herdr lifecycle without the Herdr isolation contract.
+Ship and scout briefs provide the Herdr isolation contract by default, and launch adds it to older briefs without changing their saved content.
+The contract provisions a lab only when the task or acceptance needs Herdr lifecycle behavior.
+The optional local, gitignored `config/herdr-lifecycle-spawn-guard` presence flag opts this home into refusing, at spawn, a host brief that names a Herdr lifecycle command without the isolation contract.
 Create it with `touch "$FM_HOME/config/herdr-lifecycle-spawn-guard"`; remove it to launch such briefs again.
-It is off by default: without the flag, `bin/fm-spawn.sh` launches the brief as before, and only the unguarded scaffold's own `# Herdr lifecycle declaration - NOT ENABLED` gate text asks the author to regenerate it.
+The host guard is off by default.
 With the flag present, a brief that names `bin/fm-herdr-lab.sh`, or a `herdr session` or `herdr server` command with the verb `start`, `stop`, `delete`, `restart`, `reload-config`, or `live-handoff`, must carry the `# Herdr isolation - HARD SAFETY CONTRACT` section that `bin/fm-brief.sh --herdr-lab` emits.
 The refusal names the first matching command, so the author can tell a brief that truly drives Herdr lifecycle from one that only quotes a verb incidentally, and points at `bin/fm-brief.sh --herdr-lab` as the remedy.
 A refused spawn writes no task record, so the brief can be regenerated and the spawn repeated.
-The flag is read only for ship and scout spawns, secondmate charters never take it, and it is not inherited by secondmate homes.
+The flag is read only for host spawns, secondmate charters never take it, and it is not inherited by secondmate homes.
 [`herdr-backend.md`](herdr-backend.md) owns the lab isolation contract itself; `bin/fm-spawn.sh`'s header owns the exact matching rule.
 
 ## Worker launch environment (config/launch-env-allowlist)
@@ -1286,6 +1296,8 @@ Firstmate resolves the rule's profile object or array under `SUPERVISOR.md` sect
 **Spawn requirements**
 
 - When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
+- Fresh worker launches require a selected model and a supported effort even when this file is absent; the spawn help documents the explicit bypass.
+- Automatic dispatch leaves tasks for the primary when their profile lacks a selected model or effort; the brief can record omitted axes or all three selected axes when no profile file exists.
 - Batch spawns satisfy the same requirement with a shared `--harness`.
 - Secondmate spawns are exempt and resolve through `config/secondmate-harness` using the registered mate's id; see [Choose the secondmate harness](#choose-the-secondmate-harness) for pin precedence and legacy parsing.
 
@@ -1580,7 +1592,7 @@ Missing optional tools do not request installation at startup.
 On macOS, package-manager dependencies receive manual guidance without brew or sudo commands; explicitly approved npm and self-installer paths remain available.
 An absent required tool with an automated install path reports `MISSING:` with its install command, while a present required tool below its floor or missing a required capability reports `OUTDATED:` with its installed version (or `unparseable`), requirement, and upgrade command; manual-only and presentation-only dependencies retain their dedicated diagnostics, and [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh)'s header owns these exact line formats.
 
-- An installed `treehouse` build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
+- An installed `treehouse` build without `get --lease`, `lease`, or `status --json` reports `OUTDATED:` with the `treehouse update` upgrade.
 - An installed `no-mistakes` version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
 - An absent `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` and a below-floor or feature-incompatible one reports `OUTDATED:` with its required version and any missing feature-probe capability, while retaining that same `npm install -g tasks-axi` upgrade; when `config/backlog-backend` is not `manual`, a home with a configured non-markdown adapter or a markdown backlog refuses lifecycle mutation until compatible `tasks-axi` is on `PATH`, while a manual-backend home keeps its backlog hand-edited.
 - An absent `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)` and an outdated one reports `OUTDATED:` with its `gh-axi update` upgrade.
@@ -2298,7 +2310,8 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
 - A parked owner receives the same delivery through `bin/fm-send.sh`, which resumes it before ringing, from one task job per round so the listener keeps listening meanwhile; only if that resume fails does the feedback go to the primary inbox as below, and board supervision treats the parked owner's open round as covered.
-- When that delivery creates a fresh inbox record for a nonterminal round, the board posts a short receipt at once, and every later task-owned arm that is listening posts a short readiness line after any completion reply, so the captain sees receipt, answer, and readiness in the Conversation panel; `bin/fm-procevent-lavish.sh notify` owns the text, its `config/lavish-board-ack` and `config/lavish-board-ready` overrides, and the older-client skip.
+- Each fresh nonterminal round on a worker-owned board gets a short receipt in the Conversation panel, regardless of where the feedback is routed.
+  Re-arming posts a readiness line once the board is listening, after the worker's completion reply if supplied; see [Lavish board messages](#lavish-board-messages-configlavish-board-ack-configlavish-board-ready).
 - If the owner has declared `done` or has no metadata, substantive Lavish feedback is instead copied idempotently to the primary inbox and queued as a `check` at capture or reconciliation, without waiting for the watcher's five-minute fallback; the capture stays unhandled and its ownership evidence is preserved.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
 - With synchronous-reply clients (0.1.80 or newer), the detached runner listens again after nonterminal feedback or a browser disconnect, including while the owner is replying or has declared `done`; reconciliation can restore that listener while feedback remains unacknowledged.
@@ -2714,6 +2727,7 @@ FM_INFO_SUMMARY_SECS=3600 # shared ordinary-action/information interval; minimum
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
+FM_OBLIGATION_SECONDS=900 # deadline for unresolved obligations; config/obligation-seconds also sets this per installation
 FM_TASK_INBOX_GRACE_SECS=90   # seconds an unhandled steering-inbox message may sit before the watcher attempts doorbell delivery on an idle pane; also the minimum spacing between attempts
 FM_TASK_INBOX_RING_MAX=3      # watcher delivery attempts without an acknowledgement before the task surfaces as a stale wake for recovery
 FM_TASK_INBOX_BUSY_MAX=2      # consecutive busy-deferred due polls before a stuck-busy stale wake; 1..999999999, at most 9 decimal digits, otherwise 2; policy: bin/fm-task-inbox-lib.sh
@@ -2777,7 +2791,7 @@ FM_WATCHER_CLEANUP_LOCK_BOUND=   # optional watcher EXIT marker-lock wait; defau
 FM_TURNEND_CHURN_ABSORB_SECS=900   # legacy pane-churn tuning; raw turn ends are informational regardless of this value
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading declared-wait status verb; bin/fm-classify-lib.sh owns its meaning and legacy external-wait label; excluded from FM_CAPTAIN_RE and distinct from blocked
-FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates, unless that pane's own worker declared a wait that has not elapsed, its task is held for the captain in the backlog, or, where config/wedge-defer-worker-wait arms it, its worker's own newest line is a still-open `blocked:` or `needs-decision:` line, or, where config/wedge-defer-parked-gate arms it, that pane's crew is parked at a validation gate awaiting the supervisor's decision on it that the crew raised under that run's key and nobody has answered yet, or, where config/wedge-defer-validating arms it, that pane's crew has an attributed no-mistakes run whose step is running or fixing, any of which takes the FM_PAUSE_RESURFACE_SECS recheck below instead; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats; at that same escalation moment a recovery-grade agent-state probe (docs/architecture.md owns that dead-record contract) reports a pane whose endpoint is proven `dead` or `missing` once and stops re-escalating it while it stays that way
+FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates, unless that pane's own worker declared a wait that has not elapsed, its task is held for the captain in the backlog, or, where config/wedge-defer-worker-wait arms it, its worker's own newest line is a still-open `blocked:` or `needs-decision:` line, or, where config/wedge-defer-parked-gate arms it, that pane's crew is parked at a validation gate awaiting the supervisor's decision on it that the crew raised under that run's key and nobody has answered yet, or, where config/wedge-defer-validating arms it, that pane's crew has an attributed no-mistakes run whose step is running or fixing, any of which takes the FM_PAUSE_RESURFACE_SECS recheck below instead; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats; at that same escalation moment a recovery-grade agent-state probe (docs/architecture.md owns that dead-record contract) reports a pane whose endpoint is proven `dead` or `missing` and rechecks the unresolved condition after the obligation deadline
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age without a completed turn or explicit native-harness progress (bin/fm-watch.sh owns marker selection), before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait, an attended verified captain-held transfer, an attended backlog captain hold on the crew's task, or - where config/wedge-defer-worker-wait or config/wedge-defer-parked-gate arms it - the worker's own still-open newest `blocked:` or `needs-decision:` line or a validation gate of the crew's own awaiting the supervisor's still-unanswered decision, or - where config/wedge-defer-validating arms it - an attributed validation run that is running or fixing, takes the FM_PAUSE_RESURFACE_SECS recheck below instead
 FM_PAUSE_RESURFACE_SECS=14400      # four hours between bounded rechecks of a declared external wait or verified captain-held transfer, repeated new-hash stale alarms for an ordinary crew task with an open backlog captain call, and repeated first-sight alarms from an otherwise-unclassifiable pane whose recovery-grade endpoint probe proves its agent alive and whose own status log or task worktree was written within FM_STALE_ESCALATE_SECS (without that progress evidence every new hash still surfaces immediately); a structured until time can make an external-wait recheck occur sooner but cannot extend this bound; this includes a live idle pane after its first inconclusive stale wake, a provably-working pane whose own unelapsed declared wait, backlog captain hold, or, where config/wedge-defer-worker-wait or config/wedge-defer-parked-gate arms it, its worker's own still-open `blocked:` or `needs-decision:` line or unanswered supervisor-owed validation gate, or, where config/wedge-defer-validating arms it, attributed validation run that is running or fixing, defers its FM_STALE_ESCALATE_SECS escalation, and a live busy pane past FM_BUSY_TURN_MAX_SECS, while the away-mode daemon uses the same setting and ages its window against the crew's own latest status line rather than pane busy state; set it in config/watch.env for durable non-Relay tuning of watchers started through bin/fm-watch-arm.sh, while the Codex checkpoint route with no config/supervision-host and the away-mode daemon start the watcher directly and use the default; a captain-held transfer or backlog captain hold is never rechecked while the away-posture record exists, while an armed validation gate awaiting the supervisor's decision keeps this recheck in either posture
 FM_SECONDMATE_WAKE_STALL_SECS=180  # minimum interval with no change of the oldest actionable foreign wake-queue row (it advances as the mate drains, and a queue reprovisioned under the same task id starts a fresh interval at whatever sequence it restarts) before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification for that no-progress episode; a mate that is provably inside an active turn (an exact busy verdict) does not escalate until that same no-progress interval reaches FM_BUSY_TURN_MAX_SECS above; a mate whose busy class is exactly idle, whose agent is alive, and whose composer is not pending is rung once so its own home can drain, and the parent notification is withheld until that same row stays frozen for another stall interval; unknown or ring-unsafe panes keep the parent alarm; declared external-wait pause rows are excluded, and zero or invalid values use 180

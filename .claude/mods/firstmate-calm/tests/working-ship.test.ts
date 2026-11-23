@@ -2,7 +2,7 @@
 // working row while Calm is on, its cadence on the mocked clock, its size against the
 // viewport, and how it lets go of a site the surface no longer draws.
 import { describe, expect, test } from "claude-code/testing";
-import { calmCommand, decodeCells, isStock, rasterOf, spinner, themeChange, unmeasuredSpinner, world } from "./support.ts";
+import { calmCommand, decodeCells, isStock, rasterOf, spinner, themeChange, unmeasuredSpinner, world } from "./support";
 
 const SAIL = "◿│◣";
 const HULL = "╲▁▁▁╱";

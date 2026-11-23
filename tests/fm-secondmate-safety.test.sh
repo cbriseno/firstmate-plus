@@ -73,6 +73,16 @@ test_fm_home_parameterization() {
   brief="$home_one/data/task-c/brief.md"
   grep -F "FM_HOME='$home_one' FM_STATE_OVERRIDE='$home_one/state'" "$brief" >/dev/null || fail "secondmate brief did not shell-quote FM_HOME state path"
 
+  # Complete the generated task before exercising its delivery gate.
+  python3 - "$home_one/data/task-a/brief.md" "$home_one/data/task-a" <<'PYFIXTURE'
+import json, pathlib, sys
+brief = pathlib.Path(sys.argv[1])
+brief.write_text(brief.read_text().replace('{TASK}', 'Exercise home routing.').replace(
+    '{CAPTAIN_REQUIREMENTS}', '1. Exercise home routing.'))
+pathlib.Path(sys.argv[2], 'acceptance.json').write_text(json.dumps({'requirements': [
+    {'text': 'Exercise home routing.', 'status': 'fulfilled', 'evidence': 'fixture'}]}))
+PYFIXTURE
+
   # A pushed ship worktree, and a gh that supplies no forge head, so the PR
   # check stays offline and its named-head gate reads the worktree's HEAD.
   fm_git_init_commit "$home_one/wt"

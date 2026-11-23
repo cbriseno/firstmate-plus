@@ -27,12 +27,13 @@ fm_host_paths() {
       while IFS= read -r target; do args+=(--project-root "$target"); done < <(fm_host_project_roots "$SECONDMATE_REGISTRY_HOME/projects")
     done < "$DATA/secondmates.md"
   fi
-  for target in "$@"; do args+=(--path "$target"); done
-  result=$(node "$SCRIPT_DIR/fm-primary-write-policy.mjs" "${args[@]}") || {
-    printf 'error: invalid host paths: %s\n' "$result" >&2
-    return 1
-  }
-  printf '%s\n' "$result"
+  for target in "$@"; do
+    result=$(node "$SCRIPT_DIR/fm-primary-write-policy.mjs" "${args[@]}" --path "$target") || {
+      printf 'error: invalid host path %s; use an absolute or HOME-relative path outside projects and Firstmate checkouts\n' "$target" >&2
+      return 1
+    }
+    printf '%s\n' "$result"
+  done
 }
 
 fm_host_scratch_valid() {

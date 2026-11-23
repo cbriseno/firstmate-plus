@@ -472,20 +472,24 @@ test_return_brief_composes_from_record_store_and_held_set() {
   pass "the return brief renders health, the words with the session account, waiting, could-not-fix, handled, and cost from durable records, and the gate shrinks to what the away session could not fix"
 }
 
-# On a supervision-host home off Pi the drain's BRANCH OUTCOMES section is the
+# On a supervision-host home the drain's BRANCH OUTCOMES section is the
 # one presenter of branch outcomes and the one owner of their read cursor, so
 # the return brief counts the window's outcomes and points there instead of
-# listing them, and leaves the cursor alone. On Pi the brief lists them as
-# before.
+# listing them, and leaves the cursor alone. Without the host the brief lists
+# the outcomes itself.
 test_return_brief_points_at_the_drain_on_a_host_home_only() {
   local dir harness fakebin out n
-  for harness in claude pi; do
+  for harness in claude codex; do
     dir="$TMP_ROOT/window-pointer-$harness"
     install_runner "$dir"
     for f in fm-supervision-engine-lib.sh fm-harness.sh; do
       cp "$ROOT/bin/$f" "$dir/bin/"
     done
-    : > "$dir/home/config/supervision-host"
+    if [ "$harness" = claude ]; then
+      : > "$dir/home/config/supervision-host"
+    else
+      : > "$dir/home/config/supervision-host-off"
+    fi
     fakebin="$dir/fakebin"
     mkdir -p "$fakebin"
     ln -s /bin/bash "$fakebin/$harness"
@@ -507,12 +511,12 @@ test_return_brief_points_at_the_drain_on_a_host_home_only() {
       assert_not_contains "$out" 'PR ready for review' "a host home's brief must leave the captain outcome to the drain"
       assert_not_contains "$out" 'routine 6' "a host home's brief must leave the routine outcomes to the drain"
     else
-      assert_contains "$out" '    - demo: PR ready for review' "a Pi home's brief must still list the captain outcome"
-      assert_contains "$out" '    - demo: routine 6' "a Pi home's brief must still list the latest routine outcomes"
+      assert_contains "$out" '    - demo: PR ready for review' "a home without the host must list the captain outcome"
+      assert_contains "$out" '    - demo: routine 6' "a home without the host must list the latest routine outcomes"
     fi
     [ ! -e "$dir/home/state/.branch-outcomes-cursor" ] || fail "$harness: the return moved the outcome store's read cursor"
   done
-  pass "the return brief points at the drain for branch outcomes on a host home and leaves the read cursor to it, and a Pi home's brief is unchanged"
+  pass "the return brief points at the drain for branch outcomes on a host home and leaves the read cursor to it, and a home without the host lists them"
 }
 
 test_return_brief_all_silent_window_does_not_point_at_drain() {

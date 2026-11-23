@@ -159,7 +159,7 @@ test_handling_successor_resurfaces_a_row_appended_during_startup() {
 
 # A dispatch opportunity is work for the primary, even just after another delivery.
 test_ready_work_wakes_once() {
-  local dir home state fakebin out child i id
+  local dir home state fakebin out child i id sequence generation
   dir=$(make_case ready-capacity)
   home="$dir/home"; state="$home/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
   mkdir -p "$home/data" "$home/config" "$state"
@@ -174,6 +174,7 @@ test_ready_work_wakes_once() {
     FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add "$id" "$id work" --repo firstmate >/dev/null 2>&1 || fail "fixture: add $id"
   done
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold held --kind external --reason waiting >/dev/null 2>&1 || fail "fixture: hold"
+  printf "kind=ship\n" > "$state/missing.meta" # A previous attempt left metadata on a queued task.
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add dependent 'Dependent work' --repo firstmate --blocked-by demo >/dev/null 2>&1 || fail "fixture: dependency"
   for id in demo held dependent grouped; do
     mkdir -p "$home/data/$id"
@@ -211,13 +212,141 @@ PYFIX
   grep -F 'check: ready work' "$out" | grep -F '(demo)' >/dev/null || fail "wrong dispatch candidates: $(cat "$out")"
   [ "$(awk -F '\t' '$3=="check" && $4=="ready-work"{n++} END{print n+0}' "$state/.wake-queue")" -eq 1 ] \
     || fail "dispatch wake was not queued exactly once"
+  grep -F $'check\tready-work:primary:brief:missing\tcheck: ready work for the primary: missing (prepare its brief' "$state/.wake-queue" >/dev/null ||
+    fail "the missing brief was not assigned to the primary"
   for id in held grouped; do
     [ -f "$state/$id.spawn-deferred" ] || fail "paused retry reminder was retired: $id"
   done
   grep -Fx "$(cat "$out")" "$state/.ready-work-wake" >/dev/null || fail "published dispatch reason was not preserved"
-  pass "ready work bypasses the information batch and excludes holds, group pauses, dependencies and missing briefs"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
+  [ -n "$sequence" ] && [ -n "$generation" ] || fail 'fixture: no acknowledgement was offered'
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: acknowledgement failed'
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold missing --kind external --reason resolved >/dev/null || fail 'fixture: hold missing brief'
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_OBLIGATION_SECONDS=1 \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=1 FM_DIAGNOSTICS_HOME="$dir/diag" bash "$WATCH" > "$out" 2>&1 &
+  child=$!
+  for ((i=0; i<600; i++)); do
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child"; wait "$child" 2>/dev/null || true
+    fail 'acknowledged ready work was not reminded after its deadline'
+  fi
+  wait "$child" 2>/dev/null || true
+  grep -F 'still unattended for' "$out" | grep -F '(demo)' >/dev/null || fail "wrong reminder: $(cat "$out")"
+  jq -e 'select(.e == "obligation.overdue" and .category == "ready-work")' "$dir/diag/firstmate/events.jsonl" >/dev/null || fail 'reminder did not record its category'
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: reminder acknowledgement failed'
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold demo --kind external --reason resolved >/dev/null || fail 'fixture: hold demo'
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_OBLIGATION_SECONDS=1 \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 bash "$WATCH" > "$out" 2>&1 &
+  child=$!
+  for ((i=0; i<600; i++)); do
+    [ ! -e "$state/.obligation-ready-dispatch" ] && break
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  [ ! -e "$state/.obligation-ready-dispatch" ] || { kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fail 'resolved work retained its deadline'; }
+  kill -TERM "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  ! grep -F 'still unattended for' "$out" >/dev/null || fail 'resolved work woke the primary'
+  pass "ready work bypasses the information batch, routes missing briefs and respects holds, group pauses and dependencies"
+}
+
+test_ready_result_reminded_until_integrated() {
+  local dir home state repo out sequence generation
+  dir=$(make_case ready-result); home="$dir/home"; state="$home/state"; repo="$dir/repo"
+  mkdir -p "$home/data" "$home/config" "$state" "$repo"
+  printf 'backend = "markdown"\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
+  printf '# Tasks\n\n## In flight\n\n- [ ] result - Ready result (repo: firstmate)\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  mkdir -p "$home/data/result"
+  printf '# Legacy brief\n' > "$home/data/result/brief.md"
+  git -C "$repo" init -q -b main
+  git -C "$repo" config user.name Fixture
+  git -C "$repo" config user.email fixture@example.invalid
+  git -C "$repo" commit -q --allow-empty -m initial
+  git -C "$repo" checkout -qb fm/result
+  git -C "$repo" commit -q --allow-empty -m result
+  printf 'kind=ship\nmode=local-only\nproject=%s\nworktree=%s\nbranch=fm/result\nbase_branch=main\n' "$repo" "$repo" > "$state/result.meta"
+  printf 'done: ready in branch fm/result\n' > "$state/result.status"
+  printf '60\n' > "$home/config/obligation-seconds"
+  result_tick() (
+    unset FM_OBLIGATION_SECONDS
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_DIAGNOSTICS=0 \
+      bash -c '. "$1"; wake() { printf "%s\n" "$1"; }; ready_work_tick' _ "$WATCH"
+  )
+  acknowledge_result() {
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
+    sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
+    generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" >/dev/null 2>&1 || fail 'result acknowledgement failed'
+  }
+  out=$(result_tick) || fail "first result check failed: $out"
+  assert_contains "$out" 'ready work for the primary: result' 'first result wake'
+  acknowledge_result
+  # Simulate an installation upgrading after it already acknowledged this result.
+  python3 - "$state/.obligation-ready-result-result" "$state/.ready-work-wake" <<'PY'
+import os, pathlib, sys, time
+pathlib.Path(sys.argv[1]).unlink(missing_ok=True)
+os.utime(sys.argv[2], (time.time() - 61, time.time() - 61))
+PY
+  out=$(result_tick) || fail "result reminder failed: $out"
+  assert_contains "$out" 'still unattended for' 'unintegrated result was not reminded'
+  acknowledge_result
+  git -C "$repo" branch -f main fm/result
+  out=$(result_tick) || fail "integrated result check failed: $out"
+  [ -z "$out" ] && [ ! -e "$state/.obligation-ready-result-result" ] || fail "integrated result remained actionable: $out"
+  pass 'an acknowledged result resurfaces until its branch is integrated'
+}
+
+# T4: a check row already queued when a watcher arms is delivered before the
+# poll's scanners run. Live 2026-11-23: a ready-work row queued during a long
+# turn waited 233 s after the turn ended while the first poll scanned under
+# load, and its acknowledged age reached 761 s. The scanner is made slow here.
+test_queued_check_row_resurfaces_before_scanners() {
+  local dir home state fakebin codebin child now out started
+  dir=$(make_case queued-check-before-scan)
+  home="$dir/home"; state="$dir/state"; fakebin="$dir/fakebin"; codebin="$dir/code/bin"
+  mkdir -p "$home/data" "$dir/code"
+  cp -R "$ROOT/bin" "$codebin"
+  printf '#!/usr/bin/env bash\nsleep 30\n' > "$codebin/fm-inactive-reconcile.sh"
+  chmod +x "$codebin/fm-inactive-reconcile.sh"
+  printf '%s\t1\tcheck\tready-work\tcheck: ready work with 4 free lanes: review and dispatch eligible queued tasks (demo)\n' \
+    "$(date +%s)" > "$state/.wake-queue"
+  printf '1\n' > "$state/.wake-queue.seq"
+  out="$dir/watch.out"
+  started=$(date +%s)
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 \
+    "$codebin/fm-watch.sh" > "$out" 2>&1 &
+  child=$!
+  now=0
+  while [ "$now" -lt 200 ] && kill -0 "$child" 2>/dev/null; do
+    sleep 0.1
+    now=$((now + 1))
+  done
+  if kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    pkill -f "$codebin/fm-inactive-reconcile.sh" 2>/dev/null || true
+    fail "queued check row waited for the poll scanners ($(( $(date +%s) - started ))s): $(cat "$out")"
+  fi
+  wait "$child" 2>/dev/null || true
+  pkill -f "$codebin/fm-inactive-reconcile.sh" 2>/dev/null || true
+  grep -Fx 'check: rearm-resurface' "$out" >/dev/null \
+    || fail "queued check row was not resurfaced: $(cat "$out")"
+  grep "$(printf '\tcheck\tready-work\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the resurfaced row must stay queued for main"
+  pass "a check row queued before arming is delivered before the poll scanners"
 }
 
 test_ready_work_wakes_once
+test_ready_result_reminded_until_integrated
 test_handling_successor_does_not_go_blind
 test_handling_successor_resurfaces_a_row_appended_during_startup
+test_queued_check_row_resurfaces_before_scanners

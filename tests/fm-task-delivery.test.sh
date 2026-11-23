@@ -68,7 +68,7 @@ run_spawn() {  # <home> <fakebin> <spawn-args...>
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects-unused" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux PATH="$fakebin:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_MODEL_CATEGORY_OVERRIDE=1 FM_BACKEND=tmux PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
 
@@ -662,7 +662,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn of an unfilled ship brief should exit non-zero"
-  assert_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+  assert_contains "$out" "still contains {TASK}, {FIRSTMATE_SPEC}, or {CAPTAIN_REQUIREMENTS}" \
     "unfilled ship spawn did not name the leftover placeholders"
   assert_contains "$out" "## Captain's intent" \
     "unfilled ship spawn did not name the intent subsection to fill"
@@ -678,6 +678,9 @@ Run `herdr session stop` to reproduce the lifecycle operation.
 ## Firstmate spec
 Use the existing task setup.
 
+# Herdr lifecycle declaration - NOT ENABLED
+Stop and regenerate this brief before dispatch.
+
 # Definition of done
 Delivery contract: mode=direct-PR
 EOF
@@ -687,15 +690,37 @@ EOF
   : > "$home/config/herdr-lifecycle-spawn-guard"
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   status=$?
-  [ "$status" -ne 0 ] || fail "a Herdr lifecycle brief without the isolation contract should be refused"
-  assert_contains "$out" "Herdr isolation contract" \
-    "Herdr lifecycle refusal did not name the missing isolation contract"
-  assert_contains "$out" "\`herdr session stop\`" \
-    "Herdr lifecycle refusal did not name the matched command"
-  assert_contains "$out" "fm-brief.sh --herdr-lab" \
-    "Herdr lifecycle refusal did not name the brief regeneration remedy"
-  assert_absent "$home/state/$id.meta" \
-    "Herdr lifecycle refusal wrote task metadata"
+  assert_not_contains "$out" "Herdr isolation contract" \
+    "legacy brief should receive the contract at launch"
+  assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$home/data/$id/launch-brief.md" \
+    "legacy brief launch omitted the isolation contract"
+  assert_grep "Run \`herdr session stop\`" "$home/data/$id/launch-brief.md" \
+    "legacy brief launch lost the original task"
+  assert_no_grep '# Herdr lifecycle declaration - NOT ENABLED' "$home/data/$id/launch-brief.md" \
+    "legacy launch retained the obsolete refusal"
+  assert_grep '# Herdr lifecycle declaration - NOT ENABLED' "$home/data/$id/brief.md" \
+    "legacy durable brief was modified"
+  id=delivery-herdr-fenced-example
+  mkdir -p "$home/data/$id"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Keep the following example intact.
+```markdown
+# Herdr lifecycle declaration - NOT ENABLED
+Example content that must survive.
+```
+## Firstmate spec
+Preserve the example.
+# Definition of done
+Delivery contract: mode=direct-PR
+EOF
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_grep 'Example content that must survive.' "$home/data/$id/launch-brief.md" \
+    "a fenced example was removed from the launch brief"
+  assert_grep '# Herdr isolation - HARD SAFETY CONTRACT' "$home/data/$id/launch-brief.md" \
+    "a fenced example prevented safe lab access"
+  id=delivery-herdr-lifecycle-unguarded
   printf '\n# Herdr isolation - HARD SAFETY CONTRACT\n' >> "$home/data/$id/brief.md"
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   assert_not_contains "$out" "Herdr isolation contract" \
@@ -718,7 +743,7 @@ EOF
     "Fix replacement of \`{TASK}\` in Herdr briefs." \
     "Keep literal \`{FIRSTMATE_SPEC}\` examples intact."
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
-  assert_not_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+  assert_not_contains "$out" "still contains {TASK}, {FIRSTMATE_SPEC}, or {CAPTAIN_REQUIREMENTS}" \
     "a filled ship brief mentioning placeholder tokens was refused as unfilled"
   assert_not_contains "$out" "must contain nonempty" \
     "a filled ship brief mentioning placeholder tokens failed content validation"
@@ -744,7 +769,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   assert_not_contains "$out" "must contain nonempty" \
     "fenced example headings made a filled legacy Task fail validation"
-  assert_not_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+  assert_not_contains "$out" "still contains {TASK}, {FIRSTMATE_SPEC}, or {CAPTAIN_REQUIREMENTS}" \
     "fenced example headings made a filled legacy Task look unfilled"
 
   id=delivery-legacy-no-mistakes
@@ -839,7 +864,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --scout)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn of an unfilled scout brief should exit non-zero"
-  assert_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+  assert_contains "$out" "still contains {TASK}, {FIRSTMATE_SPEC}, or {CAPTAIN_REQUIREMENTS}" \
     "unfilled scout spawn did not name the leftover placeholders"
   assert_absent "$home/state/$id.meta" "unfilled scout spawn wrote task metadata"
 
@@ -1089,7 +1114,7 @@ EOF
 }
 
 test_spawn_refreshes_legacy_worker_roles() {
-  local rec home proj fakebin kind id out brief project_kind first_line role_line supervisor_line
+  local rec home proj fakebin kind id out brief project_kind first_line
   rec=$(make_home worker-roles)
   IFS='|' read -r home proj fakebin <<EOF
 $rec
@@ -1863,7 +1888,9 @@ test_local_and_pr_landings_notify_main_waiters() {
     fm_merge_outcome_report "$home" "$home/state" "$id" https://github.com/acme/proj/pull/7 poll \
       || fail "repeated PR landing outcome failed"
   ) || fail "PR landing walk failed"
+  # shellcheck disable=SC2031 # The sourced helper runs in a subshell and cannot change this local value.
   assert_grep 'dependency landed on main' "$home/state/paused.inbox/002.msg" "PR landing did not notify waiter"
+  # shellcheck disable=SC2031 # The parent retains the same home after that subshell.
   assert_absent "$home/state/paused.inbox/003.msg" "repeated PR observation duplicated notification"
   pass "local and PR landings durably notify unresolved same-project main waiters"
 }

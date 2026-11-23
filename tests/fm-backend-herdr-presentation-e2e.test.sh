@@ -6,12 +6,18 @@
 # and the guarded named-session lab helper.
 set -u
 
+# The lab must not inherit another Firstmate home's state or launch settings.
+for fixture_env in "${!FM_@}"; do
+  case "$fixture_env" in FM_TEST_*|FM_HERDR_LAB_STATE_DIR) ;; *) unset "$fixture_env" ;; esac
+done
+export FM_SPAWN_EXTENSION=''
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$ROOT/bin/fm-timeout-lib.sh"
 
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
@@ -23,29 +29,29 @@ REAL_HERDR=$(command -v herdr)
 REAL_TREEHOUSE=$(command -v treehouse)
 HERDR_ORIGINAL_PATH=$PATH
 TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-presentation.XXXXXX") || exit 1
+unset TREEHOUSE_ROOT TREEHOUSE_WORKTREE_PATH TREEHOUSE_UNIQUE_LEAF TREEHOUSE_APFS_SHARING
 FAKEBIN="$TMP_ROOT/fakebin"
 HERDR_CALL_LOG="$TMP_ROOT/herdr-calls.log"
 TREEHOUSE_CALL_LOG="$TMP_ROOT/treehouse-calls.log"
-TREEHOUSE_LOCK_DIR="$TMP_ROOT/treehouse-call.lock"
+TREEHOUSE_ROOT="$TMP_ROOT/treehouse-pool"
 MOVE_CALL_LOG="$TMP_ROOT/workspace-move-calls.log"
 FOCUS_AUDIT_LOG="$TMP_ROOT/focus-audit.log"
 ACTIVE_SEEDED_CONTROL="$TMP_ROOT/active-seeded-control"
 POST_CREATE_ABORT_CONTROL="$TMP_ROOT/post-create-abort-control"
-mkdir -p "$FAKEBIN"
+mkdir -p "$FAKEBIN" "$TMP_ROOT/treehouse-home" "$TMP_ROOT/treehouse-config"
 : > "$HERDR_CALL_LOG"
 : > "$TREEHOUSE_CALL_LOG"
 : > "$MOVE_CALL_LOG"
 : > "$FOCUS_AUDIT_LOG"
 REAL_MOVER="$ROOT/bin/backends/herdr-workspace-move.py"
-export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG TREEHOUSE_CALL_LOG TREEHOUSE_LOCK_DIR MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
+export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG TREEHOUSE_CALL_LOG TREEHOUSE_ROOT MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
 export ACTIVE_SEEDED_CONTROL POST_CREATE_ABORT_CONTROL TMP_ROOT
 
 # Log every production-adapter call, remove its already-validated trailing
 # session flag, and send the operation through the lab helper so that helper
 # remains the sole process which appends the real trailing session flag.
-# The adapter's deliberately session-independent version read cannot pass the
-# helper's leading-option guard, so the wrapper sends only that read straight
-# to the absolute real binary with the same explicit trailing lab session.
+# Version output is derived from the scoped status read because the helper
+# rejects leading options and every Herdr operation stays within the lab.
 cat > "$FAKEBIN/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -76,7 +82,10 @@ for arg in "$@"; do
   esac
 done
 if [ "${1:-}" = --version ]; then
-  exec env PATH="$HERDR_ORIGINAL_PATH" "$REAL_HERDR" "$@" --session "$HERDR_LAB_SESSION"
+  version_status=$(env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status --json) || exit 1
+  version=$(printf '%s' "$version_status" | jq -er '.client.version') || exit 1
+  printf 'herdr %s\n' "$version"
+  exit 0
 fi
 focus_snapshot() {
   local list row workspace tab tabs
@@ -145,6 +154,31 @@ if [ "${1:-} ${2:-}" = "pane get" ] && [ -d "$ACTIVE_SEEDED_CONTROL" ] \
 fi
 before=
 [ -z "$mutation" ] || before=$(focus_snapshot || printf ambiguous/ambiguous)
+# Observe whether any earlier aborted projection still exists at each create.
+case "$mutation:$label" in
+  workspace-create:$'└ abort-'*)
+    abort_list=$(env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" workspace list) || abort_list=
+    abort_check=clean
+    printf '%s' "$abort_list" | jq -e '(.result.workspaces | type) == "array"' >/dev/null 2>&1 || abort_check=unknown
+    for task_dir in "$POST_CREATE_ABORT_CONTROL"/abort-*; do
+      [ -f "$task_dir/workspace" ] || continue
+      previous_ws=$(cat "$task_dir/workspace")
+      if printf '%s' "$abort_list" | jq -e --arg ws "$previous_ws" 'any(.result.workspaces[]?; .workspace_id == $ws)' >/dev/null; then
+        abort_check=overlap
+      fi
+    done
+    printf 'abort-precreate\t%s\n' "$abort_check" >> "$FOCUS_AUDIT_LOG"
+    ;;
+esac
+# Both the task pane and the caller must see the same private Treehouse pool.
+case "${1:-} ${2:-}" in
+  "workspace create"|"tab create")
+    set -- "$@" --env "HOME=$TMP_ROOT/treehouse-home" \
+      --env "XDG_CONFIG_HOME=$TMP_ROOT/treehouse-config" \
+      --env "TREEHOUSE_ROOT=$TREEHOUSE_ROOT" \
+      --env "PATH=$TMP_ROOT/fakebin:$HERDR_ORIGINAL_PATH"
+    ;;
+esac
 if out=$(env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"); then
   status=0
 else
@@ -213,17 +247,8 @@ set -u
 if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ "${1:-}" = get ]; then
   exit 0
 fi
-# Treehouse's pool allocator is outside the Herdr concurrency contract under
-# test. Serialize its calls so simultaneous recovery spawns cannot race for
-# one pool slot before reaching the Herdr session lock exercised below.
-while ! mkdir "$TREEHOUSE_LOCK_DIR" 2>/dev/null; do
-  sleep 0.01
-done
-release_treehouse_lock() { rmdir "$TREEHOUSE_LOCK_DIR" 2>/dev/null || true; }
-trap release_treehouse_lock EXIT
-trap 'exit 1' HUP INT TERM
-"$REAL_TREEHOUSE" "$@"
-exit $?
+exec env HOME="$TMP_ROOT/treehouse-home" XDG_CONFIG_HOME="$TMP_ROOT/treehouse-config" \
+  TREEHOUSE_ROOT="$TREEHOUSE_ROOT" "$REAL_TREEHOUSE" "$@"
 SH
 
 cat > "$FAKEBIN/herdr-workspace-mover" <<'SH'
@@ -275,13 +300,17 @@ export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 herdr_forget_inherited_pane
 
 HERDR_LAB_SESSION=$(PATH="$HERDR_ORIGINAL_PATH" \
-  "$HERDR_LAB_HELPER" name fm-herdr-presentation-projection)
+  "$HERDR_LAB_HELPER" name "${FM_TEST_HERDR_LAB_NAME:-fm-herdr-presentation-projection}")
 export HERDR_SESSION="$HERDR_LAB_SESSION" HERDR_LAB_SESSION
 LAB_READY=0
 RECORDED_WORKTREES=""
 LOCK_CONTENTION_OWNER_PID=
 LOCK_REFUSE_HOLDER_PID=
 LOCK_WAIT_HOLDER_PID=
+fixture_treehouse_return() {
+  HOME="$TMP_ROOT/treehouse-home" XDG_CONFIG_HOME="$TMP_ROOT/treehouse-config" "$REAL_TREEHOUSE" return "$@"
+}
+
 cleanup_all() {
   local wt pid
   for pid in "$LOCK_CONTENTION_OWNER_PID" "$LOCK_REFUSE_HOLDER_PID" "$LOCK_WAIT_HOLDER_PID"; do
@@ -295,24 +324,24 @@ cleanup_all() {
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     [ -d "$wt" ] || continue
-    "$REAL_TREEHOUSE" return --force "$wt" >/dev/null 2>&1 || true
+    fixture_treehouse_return --force "$wt" >/dev/null 2>&1 || true
   done <<EOF
 $RECORDED_WORKTREES
 EOF
   if [ "$LAB_READY" -eq 1 ]; then
     PATH="$HERDR_ORIGINAL_PATH" \
-      "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" >/dev/null 2>&1 || true
+      "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" >/dev/null || return 1
     LAB_READY=0
   fi
   find "$TMP_ROOT" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   rm -rf "$TMP_ROOT"
 }
-trap cleanup_all EXIT
+trap 'cleanup_all || exit 1' EXIT
 
+LAB_READY=1
 PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
   || fail "could not provision the isolated Herdr lab"
-LAB_READY=1
 
 lab() {
   PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"
@@ -394,6 +423,9 @@ make_project() {  # <dir>
   local dir=$1
   mkdir -p "$dir"
   git -C "$dir" init -q
+  git -C "$dir" symbolic-ref HEAD refs/heads/main
+  git -C "$dir" config user.name "Firstmate Tests"
+  git -C "$dir" config user.email "tests@example.invalid"
   printf '# Herdr projection E2E fixture\n' > "$dir/README.md"
   git -C "$dir" add README.md
   git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
@@ -411,6 +443,10 @@ $description
 
 ## Firstmate spec
 Verify projected workspace behavior for $id.
+
+# Definition of done
+Delivery contract: mode=no-mistakes
+Ship branch: fm/$id
 EOF
 }
 
@@ -419,7 +455,7 @@ spawn_task() {  # <id> <home> <project> [extra fm-spawn args...]; SPAWN_DEADLINE
   shift 3
   local -a deadline_cmd=()
   [ -z "${SPAWN_DEADLINE_SECONDS:-}" ] || deadline_cmd=(fm_run_timed "$SPAWN_DEADLINE_SECONDS")
-  FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_MODEL_CATEGORY_OVERRIDE=1 FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     ${deadline_cmd[@]+"${deadline_cmd[@]}"} "$ROOT/bin/fm-spawn.sh" "$id" "$project" "sh -c 'while :; do sleep 60; done'" \
     --mode no-mistakes --yolo off --backend herdr "$@"
 }
@@ -478,6 +514,11 @@ finish_concurrent_teardown() {  # <id> <status> <stdout> <stderr>
 }
 
 normalize_meta() {  # <meta>
+  local generation scope
+  generation=$(sed -n 's/^spawn_gen=//p' "$1")
+  scope=$(sed -n 's/^process_scope=//p' "$1")
+  [ -n "$generation" ] && [ "${scope##*:}" = "$generation" ] \
+    || fail "process scope does not contain this spawn incarnation"
   grep -E '^spawned_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$1" >/dev/null \
     || fail "spawn metadata is missing its UTC attempt timestamp"
   sed -E \
@@ -486,6 +527,7 @@ normalize_meta() {  # <meta>
     -e 's|^herdr_tab_id=.*$|herdr_tab_id=<herdr-container-id>|' \
     -e 's|^herdr_pane_id=.*$|herdr_pane_id=<herdr-container-id>|' \
     -e 's|^spawn_gen=.*$|spawn_gen=<spawn-incarnation>|' \
+    -e 's|^(process_scope=.*:)[^:]*$|\1<spawn-incarnation>|' \
     -e 's|^spawned_at=.*$|spawned_at=<spawn-time>|' \
     "$1"
 }
@@ -884,16 +926,9 @@ grep -F "did not enter an isolated worktree" "$TMP_ROOT/abort-b.err" >/dev/null 
   || fail "post-create abort fixture B did not reach the armed validation failure"
 ABORT_A_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane")
 ABORT_B_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane")
-ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
-  $1 == "workspace-create" && $4 ~ /^└ abort-a · p:/ { print "create-a" }
-  $1 == "workspace-create" && $4 ~ /^└ abort-b · p:/ { print "create-b" }
-  $1 == "pane-close" && $4 == a { print "close-a" }
-  $1 == "pane-close" && $4 == b { print "close-b" }
-')
-case "$ABORT_SEQUENCE" in
-  $'create-a\nclose-a\ncreate-b\nclose-b'|$'create-b\nclose-b\ncreate-a\nclose-a') ;;
-  *) fail "concurrent post-create abort cleanup interleaved outside the presentation lock: $ABORT_SEQUENCE" ;;
-esac
+ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' '$1 == "abort-precreate" { print $2 }')
+[ "$ABORT_SEQUENCE" = $'clean\nclean' ] \
+  || fail "concurrent post-create abort cleanup interleaved outside the presentation lock: $ABORT_SEQUENCE"
 ABORT_UNRESTORED=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
   ($1 == "workspace-create" || $1 == "tab-create" || $1 == "workspace-move" || ($1 == "pane-close" && $4 != a && $4 != b)) && $2 != $3 { print }
 ')
@@ -1000,8 +1035,12 @@ printf 'bravo\n' > "$SECOND_HOME_B/.fm-secondmate-home"
 touch "$SECOND_HOME_A/state/.last-watcher-beat" "$SECOND_HOME_B/state/.last-watcher-beat"
 # Ensure the secondmate homes look like gitignored firstmate homes so inheritance
 # may write config/herdr-presentation-spaces.
-git -C "$SECOND_HOME_A" init -q
-git -C "$SECOND_HOME_B" init -q
+for fixture_home in "$SECOND_HOME_A" "$SECOND_HOME_B"; do
+  git -C "$fixture_home" init -q
+  git -C "$fixture_home" symbolic-ref HEAD refs/heads/main
+  git -C "$fixture_home" config user.name "Firstmate Tests"
+  git -C "$fixture_home" config user.email "tests@example.invalid"
+done
 printf 'config/herdr-presentation-spaces\nconfig/crew-harness\nconfig/crew-dispatch.json\nconfig/backlog-backend\nconfig/backend\nconfig/startup-memory-budget\n' \
   > "$SECOND_HOME_A/.gitignore"
 cp "$SECOND_HOME_A/.gitignore" "$SECOND_HOME_B/.gitignore"
@@ -1270,7 +1309,7 @@ for RESTART_ID in fm-hibit-resume-r1 wheelhouse-healing-r1; do
     [ "$NEW_RESTART_PANE" != "$PRIOR_RESTART_PANE" ] \
       || fail "$RESTART_ID repeated reclaim reused the prior husk pane"
     if [ "$PRIOR_RESTART_WT" != "$NEW_RESTART_WT" ]; then
-      "$REAL_TREEHOUSE" return --force "$PRIOR_RESTART_WT" >/dev/null 2>&1 || true
+      fixture_treehouse_return --force "$PRIOR_RESTART_WT" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -1278,8 +1317,8 @@ for RESTART_ID in fm-hibit-resume-r1 wheelhouse-healing-r1; do
     || fail "$RESTART_ID teardown after reclaim failed: $(cat "$TMP_ROOT/$RESTART_ID-teardown.err")"
   [ ! -e "$HOME_DIR/state/$RESTART_ID.herdr-presentation" ] \
     || fail "$RESTART_ID exact reclaimed teardown did not retire its journal"
-  "$REAL_TREEHOUSE" return --force "$OLD_RESTART_WT" >/dev/null 2>&1 || true
-  "$REAL_TREEHOUSE" return --force "$NEW_RESTART_WT" >/dev/null 2>&1 || true
+  fixture_treehouse_return --force "$OLD_RESTART_WT" >/dev/null 2>&1 || true
+  fixture_treehouse_return --force "$NEW_RESTART_WT" >/dev/null 2>&1 || true
 done
 pass "real Herdr lab: Hi Bit and Wheelhouse-style same-identity restarts reclaim one nested space with exact focus and idempotence"
 
@@ -1314,8 +1353,8 @@ CROSS_NEW_PANE=$(grep '^herdr_pane_id=' "$CROSS_RESTART_META" | cut -d= -f2-)
   || fail "cross-home reclaim changed the secondmate child's presentation label"
 teardown_task "$CROSS_RESTART_ID" "$SECOND_HOME_A" > "$TMP_ROOT/cross-restart-teardown.out" 2> "$TMP_ROOT/cross-restart-teardown.err" \
   || fail "cross-home reclaimed teardown failed: $(cat "$TMP_ROOT/cross-restart-teardown.err")"
-"$REAL_TREEHOUSE" return --force "$CROSS_OLD_WT" >/dev/null 2>&1 || true
-"$REAL_TREEHOUSE" return --force "$CROSS_NEW_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$CROSS_OLD_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$CROSS_NEW_WT" >/dev/null 2>&1 || true
 pass "real Herdr lab: secondmate restart binding and reclaim stay isolated to the exact child home and parent"
 
 # Two homes recovering concurrently serialize on the named session lock and
@@ -1371,10 +1410,10 @@ teardown_task "$PRIMARY_WAVE_ID" "$HOME_DIR" > "$TMP_ROOT/primary-wave-teardown.
   || fail "concurrent primary recovery teardown failed: $(cat "$TMP_ROOT/primary-wave-teardown.err")"
 teardown_task "$BRAVO_WAVE_ID" "$SECOND_HOME_B" > "$TMP_ROOT/bravo-wave-teardown.out" 2> "$TMP_ROOT/bravo-wave-teardown.err" \
   || fail "concurrent secondmate recovery teardown failed: $(cat "$TMP_ROOT/bravo-wave-teardown.err")"
-"$REAL_TREEHOUSE" return --force "$PRIMARY_WAVE_OLD_WT" >/dev/null 2>&1 || true
-"$REAL_TREEHOUSE" return --force "$BRAVO_WAVE_OLD_WT" >/dev/null 2>&1 || true
-"$REAL_TREEHOUSE" return --force "$PRIMARY_WAVE_NEW_WT" >/dev/null 2>&1 || true
-"$REAL_TREEHOUSE" return --force "$BRAVO_WAVE_NEW_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$PRIMARY_WAVE_OLD_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$BRAVO_WAVE_OLD_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$PRIMARY_WAVE_NEW_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$BRAVO_WAVE_NEW_WT" >/dev/null 2>&1 || true
 pass "real Herdr lab: concurrent cross-home recoveries replace exact husks under one session lock with no focus drift"
 
 # Exact-resume presentation-lock contention refuses by default. Hold the
@@ -1496,8 +1535,8 @@ fi
 assert_focus_is "$LOCK_WAIT_FOCUS" "resume lock-wait"
 teardown_task "$LOCK_WAIT_ID" "$HOME_DIR" > "$TMP_ROOT/lock-wait-teardown.out" 2> "$TMP_ROOT/lock-wait-teardown.err" \
   || fail "resume lock-wait fixture teardown failed: $(cat "$TMP_ROOT/lock-wait-teardown.err")"
-"$REAL_TREEHOUSE" return --force "$LOCK_WAIT_OLD_WT" >/dev/null 2>&1 || true
-"$REAL_TREEHOUSE" return --force "$LOCK_WAIT_NEW_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$LOCK_WAIT_OLD_WT" >/dev/null 2>&1 || true
+fixture_treehouse_return --force "$LOCK_WAIT_NEW_WT" >/dev/null 2>&1 || true
 pass "real Herdr lab: --herdr-resume-lock-wait waits out session lock contention instead of refusing"
 
 # Seed a legacy old-format primary projection and a flat secondmate tab; correction must not migrate them.
@@ -1575,8 +1614,21 @@ assert_no_projection_mutation_since "$START" "agent-free duplicate-token recover
 lab workspace get "$DUP1_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery removed the first quarantined workspace"
 lab workspace get "$DUP2_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery removed the second quarantined workspace"
 
-lab pane report-agent "$DUP1_PANE" --source fm-projection-e2e --agent test-agent --state idle >/dev/null \
-  || fail "could not register the duplicate-live-agent risk fixture"
+# An external report may succeed without registering an agent. Give Herdr a
+# live agent-shaped process and verify its registration before testing recovery.
+mkdir -p "$TMP_ROOT/agent-bin"
+ln -s "$(command -v sleep)" "$TMP_ROOT/agent-bin/codex"
+printf -v DUP_COMMAND '%q 300' "$TMP_ROOT/agent-bin/codex"
+lab pane run "$DUP1_PANE" "$DUP_COMMAND" >/dev/null \
+  || fail "could not start the duplicate-live-agent fixture"
+DUP_AGENT_STATE=unknown
+for _ in $(seq 1 60); do
+  DUP_AGENT_STATE=$(fm_backend_herdr_pane_agent_state "$HERDR_LAB_SESSION" "$DUP1_PANE")
+  [ "$DUP_AGENT_STATE" = live ] && break
+  sleep 1
+done
+[ "$DUP_AGENT_STATE" = live ] \
+  || fail "duplicate-live-agent fixture did not become live (state: $DUP_AGENT_STATE)"
 START=$(log_line_count)
 if fm_backend_herdr_projection_recovery_allows_flat "$HERDR_LAB_SESSION" "$DUP_JOURNAL" duplicate1; then
   fail "a duplicate token match with a registered agent should refuse fallback"

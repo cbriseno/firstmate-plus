@@ -6,8 +6,8 @@
 # The command does not acquire the session lock, drain wakes, arm watchers,
 # mutate backlog state, or write reports. Its default ledger collector may
 # atomically refresh parent-side cached copies of remote home summaries under
-# state/secondmate-summary-cache; those observational cache writes are its only
-# fleet-state mutation.
+# state/secondmate-summary-cache. Stale structured summaries are refreshed on
+# read, and the oldest observed age is recorded for the home freshness budget.
 #
 # Top-level fields:
 #   schema: stable schema id.
@@ -1502,6 +1502,7 @@ manifest=$2
 out_dir=$3
 filter=$4
 max_bytes=$5
+now=$6
 
 valid_summary() {  # <file> <home>
   local file=$1 home=$2 bytes
@@ -1524,7 +1525,7 @@ bounded_collect() {  # <output> <error> <command...>
 }
 
 collect_one() {  # <manifest-row>
-  local row=$1 id home cache slot fetch status
+  local row=$1 id home cache slot fetch status generated
   id=$(printf '%s' "$row" | jq -r '.id') || return
   home=$(printf '%s' "$row" | jq -r '.home') || return
   cache=$(printf '%s' "$row" | jq -r '.cache') || return
@@ -1534,7 +1535,20 @@ collect_one() {  # <manifest-row>
   if bounded_collect "$fetch" "$out_dir/$slot.fetch.err" \
       "$script_dir/fm-on.sh" "$id" fm-remote-file.sh get state/home-summary.json "$max_bytes" \
       && valid_summary "$fetch" "$home"; then
+    # Keep the first copy available even if refresh exceeds the fleet deadline.
     printf 'fresh\n' > "$status"
+    generated=$(jq -r '.generated_epoch // empty' "$fetch" 2>/dev/null || true)
+    case "$generated:$now" in
+      *[!0-9:]*|:*) ;;
+      *) if [ "$((now - generated))" -gt 900 ]; then
+           if "$script_dir/fm-on.sh" "$id" fm-home-summary-refresh.sh >/dev/null 2>&1 \
+             && bounded_collect "$out_dir/$slot.refreshed" "$out_dir/$slot.refresh.err" \
+               "$script_dir/fm-on.sh" "$id" fm-remote-file.sh get state/home-summary.json "$max_bytes" \
+             && valid_summary "$out_dir/$slot.refreshed" "$home"; then
+             mv -f -- "$out_dir/$slot.refreshed" "$fetch"
+           fi
+         fi ;;
+    esac
     return
   fi
   if [ -n "$cache" ] && valid_summary "$cache" "$home"; then
@@ -1554,7 +1568,7 @@ BASH
   SNAPSHOT_COLLECTION_TIMED_OUT=0
   if fm_run_timed "$FM_SNAPSHOT_BUDGET" bash "$collector" \
       "$SCRIPT_DIR" "$manifest" "$SNAPSHOT_COLLECT_DIR" "$SNAPSHOT_SUMMARY_FILTER" \
-      "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES"; then
+      "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES" "$SNAPSHOT_EPOCH"; then
     :
   else
     rc=$?
@@ -1563,11 +1577,20 @@ BASH
   return 0
 }
 
+summary_read_epoch() {
+  if [ -n "${FM_SNAPSHOT_NOW:-}${FM_SNAPSHOT_NOW_EPOCH:-}" ]; then
+    printf '%s\n' "$SNAPSHOT_EPOCH"
+  else
+    date +%s
+  fi
+}
+
 snapshot_summary_age() {  # <summary-json-file>
-  local generated age
+  local generated age now
   generated=$(jq -r '.generated_epoch' "$1" 2>/dev/null || true)
   case "$generated" in ''|*[!0-9]*) printf 'null\n'; return ;; esac
-  age=$((SNAPSHOT_EPOCH - generated))
+  now=$(summary_read_epoch)
+  age=$((now - generated))
   [ "$age" -lt 0 ] && age=0
   printf '%s\n' "$age"
 }
@@ -1807,7 +1830,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
   local row id home host remote registered registry_error task sampled_spawn_gen status_file status_observation_file event_raw event_note event_age observed_epoch observed_age
   local activity_scan activities decisions reconciliation provenance freshness reason summary_file summary_sampled summary_valid summary_invalidity state terminal terminal_contradiction contradiction
   local summary_source summary_age summary_observed summary_freshness cache_path collection_status collection_slot summary_index=0
-  local seen_homes=''
+  local seen_homes='' read_age_max=-1 read_sample
   registry_file="$JSON_TRANSPORT_DIR/secondmate-registry.json"
   union_file="$JSON_TRANSPORT_DIR/secondmate-union.json"
   records_file="$JSON_TRANSPORT_DIR/secondmate-records.jsonl"
@@ -1921,6 +1944,15 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
         fi
       elif summary_file_read "$home/state/home-summary.json" "$home" "$summary_file"; then
         summary_source='local-ledger'
+        if [ "$(snapshot_summary_age "$summary_file")" -gt 900 ]; then
+          if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+            FM_CONFIG_OVERRIDE="$home/config" FM_PROJECTS_OVERRIDE="$home/projects" \
+            "$SCRIPT_DIR/fm-home-summary-refresh.sh" >/dev/null 2>&1; then
+            if summary_file_read "$home/state/home-summary.json" "$home" "$summary_file.refreshed"; then
+              mv -f -- "$summary_file.refreshed" "$summary_file"
+            fi
+          fi
+        fi
       elif summary_file_oversized "$home/state/home-summary.json"; then
         reason="structured home ledger exceeded byte limit"
       else
@@ -1929,6 +1961,17 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
       if [ -z "$reason" ]; then
         summary_age=$(snapshot_summary_age "$summary_file")
         summary_observed=$(jq -r '.generated' "$summary_file")
+        if [ "$summary_age" -gt "$read_age_max" ]; then
+          read_age_max=$summary_age
+          read_sample=$(umask 077; mktemp "$STATE/.home-summary-read.XXXXXX") || read_sample=
+          if [ -n "$read_sample" ]; then
+            if jq -n --argjson age "$summary_age" --argjson observed "$(summary_read_epoch)" \
+              '{age_seconds:$age,observed_epoch:$observed}' > "$read_sample"; then
+              mv -f -- "$read_sample" "$STATE/.home-summary-read.json" || true
+            fi
+            rm -f -- "$read_sample"
+          fi
+        fi
       fi
     fi
     if [ -z "$reason" ]; then
@@ -2118,8 +2161,9 @@ if [ "$OUTPUT_MODE" = work-observation ]; then
     fm_project_capacity_lookup "$capacity_config" "$(basename "$deferred_project")" || FM_PROJECT_CAPACITY=
     deferred_id=$(basename "$marker" .spawn-deferred)
     [ ! -f "$STATE/$deferred_id.meta" ] || continue
-    jq -n --arg id "$deferred_id" --argjson limit "${FM_PROJECT_CAPACITY:-null}" \
-      '{id:$id,dispatch_wait:{source:"spawn-deferred",project_limit:$limit}}'
+    deferred_reason=$(head -n 1 "$marker.reason" 2>/dev/null | cut -c1-300) || deferred_reason=
+    jq -n --arg id "$deferred_id" --argjson limit "${FM_PROJECT_CAPACITY:-null}" --arg reason "$deferred_reason" \
+      '{id:$id,dispatch_wait:({source:"spawn-deferred",project_limit:$limit} + (if $reason == "" then {} else {reason:$reason} end))}'
   done | jq -s . > "$JSON_TRANSPORT_DIR/deferrals.json" || exit 1
   jq -n --slurpfile inventory "$MAIN_INVENTORY_JSON_FILE" --slurpfile tasks "$TASKS_JSON_FILE" \
     --slurpfile deferrals "$JSON_TRANSPORT_DIR/deferrals.json" \
@@ -2129,10 +2173,18 @@ if [ "$OUTPUT_MODE" = work-observation ]; then
 fi
 # Link registration independently of backlog ownership/phase. Queued or held
 # records without metadata retain null execution, never a coordinator fallback.
-if jq --slurpfile tasks "$TASKS_JSON_FILE" '
+# A queued record whose spawn was deferred carries the deferral's recorded cause.
+for marker in "$STATE"/*.spawn-deferred; do
+  [ -f "$marker.reason" ] && [ ! -L "$marker.reason" ] || continue
+  jq -n --arg id "$(basename "$marker" .spawn-deferred)" --arg reason "$(head -n 1 "$marker.reason" 2>/dev/null | cut -c1-300)" \
+    'if $reason == "" then empty else {id:$id,reason:$reason} end'
+done | jq -s . > "$JSON_TRANSPORT_DIR/deferral-reasons.json" \
+  || { echo "fm-fleet-snapshot: deferral reason read failed" >&2; exit 1; }
+if jq --slurpfile tasks "$TASKS_JSON_FILE" --slurpfile deferrals "$JSON_TRANSPORT_DIR/deferral-reasons.json" '
   .records |= map(. as $record | ([$tasks[0][] | select(.id == $record.id)][0] // {}) as $task
     | . + {execution:($task.execution // null),native_activity:($task.native_activity // null),
-           run_step:($task.run_step // null)})' "$BACKLOG_JSON_FILE" > "$JSON_TRANSPORT_DIR/linked-backlog.json" \
+           run_step:($task.run_step // null)}
+    + (if .state == "queued" then ([$deferrals[0][] | select(.id == $record.id) | {dispatch_reason:.reason}][0] // {}) else {} end))' "$BACKLOG_JSON_FILE" > "$JSON_TRANSPORT_DIR/linked-backlog.json" \
   && mv "$JSON_TRANSPORT_DIR/linked-backlog.json" "$BACKLOG_JSON_FILE"; then
   :
 else

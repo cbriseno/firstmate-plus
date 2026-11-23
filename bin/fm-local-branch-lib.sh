@@ -8,6 +8,12 @@ fm_local_integration_branch() {
   printf '%s\n' "$branch"
 }
 
+# Exact local ancestry is independent of the harness and works on older Git.
+fm_local_head_in_base() {  # <git-directory> <base-branch> [tip-ref, default HEAD]
+  [ -n "$1" ] && [ -d "$1" ] && [ -n "$2" ] &&
+    git -C "$1" merge-base --is-ancestor "${3:-HEAD}" "refs/heads/$2" 2>/dev/null
+}
+
 # A clean merge that introduces no change proves HEAD's content is integrated,
 # including rewritten or squashed commits. Shared by auto-close and teardown;
 # conflicts and inspection failures remain inconclusive.

@@ -170,11 +170,11 @@ class Owner:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def lock(self):
+    def lock(self, *, read_only=False):
         refuse(self.data.is_symlink(), 'owner_failed', tr('Unsafe data path.'))
         self.data.mkdir(exist_ok=True)
         try:
-            self.lock_fd = acquire(self.data)
+            self.lock_fd = acquire(self.data, read_only=read_only)
         except BlockingIOError:
             raise Refusal('busy', tr('Another change is in progress. Try again.'))
         self.env['FM_WORK_OWNER_FD'] = str(self.lock_fd)
@@ -266,7 +266,7 @@ class Owner:
                'not_local_home', tr('This backend only supports read access in Deck.'))
         backlog_path = (config.get('markdown') or {}).get('path') or 'data/backlog.md'
         captured = {}
-        lock = self.lock()
+        lock = self.lock(read_only=True)
         try:
             refuse(optional('.tasks.toml', 65536) != config_text, 'busy', tr('Configuration changed. Try again.'))
             for path in (backlog_path, 'data/projects.md', self.structure_path):
@@ -303,7 +303,7 @@ class Owner:
         for task_id in task_ids:
             needed = True
             if task_id in self.rows and (self.presentations[task_id].get('evidence') or {}).get('available') is not False:
-                hold, inherited, own, safe, _, _, _, stopping = self.pause_facts(task_id)
+                hold, inherited, own, safe, _, _, _, stopping = self.pause_facts(task_id, include_worker=False)
                 needed = bool(stopping or safe == 'pending' or not (hold or inherited or own))
             tasks.append(dict(id=task_id, needed=needed))
         return dict(schema='fm-work-supervision.v1', tasks=tasks)
@@ -526,6 +526,66 @@ class Owner:
         return bool(self.current_hold(task_id) or self.inherited(task_id)
                     or task_id in self.structure.get('task_pauses', {}))
 
+    def continuation_order(self, candidates):
+        """Use the saved request order, then priority, dependency release and age."""
+        active = [i for i, row in self.rows.items() if row['state'] != 'done']
+        unit, priorities, explicit_priorities = {}, {}, {}
+        for i in active:
+            request = self.presentations[i]['presentation'].get('request')
+            key = 'request:' + request['id'] if request else i
+            unit[i] = key
+            own = self.rows[i].get('priority')
+            inherited = [self.structure['groups'].get(k, {}).get('priority') for k in self.ancestors(i)]
+            rank = next((p for p in reversed(inherited) if p is not None), own)
+            priorities[key] = min(priorities.get(key, 5), 5 if rank is None else rank)
+            if request and inherited[-1] is not None:
+                explicit_priorities[key] = inherited[-1]
+        priorities.update(explicit_priorities)
+        placed = [key for key in self.structure['order'] if key in priorities]
+        positions = {key: pos for pos, key in enumerate(placed)}
+        frees = set()
+        edges = self.edges()
+        for i in active:
+            if not self.progress_reporting_held(i):
+                for block in self.blockers(i, edges):
+                    if block['open']:
+                        frees.update(self.members(block['ref']))
+
+        def key(item):
+            i, finishes = item
+            scope = unit[i]
+            rank = priorities[scope]
+            if scope in positions:
+                slot = positions[scope], 1
+            else:
+                slot = next((n for n, p in enumerate(placed) if rank < priorities[p]), len(placed)), 0
+            row = self.rows[i]
+            created = (task_creation(self.data, row) or {}).get('value') or row.get('created')
+            age = time_value(created)['value']
+            if age is None:
+                age = '9999-12-31'
+            elif len(age) > 10:
+                instant = dt.datetime.fromisoformat(age.replace('Z', '+00:00'))
+                age = instant.astimezone(dt.timezone.utc).isoformat() if instant.tzinfo else age[:10]
+            return slot, rank, not (i in frees or finishes), age
+
+        return [i for i, _ in sorted(candidates, key=key)]
+
+    def continuations(self):
+        edges = self.edges()
+        candidates = []
+        for i, row in self.rows.items():
+            if not ID.fullmatch(i) or row['state'] not in ('queued', 'in_flight') or self.progress_reporting_held(i):
+                continue
+            if any(b['open'] for b in self.blockers(i, edges)):
+                continue
+            in_flight = row['state'] == 'in_flight'
+            if in_flight and not self.status[i]:
+                continue
+            candidates.append((i, in_flight))
+        return dict(tasks=[dict(id=i, state=self.rows[i]['state'])
+                           for i in self.continuation_order(candidates)])
+
     def request_records(self):
         if self._requests is not None:
             return self._requests
@@ -616,19 +676,22 @@ class Owner:
             pass
         return dict(state='unknown', source='none', detail=tr('Current activity could not be confirmed.'))
 
-    def pause_facts(self, task_id):
+    def pause_facts(self, task_id, include_worker=True):
         row = self.rows[task_id]
         hold = self.current_hold(task_id)
         inherited = self.inherited(task_id)
         task_pause = self.structure.get('task_pauses', {}).get(task_id)
         safe, request_id = self.safe_point(task_id) if (hold or inherited or task_pause) else ('none', None)
         running = row['state'] == 'in_flight'
-        worker = self.worker_liveness(task_id) if running else None
-        closing = any(r.get('signal') == 'pause.request' and not r.get('cancelled') and not r.get('resumed')
-                      and task_id in r.get('safe_tasks', []) and task_id not in r.get('exited', [])
-                      for r in self.request_records())
-        stopping = (running and (task_pause or inherited or (hold and hold.get('kind') == 'parked'))
-                    and (safe != 'reached' or closing) and worker['state'] != 'dead')
+        parking = running and bool(task_pause or inherited or (hold and hold.get('kind') == 'parked'))
+        may_be_stopping = parking and (safe != 'reached' or any(
+            r.get('signal') == 'pause.request' and not r.get('cancelled') and not r.get('resumed')
+            and task_id in r.get('safe_tasks', []) and task_id not in r.get('exited', [])
+            for r in self.request_records()))
+        # The full projection displays liveness. Supervision needs it only
+        # when it determines whether a pause has stopped an in-flight worker.
+        worker = self.worker_liveness(task_id) if may_be_stopping or (running and include_worker) else None
+        stopping = may_be_stopping and worker['state'] != 'dead'
         return hold, inherited, task_pause, safe, request_id, running, worker, stopping
 
     def snapshot(self, facts=None, previous=None, affected=None, controls_only=False, crew=None):
@@ -1439,6 +1502,7 @@ class Owner:
             candidates = [i for i in self.members(op['target']) if i in closed and self.rows[i]['state'] == 'in_flight'
                           and not self.progress_reporting_held(i) and not any(b['open'] for b in self.blockers(i))
                           and self.worker_liveness(i)['state'] != 'alive']
+            candidates = self.continuation_order((i, False) for i in candidates)
         finally:
             # Only the in-memory pause was simulated; no source needs reloading.
             self.rows, self.structure = rows, structure
@@ -1942,7 +2006,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['capabilities', 'supervision', 'bootstrap', 'snapshot', 'preview', 'apply', 'request-status', 'close', 'reconcile',
         'pause.preview', 'pause.request', 'pause.cancel', 'resume.preview', 'resume.request', 'resume.dequeue', 'outcome.review', 'report.review',
-        'assign', 'dispatch-check', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
+        'assign', 'dispatch-check', 'continuations', 'normalize-plan', 'normalize-apply', 'normalize-rollback', 'aliases-init', 'resolve'])
     parser.add_argument('--order', choices=['recent', 'manual'], default='recent', help='Request display order: activity or persisted manual order.')
     parser.add_argument('--runtime', action='store_true', help='Include full bounded crew reconciliation in addition to fresh endpoint liveness.')
     parser.add_argument('--freeze-scope', action='store_true', help='Interpret a historical freeze with explicit authority; dry run only until normalize-apply.')
@@ -1976,7 +2040,7 @@ def main():
         else:
             if args.verb in ('bootstrap', 'snapshot', 'apply', 'request-status', 'close', 'reconcile', 'assign', 'normalize-apply', 'normalize-rollback', 'aliases-init') or '.' in args.verb or (owner.home / ALIAS_PATH).exists() or owner.env.get('FM_WORK_OWNER_FD'):
                 lock = owner.lock()
-            if lock is None and args.verb in ('snapshot', 'preview', 'normalize-plan', 'dispatch-check', 'resolve') and (owner.data / '.work.lock').exists():
+            if lock is None and args.verb in ('snapshot', 'preview', 'normalize-plan', 'dispatch-check', 'continuations', 'resolve') and (owner.data / '.work.lock').exists():
                 lock = os.open(owner.data / '.work.lock', os.O_RDONLY | os.O_NOFOLLOW)
                 try:
                     fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -1985,10 +2049,10 @@ def main():
             DIAG['lock_ms'] = round((time.monotonic() - DIAG['started']) * 1000)
             if args.verb == 'bootstrap':
                 from fm_work_projection import position
-                owner.ledger_start = position(owner.home)
+                owner.ledger_start, owner.ledger_prefix = position(owner.home)
             if args.verb in ('bootstrap', 'snapshot'):
                 observation_process = start_work_observation(owner.env)
-            owner.load(include_presentations=args.verb != 'snapshot')
+            owner.load(include_presentations=args.verb not in ('snapshot', 'continuations'))
             if args.verb == 'bootstrap':
                 from fm_work_projection import bootstrap
                 os.close(lock)
@@ -2046,6 +2110,8 @@ def main():
                 DIAG['tasks'] = len(result.get('tasks', []))
             elif args.verb == 'reconcile':
                 result = owner.reconcile_controls()
+            elif args.verb == 'continuations':
+                result = owner.continuations()
             elif args.verb == 'dispatch-check':
                 if args.task not in owner.rows:
                     args.task = owner.aliases.resolve(args.task).removeprefix('task:')
@@ -2119,7 +2185,7 @@ def main():
     except Refusal as exc:
         DIAG['result'] = exc.code if exc.code == 'busy' else 'rejected'
         print(json.dumps(dict(request_id=locals().get('op', {}).get('request_id', args.request_id), state='conflict' if exc.code in ('stale_revision', 'stale_occurrence', 'review_conflict') else 'rejected', code=exc.code, message=str(exc), **exc.details), ensure_ascii=False))
-        return 1 if args.verb == 'dispatch-check' else 0
+        return 1 if args.verb in ('dispatch-check', 'continuations') else 0
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         print(json.dumps(dict(state='failed', code='owner_failed', message=str(exc)), ensure_ascii=False))
         return 1

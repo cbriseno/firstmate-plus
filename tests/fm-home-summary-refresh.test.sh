@@ -342,6 +342,8 @@ PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CADENCE_HOME" \
   FM_SNAPSHOT_NOW="$NOW_TWO" FM_SNAPSHOT_NOW_EPOCH="$EPOCH_TWO" \
   "$WRITER" || fail "could not seed the cadence ledger"
 touch -t 203801010000 "$CADENCE_HOME/state/home-summary.json"
+# The ready-work event is already handled; this case measures the ledger cadence.
+printf "brief:cadence-task\n" > "$CADENCE_HOME/state/.ready-work-wake"
 PATH="$FAKEBIN:$PATH" \
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CADENCE_HOME" \
   FM_SNAPSHOT_NOW="$NOW_THREE" FM_SNAPSHOT_NOW_EPOCH="$EPOCH_THREE" \
@@ -414,6 +416,22 @@ jq -e '
 ' "$TMP_ROOT/parent-snapshot.json" >/dev/null \
   || fail "fleet snapshot did not consume the published local ledger: $(jq -c '.secondmate_current.records[0]' "$TMP_ROOT/parent-snapshot.json")"
 pass "fleet snapshot consumes the published local ledger by default"
+
+# A quiet home can keep its last ledger long after the watcher stops. Reading it
+# must publish the current state and measure the age actually delivered.
+stale_epoch=$(( $(date +%s) - 1800 ))
+jq --argjson epoch "$stale_epoch" '.generated_epoch=$epoch' \
+  "$HOME_DIR/state/home-summary.json" > "$TMP_ROOT/stale-ledger.json"
+mv "$TMP_ROOT/stale-ledger.json" "$HOME_DIR/state/home-summary.json"
+PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$PARENT_HOME" \
+  "$SNAPSHOT" --json > "$TMP_ROOT/refreshed-parent.json" \
+  || fail "snapshot could not read a stale ledger"
+jq -e '.secondmate_current.records[0].freshness.age_seconds < 900' \
+  "$TMP_ROOT/refreshed-parent.json" >/dev/null \
+  || fail "snapshot delivered the old summary after its read"
+jq -e '.age_seconds < 900' "$PARENT_HOME/state/.home-summary-read.json" >/dev/null \
+  || fail "snapshot did not record the age delivered to its reader"
+pass "reading an old home summary refreshes it and records its delivered age"
 
 # Restore the established ledger, then stop a real writer while its real producer
 # is blocked in a current-state read. The prior ledger must remain byte-identical

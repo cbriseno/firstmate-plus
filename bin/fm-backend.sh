@@ -244,8 +244,23 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     return 1
   }
   project=$(fm_backend_meta_exact_value "$meta" project) || {
-    echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
-    return 1
+    # An installation audit has no project: bind its endpoint to its own exact
+    # task-data scratch instead of accepting an arbitrary empty identity.
+    local audit kind audit_data audit_parent audit_work
+    audit=$(fm_backend_meta_exact_value "$meta" installation_audit) || audit=
+    kind=$(fm_backend_meta_exact_value "$meta" kind) || kind=
+    audit_data=${FM_DATA_OVERRIDE:-${FM_HOME:-}/data}
+    audit_parent=$(cd "$audit_data/$id" 2>/dev/null && pwd -P) || audit_parent=
+    audit_work=$(cd "$worktree" 2>/dev/null && pwd -P) || audit_work=
+    if [ "$audit" != 1 ] || [ "$kind" != scout ] ||
+       [ "$(grep -c '^project=$' "$meta" 2>/dev/null || true)" != 1 ] ||
+       [ "$(grep -c '^project=' "$meta" 2>/dev/null || true)" != 1 ] ||
+       [ -z "$audit_parent" ] || [ "$audit_work" != "$audit_parent/work" ] ||
+       [ -L "$audit_data/$id" ] || [ -L "$worktree" ] || [ -e "$worktree/.git" ]; then
+      echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
+      return 1
+    fi
+    project=$audit_work
   }
   case "$worktree$project$window" in *$'\n'*|*$'\r'*|*$'\t'*)
     echo "REFUSED: task $id has malformed endpoint metadata; preserving task state." >&2

@@ -66,8 +66,10 @@ Use the current affected regression tests to refresh this compatibility topic.
 
 ### Dialog mirror writers
 
-Historical machine-specific probe transcripts are not distributed.
-Use the current affected regression tests to refresh this compatibility topic.
+On 2026-11-22, Claude Code 2.1.330 on Linux ran the registered asynchronous Stop writer in an isolated interactive session.
+The writer recorded the primary's response in both the dialog mirror and fleet ledger, and the harness's own rewake stayed out of the captain's input history.
+Refresh with `FM_HOST_MIRROR_LIVE_E2E=1 FM_HOST_MIRROR_LIVE_HARNESSES=claude bash tests/fm-host-mirror-live-e2e.test.sh`.
+The portable `tests/fm-host-mirror.test.sh` also checks that the synchronous question review blocks without writing a final and takes one process snapshot.
 
 ### Attended posture
 

@@ -145,8 +145,47 @@ test_scout_batch_refuses_delivery_flags() {
   pass "scout batch refuses ship delivery flags instead of ignoring them"
 }
 
+
+test_changed_requires_publication() {
+  local home project id effect brief out
+  home="$TMP_ROOT/changed-home"
+  project="$home/projects/alpha"
+  mkdir -p "$home/data" "$project"
+  git -C "$project" init -q || fail 'fixture init'
+  git -c user.name=test -c user.email=test@example.com -C "$project" commit -q --allow-empty -m init || fail 'fixture commit'
+  for effect in none nonpublish publish explicit combined prohibition; do
+    id="changed-$effect-z1"
+    case "$effect" in
+      none) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR >/dev/null ;;
+      nonpublish) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR --effect 'deploy locally' >/dev/null ;;
+      publish) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR --publish >/dev/null ;;
+      explicit) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR --effect 'publish the release' >/dev/null ;;
+      combined) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR --publish --effect 'deploy locally' >/dev/null ;;
+      prohibition) FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR >/dev/null ;;
+    esac
+    brief="$home/data/$id/brief.md"
+    python3 - "$brief" "$effect" <<'PYBRIEF'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text().replace('{TASK}', 'Fix a defect.').replace('{FIRSTMATE_SPEC}', 'Run bin/fm-test-run.sh --changed --base main.').replace('{CAPTAIN_REQUIREMENTS}', '1. Fix a defect.')
+if sys.argv[2] == 'prohibition':
+    s = s.replace('Run bin/fm-test-run.sh --changed --base main.', 'NO corras bin/fm-test-run.sh --changed.')
+p.write_text(s)
+PYBRIEF
+    out=$(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_PROJECTS_OVERRIDE='' \
+      FM_HOME="$home" FM_SPAWN_NO_GUARD=1 "$SPAWN" "$id" projects/alpha codex --mode direct-PR --yolo off --model gpt-6.1-terra --effort medium --base-branch wrong 2>&1)
+    case "$effect" in
+      none|nonpublish) printf '%s\n' "$out" | grep -F 'use targeted tests' >/dev/null || fail "$effect must reject batch: $out" ;;
+      *) printf '%s\n' "$out" | grep -F 'must record Base branch' >/dev/null || fail "$effect must pass batch guard: $out" ;;
+    esac
+  done
+  pass 'changed batch requires a publication effect'
+}
+
 test_batch_dispatches_every_pair
 test_batch_mode_boundaries
 test_batch_requires_the_shared_delivery_contract
 test_scout_batch_refuses_delivery_flags
 test_projects_path_scoping
+
+test_changed_requires_publication

@@ -65,10 +65,13 @@ try:
     assert version == "codex-cli " + meta["cli_version"]
     wait(lambda: any(json.loads(r).get("payload", {}).get("type") == "task_complete"
                      for r in rollout.read_text().splitlines()), "real turn never completed")
-    if meta["cli_version"] != "0.166.0":
-        verdict = subprocess.check_output([sys.executable, str(root / "bin/fm-codex-activity.py"),
-                                           "classify", str(state), "proof"], text=True).strip()
-        assert verdict == "unknown codex-unverified", "session binding changed activity qualification"
+    def activity():
+        return subprocess.check_output([sys.executable, str(root / "bin/fm-codex-activity.py"),
+                                        "classify", str(state), "proof"], text=True).strip()
+    if meta["cli_version"] in ("0.166.0", "0.169.0"):
+        wait(lambda: activity() == "idle codex-rollout", "qualified activity did not settle idle")
+    else:
+        assert activity() == "unknown codex-unverified", "session binding changed activity qualification"
     print("ok - " + version + ": real worker transcript bound; activity qualification unchanged")
 finally:
     print(herdr("pane", "read", pane, "--source", "recent", "--lines", "25"))

@@ -13,7 +13,8 @@ import sys
 import zipfile
 
 SCHEMA = {
-    'hook.run': 'hook harness role session ms rc',
+    'hook.run': 'hook harness role session run ms rc',
+    'operation.stage': 'operation stage run ms rc',
     'session.stage': 'stage ms',
     'session.start': 'ms rc last_stage budget_s source harness session',
     'wake.ack': 'kind age_s',

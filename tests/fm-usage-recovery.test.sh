@@ -54,9 +54,10 @@ transcript('ambiguous-a',30); transcript('ambiguous-b',31)
 transcript('rejected',40); transcript('foreign',50,contract('missing',base/'other-home'))
 # Claude uses its existing assistant/API request format and task cwd evidence.
 lines(claude/'main.jsonl', [dict(type='user',timestamp='2026-11-01T02:00:00Z',cwd='/tmp/claude-task'),
-    dict(type='api-request',params=dict(output_config=dict(effort='medium'))),
+    dict(type='api-request',params=dict(model='sonnet',output_config=dict(effort='medium'))),
     dict(type='assistant',message=dict(id='one',model='claude-sonnet-5-5',usage=dict(input_tokens=100,output_tokens=10)))])
 (home/'data/claude-task').mkdir()
+lines(home/'data/claude-task/sessions.jsonl', [dict(harness='claude',model='sonnet',effort='medium',started_at='2026-11-01T02:00:00Z',session=None)])
 (home/'data/no-anchor').mkdir()
 def snapshot(): return {str(p.relative_to(home)):p.read_bytes() for p in home.rglob('*') if p.is_file()}
 before=snapshot(); review=cli(); assert snapshot()==before, 'dry run wrote files'
@@ -65,6 +66,27 @@ assert {k:v['confidence'] for k,v in by.items()} == dict(explicit='explicit',inf
 assert by['missing']['missing_reason']=='no-nearby-transcript'
 assert by['no-anchor']['missing_reason']=='no-recorded-anchor-or-explicit-link'
 assert by['claude-task']['candidates'][0]['session']['model']=='claude-sonnet-5-5'
+session_cli=[sys.executable, '-B', str(root/'bin/fm_task_sessions.py')]
+launch=home/'data/launch'; launch.mkdir()
+(home/'state/launch.meta').write_text('\n'.join([
+    'harness=claude', 'model=sonnet', 'effort=medium', 'spawned_at=2026-11-01T02:00:00Z',
+    'busy_gen=gen', 'sessions_file='+str(launch/'sessions.jsonl')])+'\n')
+subprocess.run(session_cli+['start',str(home/'state'),'launch'], check=True)
+subprocess.run(session_cli+['bind',str(home/'state'),'launch','gen'],
+               input=json.dumps(dict(transcript_path=str(claude/'main.jsonl'))), text=True, check=True)
+record=json.loads((launch/'sessions.jsonl').read_text())
+assert (record['model'],record['observed_model'],record['observed_effort']) == ('sonnet','claude-sonnet-5-5','medium')
+saved=(launch/'sessions.jsonl').read_bytes()
+subprocess.run(session_cli+['bind',str(home/'state'),'launch','gen'],
+               input=json.dumps(dict(transcript_path=str(claude/'main.jsonl'))), text=True, check=True)
+assert (launch/'sessions.jsonl').read_bytes()==saved
+legacy=home/'data/legacy'; legacy.mkdir()
+lines(legacy/'sessions.jsonl',[dict(harness='claude',model='sonnet',effort='high',session=None)])
+listed=json.loads(subprocess.check_output(session_cli+['list',str(home),'--task','legacy'],text=True))
+assert listed['model']=='sonnet' and listed['observed_model'] is None and listed['observed_effort'] is None
+(home/'state/launch.meta').unlink()
+(launch/'sessions.jsonl').unlink(); launch.rmdir()
+(legacy/'sessions.jsonl').unlink(); legacy.rmdir()
 assert by['inferred']['candidates'][0]['evidence']==['session-start']
 review_path=base/'review.json'; backup=base/'before.json'
 by['inferred']['candidates'][0]['decision']='accept'
@@ -91,6 +113,8 @@ assert abs(sum(r['usd'] for r in usage['by'])-.000398)<1e-12
 assert all(r['effort'] for r in usage['by'])
 assert json.loads((home/'data/inferred/sessions.jsonl').read_text())['recovery']['confidence']=='inferred'
 assert json.loads((home/'data/inferred/sessions.jsonl').read_text())['started_at']=='2026-11-01T00:15:00Z'
+claude_record=json.loads((home/'data/claude-task/sessions.jsonl').read_text())
+assert claude_record['model']=='claude-sonnet-5-5' and claude_record['requested_model']=='sonnet'
 assert not applied['usage']['inferred']['unknown'], 'accepted nearby launch left an unbound placeholder'
 after=snapshot(); assert cli('--apply',str(review_path),'--backup',str(backup))['applied']==[]
 assert snapshot()==after, 'repeat changed rows'

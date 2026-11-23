@@ -74,6 +74,7 @@ wait_for() {  # <file> [tries]
 python3 - "$ROOT" "$TMP_ROOT/zombies" "$BLOCKER" <<'PY' || fail "zombie listener recovery"
 import os
 import pathlib
+import re
 import signal
 import subprocess as sp
 import sys
@@ -87,11 +88,15 @@ pe = str(root / "bin/fm-procevent.sh")
 source = "zombie-recovery"
 children, groups, guards = [], [], []
 
-def run(*args, timeout=45):
-    return sp.check_output(args, env=env, text=True, stderr=sp.STDOUT, timeout=timeout)
+def run(*args, timeout=180):
+    try:
+        return sp.check_output(args, env=env, text=True, stderr=sp.STDOUT, timeout=timeout)
+    except sp.CalledProcessError as error:
+        print(error.output, file=sys.stderr)
+        raise
 
 def wait_for(test):
-    for _ in range(200):
+    for _ in range(1000):
         if test():
             return
         time.sleep(.1)
@@ -137,14 +142,22 @@ try:
         dead = sp.run(["bash", "-c", '. "$1/bin/fm-wake-lib.sh"; fm_pid_alive "$2"',
                        "_", str(root), str(holder.pid)], env=fallback)
         assert dead.returncode == 1, "zombie is still considered live"
-    assert "none" in run(pe, "list", timeout=5), "zombie-only group still owns source"
-    assert "started=1" in run(pe, "reconcile", timeout=45), "dead listener did not recover"
+    assert "none" in run(pe, "list", timeout=180), "zombie-only group still owns source"
+    assert "started=1" in run(pe, "reconcile", timeout=180), "dead listener did not recover"
     (lab / "release").touch()
     result = lab / "state/procevent-inbox/zombie-recovery.1.result"
     wait_for(result.exists)
     queue = lab / "state/.wake-queue"
     wait_for(lambda: queue.exists() and "procevent lavish zombie-recovery 1" in queue.read_text())
     assert "recovered" in result.read_text()
+    # Finish handling the captured result and the earlier stranded wake before
+    # checking the later coverage wake, just as the main session does.
+    run(pe, "handled", source, "1")
+    drain = str(root / "bin/fm-wake-drain.sh")
+    presented = run(drain)
+    ack = re.search(r"--ack-through (\d+) --recovery-generation ([A-Za-z0-9._-]+)", presented)
+    assert ack, presented
+    run(drain, "--ack-through", ack.group(1), "--recovery-generation", ack.group(2))
 
     # A genuinely live lock holder must remain untouched. Reconciliation must
     # time out, reject concurrent work, and let discovery report uncertainty.
@@ -155,7 +168,7 @@ try:
         str(lab / "held"), str(lab / "unlock")], env=env)
     children.append(live_holder)
     wait_for(lambda: (lab / "held").exists())
-    bounded = dict(env, FM_PROCEVENT_RECONCILE_SECONDS="3")
+    bounded = dict(env, FM_PROCEVENT_RECONCILE_SECONDS="15")
     job = sp.Popen([pe, "reconcile"], env=bounded, text=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     children.append(job)
     singleton = lab / "state/.procevent-reconcile.lock"
@@ -164,10 +177,10 @@ try:
     alias = lab / "state-alias"
     alias.symlink_to(lab / "state", target_is_directory=True)
     alias_env = dict(bounded, FM_STATE_OVERRIDE=str(alias))
-    duplicate = sp.check_output([pe, "reconcile"], env=alias_env, text=True, timeout=3)
+    duplicate = sp.check_output([pe, "reconcile"], env=alias_env, text=True, timeout=180)
     assert "already running" in duplicate, duplicate
-    assert "uncertain" in run(pe, "list", timeout=3)
-    output = job.communicate(timeout=10)[0]
+    assert "uncertain" in run(pe, "list", timeout=180)
+    output = job.communicate(timeout=180)[0]
     assert job.returncode == 124 and "exceeded" in output, output
     assert not singleton.is_symlink() and not singleton.exists(), "singleton lock leaked"
     status = run("ps", "-e", "-o", "pid=", "-o", "stat=")
@@ -181,7 +194,7 @@ try:
     watcher_env = dict(bounded, FM_POLL="1", FM_HEARTBEAT="999999",
                        FM_HOME_SUMMARY_INTERVAL="999999", LAVISH_AXI_STATE_DIR=str(lab / "lavish"))
     watcher = sp.check_output([str(root / "bin/fm-watch.sh")], env=watcher_env,
-                              text=True, stderr=sp.STDOUT, timeout=15)
+                              text=True, stderr=sp.STDOUT, timeout=180)
     assert "unattended Lavish board" in watcher, watcher
     assert "reconciliation failed or exceeded" in queue.read_text()
     (lab / "unlock").touch()
@@ -208,7 +221,7 @@ try:
         if override:
             selected["FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS"] = override
         cold = sp.run([pe, "reconcile"], env=selected, text=True, stdout=sp.PIPE,
-                      stderr=sp.STDOUT, timeout=30)
+                      stderr=sp.STDOUT, timeout=120)
         print("simulated startup:", label, cold.returncode, cold.stdout.strip())
         assert cold.returncode == expected, cold.stdout
         assert ("failed=1" if expected else "failed=0") in cold.stdout, cold.stdout

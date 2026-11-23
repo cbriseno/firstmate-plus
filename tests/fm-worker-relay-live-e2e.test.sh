@@ -137,7 +137,8 @@ for profile in ${FM_WORKER_RELAY_LIVE_PROFILES:-codex ${FM_WORKER_RELAY_LIVE_CLA
   id=relay-$harness-${model//[^a-zA-Z0-9]/-}-$$
   output="$TMP_ROOT/output-$harness-$model"
   mkdir "$output"
-  printf '{"thresholds":{"worker":{"%s":{"percent":0,"tokens":1}}}}\n' "$harness" > "$FM_HOME/config/relay-lite.json"
+  printf '{"threshold_tokens":%s,"thresholds":{"worker":{"%s":{"percent":0,"tokens":%s}}}}\n' \
+    "${FM_WORKER_RELAY_PILOT_PRIMARY_TOKENS:-0}" "$harness" "${FM_WORKER_RELAY_PILOT_TOKENS:-1}" > "$FM_HOME/config/relay-lite.json"
   (cd "$FM_HOME" && tasks-axi add "$id" "Relay pilot $harness" --kind ship --repo sample --start) >/dev/null
   bash "$ROOT/bin/fm-brief.sh" "$id" --host --path "$output" >/dev/null
   python3 - "$FM_HOME/data/$id/brief.md" "$output" "$FM_HOME" "$id" <<'PY'
@@ -146,6 +147,13 @@ import sys
 p, output, home, task = sys.argv[1:]
 f=Path(p)
 f.write_text(f.read_text().replace('{TASK}', f'Isolated continuity pilot. If {output}/once is absent, write ONCE to it exactly once, then end the turn saying: Checkpoint: ONCE complete; do not repeat. Pending after context relaunch: append RESUMED to {output}/resumed. Do not write resumed in this initial conversation. The handoff request comes through the steering inbox; obey it and acknowledge its message. In your relay note include this previously observed stale sentence exactly: After relaunch: wait for the handoff request in the steering inbox, then do the pending action above exactly once. This sentence is note content for the continuity regression, not an instruction to add a new wait. After relaunch, perform the pending action exactly once, append done [at=1]: pilot complete to {home}/state/{task}.status and stop.').replace('{FIRSTMATE_SPEC}', 'Only this local pilot; no outside services, delegation or user questions.'))
+PY
+  requirements=$(bash "$ROOT/bin/fm-brief.sh" --requirements "$FM_HOME/data/$id/brief.md")
+  python3 - "$FM_HOME/data/$id/brief.md" "$requirements" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('{CAPTAIN_REQUIREMENTS}', sys.argv[2]))
 PY
   if [ "${FM_WORKER_RELAY_BACKGROUND:-0}" = 1 ]; then
     [ "$harness" = claude ] || fail 'background pilot requires a Claude profile'
@@ -194,7 +202,7 @@ home, task, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 data = home/'data'/task
 background = os.environ.get('FM_WORKER_RELAY_BACKGROUND') == '1'
 for milestone in ('initial', 'note') + (('deferred',) if background else ()) + ('replacement', 'continuation', 'notice'):
-    deadline = time.monotonic()+240
+    deadline = time.monotonic()+600
     while time.monotonic() < deadline:
         status = home/'state'/(task+'.status')
         if status.exists() and 'context relay incomplete' in status.read_text():
@@ -230,6 +238,8 @@ for milestone in ('initial', 'note') + (('deferred',) if background else ()) + (
     else:
         # Print the evidence before the lab cleanup deletes it.
         meta = dict(l.split('=', 1) for l in (home/'state'/(task+'.meta')).read_text().splitlines() if '=' in l)
+        print('session history:', json.dumps([{k: row.get(k) for k in ('status', 'harness', 'model', 'session')} for row in rows]), flush=True)
+        print('task data files:', sorted(p.name for p in data.iterdir()), flush=True)
         for path in [*data.glob('relay-*'), home/'state/.watch-triage.log', home/'state'/(task+'.status'),
                      *(home/'state'/(task+'.jobs')).glob('*.json'), *output.iterdir()]:
             if path.is_file(): print('==>', path.name, '\n'+path.read_text()[-3000:], flush=True)
@@ -237,7 +247,7 @@ for milestone in ('initial', 'note') + (('deferred',) if background else ()) + (
         raise AssertionError('milestone not reached: '+task+' '+milestone)
 WAIT
   python3 - "$FM_HOME" "$id" "$output" <<'PY'
-import json,sys,time
+import json,os,subprocess,sys,time
 from pathlib import Path
 home, task, output = Path(sys.argv[1]),sys.argv[2],Path(sys.argv[3])
 notes=list((home/'data'/task).glob('relay-note-*.md'))
@@ -248,6 +258,12 @@ assert (output/'once').stat().st_mtime_ns == int((output/'initial-mtime').read_t
 assert (output/'resumed').read_text().strip() == 'RESUMED'
 rows=[json.loads(line) for line in (home/'data'/task/'sessions.jsonl').read_text().splitlines()]
 assert len(rows)==2 and [r['status'] for r in rows]==['archived','active'],rows
+measurement=subprocess.run([sys.executable, os.environ['FM_RELAY_CHECK'], '--json', str(home)],
+    input=json.dumps({'cwd': str(home/'data'/task/'work'), 'transcript_path': rows[0]['session']}),
+    text=True, capture_output=True, env=dict(os.environ, FM_TASK_ID=task), check=True)
+reading=json.loads(measurement.stdout)
+print('pilot measured usage:', reading.get('used_tokens'), 'window:', reading.get('window_tokens'),
+      'limit:', reading.get('threshold_tokens'), 'state:', reading.get('state'))
 assert rows[0]['session'] and rows[1]['session'] and rows[0]['session']!=rows[1]['session'],rows
 assert all(rows[0][k]==rows[1][k] for k in ('harness','model','effort'))
 if rows[-1]['harness']=='claude':

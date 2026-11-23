@@ -233,6 +233,7 @@ When the configured tasks-axi backlog gate applies, the spawn itself moves the w
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
+When steering the primary, record each nudge with `bin/fm-nudge.sh record` instead of writing a table.
 Steer a worker with ordinary text through fail-closed `fm-send`: the message becomes a durable record in the task's steering inbox (multi-line text is legal, local and remote alike) and the worker's terminal receives only a constant doorbell line, with the watcher re-ringing an unacknowledged local message and escalating a stuck one (`bin/fm-task-inbox-lib.sh`; `bin/fm-send.sh` owns the typed-plane carve-outs).
 A remote secondmate steer rides the same durable-inbox model through the remote transport; after an unconfirmed delivery, only the exact `FM_PENDING_REPLY_EXISTING_CORR=<id>` resend command printed by `fm-send` is safe because it preserves the request body for remote enqueue deduplication (`bin/fm-send.sh` header).
 When a steer answers an open keyed decision or blocker, pass `fm-send`'s `--resolve-key` so the answer itself closes that decision record at answer time, identically for local and remote workers (contract: `bin/fm-send.sh` header).
@@ -397,7 +398,8 @@ It tracks work items only, never agents; persistent secondmates never appear as 
 Work routed to a secondmate is recorded in that secondmate home's own backlog, not the main backlog.
 When you file any item, decisions included, give its card a short title and its group in the captain's language through `bin/fm-tasks-axi.sh presentation`, whose header owns the card fields and who keeps each one current.
 When the item is another step of a captain request already filed - a split of it, a follow-up it needs, or a decision it raises - add it with `--request-from <task-id>` of a task in that request so it joins that request instead of opening a new one; the same header owns that rule.
-A decision is simply a task held for the captain: create the task with `bin/fm-tasks-axi.sh add` when needed, then always hold it through `bin/fm-captain-hold.sh hold <id> --reason "<reason>"` with its required card fields - `--question`, two or more `--option` choices, and `--recommended` - and with `--until <date>` when the captain defers it; the script refuses a call without choices and its `--help` owns the `--no-options` escape.
+Consult the standing grants supplied at the start of each turn, including their scope and limits, before deciding whether an action needs the captain.
+A decision is simply a task held for the captain: create the task with `bin/fm-tasks-axi.sh add` when needed, then always hold it through `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --action "<action class>"` with its required category and card fields - `--question`, two or more `--option` choices, and `--recommended` - and with `--until <date>` when the captain defers it; the script refuses a call without choices and its `--help` owns the `--no-options` escape.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.
 When the automatic transition gate applies, dispatch and completion move the item themselves - `bin/fm-spawn.sh` and `bin/fm-teardown.sh` own those transitions and refuse rather than report success without them - so what remains yours is filing the item before dispatch, recording decisions, and keeping notes current; `docs/configuration.md` owns gate applicability and the manual-backend exception.
@@ -426,7 +428,8 @@ A change outside every project, such as the captain's shell or user configuratio
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
-If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
+Before scaffolding or dispatching an existing brief, assess both the task and its end-to-end acceptance, including validation required by the project's instructions: if either requires starting, controlling, relaunching, or stopping real agents through Herdr, scaffold with `--herdr-lab` even when the request does not name Herdr commands.
+The launch contract supplies isolation for existing ship and scout briefs as well; do not add lifecycle commands by hand to an unguarded host brief.
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
 
 Load `secondmate-provisioning` before creating or using a charter brief and preserve its idle-by-default and marked-return-channel contracts.

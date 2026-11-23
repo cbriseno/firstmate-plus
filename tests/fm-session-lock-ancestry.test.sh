@@ -60,6 +60,18 @@ test_version_named_session_is_identified_on_both_platforms() {
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
 set -u
+if [ "${1:-}" = -A ]; then
+  format='%7s %7s %-128s %s\n'
+  printf "$format" PID PPID "$(printf '%128s' '' | tr ' ' C)" ARGS
+  printf "$format" "$FM_TEST_WALK_PID" 700 bash 'bash hook.sh'
+  if [ "${FM_TEST_CLAUDE_SHAPE:-linux}" = macos ]; then
+    printf "$format" 700 1 '/srv/user with spaces/claude/versions/2.1.220' 'versioned-executable --resume'
+  else
+    printf "$format" 700 1 '2.1.220' '/opt/claude/versions/2.1.220 --resume'
+  fi
+  printf "$format" 1 0 init init
+  exit 0
+fi
 field= pid=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -83,12 +95,12 @@ SH
   printf '700\n' > "$dir/state/.lock"
 
   for shape in linux macos; do
-    got=$(FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    got=$(FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'export FM_TEST_WALK_PID=$$; fm_harness_ancestry_pid') \
       || fail "$shape: the version-named session was not found in the ancestry at all"
     [ "$got" = 700 ] || fail "$shape: ancestry resolved '$got', expected the version-named session pid 700"
     FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_pid_alive 700' \
       || fail "$shape: a live version-named session was not recognized as a harness"
-    FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "export FM_TEST_WALK_PID=\$\$; fm_session_lock_owned_by_self '$dir/state'" \
       || fail "$shape: the session holding the lock did not recognize itself as the owner"
   done
   pass "session-lock: a version-named Claude Code session is identified from its install path and argv[0]"

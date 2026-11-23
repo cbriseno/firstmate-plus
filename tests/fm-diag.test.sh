@@ -52,6 +52,42 @@ SH
   pass "hook timing records each run and keeps its exit status"
 }
 
+test_operation_stages() {
+  local home="$TMP_ROOT/operation-home" archive="$TMP_ROOT/stages.zip" rc
+  mkdir -p "$home/state" "$home/config"
+  : > "$LOG"
+  printf '%s' '{"stop_hook_active":true}' | FM_HOME="$home" bash "$ROOT/bin/fm-turnend-guard.sh" || fail "guard failed"
+  FM_HOME="$home" bash "$ROOT/bin/fm-send.sh" absent hello >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 0 ] || fail "missing send target succeeded"
+  FM_HOME="$home" bash "$ROOT/bin/fm-teardown.sh" absent >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 0 ] || fail "missing cleanup target succeeded"
+  jq -e -s '
+    ([.[] | select(.e == "operation.stage" and .operation == "stop-guard" and .stage == "input" and .rc == 0)] | length) == 1
+    and ([.[] | select(.e == "operation.stage" and .operation == "protected-send" and .stage == "resolve" and .rc != 0)] | length) == 1
+    and ([.[] | select(.e == "operation.stage" and .operation == "cleanup" and .rc != 0)] | length) == 1
+    and ([.[] | select(.e == "hook.run" and .hook == "stop-guard") | .run] == [.[] | select(.e == "operation.stage" and .operation == "stop-guard") | .run])
+    and all(.[] | select(.e == "operation.stage"); (.ms | type) == "number" and .ms >= 0 and (.run | type) == "number")
+  ' "$LOG" >/dev/null || fail "operation stage records missing: $(cat "$LOG")"
+  "$DIAG" export "$archive" >/dev/null || fail "stage export failed"
+  if ! python3 - "$archive" <<'PYTEST'
+import json, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    events = [json.loads(line) for line in archive.read('events.jsonl').splitlines()]
+assert {e['operation'] for e in events if e['e'] == 'operation.stage'} == {'stop-guard', 'protected-send', 'cleanup'}
+PYTEST
+  then fail "export dropped operation stages"; fi
+  pass "guard, protected send and cleanup record and export stages"
+}
+
+test_macos_stage_clock() {
+  : > "$LOG"
+  DIAG_FILE="$DIAG" bash -c 'OSTYPE=darwin; unset EPOCHREALTIME; . "$DIAG_FILE"; fm_diag_stage_begin fixture wait; sleep 0.2; fm_diag_stage_end' \
+    || fail "macOS clock fixture failed"
+  jq -e 'select(.e == "operation.stage" and .operation == "fixture" and .stage == "wait" and .ms >= 200)' "$LOG" >/dev/null \
+    || fail "macOS clock fixture did not measure the wait: $(cat "$LOG")"
+  pass "stage timing works without Bash EPOCHREALTIME on the macOS path"
+}
+
 test_worker_sample_counts_unreaped_zombies() {
   local state="$TMP_ROOT/state" pid i
   mkdir -p "$state"
@@ -118,6 +154,8 @@ PYTEST
 
 test_emit_keeps_only_schema_tokens
 test_hook_timing_keeps_exit_status
+test_operation_stages
+test_macos_stage_clock
 test_worker_sample_counts_unreaped_zombies
 test_wake_ack_records_attention_latency
 

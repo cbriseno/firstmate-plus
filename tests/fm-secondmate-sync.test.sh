@@ -572,7 +572,7 @@ test_bootstrap_nudge_retry_is_idempotent() {
 
   out2=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
-  [ -z "$out2" ] || fail "idempotent retry should converge to silence, got: $out2"
+  [ "$out2" = 'STANDING_GRANTS_MIGRATION: transcribe existing authorizations using UPGRADING.md, then mark the migration complete.' ] || fail "idempotent retry should only report pending migration, got: $out2"
   pass "T8d bootstrap nudge retry is idempotent after success"
 }
 

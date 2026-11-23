@@ -37,9 +37,11 @@ exit 0
 SH
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease]'
-fi
+case "${1:-}:${2:-}" in
+  get:--help) printf '%s\n' 'Usage: treehouse get [--lease]' ;;
+  lease:--help) printf '%s\n' 'Usage: treehouse lease [--lease-holder]' ;;
+  status:--help) printf '%s\n' 'Usage: treehouse status [--json]' ;;
+esac
 SH
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
@@ -101,11 +103,21 @@ test_primary_bootstrap_materializes_visible_default() {
   fakebin=$(make_fake_toolchain "$TMP_ROOT/materialize")
 
   out=$(run_bootstrap "$root" "$home" "$fakebin")
-  [ -z "$out" ] || fail "default materialization should stay quiet, got: $out"
+  case "$out" in
+    *'STANDING_GRANTS_MIGRATION: transcribe existing authorizations using UPGRADING.md, then mark the migration complete.'*) ;;
+    *) fail "pending standing-grants migration was not announced, got: $out" ;;
+  esac
   [ "$(<"$home/config/startup-memory-budget")" = 7500 ] \
     || fail "bootstrap did not materialize the visible 7500 default"
   [ "$(FM_HOME="$home" "$BUDGET" read)" = 7500 ] \
     || fail "read command did not expose the generated default"
+
+  python3 "$ROOT/bin/fm-standing-grants.py" migrated "$home/data/standing-grants.json" \
+    || fail "standing-grants migration could not be completed"
+  out=$(run_bootstrap "$root" "$home" "$fakebin")
+  case "$out" in
+    *STANDING_GRANTS_MIGRATION*) fail "completed standing-grants migration was announced again: $out" ;;
+  esac
 
   printf '321\n' > "$home/config/startup-memory-budget"
   run_bootstrap "$root" "$home" "$fakebin" >/dev/null

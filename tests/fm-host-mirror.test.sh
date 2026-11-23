@@ -49,8 +49,17 @@ as_session() {  # <home> <script>
 }
 
 # The command string one tracked registration runs.
-claude_cmd() { jq -r --arg e "$1" '.hooks[$e][].hooks[] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.claude/settings.json"; }
-cursor_cmd() { jq -r --arg e "$1" '.hooks[$e][] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.cursor/hooks.json"; }
+claude_cmd() { jq -er --arg e "$1" '.hooks[$e][].hooks[] |
+  select(if $e == "Stop" then .async == true and (.command | contains("fm-primary-final.sh"))
+    else .command | contains("fm-host-mirror.sh") end) | .command' "$ROOT/.claude/settings.json"; }
+cursor_cmd() {
+  if [ -f "$ROOT/.cursor/hooks.json" ]; then
+    jq -er --arg e "$1" '.hooks[$e][] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.cursor/hooks.json"
+  else
+    # Some distributions omit Cursor's registration but retain its adapter.
+    printf '%s\n' '"$CURSOR_PROJECT_DIR"/bin/fm-host-mirror.sh hook cursor'
+  fi
+}
 
 # Inside an as_session script: one Claude prompt-submit (captain) or Stop
 # (main) hook payload carrying <text>, through the mirror's hook writer.
@@ -72,13 +81,14 @@ entries() {  # <home> -> "<tag>|<text>" per entry
 test_every_harness_registration_writes_the_mirror() {
   local home out
   home=$(make_home harnesses)
+  : > "$home/config/fleet-ledger"
   CLAUDE_PROMPT=$(claude_cmd UserPromptSubmit) CLAUDE_STOP=$(claude_cmd Stop) \
   CURSOR_PROMPT=$(cursor_cmd beforeSubmitPrompt) CURSOR_RESPONSE=$(cursor_cmd afterAgentResponse) \
   as_session "$home" '
     run() { printf "%s" "$2" | env CLAUDE_PROJECT_DIR="$PRIMARY_ROOT" CURSOR_PROJECT_DIR="$PRIMARY_ROOT" \
       bash -c "cd \"$PRIMARY_ROOT\" && $1"; }
     run "$CLAUDE_PROMPT" "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"c1\",\"prompt\":\"claude captain\"}"
-    run "$CLAUDE_STOP" "{\"hook_event_name\":\"Stop\",\"prompt_id\":\"c1\",\"last_assistant_message\":\"claude main\"}"
+    run "$CLAUDE_STOP" "{\"hook_event_name\":\"Stop\",\"session_id\":\"session\",\"prompt_id\":\"c1\",\"last_assistant_message\":\"claude main\\n\"}"
     run "$CURSOR_PROMPT" "{\"hook_event_name\":\"beforeSubmitPrompt\",\"generation_id\":\"u1\",\"prompt\":\"cursor captain\",\"cursor_version\":\"x\"}"
     run "$CURSOR_RESPONSE" "{\"hook_event_name\":\"afterAgentResponse\",\"generation_id\":\"u1\",\"text\":\"cursor main\",\"cursor_version\":\"x\"}"
   ' || fail "a tracked mirror hook failed"
@@ -87,7 +97,33 @@ test_every_harness_registration_writes_the_mirror() {
 main|claude main
 captain|cursor captain
 main|cursor main" "$out" "every tracked registration must write its captain prompt and main reply, in order"
+  jq -es 'length == 1 and .[0].event == "primary.final"
+    and .[0].value == {harness:"claude",session:"session",turn:"c1",text:"claude main\n"}' \
+    "$home/state/fleet-ledger.jsonl" >/dev/null || fail "the same Stop must write the full final to the ledger once"
   pass "mirror: the Claude and Cursor registrations each write the captain's prompt and main's reply"
+}
+
+test_stop_guard_checks_the_process_table_once() {
+  local fake home
+  fake=$(fm_fakebin "$TMP_ROOT/count-ps")
+  home=$(make_home count-ps)
+  : > "$home/config/fleet-ledger"
+  cat > "$fake/ps" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_HOME/ps.calls"
+exec "$REAL_PS" "$@"
+SH
+  chmod +x "$fake/ps"
+  REAL_PS=$(command -v ps) PATH="$fake:$PATH" FM_DIAGNOSTICS=0 as_session "$home" '
+    export FM_ROOT_OVERRIDE="$PRIMARY_ROOT"
+    guard="$PRIMARY_ROOT/bin/fm-turnend-guard.sh"
+    printf "%s" "{\"hook_event_name\":\"Stop\",\"session_id\":\"session\",\"last_assistant_message\":\"Final\"}" |
+      "$guard" --claude 2> "$FM_HOME/guard.err"
+    [ "$?" -eq 2 ] && [ -s "$FM_HOME/state/.captain-question-block" ]' \
+    || fail "the first Stop must still block for the captain-question review"
+  assert_equals 1 "$(wc -l < "$home/ps.calls" | tr -d ' ')" "Stop guard must read processes once"
+  [ ! -e "$home/state/fleet-ledger.jsonl" ] || fail "the synchronous guard wrote the ledger"
+  pass "Stop guard preserves the captain-question block with one process read"
 }
 
 # Non-host invariance: on a home opted out by config/supervision-host-off, every
@@ -457,6 +493,7 @@ test_only_proven_writers_are_verified() {
   pass "only Claude and Cursor, the primaries with proven writers, have a verified dialog mirror"
 }
 
+test_stop_guard_checks_the_process_table_once
 test_every_harness_registration_writes_the_mirror
 test_writers_are_inert_on_a_home_that_opted_out
 test_only_proven_writers_are_verified

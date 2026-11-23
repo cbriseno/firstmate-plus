@@ -364,7 +364,7 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
     | while read -r pid pgid tpgid comm; do
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
-        args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
+        args=$(LC_ALL=C ps -ww -p "$pid" -o args= 2>/dev/null) || continue
         args=${args#"${args%%[![:space:]]*}"}
         argv0=${args%%[[:space:]]*}
         [ -n "$argv0" ] && printf '%s\n' "$argv0"

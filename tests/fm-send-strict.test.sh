@@ -198,7 +198,7 @@ test_healthy_fm_id_send_still_works() {
   fb=$(make_stubs "$dir"); home=$(setup_home healthy); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
   fm_write_meta "$home/state/lane-ok.meta" "window=sess:fm-lane-ok" "kind=ship" "harness=codex"
 
-  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 FM_DIAGNOSTICS_HOME="$dir/diag" \
     "$SEND" fm-lane-ok "hello captain" >/dev/null 2>"$err"; rc=$?
   expect_code 0 "$rc" "healthy fm-id send should succeed"
   got=$(cat "$log")
@@ -207,6 +207,8 @@ test_healthy_fm_id_send_still_works() {
   assert_contains "$got" "target=sess:fm-lane-ok literal=0 arg=Enter" "healthy send should submit the doorbell with Enter"
   grep -qF 'hello captain' "$home/state/lane-ok.inbox/001.msg" \
     || fail "healthy send should record the steer in the task inbox"
+  jq -e -s '[.[] | select(.e == "operation.stage" and .operation == "protected-send") | .stage] | index("delivery") != null and index("doorbell") != null' "$dir/diag/firstmate/events.jsonl" >/dev/null \
+    || fail "inbox send did not record its delivery and doorbell stages"
   assert_contains "$(cat "$err")" "requested message WILL still be sent" "fm-send guard banner should keep send-specific continuation wording"
   pass "fm-send strict: healthy fm-<id> sends record the steer and ring once"
 }
@@ -224,10 +226,12 @@ test_key_send_exit_status_follows_delivery() {
   fb=$(make_stubs "$dir"); home=$(setup_home keyexit); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
   fm_write_meta "$home/state/lane-key.meta" "window=sess:fm-lane-key" "kind=ship"
 
-  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 FM_DIAGNOSTICS_HOME="$dir/diag" \
     "$SEND" lane-key --key Escape >/dev/null 2>"$err"; rc=$?
   expect_code 0 "$rc" "a delivered --key interrupt should report success"
   assert_contains "$(cat "$log")" "target=sess:fm-lane-key literal=0 arg=Escape" "the delivered case should send the named key"
+  jq -e 'select(.e == "operation.stage" and .operation == "protected-send" and .stage == "key" and .rc == 0)' "$dir/diag/firstmate/events.jsonl" >/dev/null \
+    || fail "key send did not record its delivery stage"
 
   : > "$log"
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \

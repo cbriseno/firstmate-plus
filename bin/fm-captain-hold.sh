@@ -20,6 +20,11 @@
 # and secondmate-home ownership aligned with the work that discovered the call.
 #
 # Usage:
+#   hold requires --action with the exact action class and checks the home's
+#   standing grants before mutation. --repo selects project-scoped grants.
+#   A matching grant refuses the hold; --override-grant records why this case
+#   differs in the refusal/override output. answer --standing writes the action,
+#   scope, exact decision and optional --limits to the home's grants file.
 #   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact
 #   (SUPERVISOR.md section 9 owns their meaning). `money` also requires --charge
 #   naming the real payment or purchase, so quota, tokens, and subscription use
@@ -30,13 +35,13 @@
 #   one line before any mutation; a hold that opens a call records them as
 #   `Captain hold challenge:` and `Captain hold charge:` body lines beside
 #   `Captain hold origin:`, while a repeat of an active hold leaves the body alone.
-#   fm-captain-hold.sh hold <task-id> --reason <reason> --category <category> [--charge <line>] [--challenge <line>] \
+#   fm-captain-hold.sh hold <task-id> --reason <reason> --action <class> --category <category> [--override-grant <why>] [--charge <line>] [--challenge <line>] \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--repair-call] \
 #     (--question <line> --option <id>=<label>[|<detail>] --option <id>=<label>[|<detail>]... \
 #      [--call-kind question|approval] [--recommended <id>] [--context <line>] [--link <report path or URL>]
 #      | --no-options <why> [--question <line> [--context <line>] [--link <report path or URL>]]
 #      | --call-kind action --instruction <line> --where chat [--context <line>] [--link <path or URL>])
-#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--attach <file>]... [--release | --release-in-flight] [--expected-identity <identity>]
+#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--standing [--action <class>] [--scope <project>] [--limits <line>]] [--attach <file>]... [--release | --release-in-flight] [--expected-identity <identity>]
 #   fm-captain-hold.sh correct <task-id> --decision-file <path> [--attach <file>]... [--expected-identity <identity>]
 #   fm-captain-hold.sh complete-action <task-id> --evidence-file <path> [--expected-identity <identity>]
 #   fm-captain-hold.sh action-pending <task-id>   (0 pending action, 1 other/completed, 2 unknown)
@@ -48,6 +53,8 @@
 #   fm-captain-hold.sh binding <source-id>
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify <origin-id>
+#   fm-captain-hold.sh followups <origin-id> (--none | <task-id>...)
+#   fm-captain-hold.sh verify-followups <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
 #   fm-captain-hold.sh resolved <task-id> <occurrence>
 #   fm-captain-hold.sh diverged
@@ -805,32 +812,8 @@ CAPTAIN_MIGRATION_SCAN_LOADED=0
 CAPTAIN_MIGRATION_SCAN_JSON=
 NL_SEP=$'\n'
 
-# Section-aware extraction from a .tasks.toml: only the named keys inside the
-# named section, comments stripped. Prints "<key> <value>" lines.
-captain_toml_section_entries() {  # <toml-file> <section> <key-alternation>
-  [ -f "$1" ] || return 0
-  LC_ALL=C awk -v section="[$2]" -v keys="^($3)[[:space:]]*=" '
-    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
-    BEGIN { insection = 0 }
-    {
-      line = $0
-      sub(/[[:space:]]*#.*/, "", line)
-      line = trim(line)
-      if (line ~ /^\[[^]]+\]$/) { insection = (line == section); next }
-      if (!insection) next
-      if (line ~ keys) {
-        key = line
-        sub(/[[:space:]]*=.*/, "", key)
-        sub(/^[^=]*=[[:space:]]*/, "", line)
-        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
-        printf "%s %s\n", key, line
-      }
-    }
-  ' "$1"
-}
-
 captain_beads_toml_entries() {  # <toml-file>
-  captain_toml_section_entries "$1" beads 'prefix|path|binary'
+  fm_backlog_toml_section_entries "$1" beads 'prefix|path|binary'
 }
 
 captain_beads_setting() {  # <entries-output> <setting>
@@ -1175,11 +1158,11 @@ refuse_without_choices() {  # <task-id> <why>
   printf 'fm-captain-hold: %s\n' "$2" >&2
   cat >&2 <<EOF
 A captain call needs real choices the captain can click. Hold it as:
-  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> --challenge "<why no rule settles it>" \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --action "<action class>" --category <category> --challenge "<why no rule settles it>" \\
     --question "<the question>" --option <id>="<choice>" --option <id>="<choice>" \\
     [--recommended <id>] [--context "<one line>"] [--link <report path or URL>]
 Only for a genuinely open question or a wait with no choices (a human action, a date):
-  fm-captain-hold.sh hold $id --reason "<short summary>" --category <category> --challenge "<why no rule settles it>" \\
+  fm-captain-hold.sh hold $id --reason "<short summary>" --action "<action class>" --category <category> --challenge "<why no rule settles it>" \\
     --no-options "<why there are no choices>" [--question "<the question>"]
 EOF
   exit 1
@@ -1336,41 +1319,6 @@ refuse_self_inventory() {
 # absent once retention ran. The completion gate and moot-retirement proof
 # consult the archive; mutation still addresses only current backlog rows.
 
-# The [markdown] archive key tasks-axi would honour, resolved with tasks-axi's
-# own source precedence: the backlog root's .tasks.toml first, then the
-# user-level $HOME/.tasks-axi/config.toml. Empty when neither sets it; a relative
-# value resolves against the backlog root wherever it was configured, the way
-# tasks-axi resolves it.
-captain_markdown_archive_setting() {  # <backlog-root>
-  local root=$1 archive
-  archive=$(captain_toml_section_entries "$root/.tasks.toml" markdown archive | sed -n 's/^archive //p' | head -1)
-  if [ -z "$archive" ] && [ -n "${HOME:-}" ]; then
-    archive=$(captain_toml_section_entries "$HOME/.tasks-axi/config.toml" markdown archive | sed -n 's/^archive //p' | head -1)
-  fi
-  printf '%s\n' "$archive"
-}
-
-# The archive tasks-axi writes: the [markdown] archive key resolved against the
-# backlog root, else done-archive.md beside the addressed backlog file. Returns
-# 1 when the configured backend keeps no markdown archive.
-captain_markdown_archive_path() {
-  local data root backend archive file
-  data=$(fm_backlog_data_absolute "$DATA") || return 1
-  root=$(fm_backlog_root "$data") || return 1
-  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 1
-  [ "$backend" = markdown ] || return 1
-  archive=$(captain_markdown_archive_setting "$root")
-  case "$archive" in
-    '')
-      file=$(fm_backlog_file "$data") || return 1
-      archive="${file%/*}/done-archive.md"
-      ;;
-    /*) ;;
-    *) archive="$root/$archive" ;;
-  esac
-  printf '%s\n' "$archive"
-}
-
 # Read an archived row (or --list for the dependency proof) into TASK_SHOW_OUTPUT
 # exactly as tasks-axi shows live rows, replaying the newest archived blocks. A
 # reused id can be archived more than once, and retention appends, so the last
@@ -1381,7 +1329,7 @@ task_show_archived() {  # <id>; sets TASK_SHOW_OUTPUT
   TASK_SHOW_OUTPUT=
   case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
   [ "$secs" -gt 0 ] 2>/dev/null || secs=10
-  archive=$(captain_markdown_archive_path) || return 1
+  archive=$(fm_backlog_markdown_archive_path "$DATA") || return 1
   [ ! -L "$archive" ] || return 2
   [ -f "$archive" ] || return 1
   [ -r "$archive" ] || return 2
@@ -1394,22 +1342,7 @@ task_show_archived() {  # <id>; sets TASK_SHOW_OUTPUT
   printf 'backend = "markdown"\n' > "$dir/.tasks.toml"
   {
     printf '## Done\n'
-    LC_ALL=C awk -v id="$id" '
-      /^- \[.\] / {
-        rest = substr($0, 7)
-        split(rest, fields, /[[:space:]]/)
-        key = fields[1]
-        inrow = (id == "--list" || key == id)
-        if (inrow) blocks[key] = $0 "\n"
-        next
-      }
-      inrow && ($0 == "" || $0 ~ /^[[:space:]]/) { blocks[key] = blocks[key] $0 "\n"; next }
-      { inrow = 0 }
-      END {
-        if (id == "--list") { for (key in blocks) printf "%s", blocks[key] }
-        else printf "%s", blocks[id]
-      }
-    ' "$archive"
+    fm_backlog_archive_rows "$archive" "$id"
   } > "$dir/backlog.md" || status=1
   if [ "$status" -eq 0 ]; then
     # The replayed archive read gets the same bound as a live backlog read, so a
@@ -1519,7 +1452,7 @@ command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
   local question='' recommended='' context='' link='' no_options='' category='' call_given=0 call_kind=question instruction='' where='' existing_call_kind repair_call=0 call_path
-  local charge='' challenge=''
+  local charge='' challenge='' grant_action='' grant_override='' grant_match='' grant_scope='' grant_rc=0
   local -a call_options=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1533,6 +1466,8 @@ command_hold() {
       --category) shift; category=${1:-} ;;
       --charge) shift; charge=${1:-} ;;
       --challenge) shift; challenge=${1:-} ;;
+      --action) shift; grant_action=${1:-} ;;
+      --override-grant) shift; grant_override=${1:-} ;;
       --repair-call) repair_call=1 ;;
       --question) shift; question=${1:-}; call_given=1 ;;
       --call-kind) shift; call_kind=${1:-}; call_given=1 ;;
@@ -1551,6 +1486,39 @@ command_hold() {
     shift
   done
   validate_slug task-id "$id"
+  [ -z "$origin" ] || validate_slug origin-id "$origin"
+  [ -n "$grant_action" ] || fail '--action is required'
+  validate_one_line --action "$grant_action"
+  [ -z "$grant_override" ] || validate_one_line --override-grant "$grant_override"
+  # Only a potentially matching scoped grant needs a backlog lookup.
+  grant_match=$(python3 "$SCRIPT_DIR/fm-standing-grants.py" match "$DATA/standing-grants.json" "$grant_action" '') || grant_rc=$?
+  if [ "$grant_rc" = 3 ]; then
+    require_tasks_axi
+    if task_show "$id"; then
+      grant_scope=$(show_field_value "$TASK_SHOW_OUTPUT" repo)
+    else
+      grant_scope=$repo
+      if [ -z "$grant_scope" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
+        grant_scope=$(meta_value "$STATE/$origin.meta" project)
+        grant_scope=${grant_scope%/}
+        grant_scope=${grant_scope##*/}
+      fi
+      [ -n "$grant_scope" ] || grant_scope=firstmate
+    fi
+    if [ -n "$grant_scope" ]; then
+      grant_rc=0
+      grant_match=$(python3 "$SCRIPT_DIR/fm-standing-grants.py" match "$DATA/standing-grants.json" "$grant_action" "$grant_scope") || grant_rc=$?
+    else
+      grant_rc=1
+    fi
+  fi
+  [ "$grant_rc" -le 1 ] || fail 'cannot read standing grants'
+  if [ "$grant_rc" = 0 ]; then
+    if [ -z "$grant_override" ]; then
+      fail "standing grant: $grant_match; hazlo y repórtalo"
+    fi
+    printf 'standing grant: %s; override: %s\n' "$grant_match" "$grant_override" >&2
+  fi
   [ -n "$reason" ] || fail "reason must not be empty"
   [ "$repair_call" = 0 ] || [ "$call_given" = 1 ] || fail '--repair-call needs explicit call fields'
   case "$category" in
@@ -1565,6 +1533,7 @@ command_hold() {
   if [ "$call_given" = 1 ]; then
     build_call_json "$id" "$question" "$recommended" "$context" "$link" "$no_options" "$call_kind" "$instruction" "$where" \
       "${call_options[@]+"${call_options[@]}"}"
+    CALL_JSON=$(printf '%s' "$CALL_JSON" | jq -c --arg action "$grant_action" '. + {grant_action:$action}') || fail 'cannot record grant action'
   fi
   [ "$call_kind" != action ] || [ -z "$until" ] || fail 'an action persists until completion; --until is not allowed'
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
@@ -1694,6 +1663,14 @@ command_hold() {
   [ "$call_given" = 0 ] || write_captain_call "$id" "$hold_set"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   publish_call_event call.opened "$id" "$occurrence"
+  # A successful primary hold belongs to its current turn only.
+  # shellcheck source=bin/fm-primary-scope-lib.sh
+  . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+  if [ "$preserve_hold_set" = 0 ] && fm_primary_scope_matches "$FM_ROOT" "$STATE" && fm_session_lock_owned_by_self "$STATE"; then
+    cat "$STATE/.lock" > "$STATE/.captain-hold-turn" || :
+  fi
   # A new hold lifecycle tells the captain once; a repeat of an active hold
   # and the captain's own dated deferral stay silent.
   if [ "$preserve_hold_set" = 0 ] && [ -z "$until" ]; then
@@ -1797,8 +1774,22 @@ remove_interrupted_answer_stamp() {  # <task-id>
   rm -f -- "$tmp"
 }
 
+record_standing_grant() {
+  [ "$standing" = 1 ] || return 0
+  call_path=$(captain_call_path "$id") || fail 'cannot read grant action'
+  if [ -f "$call_path" ]; then
+    grant_action=$(jq -r '.grant_action // empty' "$call_path") || fail 'cannot read grant action'
+  fi
+  [ -z "$grant_action" ] || [ -z "$standing_action" ] || [ "$grant_action" = "$standing_action" ] \
+    || fail 'the supplied action differs from the recorded action'
+  grant_action=${grant_action:-$standing_action}
+  [ -n "$grant_action" ] || fail 'this older call needs --action with --standing'
+  python3 "$SCRIPT_DIR/fm-standing-grants.py" add "$DATA/standing-grants.json" "$grant_action" "$grant_scope" "$decision_file" "$standing_limits" || fail 'could not record standing grant'
+}
+
 command_answer() {
   local id=${1:-} decision_file='' release=0 release_in_flight=0 show state hold_kind body outcome recorded_mode occurrence
+  local standing=0 standing_limits='' standing_action='' grant_action='' grant_scope='' call_path
   local expected='' call_kind completing=${ACTION_COMPLETION:-0} correcting=${ANSWER_CORRECTION:-0}
   local -a attach_files=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
@@ -1806,6 +1797,10 @@ command_answer() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --decision-file) shift; decision_file=${1:-} ;;
+      --standing) standing=1 ;;
+      --action) shift; standing_action=${1:-}; validate_one_line --action "$standing_action" ;;
+      --scope) shift; grant_scope=${1:-}; validate_one_line --scope "$grant_scope" ;;
+      --limits) shift; standing_limits=${1:-} ;;
       --attach) shift; attach_files+=("${1:-}") ;;
       --release) release=1 ;;
       --release-in-flight) release_in_flight=1 ;;
@@ -1880,6 +1875,7 @@ command_answer() {
       fi
       [ "$release" = 0 ] \
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
+      record_standing_grant
       remove_interrupted_answer_stamp "$id"
       if [ "$completing" = 1 ]; then
         publish_parent_resolution_then_retire "$id" $((occurrence - 1)) action-completed
@@ -1905,6 +1901,7 @@ command_answer() {
     [ "$(show_field "$show" state)" = "done" ] || fail "recording the answer reopened closed task $id"
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
+    record_standing_grant
     if [ "$completing" = 1 ]; then
       publish_parent_resolution_then_retire "$id" "$occurrence" action-completed
       printf 'action-completed: %s\n' "$id"
@@ -1916,6 +1913,7 @@ command_answer() {
   fi
 
   if [ "$hold_kind" = captain ]; then
+    record_standing_grant
     # Actively the captain's item (a date-expired hold keeps its annotations
     # and stays answerable). A matching record means an interrupted close to
     # finish; a different digest is a NEW answer on a re-held task and gets
@@ -2019,7 +2017,7 @@ moot_graph() {
   root=$(fm_backlog_root "$data") || return 1
   backend=$(fm_tasks_axi_backend "$root") || return 1
   if [ "$backend" = markdown ]; then
-    archive=$(captain_markdown_archive_path) || return 1
+    archive=$(fm_backlog_markdown_archive_path "$DATA") || return 1
     if [ -e "$archive" ] || [ -L "$archive" ]; then
       task_show_archived --list || return 1
       archived=$(printf '%s\n' "$TASK_SHOW_OUTPUT" | parse_moot_graph) || return 1
@@ -2828,6 +2826,58 @@ reconcile_note() {
   printf 'still-open: %s\n' "$id"
 }
 
+# Scout recommendations are inventoried by the author, not inferred from prose.
+# Each named follow-up must exist in this home's backlog when recorded and at
+# teardown; --none attests that the scout recommends no outstanding work.
+command_followups() {
+  local origin=${1:-} meta entry keys=''
+  [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+  validate_slug origin-id "$origin"
+  meta="$STATE/$origin.meta"
+  [ -f "$meta" ] || fail "origin metadata is absent: $meta"
+  [ "$(meta_value "$meta" kind)" = scout ] || fail "followups requires a scout"
+  shift
+  require_tasks_axi
+  if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
+    keys=''
+  else
+    for entry in "$@"; do
+      validate_slug task-id "$entry"
+      [ "$entry" != "$origin" ] || fail "the scout cannot be its own follow-up"
+      task_show_or_fail "$entry" "follow-up task $entry does not exist"
+      keys="${keys}${keys:+ }$entry"
+    done
+  fi
+  keys=$(sorted_key_union '' "$keys")
+  CAPTAIN_META_LOCK=$(fm_meta_lock_path "$meta") || fail "could not resolve task metadata lock"
+  fm_lock_acquire_wait "$CAPTAIN_META_LOCK"
+  CAPTAIN_META_LOCK_HELD=1
+  [ -f "$meta" ] || fail "task metadata disappeared while recording follow-ups"
+  printf 'followups_reviewed=1\nfollowup_keys=%s\n' "$keys" >> "$meta"
+  fm_lock_release "$CAPTAIN_META_LOCK"
+  CAPTAIN_META_LOCK_HELD=0
+  printf 'complete: %s scout follow-ups reviewed%s\n' "$origin" "${keys:+ ($keys)}"
+}
+
+command_verify_followups() {
+  local origin=${1:-} meta keys entry
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  validate_slug origin-id "$origin"
+  meta="$STATE/$origin.meta"
+  [ -f "$meta" ] || fail "origin metadata is absent: $meta"
+  [ "$(meta_value "$meta" followups_reviewed)" = 1 ] || fail "scout $origin has no reviewed follow-up inventory"
+  keys=$(meta_value "$meta" followup_keys)
+  require_tasks_axi
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ "$entry" != "$origin" ] || fail "the scout cannot be its own follow-up"
+    task_show_or_fail "$entry" "follow-up task $entry does not exist"
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
+  printf 'verified: %s scout follow-ups\n' "$origin"
+}
+
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved
   local resolved_how attested_by_prefix='' origin_state unrecorded_origin=''
@@ -3176,6 +3226,8 @@ case "${1:-}" in
   binding) shift; command_binding "$@" ;;
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
+  followups) shift; command_followups "$@" ;;
+  verify-followups) shift; command_verify_followups "$@" ;;
   open) shift; command_open "$@" ;;
   resolved) shift; command_resolved "$@" ;;
   diverged) shift; command_diverged "$@" ;;

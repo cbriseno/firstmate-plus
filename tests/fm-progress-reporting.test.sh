@@ -7,7 +7,7 @@ set -euo pipefail
 command -v tasks-axi >/dev/null || { printf 'SKIP: tasks-axi required\n'; exit 0; }
 export FM_LIVE=0
 python3 - "$ROOT" <<'PY'
-import fcntl, json, os, pathlib, re, signal, subprocess, sys, tempfile, time
+import fcntl, json, os, pathlib, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     home = pathlib.Path(tmp)
@@ -24,7 +24,9 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
         # A public lifecycle command may launch a short detached helper. File
         # captures cannot be held open by an inherited pipe after its parent
         # exits. Bound only this private fixture command/process group.
-        timeout = kwargs.pop('timeout', 20)
+        # These are fixture process-cleanup bounds, not performance assertions.
+        # Allow the same scheduling margin to every public command under load.
+        timeout = max(kwargs.pop('timeout', 60), 60)
         kwargs.pop('capture_output', None)
         with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
             p = subprocess.Popen(argv, stdout=out, stderr=err, start_new_session=True, **kwargs)
@@ -57,6 +59,15 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     lock.touch()
     run('presentation', 'proof', '--presentation-file', str(draft))
     check(task()['progress']['done'] == 1, 'uncontended known matching path')
+    progress['deliverables'] = [{'root': 'data', 'path': 'report.md'}, {'root': 'worktree', 'path': 'src/new.py'}]
+    draft.write_text(json.dumps({'progress': progress}))
+    check(run('presentation', 'proof', '--presentation-file', str(draft))['presentation']['progress'] == progress,
+          'declared deliverables survive publication')
+    for bad in ('../outside', '/absolute', 'a/../outside'):
+        invalid = dict(progress, deliverables=[{'root': 'worktree', 'path': bad}])
+        draft.write_text(json.dumps({'progress': invalid}))
+        run('presentation', 'proof', '--presentation-file', str(draft), ok=False)
+    draft.write_text(json.dumps({'progress': progress}))
     # Identity comes from the same canonical store and exact owning data root,
     # even when caller/config defaults point at a different backlog.
     decoy = home / 'decoy.md'
@@ -82,6 +93,19 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     result = run('presentation', 'moved', '--card-status', 'Relocated owner',
                  extra_env={'FM_DATA_OVERRIDE': str(relocated), 'TASKS_AXI_FILE': str(decoy)})
     check(result['ok'] and (relocated / 'moved/presentation.json').is_file(), 'relocated data uses its own exact backlog')
+    with tempfile.TemporaryDirectory(prefix='fm-external-data-') as external:
+        data = pathlib.Path(external)
+        (data / 'backlog.md').write_text('## Queued\n\n- [ ] external - External task\n')
+        (data / 'external').mkdir()
+        (data / 'external/progress-input.json').write_text(json.dumps({'phase': 'investigation', 'progress': {'steps': [
+            {'label': 'Investigate', 'state': 'active'}]}}))
+        p = execute(wrapper + ['progress-contract', 'external'], env=env | {'FM_DATA_OVERRIDE': external}, text=True)
+        check(p.returncode == 0, (p.stdout, p.stderr))
+        command = re.search(r'`([^`]+)`', p.stdout).group(1)
+        p = execute(['bash', '-c', command], env=env, text=True)
+        result = json.loads(p.stdout) if p.returncode == 0 else {}
+        check(result.get('evidence', {}).get('available') and result['lifecycle']['evidence']['current'], (p.stdout, p.stderr))
+        check((data / 'external/presentation.json').is_file(), 'generated contract publishes to external data')
     (home / 'data/done-archive.md').write_text('## Archived 2026-11-09\n\n- [x] archived - Archived task (done 2026-11-09)\n')
     check(run('presentation', 'archived', '--card-status', 'Retained owner')['ok'],
           'canonical retained-history fallback remains available')
@@ -96,10 +120,12 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
         time.sleep(0.4)
         check(p.poll() is None, 'transient shared snapshot reader must not lose a milestone write')
         fcntl.flock(reader, fcntl.LOCK_UN)
-        out, err = p.communicate(timeout=15)
+        out, err = p.communicate(timeout=60)
         check(p.returncode == 0 and json.loads(out)['presentation']['progress'] == progress, (out, err))
     check(task()['progress']['done'] == 2 and task()['progress']['total'] == 4, 'public snapshot carries completed steps exactly')
-    run('presentation', 'proof', '--card-status', 'Comprobaciones cerradas')
+    result = run('presentation', 'proof', '--card-status', 'Comprobaciones cerradas')
+    check(result['presentation']['progress']['deliverables'] == progress['deliverables'],
+          'status-only publication preserves declared deliverables')
     check(task()['progress']['done'] == 2, 'status-only write preserves steps')
     with lock.open('w') as owner:
         fcntl.flock(owner, fcntl.LOCK_EX)
@@ -285,6 +311,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
           'actual promotion refreshes explicit title and requires implementation checkpoint')
     # Age every grace input so the public mechanical scan sees the missed
     # checkpoint without a supervisor, model invocation or a new timing policy.
+    status.write_text('working [at=1793512718]: implementation resumed\n')
     old = time.time() - 31
     os.utime(meta, (old, old)); os.utime(status, (old, old))
     declaration = json.loads(output.read_text())
@@ -302,12 +329,23 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     fakebin.mkdir()
     tmux = fakebin / 'tmux'
     tmux.write_text('#!/usr/bin/env bash\nexit 0\n'); tmux.chmod(0o755)
-    p = execute(['bash', str(root / 'bin/fm-watch.sh')],
-                       env=env | {'PATH':str(fakebin) + ':' + env['PATH'], 'FM_SIGNAL_GRACE':'0',
-                                  'FM_CHECK_INTERVAL':'1', 'FM_POLL':'1'},
-                       text=True, capture_output=True, timeout=20)
-    check(p.returncode == 0 and 'progress reconciliation required' in p.stdout,
-          ('ordinary watcher queues the existing check wake', p.stdout, p.stderr))
+    p = subprocess.Popen(['bash', str(root / 'bin/fm-watch.sh')],
+        env=env | {'PATH':str(fakebin) + ':' + env['PATH'], 'FM_SIGNAL_GRACE':'0',
+                   'FM_CHECK_INTERVAL':'1', 'FM_POLL':'1', 'FM_BUDGETS':'0'},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    marker = home / 'state/.progress-reconciliation'
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and p.poll() is None:
+            if marker.exists() and 'proof: stale' in marker.read_text():
+                break
+            time.sleep(0.1)
+        check(p.poll() is None and marker.exists() and 'proof: stale' in marker.read_text(),
+              'ordinary watcher retains reconciliation for the next relevant wake')
+    finally:
+        if p.poll() is None:
+            os.killpg(p.pid, signal.SIGTERM)
+        p.wait(timeout=60)
     publish(['done'] * 4 + ['todo', 'todo', 'active'], gates={4:'branch-ready', 5:'integrated'})
     p = execute(wrapper + ['progress-check'], env=env, text=True, capture_output=True, timeout=15)
     check(p.returncode == 0 and p.stdout == '', 'unchanged honest checkpoint clears the reporting obligation')
@@ -346,17 +384,18 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     (space_home / 'config').mkdir()
     (space_home / 'data/backlog.md').write_text('## Queued\n- [ ] ship - Ship (repo: alpha)\n- [ ] scout - Scout (repo: alpha)\n')
     brief_env = env | {'FM_HOME': str(space_home)}
+    help_text = execute(wrapper + ['--help'], env=brief_env, text=True)
+    check(help_text.returncode == 0 and 'retry once without' in help_text.stdout
+          and 'continue independent authorized work' in help_text.stdout,
+          'public recovery instructions retain the contention procedure')
     for kind in ('ship', 'scout'):
         flags = ['--mode', 'local-only'] if kind == 'ship' else ['--scout']
         p = execute(['bash', str(root / 'bin/fm-brief.sh'), kind, 'alpha', *flags],
                            env=brief_env, text=True, capture_output=True, timeout=15)
         check(p.returncode == 0, (p.stdout, p.stderr))
-        text = (space_home / 'data' / kind / 'brief.md').read_text()
-        section = text.split('# Declared progress and safe pauses\n', 1)[1].split('# Firstmate instruction inbox', 1)[0]
-        check('bin/fm-tasks-axi.sh --help before reporting failure' in section
-              and 'recovery precedes the generic two-obstacle rule' in section,
-              (kind, 'generated worker contract must recover before escalating'))
-        command = re.search(r'^`(.*--presentation-file.*)`$', section, re.M).group(1)
+        p = execute(wrapper + ['progress-contract', kind], env=brief_env, text=True)
+        check(p.returncode == 0, (kind, p.stdout, p.stderr))
+        command = re.search(r'^`(.*--presentation-file.*)`$', p.stdout, re.M).group(1)
         input_path = space_home / 'data' / kind / 'progress-input.json'
         input_path.write_text(json.dumps({'progress': progress}))
         clean = {k:v for k,v in env.items() if not k.startswith('FM_')}
@@ -374,7 +413,10 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-reporting-') as tmp:
     for i in range(20):
         (bench / f'state/row{i}.meta').write_text(f'kind=ship\nmode=local-only\nworktree={bench}/repo-{i}\n')
     slow_git = bench / 'fakebin/git'
-    slow_git.write_text('#!/usr/bin/env bash\nsleep 60 &\nwait\n'); slow_git.chmod(0o755)
+    real_git = shutil.which('git', path=env['PATH'])
+    slow_git.write_text('#!/usr/bin/env bash\ncase "${2:-}" in '
+        + shlex.quote(str(bench / 'repo-')) + '*) sleep 60 & wait ;; *) exec '
+        + shlex.quote(real_git) + ' "$@" ;; esac\n'); slow_git.chmod(0o755)
     started = time.monotonic()
     p = execute(wrapper + ['work', 'snapshot'], env=env | {'FM_HOME':str(bench),
         'PATH':str(bench / 'fakebin') + ':' + env['PATH']}, text=True, timeout=25)

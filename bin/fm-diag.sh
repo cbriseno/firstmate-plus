@@ -21,21 +21,26 @@
 # LINE: {"t":"<UTC ISO-8601 ms>","c":"firstmate","e":EVENT,"v":"unknown","r":"unknown",...fields}
 # EVENTS AND FIELDS (the single owner of this schema; unknown events and
 # fields are dropped):
-#   hook.run        hook harness role session ms rc
+#   hook.run        hook harness role session run ms rc
 #                   one blocking PreToolUse or Stop hook; session is the
 #                   harness pid, role primary|worker
+#   operation.stage operation stage run ms rc - one completed diagnostic stage
 #   session.stage   stage ms - one completed bin/fm-session-start.sh stage
 #   session.start   ms rc last_stage budget_s source harness session - the
 #                   whole run; last_stage only when it was cut short
 #   wake.ack        kind age_s - a wake row acknowledged by fm-wake-drain.sh;
 #                   age_s is its wait from queueing (attention latency)
+#   obligation.overdue category obligation - one overdue page from
+#                   bin/fm-obligation-lib.sh; obligation is its anonymized key
 #   work.snapshot   caller ms lock_ms result tasks - one fm_work.py snapshot
 #   worker.procs    task harness procs zombies rss_mb - one worker's process
 #                   scope, sampled by the watcher every FM_DIAG_SAMPLE_SECS (300)
 #   session.link    task harness result reason - launch/bind outcome; no transcript paths
+#   integration.ok  task project request - the approved local default ref advanced
 # Value kinds: integers stay numbers; `task` is replaced by "live-" plus 16
 # hex of sha256(local salt + id), the same id kind fm_diagnostics uses (run
-# `fm-diag.sh id <task-id>` to find a task's id on this machine); every other
+# `fm-diag.sh id <task-id>` to find a task's id on this machine); project,
+# request and obligation use the same representation with a type prefix. Every other
 # value must be a short token [A-Za-z0-9._-], else it is dropped. No paths,
 # commands, titles or free text are ever written.
 #
@@ -70,14 +75,17 @@ fm_diag_now_ms() {  # sets FM_DIAG_MS
 
 fm_diag_schema() {  # <event> -> FM_DIAG_FIELDS
   case "$1" in
-    hook.run) FM_DIAG_FIELDS='hook harness role session ms rc' ;;
+    hook.run) FM_DIAG_FIELDS='hook harness role session run ms rc' ;;
+    operation.stage) FM_DIAG_FIELDS='operation stage run ms rc' ;;
     session.stage) FM_DIAG_FIELDS='stage ms' ;;
     session.start) FM_DIAG_FIELDS='ms rc last_stage budget_s source harness session' ;;
     wake.ack) FM_DIAG_FIELDS='kind age_s' ;;
+    obligation.overdue) FM_DIAG_FIELDS='category obligation' ;;
     work.snapshot) FM_DIAG_FIELDS='caller ms lock_ms result tasks' ;;
     worker.procs) FM_DIAG_FIELDS='task harness procs zombies rss_mb' ;;
     context.relay) FM_DIAG_FIELDS='task result reason' ;;
     session.link) FM_DIAG_FIELDS='task harness result reason' ;;
+    integration.ok) FM_DIAG_FIELDS='task project request' ;;
     *) return 1 ;;
   esac
 }
@@ -108,8 +116,10 @@ fm_diag_emit() {  # <event> [key=value ...]
     key=${pair%%=*} value=${pair#*=}
     case " $FM_DIAG_FIELDS " in *" $key "*) ;; *) continue ;; esac
     case "$key:$value" in *:'') continue ;; esac
-    if [ "$key" = task ]; then
-      value=$(fm_diag_id "$value") || continue
+    if [[ "$key" = task || "$key" = project || "$key" = request || "$key" = obligation ]]; then
+      local identity=$value
+      [ "$key" = task ] || identity="$key:$value"
+      value=$(fm_diag_id "$identity") || continue
       fields+=",\"$key\":\"$value\""
     elif [[ $value =~ ^-?[0-9]{1,15}$ ]]; then
       fields+=",\"$key\":$((10#${value#-} * ${value%%[0-9]*}1))"
@@ -182,6 +192,28 @@ fm_diag_harness() {
   [ -n "${FM_DIAG_HARNESS:-}" ] || FM_DIAG_HARNESS=unknown
 }
 
+# Stage clocks use monotonic time on both stock macOS Bash and Linux.
+fm_diag_stage_begin() {  # <operation> <stage>
+  [ "${FM_DIAGNOSTICS:-1}" != 0 ] || return 0
+  FM_DIAG_OPERATION=$1 FM_DIAG_STAGE_NAME=$2
+  FM_DIAG_STAGE_START=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)' 2>/dev/null) || FM_DIAG_STAGE_START=
+}
+
+fm_diag_stage_end() {  # [status]
+  local rc=${1:-0} now
+  [ -n "${FM_DIAG_STAGE_START:-}" ] || return 0
+  now=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)' 2>/dev/null) || return 0
+  fm_diag_emit operation.stage operation="$FM_DIAG_OPERATION" stage="$FM_DIAG_STAGE_NAME" \
+    run="$$" ms="$((now - FM_DIAG_STAGE_START))" rc="$rc"
+  FM_DIAG_STAGE_START=
+}
+
+fm_diag_stage_next() {  # <stage> [previous-status]
+  local operation=${FM_DIAG_OPERATION:-} rc=${2:-0}
+  fm_diag_stage_end "$rc"
+  [ -z "$operation" ] || fm_diag_stage_begin "$operation" "$1"
+}
+
 fm_diag_hook_begin() {  # <hook-name>; pair with an EXIT trap running fm_diag_hook_end
   [ "${FM_DIAGNOSTICS:-1}" != 0 ] || return 0
   FM_DIAG_HOOK=$1
@@ -196,7 +228,7 @@ fm_diag_hook_end() {  # [status]; returns the status it was given (default $?)
   fm_diag_harness
   [ -z "${FM_WORKER_PROCESS_SCOPE:-}" ] || role=worker
   fm_diag_emit hook.run hook="$FM_DIAG_HOOK" harness="$FM_DIAG_HARNESS" role="$role" \
-    session="$FM_DIAG_SESSION" ms="$(( FM_DIAG_MS - FM_DIAG_HOOK_START ))" rc="$rc"
+    session="$FM_DIAG_SESSION" run="$$" ms="$(( FM_DIAG_MS - FM_DIAG_HOOK_START ))" rc="$rc"
   FM_DIAG_HOOK_START=''
   return "$rc"
 }

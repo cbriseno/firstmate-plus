@@ -88,7 +88,7 @@ triage_log() {
   fi
 }
 
-# Information, ordinary completions and questions share one fleet-wide deadline.
+# Informational observations share one fleet-wide deadline.
 # Default one hour; FM_INFO_SUMMARY_SECS can lengthen it or shorten it to 15 min.
 # The existing .last-info-summary records every successful primary delivery;
 # urgent events can bypass the deadline and start a new interval.
@@ -162,12 +162,9 @@ wake() {
   # Every producer goes through the same delivery decision, including the
   # away-mode handoff and recovery paths. Queued history is not current work.
   if declare -F main_has_eligible_queued_row >/dev/null; then
-    if ! main_has_eligible_queued_row; then
+    if [ "${FM_WATCH_RECOVERY_DECISIONS:-0}" != 1 ] && ! main_has_eligible_queued_row \
+      && ! { [ "$1" = "check: rearm-resurface" ] && declare -F recovery_needs_main >/dev/null && recovery_needs_main; }; then
       watch_info_record deferred "$1"
-      deferred=1
-    elif ! watch_attention_batch_due && ! main_has_eligible_queued_row immediate; then
-      # The pending rows already record these actions. Do not consume them or
-      # manufacture another informational record on every poll.
       deferred=1
     fi
   fi

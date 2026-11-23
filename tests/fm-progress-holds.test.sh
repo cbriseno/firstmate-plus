@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         # optional short-lived helper after the public command has returned.
         with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
             p = subprocess.run(argv, env=env, input=json.dumps(body) if body else None,
-                text=True, stdout=out, stderr=err, timeout=25)
+                text=True, stdout=out, stderr=err, timeout=int(os.environ.get("FM_PROGRESS_TEST_TIMEOUT", "25")))
             out.seek(0); err.seek(0)
             text = out.read()
             check(p.returncode == 0, (argv, text, err.read()))
@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='fm-progress-holds-') as tmp:
         cli('hold', name, '--kind', 'parked', '--reason', 'Parked by owner')
     cli('hold', 'layered', '--kind', 'external', '--reason', 'Retained external condition')
     execute(['bash', str(root / 'bin/fm-captain-hold.sh'), 'hold', 'captain', '--title', 'Fixture captain',
-        '--reason', 'Deliberately held', '--category', 'product-design', '--challenge', 'fixture', '--question', 'Keep this paused?', '--option', 'yes=Keep', '--option', 'no=Release'])
+        '--reason', 'Deliberately held', '--action', 'fixture', '--category', 'product-design', '--challenge', 'fixture', '--question', 'Keep this paused?', '--option', 'yes=Keep', '--option', 'no=Release'])
     apply('set_pause', 'project:held')
     apply('set_pause', 'task:layered')
     seed = home / 'aliases.json'

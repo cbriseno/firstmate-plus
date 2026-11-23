@@ -21,6 +21,10 @@ FM_HARNESS_RE='claude|codex'
 # bin/fm-claude-stop-autoarm.sh.
 FM_HARNESS_NAMES=(claude codex)
 
+# Cache only inside a hook shell and its Bash subshells. A separately invoked
+# script must prove its own ancestry, never import a lock verdict from its env.
+unset _FM_HARNESS_HOOK_ANCESTRY
+
 # Print the exact harness name carried by executable path $1 - its own basename
 # or any directory component - or return 1.
 #
@@ -91,8 +95,8 @@ FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
   FM_HARNESS_IS_CLAUDE=0
-  base=$(basename -- "$comm")
-  if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
+  base=${comm##*/}
+  if [[ $base =~ $FM_HARNESS_RE ]]; then
     case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
     return 0
   fi
@@ -108,7 +112,7 @@ fm_harness_process_matches() {  # <comm> <args>
   # Bare interpreter (e.g. node): match the harness name in its script path.
   case "$comm" in
     *node*|*python*)
-      if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
+      if [[ $args =~ $FM_HARNESS_RE ]]; then
         case "$args" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
         return 0
       fi
@@ -255,6 +259,30 @@ fm_win_harness_ancestry_pids() {
   return 1
 }
 
+# Print the current shell's adjacent process rows, innermost first. Use the
+# padded headings to keep spaces in macOS's full executable paths. A full
+# command column may have been truncated, so read that specific name on demand.
+_fm_harness_ancestry_rows() {
+  local heading
+  printf -v heading '%128s' ''
+  LC_ALL=C ps -A -ww -o pid=PID -o ppid=PPID -o "comm=${heading// /C}" -o args=ARGS 2>/dev/null |
+    LC_ALL=C awk -v pid="$$" '
+      NR == 1 { c = index($0, "CCCC"); a = index($0, "ARGS"); next }
+      c && a && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+        parent[$1] = $2
+        name[$1] = substr($0, c, a - c - 1)
+        argv[$1] = substr($0, a)
+      }
+      END {
+        for (i = 0; i < 16 && pid > 0 && pid in parent; i++) {
+          comm = name[pid]
+          if (!sub(/ +$/, "", comm)) comm = ""
+          printf "%s\t%s\t%s\n", pid, comm, argv[pid]
+          pid = parent[pid]
+        }
+      }'
+}
+
 # Walk the current process ancestry (up to 16 hops) and print this session's
 # contiguous verified-harness ancestry, innermost pid first.
 #
@@ -274,10 +302,26 @@ fm_win_harness_ancestry_pids() {
 # session cannot be read off the ancestry at all, so the whole contiguous run is
 # reported and the callers below decide what they need from it.
 fm_harness_ancestry_pids() {
-  local pid=$$ comm args extending=0 printed=0
+  if [ "${_FM_HARNESS_HOOK_ANCESTRY+x}" ]; then
+    [ -n "$_FM_HARNESS_HOOK_ANCESTRY" ] || return 1
+    printf '%s\n' "$_FM_HARNESS_HOOK_ANCESTRY"
+    return 0
+  fi
+  local pid=$$ comm args extending=0 printed=0 rows row
+  rows=$(_fm_harness_ancestry_rows) || rows=
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    comm=$(fm_ps_comm "$pid") || break
-    args=$(fm_ps_args "$pid")
+    if [ -n "$rows" ]; then
+      row=${rows%%$'\n'*}
+      pid=${row%%$'\t'*}
+      row=${row#*$'\t'}
+      comm=${row%%$'\t'*}
+      args=${row#*$'\t'}
+      [ -n "$comm" ] || comm=$(fm_ps_comm "$pid") || break
+    else
+      # Cygwin has no custom-format ps. Keep its existing per-pid fallback.
+      comm=$(fm_ps_comm "$pid") || break
+      args=$(fm_ps_args "$pid")
+    fi
     if fm_harness_process_matches "$comm" "$args"; then
       printf '%s\n' "$pid"
       printed=1
@@ -285,6 +329,9 @@ fm_harness_ancestry_pids() {
       extending=1
     elif [ "$extending" -eq 1 ]; then
       break
+    fi
+    if [ -n "$rows" ]; then
+      case "$rows" in *$'\n'*) rows=${rows#*$'\n'}; continue ;; *) break ;; esac
     fi
     pid=$(fm_ps_ppid "$pid")
     # Examine the top of the chain before stopping. Inside a PID namespace the
@@ -303,6 +350,15 @@ fm_harness_ancestry_pids() {
     fm_win_harness_ancestry_pids && return 0
   fi
   [ "$printed" -eq 1 ]
+}
+
+# Call once in a short-lived hook before repeated ownership checks. An empty
+# result is also cached. Long-lived callers keep taking fresh snapshots.
+fm_harness_cache_ancestry() {
+  [ "${_FM_HARNESS_HOOK_ANCESTRY+x}" ] && return 0
+  local pids
+  pids=$(fm_harness_ancestry_pids) || pids=
+  _FM_HARNESS_HOOK_ANCESTRY=$pids
 }
 
 # Print the outermost pid of this session's contiguous harness run for callers
@@ -511,9 +567,9 @@ fm_session_lock_foreign_owner_live() {
   [ -f "$state/.lock" ] && [ ! -L "$state/.lock" ] || return 1
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   fm_session_pid_valid "$lock_pid" || return 1
-  fm_harness_pid_alive "$lock_pid" || return 1
   pids=$(fm_harness_ancestry_pids) || return 1
   fm_harness_pid_listed "$lock_pid" "$pids" && return 1
+  fm_harness_pid_alive "$lock_pid" || return 1
   fm_session_lock_same_session "$state" "$pids" && return 1
   # shellcheck disable=SC2034 # Output global, read by the sourcing guard caller.
   FM_SESSION_LOCK_FOREIGN_OWNER_PID=$lock_pid

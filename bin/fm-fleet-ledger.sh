@@ -23,7 +23,7 @@
 #   bin/fm_work.py               entity (structure, controls, outcome review)
 #   bin/fm-busy-event.sh         entity (accepted activity and retirement)
 #   bin/fm-worker-processes.py  entity (observed worker process liveness)
-#   bin/fm-primary-final.sh      entity (complete primary final)
+#   bin/fm-host-mirror.sh        entity (complete primary final)
 #   status-writing owners       appended (permission, relay, spawn, primary closes)
 #
 # Usage:
@@ -60,7 +60,8 @@
 # records precede them. cleaned_up then deletes the task's offset, because teardown
 # retires that status log right after. dispatched deletes any leftover offset
 # so a reused task id starts at byte 0 of its fresh log.
-# Every write holds state/.fleet-ledger.lock.
+# Every write holds state/.fleet-ledger.lock, and the hourly compaction that
+# docs/fleet-ledger.md describes runs at the end of a write under that lock.
 #
 # Environment: FM_HOME, FM_STATE_OVERRIDE, and FM_CONFIG_OVERRIDE resolve the
 # home exactly as the other bin/ scripts do.
@@ -295,5 +296,36 @@ PYCONFIG
     [ "$rc" -ne 0 ] || rm -f -- "$(offset_path "$2")"
     ;;
 esac
+# Hourly compaction; state/.fleet-ledger.compacted's mtime is the last one.
+if [ -s "$LEDGER" ] && [ -z "$(find "$STATE/.fleet-ledger.compacted" -mmin -60 2>/dev/null)" ]; then
+  python3 - "$LEDGER" "$STATE/.fleet-ledger.compacted" <<'PYCOMPACT' || echo "fm-fleet-ledger: could not compact $LEDGER; the next write retries" >&2
+import json, os, sys
+ledger, stamp = sys.argv[1], sys.argv[2]
+latest, cleaned = {}, {}
+with open(ledger, 'rb') as stream:
+    for index, line in enumerate(stream):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue  # unreadable, so no reader could use it either
+        if not line.endswith(b'\n') or not isinstance(record, dict):
+            continue
+        home, task, event = record.get('home'), record.get('task'), record.get('event')
+        latest[home, task, event] = index, line
+        if event == 'task.cleaned_up':
+            cleaned[home, task] = index
+kept = sorted((index, line) for (home, task, event), (index, line) in latest.items()
+              if event == 'task.dispatched' or index >= cleaned.get((home, task), -1))
+temporary = ledger + '.compact'
+with open(temporary, 'wb') as stream:
+    stream.writelines(line for _, line in kept)
+    stream.flush()
+    os.fsync(stream.fileno())
+os.chmod(temporary, os.stat(ledger).st_mode & 0o777)
+os.replace(temporary, ledger)
+open(stamp, 'a').close()
+os.utime(stamp)
+PYCOMPACT
+fi
 [ "$rc" -eq 0 ] || echo "fm-fleet-ledger: could not record $cmd${2:+ for $2}; the ledger may be missing records" >&2
 exit "$rc"

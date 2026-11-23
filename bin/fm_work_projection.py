@@ -7,6 +7,7 @@ between canonical save and append still require explicit canonical recovery.
 """
 import copy
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -29,14 +30,20 @@ def event_time(event):
 
 
 def position(home):
+    """Return [device, inode, end of the last complete line] and those bytes.
+
+    One open keeps the identity and the prefix together when compaction
+    replaces the file. A writer can be in the middle of its append; the live
+    reader starts at the last complete line.
+    """
     try:
-        stat = (Path(home) / 'state/fleet-ledger.jsonl').stat()
-        # A writer can be in the middle of its append. Bootstrap is the only
-        # full read; the live reader starts at the last complete line.
-        content = (Path(home) / 'state/fleet-ledger.jsonl').read_bytes()
-        return [stat.st_dev, stat.st_ino, content.rfind(b'\n') + 1]
+        with (Path(home) / 'state/fleet-ledger.jsonl').open('rb') as stream:
+            stat = os.fstat(stream.fileno())
+            content = stream.read()
     except FileNotFoundError:
-        return [None, None, 0]
+        return [None, None, 0], b''
+    end = content.rfind(b'\n') + 1
+    return [stat.st_dev, stat.st_ino, end], content[:end]
 
 
 def bootstrap(owner, observation=None):
@@ -49,29 +56,28 @@ def bootstrap(owner, observation=None):
     owner.event_changed, owner.event_observed = {}, {}
     enabled = (owner.home / 'config/fleet-ledger').exists()
     if enabled and owner.ledger_start[2]:
-        with (owner.home / 'state/fleet-ledger.jsonl').open('rb') as stream:
-            for line in stream.read(owner.ledger_start[2]).splitlines():
-                event = json.loads(line)
-                if event.get('home', str(owner.home)) != str(owner.home):
-                    continue
-                task, name = event.get('task'), event.get('event')
-                if task in owner.rows and (name in TELEMETRY_EVENTS or name in (
-                        'task.changed', 'task.presentation', 'task.review', 'task.completion',
-                        'task.dispatched', 'task.cleaned_up', 'call.opened', 'call.resolved', 'call.application',
-                        'work.structure', 'work.control', 'work.aliases', 'task.status')):
-                    stamp = event_time(event)
-                    owner.event_observed[task] = latest([owner.event_observed.get(task), stamp])
-                    if name != 'task.status' and name not in TELEMETRY_EVENTS:
-                        owner.event_changed[task] = latest([owner.event_changed.get(task), stamp])
-                if name == 'task.dispatched':
-                    launches.setdefault(task, True)
-                    roles[task] = event.get('kind')
-                elif name == 'task.cleaned_up':
-                    launches[task] = False
-                    workers[task] = dict(state='dead', source='events', verdict=name)
-                elif name == 'agent.liveness':
-                    workers[task] = event['value']
-                    launches[task] = event['value']['state'] == 'alive'
+        for line in owner.ledger_prefix.splitlines():
+            event = json.loads(line)
+            if event.get('home', str(owner.home)) != str(owner.home):
+                continue
+            task, name = event.get('task'), event.get('event')
+            if task in owner.rows and (name in TELEMETRY_EVENTS or name in (
+                    'task.changed', 'task.presentation', 'task.review', 'task.completion',
+                    'task.dispatched', 'task.cleaned_up', 'call.opened', 'call.resolved', 'call.application',
+                    'work.structure', 'work.control', 'work.aliases', 'task.status')):
+                stamp = event_time(event)
+                owner.event_observed[task] = latest([owner.event_observed.get(task), stamp])
+                if name != 'task.status' and name not in TELEMETRY_EVENTS:
+                    owner.event_changed[task] = latest([owner.event_changed.get(task), stamp])
+            if name == 'task.dispatched':
+                launches.setdefault(task, True)
+                roles[task] = event.get('kind')
+            elif name == 'task.cleaned_up':
+                launches[task] = False
+                workers[task] = dict(state='dead', source='events', verdict=name)
+            elif name == 'agent.liveness':
+                workers[task] = event['value']
+                launches[task] = event['value']['state'] == 'alive'
     for task, kind in roles.items():
         observed = next((o for o in owner.observation.get('tasks', []) if o.get('id') == task), None)
         if observed is None:

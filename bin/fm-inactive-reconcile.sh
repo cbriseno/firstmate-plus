@@ -727,7 +727,7 @@ open_idle_captain_call() { # <id> <record> <fingerprint> <hours> <link> <timeout
   out=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$CAPTAIN_HOLD_BIN" hold "$id" \
     --reason "No live worker and nothing due for ${hours}h; supervision opened this call instead of re-checking it as a wait" \
-    --category captain-only-fact \
+    --action "decide the fate of idle in-flight work" --category captain-only-fact \
     --challenge "Supervision design: whether to close, keep or restart work nobody is doing is asked, not decided (this script's header)" \
     --context "Nobody has worked on this for ${hours} hours: its worker is gone and it waits on nothing that is due." \
     --question "No one is working on this any more. What should happen to it?" \

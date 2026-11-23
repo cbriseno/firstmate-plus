@@ -59,7 +59,11 @@ SH
 #!/usr/bin/env bash
 echo "gh $*" >> "$NET_LOG"
 if [ "${FAKE_GH_FAIL:-0}" = 1 ]; then exit 1; fi
-if [ "${FAKE_GH_SLEEP:-0}" = 1 ]; then sleep 30; fi
+if [ "${FAKE_GH_SLEEP:-0}" = 1 ]; then
+  date +%s > "${NET_LOG}.started"
+  trap 'date +%s > "${NET_LOG}.terminated"; exit 143' TERM
+  sleep 30
+fi
 if [ "${FAKE_GH_MANY:-0}" = 1 ]; then
   cat <<'JSON'
 [{"number":1,"title":"One","url":"https://github.com/acme/repo/pull/1","headRefName":"fm/one","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":2,"title":"Two","url":"https://github.com/acme/repo/pull/2","headRefName":"fm/two","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":3,"title":"Three","url":"https://github.com/acme/repo/pull/3","headRefName":"fm/three","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]}]
@@ -314,6 +318,10 @@ if [ -f "$remote_home/state/slow-ledger-read" ]; then
   wait "$sleeper"
 fi
 case "${args[0]:-}" in
+  fm-home-summary-refresh.sh)
+    : > "$remote_home/state/refresh-attempted"
+    sleep 30
+    ;;
   fm-remote-file.sh)
     [ -f "$remote_home/state/home-summary.json" ] || exit 1
     if [ -f "$remote_home/state/unbounded-ledger-read" ]; then
@@ -1510,10 +1518,12 @@ test_perl_fallback_bounds_github_call() {
     . "$1/bin/fm-timeout-lib.sh"
     [ "$(fm_timeout_mechanism)" = perl ]
   ' _ "$ROOT" || fail "the integrated fallback fixture did not select Perl"
-  started=$(date +%s)
   json=$(PATH="$fakebin:$toolbin" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
     FM_BEARINGS_PR_TIMEOUT=1 NET_LOG="$home/net.log" FAKE_GH_SLEEP=1 "$BEARINGS" --include-prs --json)
-  elapsed=$(( $(date +%s) - started ))
+  [ -s "$home/net.log.started" ] && [ -s "$home/net.log.terminated" ] \
+    || fail "stalled gh call did not start and receive TERM"
+  started=$(cat "$home/net.log.started")
+  elapsed=$(( $(cat "$home/net.log.terminated") - started ))
   [ "$elapsed" -lt 10 ] || fail "Perl fallback did not bound a stalled gh call (${elapsed}s)"
   printf '%s' "$json" | jq -e '.prs | test("unavailable")' >/dev/null \
     || fail "timed-out gh call did not fail soft: $json"
@@ -3259,7 +3269,7 @@ SH
 
 test_large_local_snapshot_overlaps_local_reads_without_projection_drift() {
   local home fakebin worktree serial parallel parallel_file snapshot_pid i
-  local serial_started serial_elapsed parallel_started parallel_elapsed saved
+  local serial_started serial_elapsed parallel_started parallel_elapsed saved serial_observed_start serial_observed_end parallel_end serial_cmp parallel_cmp
   home=$(make_home large-local-snapshot)
   worktree="$home/projects/shared-worktree"
   fm_git_init_commit "$worktree"
@@ -3298,7 +3308,9 @@ SH
     i=$((i + 1))
   done
 
+  serial_observed_start=$(date +%s)
   serial=$(FAKE_NM_DELAY=0 FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=1 run "$home" "$fakebin" --json)
+  serial_observed_end=$(date +%s)
 
   # Serialized reads pay every worker's delay end to end while concurrent reads
   # overlap them. Time both runs and compare, because the two pay the same
@@ -3318,7 +3330,7 @@ SH
     run "$home" "$fakebin" --json > "$parallel_file" &
   snapshot_pid=$!
   i=0
-  while [ ! -e "$home/nm-started" ] && [ "$i" -lt 100 ]; do
+  while [ ! -e "$home/nm-started" ] && [ "$i" -lt 1200 ]; do
     sleep 0.05
     i=$((i + 1))
   done
@@ -3329,14 +3341,25 @@ SH
   fi
   wait "$snapshot_pid" || fail "concurrent local snapshot failed"
   parallel=$(<"$parallel_file")
-  parallel_elapsed=$(( $(date +%s) - parallel_started ))
+  parallel_end=$(date +%s)
+  parallel_elapsed=$(( parallel_end - parallel_started ))
   # Five one-second reads serialize into five seconds and overlap into about
   # one, so at least two of those four seconds must show up as real savings.
   # Serializing the reads again collapses that difference to roughly zero.
   saved=$(( serial_elapsed - parallel_elapsed ))
   [ "$saved" -ge 2 ] \
     || fail "concurrent local reads saved no measurable time (serial ${serial_elapsed}s vs concurrent ${parallel_elapsed}s)"
-  [ "$parallel" = "$serial" ] \
+  # Native activity records the real time of each observation. The runs are
+  # deliberately separate, so validate each timestamp in its own run window.
+  printf '%s' "$serial" | jq -e --argjson start "$serial_observed_start" --argjson end "$serial_observed_end" \
+    'all(.in_flight[]; (.native_activity.observed_at | fromdateiso8601) as $t | $t >= $start and $t <= $end)' >/dev/null \
+    || fail "serialized native activity timestamps fell outside the observation window"
+  printf '%s' "$parallel" | jq -e --argjson start "$parallel_started" --argjson end "$parallel_end" \
+    'all(.in_flight[]; (.native_activity.observed_at | fromdateiso8601) as $t | $t >= $start and $t <= $end)' >/dev/null \
+    || fail "concurrent native activity timestamps fell outside the observation window"
+  serial_cmp=$(printf '%s' "$serial" | jq -Sc 'walk(if type == "object" and (.native_activity | type) == "object" then .native_activity.observed_at = "observed" else . end)')
+  parallel_cmp=$(printf '%s' "$parallel" | jq -Sc 'walk(if type == "object" and (.native_activity | type) == "object" then .native_activity.observed_at = "observed" else . end)')
+  [ "$parallel_cmp" = "$serial_cmp" ] \
     || fail "concurrent local observation changed the fm-bearings.v1 projection"
   printf '%s' "$parallel" | jq -e '
     .schema == "fm-bearings.v1"
@@ -3344,7 +3367,7 @@ SH
       and ([.in_flight[].id] | sort) == ["local-1","local-2","local-3","local-4","local-5"]
       and ([.in_flight[] | select(.id == "local-1" and .kind == "ship")] | length) == 1
   ' >/dev/null || fail "large local snapshot lost a worker row: $parallel"
-  pass "large local snapshot overlaps local reads with byte-identical serial and concurrent projections"
+  pass "large local snapshot overlaps reads and preserves all fields apart from separately verified observation times"
 }
 
 test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache() {
@@ -3495,6 +3518,26 @@ EOF
   pass "remote ledgers collect concurrently under one budget, reuse aged cache, and cancel wedged collectors"
 }
 
+test_stale_remote_read_keeps_its_first_copy_when_refresh_times_out() {
+  local parent fakebin remote_home json
+  parent=$(make_home remote-stale-refresh)
+  make_remote_ledger_fleet "$parent" 1
+  remote_home="$TMP_ROOT/remote-ledger-home-1"
+  rm -f "$remote_home/state/refresh-attempted" "$remote_home/state/slow-ledger-read"
+  fakebin=$(make_remote_ledger_ssh "$parent/remote-ssh")
+  mkdir -p "$parent/ledger-active"
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 2000)
+  [ -f "$remote_home/state/refresh-attempted" ] || fail "stale remote summary was not refreshed"
+  printf '%s' "$json" | jq -e '
+    .secondmates[0].age_seconds == 1000 and .secondmates[0].provenance == "structured-home"
+  ' >/dev/null || fail "timed out refresh lost the old remote summary or its age: $json"
+  jq -e '.age_seconds == 1000' "$parent/state/.home-summary-read.json" >/dev/null \
+    || fail "remote read age was not recorded"
+  pass "a slow remote refresh returns the first copy with its real age"
+}
+
 test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_compute() {
   local parent fakebin remote_home json
   parent=$(make_home remote-ledger-missing)
@@ -3634,6 +3677,7 @@ test_current_state_uses_captured_status_observation
 test_relaunched_task_does_not_inherit_reused_endpoint_state
 test_large_local_snapshot_overlaps_local_reads_without_projection_drift
 test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache
+test_stale_remote_read_keeps_its_first_copy_when_refresh_times_out
 test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_compute
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution

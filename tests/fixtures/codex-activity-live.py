@@ -13,6 +13,7 @@ import time
 
 root = Path(os.environ["FM_ACTIVITY_ROOT"])
 lab = Path(os.environ["FM_ACTIVITY_LAB"])
+version = os.environ["FM_ACTIVITY_VERSION"]
 state, workspace, home = lab / "home/state", lab / "wt", lab / "codex"
 task = "activity-proof"
 socket = "fm-codex-activity-" + str(os.getpid())
@@ -52,7 +53,7 @@ def wait_for(test, label, seconds=100):
         if test():
             return
         time.sleep(.25)
-    raise AssertionError("codex-cli 0.166.0: " + label + "; last verdict=" + verdict())
+    raise AssertionError(version + ": " + label + "; last verdict=" + verdict())
 
 
 def wait_state(expected):
@@ -129,7 +130,7 @@ try:
     assert "no-session" not in json.loads(usage.read_text()).get("unknown", []), \
         "bound Codex rollout still reports no-session after refresh"
     assert any(e["type"] == "task_complete" for e in events(gen))
-    print("ok - codex-cli 0.166.0: captured launch, task start, quiet long tool and ordinary completion", flush=True)
+    print("ok - " + version + ": captured launch, task start, quiet long tool and ordinary completion", flush=True)
     if os.environ.get("FM_CODEX_ACTIVITY_NOTIFY_ONLY") == "1":
         raise SystemExit(0)  # This ledger proof covers normal notify, not failure/interrupt hooks.
 
@@ -141,7 +142,7 @@ try:
     tmux("send-keys", "-t", "proof:first", "Escape")
     wait_state("idle")
     assert any(e["type"] == "turn_aborted" for e in events(gen))
-    print("ok - codex-cli 0.166.0: real Escape emits a bound turn_aborted and settles idle", flush=True)
+    print("ok - " + version + ": real Escape emits a bound turn_aborted and settles idle", flush=True)
 
     # Leave the old process alive. Its later close must not settle its replacement.
     old_marker = lab / "old-tool"
@@ -159,7 +160,7 @@ try:
                         for e in events(gen)), "old turn did not complete")
     assert verdict() == "busy codex-rollout", "old close overwrote replacement"
     wait_state("idle")
-    print("ok - codex-cli 0.166.0: old completion cannot overwrite the live replacement generation", flush=True)
+    print("ok - " + version + ": old completion cannot overwrite the live replacement generation", flush=True)
 
     # The real Codex engine owns this failure; no fake harness or fake success.
     # Connection refusal instead leaves Codex reconnecting with an OPEN turn.
@@ -198,10 +199,10 @@ try:
     assert not authorization_seen.is_set(), "private custom provider received authorization"
     result = verdict()
     assert any(e["type"] == "task_complete" for e in events(failed))
-    print("ok - codex-cli 0.166.0: native HTTP 400 error => " + result + "; events="
+    print("ok - " + version + ": native HTTP 400 error => " + result + "; events="
           + ",".join(e["type"] for e in events(failed)
                      if e["type"] in ("task_started", "task_complete", "turn_aborted", "error")), flush=True)
-    print("ok - codex-cli 0.166.0: verified one installed native harness; no other harness invoked", flush=True)
+    print("ok - " + version + ": verified one installed native harness; no other harness invoked", flush=True)
 except BaseException as error:
     if isinstance(error, SystemExit) and error.code == 0:
         raise

@@ -4,13 +4,19 @@
 # timing markers, and the complete-regression coverage guard.
 #
 # Machine test budget: every executing test script, serial or concurrent, holds
-# one of N host slots shared by every run in every home and worktree, so the
+# one of N host slots in /tmp shared by every run in every home and worktree, so the
 # internal --jobs workers of simultaneous runs draw from one pool instead of
 # multiplying. N is two baseline slots plus one per available GiB above the
 # first, capped at the CPU count (minimum two); unknown memory retains two.
 # A run waiting for a slot prints one line naming the holders' runner PIDs and
 # the bypass FM_TEST_SKIP_HOST_LOCK=1. Tests and nested runners execute inside
-# their script's slot. Live-harness and real-Herdr suites additionally use
+# their script's slot; parallel nested scripts share it one at a time or acquire
+# another host slot. An inherited marker alone does not grant a slot.
+# FM_TEST_LOCK_DIR overrides /tmp for isolated regression fixtures only.
+# A publication run (--publish or FM_TEST_PUBLISH=1) takes
+# the next free slot before every ordinary run: while one waits, ordinary runs
+# leave freed slots alone, so a publication is delayed only by scripts already
+# executing. Live-harness and real-Herdr suites additionally use
 # bin/fm-heavy-run.sh's single heavy-session host slot.
 #
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
@@ -84,13 +90,16 @@
 #                   Each worker still waits for its machine test slot, so
 #                   simultaneous runs share the host budget instead of
 #                   adding their worker counts together.
+#   --publish       mark this run as a publication run: it is first in line for
+#                   machine test slots (see the header); FM_TEST_PUBLISH=1 is
+#                   equivalent and is inherited by nested runners.
 #   --per-script-timeout-secs N
 #                   terminate a script that runs longer than N seconds and
-#                   record it as exit 124 (0 disables, the default). The
-#                   --changed applies 1500s automatically, above the current
-#                   slowest CI hint with margin; exceeding it becomes a bounded
-#                   failure, not proof of a hang. --max-wall-ms is checked
-#                   after the run and so cannot catch a hang on its own.
+#                   record it as exit 124; 0 disables the bound. Every
+#                   selection applies 1500s when this is not given, above the
+#                   current slowest CI hint with margin; exceeding it becomes a
+#                   bounded failure, not proof of a hang. --max-wall-ms is
+#                   checked after the run and so cannot catch a hang on its own.
 #                   External interruption cleanup is outside this runner's
 #                   guarantee; configured per-script bounds remain authoritative.
 #   --max-wall-ms N fail the run when its measured invocation wall clock exceeds
@@ -102,6 +111,7 @@
 #   -h, --help      print this header
 #
 # Per-script machine-parseable markers (stdout):
+#   FM_TEST_QUEUE <iso8601> <script> (concurrent dispatch before host admission)
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
 #   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false>
 #
@@ -200,8 +210,8 @@ JOBS=1
 JOBS_EXPLICIT=0
 JOBS_MAX=8
 MAX_WALL_MS=
-PER_SCRIPT_TIMEOUT_SECS=0
-# Bound applied automatically on the automatic --changed path, derived from
+PER_SCRIPT_TIMEOUT_SECS=
+# Bound applied to every selection unless the caller names one, derived from
 # measured healthy runtimes with margin rather than picked: the slowest measured
 # script is tests/fm-supervision-host.test.sh at about 1193s under CI load (the
 # hint table below records that loaded figure). 1500s keeps every measured script
@@ -211,7 +221,7 @@ PER_SCRIPT_TIMEOUT_SECS=0
 # cancels the lane. It is a guard, not a speed control: a HUNG script becomes a
 # bounded failure instead of an unbounded suite, which is the shape that
 # silently outruns a caller's invocation budget.
-CHANGED_DEFAULT_TIMEOUT_SECS=1500
+DEFAULT_PER_SCRIPT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
@@ -365,7 +375,7 @@ family_for_basename() {
     fm-backlog-atomicity.test.sh|\
     fm-bootstrap.test.sh|fm-bootstrap-network-parallel.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
-    fm-tangle-guard.test.sh|fm-update.test.sh)
+    fm-tangle-guard.test.sh|fm-update.test.sh|fm-update-local.test.sh)
       printf '%s\n' session-bootstrap
       ;;
     \
@@ -401,7 +411,7 @@ family_for_basename() {
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
     fm-tmux-agent-liveness.test.sh|\
-    fm-control.test.sh|fm-control-relaunch.test.sh|\
+    fm-control.test.sh|fm-control-relaunch.test.sh|fm-worker-park-safe.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|fm-claude-native-skills.test.sh|\
@@ -440,7 +450,7 @@ family_for_basename() {
     fm-live-gate.test.sh|\
     fm-project-origin.test.sh|fm-public-followup.test.sh|fm-quota-choose.test.sh|\
     fm-remote-entrypoint.test.sh|fm-remote-secondmate-parent-binding.test.sh|\
-    fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|\
+    fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|fm-spawn-pool-recycle.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
     fm-voice-relay.test.sh|fm-wake-drain-open-decisions-cursor.test.sh|\
     fm-wake-drain-open-decisions.test.sh|fm-wake-drain-outcome-backstop.test.sh)
@@ -1452,6 +1462,10 @@ families_for_changed_path() {
     bin/fm-watch*|bin/fm-wake*|bin/fm-codex-native-lib.sh|bin/fm-codex-stop-autoarm.sh|bin/fm-inactive-reconcile.sh|\
     bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
+      printf '%s\n' __script__:fm-pause-job-watch.test.sh
+      ;;
+    bin/fm-pause-job.py)
+      printf '%s\n' __script__:fm-pause-job.test.sh __script__:fm-pause-job-watch.test.sh
       ;;
     bin/fm-afk*)
       printf '%s\n' afk
@@ -1482,7 +1496,7 @@ families_for_changed_path() {
       printf '%s\n' secondmate
       ;;
     bin/fm-session-start.sh|bin/fm-fleet-sync.sh|\
-    bin/fm-sessionstart-nudge.sh|bin/fm-startup-network.sh|bin/fm-tangle*|bin/fm-update.sh|\
+    bin/fm-sessionstart-nudge.sh|bin/fm-startup-network.sh|bin/fm-tangle*|bin/fm-update.sh|bin/fm-update-local-lib.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
       ;;
@@ -1590,6 +1604,9 @@ families_for_changed_path() {
     bin/fm-worker-relay.py)
       printf '%s\n' '__script__:fm-control.test.sh' '__script__:fm-host-task.test.sh' '__script__:fm-worker-relay-live-e2e.test.sh'
       ;;
+    bin/fm-treehouse-recycle.sh)
+      printf '%s\n' '__script__:fm-spawn-pool-recycle.test.sh' '__script__:fm-spawn-pool-base-freshen.test.sh'
+      ;;
     bin/fm-spawn.sh|bin/fm-spawn-remote-lib.sh|bin/fm-spawn-cleanup-lib.sh|bin/fm-spawn-template-lib.sh|bin/fm-send.sh|bin/fm-send-target-lib.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
@@ -1643,7 +1660,7 @@ families_for_changed_path() {
     docs/fm-test-isolation-proof.json)
       printf '%s\n' pure-contract-unit
       ;;
-    .github/*|.gitattributes|.tasks.toml|AGENTS.md|SUPERVISOR.md|worker/*|CLAUDE.md|CONTRIBUTING.md|\
+    .github/*|.gitattributes|.tasks.toml|AGENTS.md|SUPERVISOR.md|worker/*|overseer/*|CLAUDE.md|CONTRIBUTING.md|\
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
@@ -1664,6 +1681,9 @@ families_for_changed_path() {
       ;;
     bin/fm_progress.py)
       printf '%s\n' __script__:fm-progress-reporting.test.sh __script__:fm-progress-holds.test.sh __script__:fm-notification-command.test.sh
+      ;;
+    bin/fm_integration.py|bin/fm_test_slots.py|bin/fm-budgets.py)
+      printf '%s\n' __script__:fm-budgets.test.sh __script__:fm-test-run.test.sh
       ;;
     bin/fm-notify.py|locales/*)
       printf '%s\n' __script__:fm-notification-command.test.sh
@@ -1975,6 +1995,10 @@ while [ "$#" -gt 0 ]; do
       JOBS_EXPLICIT=1
       shift
       ;;
+    --publish)
+      FM_TEST_PUBLISH=1
+      shift
+      ;;
     --max-wall-ms)
       [ "$#" -gt 1 ] || die "--max-wall-ms requires a positive integer"
       MAX_WALL_MS=$2
@@ -2123,6 +2147,9 @@ if [ -n "$MAX_WALL_MS" ]; then
   [ "$MAX_WALL_MS" -gt 0 ] || die "--max-wall-ms requires a positive integer"
 fi
 
+# A hung script must end as a bounded failure in every selection, not only on
+# the automatic --changed path: a plain script list left one hung for hours.
+[ -n "$PER_SCRIPT_TIMEOUT_SECS" ] || PER_SCRIPT_TIMEOUT_SECS=$DEFAULT_PER_SCRIPT_TIMEOUT_SECS
 case "$PER_SCRIPT_TIMEOUT_SECS" in
   ''|*[!0-9]*) die "--per-script-timeout-secs requires a whole number of seconds (0 disables)" ;;
 esac
@@ -2271,7 +2298,8 @@ available_memory_kb() {
 # One slot per executing script (see header). A holder process owns the lock,
 # so no test or background child can retain it after the script's turn.
 TEST_SLOTS=0
-if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1 ]; then
+[ "${FM_TEST_HOST_LOCKED:-0}" = 1 ] || unset FM_TEST_SLOT_TOKEN
+if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ]; then
   available_kb=$(available_memory_kb) || available_kb=
   case "$available_kb" in ''|*[!0-9]*) TEST_SLOTS=2 ;;
     *) TEST_SLOTS=$((2 + available_kb / 1048576 - 1)); [ "$TEST_SLOTS" -ge 2 ] || TEST_SLOTS=2 ;;
@@ -2285,15 +2313,19 @@ if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ] && [ "${FM_TEST_HOST_LOCKED:-0}" != 1
   trap '' PIPE
 fi
 export FM_TEST_HOST_LOCKED=1
-# Holder: <slots> <ready-file> <notice-file> <runner-pid> <owner-pid>. Takes the
-# first free slot, creates <ready-file>, and keeps the slot until killed or the
+case "${FM_TEST_PUBLISH:-0}" in 1) export FM_TEST_PUBLISH ;; *) FM_TEST_PUBLISH=0 ;; esac
+# Holder: <slots> <ready-file> <notice-file> <runner-pid> <owner-pid> <priority>.
+# While a priority holder waits it keeps a marker file in the lock directory and
+# ordinary holders do not take freed slots, so the next free slot is its own.
+# Takes the first free slot, creates <ready-file>, and keeps the slot until killed or the
 # owner shell exits. <notice-file> makes the waiting line print once per run.
 # The holder is never a child of its owner: a shell wait that has lost its own
 # child would otherwise block on the holder, which waits for that shell.
 # shellcheck disable=SC2016
 TEST_SLOT_HOLDER_PY='
-import fcntl, os, sys, time
+import atexit, fcntl, os, signal, sys, tempfile, time
 slots, ready, notice, runner, owner = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+priority = sys.argv[6] == "1"
 def owner_alive():
     try:
         os.kill(owner, 0)
@@ -2303,11 +2335,44 @@ def owner_alive():
         pass
     return True
 lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
+# Demand follows the holder lock even when the waiting shell is interrupted.
+# An abrupt exit releases the lock and makes the record invisible to budgets.
+try:
+    demand, demand_path = tempfile.mkstemp(prefix=f"firstmate-test-{os.getuid()}-run-", dir=lock_dir)
+    atexit.register(os.unlink, demand_path)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    fcntl.flock(demand, fcntl.LOCK_EX)
+    priority_run = int(os.environ.get("FM_TEST_PUBLISH") == "1")
+    os.write(demand, f"{runner} {slots} {time.time():.3f} {priority_run}\n".encode())
+except OSError:
+    pass  # Demand observations never govern test admission.
+# A nested script may borrow the parent slot once; further scripts acquire
+# host slots. Each admitted script exposes a fresh token for deeper nesting.
+inherited = os.environ.get("FM_TEST_SLOT_TOKEN")
+inherited_fd = os.open(inherited, os.O_RDWR | os.O_NOFOLLOW) if inherited else None
 fds = [os.open(os.path.join(lock_dir, f"firstmate-test-{os.getuid()}-{slot}.lock"),
                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600) for slot in range(1, slots + 1)]
+prefix = f"firstmate-test-{os.getuid()}-prio-"
+marker = os.path.join(lock_dir, prefix + str(os.getpid()))
+def priority_waiting():
+    for name in os.listdir(lock_dir):
+        if not name.startswith(prefix) or name == os.path.basename(marker):
+            continue
+        try:
+            os.kill(int(name[len(prefix):]), 0)
+            return True
+        except (ValueError, ProcessLookupError):
+            continue
+        except PermissionError:
+            return True
+    return False
+if priority:
+    os.close(os.open(marker, os.O_CREAT | os.O_WRONLY, 0o600))
 held = None
 while held is None:
-    for fd in fds:
+    candidates = ([inherited_fd] if inherited_fd is not None else [])
+    candidates += [] if not priority and priority_waiting() else fds
+    for fd in candidates:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -2317,6 +2382,8 @@ while held is None:
     if held is not None:
         break
     if not owner_alive():
+        if priority:
+            os.unlink(marker)
         sys.exit(1)
     try:
         os.close(os.open(notice, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
@@ -2329,6 +2396,8 @@ while held is None:
     except FileExistsError:
         pass
     time.sleep(0.1)
+if priority:
+    os.unlink(marker)
 os.ftruncate(held, 0)
 os.lseek(held, 0, os.SEEK_SET)
 os.write(held, runner.encode())
@@ -2338,7 +2407,7 @@ while owner_alive():
 '
 
 # acquire_test_slot <ready-file>: block until this shell holds a slot; sets
-# TEST_SLOT_PID. A no-op when the budget is bypassed or inherited.
+# TEST_SLOT_PID. A no-op only when the caller explicitly bypassed the budget.
 acquire_test_slot() {
   TEST_SLOT_PID=
   [ "$TEST_SLOTS" -gt 0 ] || return 0
@@ -2348,7 +2417,7 @@ acquire_test_slot() {
   owner=$(exec sh -c 'echo "$PPID"')
   # Started inside a command substitution, the holder is reparented when it exits.
   TEST_SLOT_PID=$(python3 -c "$TEST_SLOT_HOLDER_PY" "$TEST_SLOTS" "$1" \
-    "$RUN_TMP/slot-wait-noticed" "$$" "$owner" </dev/null >/dev/null & echo "$!")
+    "$RUN_TMP/slot-wait-noticed" "$$" "$owner" "${FM_TEST_PUBLISH:-0}" </dev/null >/dev/null & echo "$!")
   while [ ! -e "$1" ]; do
     kill -0 "$TEST_SLOT_PID" 2>/dev/null || die "test slot holder exited before acquiring a slot"
     sleep 0.05
@@ -2377,9 +2446,6 @@ done
 # and --all is a deliberate complete regression.
 AUTO_CONCURRENCY=0
 if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq 0 ]; then
-  if [ "$MODE" = changed ] && [ "${#SCRIPTS[@]}" -gt 0 ] && [ "$PER_SCRIPT_TIMEOUT_SECS" -eq 0 ]; then
-    PER_SCRIPT_TIMEOUT_SECS=$CHANGED_DEFAULT_TIMEOUT_SECS
-  fi
   auto_admissible=0
   for s in "${SCRIPTS[@]}"; do
     script_allows_concurrency "$s" && auto_admissible=$((auto_admissible + 1))
@@ -2625,7 +2691,7 @@ run_script_bounded() (  # <script> <out> <stream> <id>
   # shellcheck disable=SC2016
   command=(bash -c 'printf "%s\n" "$$" > "$1" && shift && exec "$@"' fm-test-suite \
     "$out.pid" "${command[@]}")
-  local rc
+  local rc FM_TIMEOUT_WAIT_CLEANUP=1
   : "$id"
   set +e
   if [ "$stream" -eq 1 ]; then
@@ -2658,11 +2724,13 @@ run_script_bounded() (  # <script> <out> <stream> <id>
 run_one_serial() {
   local script=$1
   local base family expected out begin_iso begin_ms end_ms end_iso duration rc
+  local FM_TEST_SLOT_TOKEN
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
   out="$RUN_TMP/out.$TOTAL"
   acquire_test_slot "$RUN_TMP/slot.serial"
+  if [ "$TEST_SLOTS" -gt 0 ]; then FM_TEST_SLOT_TOKEN="$RUN_TMP/slot.serial"; export FM_TEST_SLOT_TOKEN; fi
   begin_iso=$(now_iso)
   begin_ms=$(now_ms)
 
@@ -2783,8 +2851,7 @@ else
     base=$(basename "$script")
     family=$(family_for_basename "$base")
     expected=$(expected_gate_skip_for_family "$family")
-    printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
-      "$(now_iso)" "$script" "$family" "$expected"
+    printf 'FM_TEST_QUEUE %s %s\n' "$(now_iso)" "$script"
     (
       trap - EXIT HUP INT TERM
       set +e
@@ -2794,7 +2861,10 @@ else
         FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
       cd "$ROOT" || exit 1
       acquire_test_slot "$work/slot"
+      if [ "$TEST_SLOTS" -gt 0 ]; then FM_TEST_SLOT_TOKEN="$work/slot"; export FM_TEST_SLOT_TOKEN; fi
       begin_ms=$(now_ms)
+      printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
+        "$(now_iso)" "$script" "$family" "$expected"
       set +e
       run_script_bounded "$script" "$work/output" 0 "w$worker_n"
       rc=$?

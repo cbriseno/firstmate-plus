@@ -57,7 +57,7 @@ EOF
 run_spawn() {  # <id> <args...>
   local id=$1
   shift
-  fm_test_run_spawn "$HOME_DIR" "$POOL_DIR" "$FAKEBIN_DIR" "$id" "$PROJECT_DIR" "$@"
+  fm_test_run_spawn "$HOME_DIR" "$POOL_DIR" "$FAKEBIN_DIR" "$id" "$PROJECT_DIR" --model codex-test --effort high "$@"
 }
 
 refused_before_launch() {  # <id> <label> <needle> <out> <status>

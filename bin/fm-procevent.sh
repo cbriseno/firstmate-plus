@@ -603,6 +603,17 @@ cmd_register() {
     fm_procevent_source_lock_release "$id"
     die "cannot arm task-owned Lavish source $id owned by task $owner_task; steer that task to re-arm its board"
   fi
+  # An identical live Lavish registration must keep its identity: its runner
+  # owns terminal retirement and cannot retire a replacement generation.
+  if [ "$adapter" = lavish ] && [ "$1" = "$SCRIPT_DIR/fm-procevent-lavish.sh" ] && [ "${2-}" = poll ] \
+    && fm_procevent_registration_context_matches_locked "$STATE" "$adapter" "$id" "$review_task" "$review_occurrence" "$@" \
+    && fm_procevent_claim_state_locked "$id" \
+    && [ "$FM_PROCEVENT_CLAIM_REG_IDENTITY" = "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" ]; then
+    fm_procevent_source_lock_release "$id"
+    owner_lease_refresh
+    printf 'registered: %s (%s)\n' "$id" "$adapter"
+    return 0
+  fi
   if ! extension_registration_replacement_safe_locked "$id"; then
     fm_procevent_source_lock_release "$id"
     die "cannot replace extension registration while its prior runner remains active: $id"
@@ -915,7 +926,7 @@ cmd_register_extension() {
 # and drains until `fm_procevent_mark_handled` records it.
 publish_result() {  # <result-file>
   local result=$1 id seq adapter line status=1 owner_task='' closed_candidate='' message='' record=''
-  local ring_backend ring_target ring_meta inbox_dir handled_dir pre_existing existing new_record terminal
+  local ring_backend ring_target ring_meta inbox_dir handled_dir pre_existing existing new_record
   id=$(fm_procevent_result_source_id "$result")
   seq=$(fm_procevent_result_sequence "$result")
   fm_procevent_source_id_valid "$id" || return 1
@@ -950,9 +961,7 @@ publish_result() {  # <result-file>
       owner_task=
     fi
     if [ -n "$owner_task" ]; then
-      terminal=0
       if adapter_result_is_terminal "$adapter" "$result"; then
-        terminal=1
         message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it."
       else
         export FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD=1
@@ -1012,14 +1021,6 @@ EOF
           if [ -n "$ring_backend" ] && [ -n "$ring_target" ]; then
             fm_task_inbox_ring "$ring_backend" "$ring_target" "$record" "fm-$owner_task" >/dev/null 2>&1 || true
           fi
-        fi
-        # The board acknowledges a fresh nonterminal round at once, so the
-        # captain sees receipt while the owner works on it.
-        if [ "$adapter" = lavish ] && [ "$terminal" -eq 0 ]; then
-          (
-            read_argv "$id" && [ "${ARGV[1]-}" = poll ] \
-              && "$SCRIPT_DIR/fm-procevent-lavish.sh" notify "${ARGV[2]}" ack "$owner_task"
-          ) >/dev/null 2>&1 || true
         fi
       fi
       return "$status"
@@ -1340,7 +1341,7 @@ cmd_start() {
   # it is outside this confused-agent-grade boundary.
   export FM_PROCEVENT_IN_RUNNER=1
   start_owner_guard "$id" || die "cannot start the runner's owner guard: $id"
-  local launch_floor runner inbox reservation_dir staging launch_ready launch_reply launch_pid
+  local launch_floor runner inbox reservation_dir staging launch_ready launch_reply launch_pid receipt_pid
   launch_floor=$(fm_procevent_launch_floor_seconds) \
     || die "FM_PROCEVENT_LAUNCH_FLOOR_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_FLOOR_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_FLOOR_MAX_SECONDS"
   if [ "$extension_owner" -eq 1 ]; then
@@ -1548,6 +1549,15 @@ EOF
   STAGED_OUTPUT=
   [ "$truncated" -eq 1 ] && printf 'truncated: %s at %s bytes\n' "$id" "$MAX_OUTPUT_BYTES" >&2
 
+  # Start the receipt once per capture, alongside delivery. Neither a slow
+  # board reply nor a slow route to the handler should hold up the other.
+  receipt_pid=''
+  if [ "$extension_owner" -eq 0 ] && [ "$adapter" = lavish ] && [ -n "$task_owner" ] \
+    && [ "${ARGV[1]-}" = poll ] && [ -n "${ARGV[2]-}" ]; then
+    "$SCRIPT_DIR/fm-procevent-lavish.sh" notify "${ARGV[2]}" ack "$task_owner" "$durable" >/dev/null 2>&1 &
+    receipt_pid=$!
+  fi
+
   # Independent of publication and acknowledgement, so it runs once per capture
   # for every adapter and cannot change what the handler receives.
   if [ "$extension_owner" -eq 0 ] \
@@ -1581,6 +1591,7 @@ EOF
     fi
     publish_pending "$durable" >/dev/null
   fi
+  [ -z "$receipt_pid" ] || wait "$receipt_pid" || true
   [ "$extension_owner" -eq 1 ] || rm -f -- "$runner"
   if [ "$self_announcing" -eq 1 ]; then
     if adapter_autohandle "$adapter" "$id" "$durable"; then

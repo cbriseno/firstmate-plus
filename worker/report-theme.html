@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Adapt all example text and lang to the request or installation language. -->
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -59,9 +60,10 @@ function updateAges() {
   document.querySelectorAll('[data-age-for]').forEach(function (el) {
     const t = Date.parse(el.dataset.ageFor), delta = Date.now() - t;
     if (!Number.isFinite(t)) return;
-    if (delta < 0) { el.textContent = 'fecha futura'; return; }
-    const minutes = Math.floor(delta / 60000);
-    el.textContent = minutes < 1 ? 'hace menos de un min' : minutes < 60 ? 'hace ' + minutes + ' min' : minutes < 1440 ? 'hace ' + Math.floor(minutes / 60) + ' h' : 'hace ' + Math.floor(minutes / 1440) + (minutes < 2880 ? ' día' : ' días');
+    const minutes = Math.round(delta / 60000);
+    const unit = Math.abs(minutes) < 60 ? 'minute' : Math.abs(minutes) < 1440 ? 'hour' : 'day';
+    const divisor = unit === 'minute' ? 1 : unit === 'hour' ? 60 : 1440;
+    el.textContent = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {numeric: 'auto'}).format(-Math.round(minutes / divisor), unit);
   });
 }
 updateAges(); setInterval(updateAges, 60000);

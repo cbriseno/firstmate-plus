@@ -606,7 +606,7 @@ run_spawn() {  # <case-dir> <args...>
 
 run_ship_spawn() {  # <case-dir> <id>
   local case_dir=$1 id=$2
-  run_spawn "$case_dir" "$id" "$case_dir/project" --mode no-mistakes --yolo off
+  run_spawn "$case_dir" "$id" "$case_dir/project" --model claude-test --effort high --mode no-mistakes --yolo off
 }
 
 # Teardown against a recorded worktree that no longer exists: the landed-work and
@@ -1488,7 +1488,7 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
     FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
     FM_TASKS_AXI_TIMEOUT=3 PATH="$case_dir/fakebin:$PATH" \
     "$SPAWN" "$id" "$case_dir/project" \
-    --mode no-mistakes --yolo off 2>&1) || rc=$?
+    --model claude-test --effort high --mode no-mistakes --yolo off 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   case "$rc" in
     124|137) fail "the verification hung on the unresponsive start instead of timing out: $out" ;;
@@ -1517,8 +1517,9 @@ test_dispatch_does_not_resurrect_a_row_closed_after_preflight() {
   assert_contains "$out" "state done" "spawn did not report the row's ineligible state"
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
     || fail "spawn resurrected a row closed after preflight"
-  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
-    "spawn retained a record after its row was closed"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "spawn lost ownership after launch delivery"
+  assert_contains "$out" "original record" "spawn did not explain its retained ownership"
   pass "dispatch does not resurrect a row closed after preflight"
 }
 
@@ -1533,8 +1534,9 @@ test_dispatch_fails_when_its_row_vanishes_after_preflight() {
   [ "$rc" -ne 0 ] || fail "spawn succeeded after its backlog row vanished"
   assert_contains "$out" "vanished before dispatch commit" \
     "spawn did not report that its backlog row vanished"
-  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
-    "spawn retained a record after its backlog row vanished"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "spawn lost ownership after launch delivery"
+  assert_contains "$out" "original record" "spawn did not explain its retained ownership"
   [ -z "$(row_state "$case_dir" "$id")" ] || fail "spawn recreated a removed backlog row"
   pass "dispatch fails when its backlog row vanishes after preflight"
 }
@@ -1589,6 +1591,19 @@ test_dispatch_refuses_a_malformed_install_link_before_creating_resources() {
 
 # --- completion -------------------------------------------------------------
 
+prepare_scout_close() {  # <case-dir> <data-dir> <id>
+  local case_dir=$1 data=$2 id=$3 action
+  mkdir -p "$data/$id"
+  printf 'findings\n' > "$data/$id/report.md"
+  printf '%s\n' '<!doctype html><title>Scout report</title><p>Findings</p>' > "$data/$id/report.html"
+  for action in complete followups; do
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
+      FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
+      "$ROOT/bin/fm-captain-hold.sh" "$action" "$id" --none >/dev/null \
+      || fail "could not record the scout's $action inventory"
+  done
+}
+
 test_completion_closes_a_local_only_ship_before_reporting_success() {
   local case_dir id out
   id=atomic-close-b5
@@ -1634,14 +1649,7 @@ test_completion_closes_a_scout_with_its_report() {
   add_item "$case_dir" "$id" scout
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-close-scout"
-  # A scout's deliverable is its report, and teardown also enforces the shared
-  # captain-call completion gate; satisfy both the way a real scout does.
-  mkdir -p "$(home_of "$case_dir")/data/$id"
-  printf 'findings\n' > "$(home_of "$case_dir")/data/$id/report.md"
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
-    PATH="$case_dir/fakebin:$PATH" \
-    "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
-    || fail "could not record the scout's completed captain-call inventory"
+  prepare_scout_close "$case_dir" "$(home_of "$case_dir")/data" "$id"
 
   out=$(run_teardown "$case_dir" "$id") || fail "teardown failed: $out"
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
@@ -1706,12 +1714,7 @@ test_completion_records_a_relative_report_for_relocated_data() {
   tasks-axi add "$id" "item for $id" --kind scout --file "$backlog" >/dev/null
   tasks-axi start "$id" --file "$backlog" >/dev/null
   write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-relocated-scout"
-  mkdir -p "$relocated/$id"
-  printf 'findings\n' > "$relocated/$id/report.md"
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
-    FM_DATA_OVERRIDE="$relocated////" PATH="$case_dir/fakebin:$PATH" \
-    "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
-    || fail "could not record the relocated scout's captain-call inventory"
+  prepare_scout_close "$case_dir" "$relocated////" "$id"
 
   out=$(FM_DATA_OVERRIDE="$relocated////" run_teardown "$case_dir" "$id") \
     || fail "relocated scout teardown failed: $out"
@@ -1734,20 +1737,15 @@ test_space_containing_scout_report_marker_replays() {
   tasks-axi add "$id" "item for $id" --kind scout --file "$backlog" >/dev/null
   tasks-axi start "$id" --file "$backlog" >/dev/null
   write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-space-report"
-  mkdir -p "$data/$id"
-  printf 'findings\n' > "$data/$id/report.md"
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
-    FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
-    "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
-    || fail "could not record the space-path scout's captain-call inventory"
+  prepare_scout_close "$case_dir" "$data" "$id"
   break_verb "$case_dir" "done"
   marker="$(home_of "$case_dir")/state/$id.backlog-close"
 
   out=$(FM_DATA_OVERRIDE="$data" run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "space-path scout teardown unexpectedly completed"
   assert_present "$marker" "space-path scout teardown recorded no pending close"
-  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
-    "space-path scout teardown retained meta after recording its close"
+  assert_present "$(home_of "$case_dir")/state/$id.meta" \
+    "space-path scout teardown removed meta before applying its close"
   rm -f "$case_dir/fakebin/tasks-axi"
 
   out=$(FM_DATA_OVERRIDE="$data" run_bootstrap "$case_dir")
@@ -1840,27 +1838,43 @@ test_completion_preserves_records_when_meta_removal_fails() {
     "teardown did not report task-record removal failure"
   assert_present "$meta" "teardown lost meta after its removal failed"
   assert_present "$marker" "teardown discarded recovery after meta removal failed"
-  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
-    || fail "teardown closed the row before verifying meta removal"
+  [ "$(row_state "$case_dir" "$id")" = "done" ] \
+    || fail "a failed meta removal lost the completed backlog transition"
   pass "completion preserves recovery state when task-record removal fails"
 }
 
 test_completion_fails_loudly_and_records_the_close_it_still_owes() {
-  local case_dir id out rc=0
+  local case_dir home id out rc=0
   id=atomic-close-b7
   case_dir=$(make_home close-fails)
+  home=$(home_of "$case_dir")
   add_item "$case_dir" "$id"
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship local-only "spawn_gen=spawn-close-fails"
+  printf 'done: ready in integrated branch\n' > "$home/state/$id.status"
+  touch "$home/config/status-archive"
   break_verb "$case_dir" "done"
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown reported success while its item was still In flight"
   assert_contains "$out" "could not be closed" \
     "teardown failed without explaining the unclosed backlog item"
-  assert_present "$(home_of "$case_dir")/state/$id.backlog-close" \
-    "teardown lost the close it still owes"
-  pass "completion refuses to report success while its item is still open, and records what it owes"
+  assert_present "$home/state/$id.backlog-close" "teardown lost the close it still owes"
+  assert_present "$home/state/$id.meta" "teardown removed meta before closing the backlog"
+  assert_grep 'done: ready in integrated branch' "$home/state/$id.status" \
+    "teardown lost done status before closing the backlog"
+  assert_absent "$home/data/$id/status.log" "teardown archived the status before closing the backlog"
+
+  rm -f -- "$case_dir/fakebin/tasks-axi"
+  [ "$(row_state "$case_dir" "$id")" = in_flight ] || fail "the failed close changed the row"
+  out=$(run_teardown "$case_dir" "$id") || fail "teardown could not retry its pending close: $out"
+  [ "$(row_state "$case_dir" "$id")" = "done" ] || fail "the retry left the row open"
+  assert_absent "$home/state/$id.meta" "the completed close retained meta"
+  assert_absent "$home/state/$id.status" "the completed close retained live status"
+  assert_absent "$home/state/$id.backlog-close" "the completed close retained its pending close"
+  assert_grep 'done: ready in integrated branch' "$home/data/$id/status.log" \
+    "the completed close failed to archive done status"
+  pass "teardown preserves status and meta until the backlog close succeeds"
 }
 
 test_interrupted_destructive_cleanup_leaves_a_recoverable_close() {
@@ -2185,8 +2199,7 @@ test_recovery_retry_preserves_incomplete_cleanup_warning() {
   break_verb "$case_dir" show
 
   out=$(run_bootstrap "$case_dir")
-  assert_absent "$home/state/$id.meta" \
-    "failed replay did not cross the task-record removal boundary"
+  assert_present "$home/state/$id.meta" "failed replay removed meta while the row was open"
   assert_present "$marker" "failed replay discarded its pending close"
   rm -f "$case_dir/fakebin/tasks-axi"
 
@@ -2194,7 +2207,8 @@ test_recovery_retry_preserves_incomplete_cleanup_warning() {
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
     || fail "retried recovery left the item In flight: $out"
   assert_contains "$out" "endpoint or local copy may remain" \
-    "retry lost the incomplete-cleanup evidence after removing metadata"
+    "retry failed to report incomplete cleanup"
+  assert_absent "$home/state/$id.meta" "successful replay did not retire meta"
   assert_absent "$marker" "retried recovery retained its applied marker"
   pass "recovery preserves incomplete-cleanup evidence across a failed replay"
 }
@@ -2263,8 +2277,8 @@ test_recovery_preserves_both_records_when_meta_removal_fails() {
   assert_present "$meta" "failed recovery removed the task record"
   assert_present "$(home_of "$case_dir")/state/$id.backlog-close" \
     "failed recovery discarded the pending close"
-  [ "$(row_state "$case_dir" "$id")" = in_flight ] \
-    || fail "failed recovery closed the backlog before removing meta"
+  [ "$(row_state "$case_dir" "$id")" = "done" ] \
+    || fail "a failed meta removal lost the recovered backlog transition"
 
   rm -f "$case_dir/fakebin/rm"
   out=$(run_bootstrap "$case_dir")
@@ -2875,7 +2889,7 @@ test_spawn_refuses_a_special_file_tasks_config() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \
     PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1) || rc=$?
+    "$SPAWN" "$id" "$case_dir/project" --model claude-test --effort high --mode no-mistakes --yolo off 2>&1) || rc=$?
   [ "$rc" -ne 124 ] || fail "spawn hung reading a special-file tasks-axi config"
   [ "$rc" -ne 0 ] || fail "spawn accepted a special-file tasks-axi config"
   assert_contains "$out" "tasks-axi config is not a regular file" \
@@ -3081,6 +3095,7 @@ test_a_persistent_secondmate_is_never_a_backlog_item() {
   printf 'charter for %s\n' "$id" > "$mate/data/charter.md"
   printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$mate/.gitignore"
   git -C "$mate" init -q -b main
+  fm_git_config_identity "$mate"
 
   # No backlog item exists for the mate, and none should be required: agents are
   # not work items. The dispatch must succeed anyway.

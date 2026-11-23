@@ -28,11 +28,15 @@ command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-liveness-$$"
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-liveness.XXXXXX") || exit 1
+LAB_ROOT=$LAB
+LAB="$LAB/a-long-installation-path-for-checking-process-arguments-beyond-terminal-width"
+mkdir -p "$LAB"
+export COLUMNS=80
 SESSION=liveness
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -n "${LAB:-}" ] && fm_test_remove_tree "$LAB"
+  [ -n "${LAB_ROOT:-}" ] && fm_test_remove_tree "$LAB_ROOT"
   fm_test_cleanup
 }
 trap cleanup_all EXIT
@@ -59,21 +63,13 @@ STANDIN_BIN=$(fm_agent_standin "$LAB/standin") || {
 }
 CC_BIN=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
 ln -s "$STANDIN_BIN" "$LAB/bin/claude-link"
-ln -s "$STANDIN_BIN" "$LAB/bin/pi"
+ln -s "$STANDIN_BIN" "$LAB/bin/codex"
 ln -s "$STANDIN_BIN" "$LAB/bin/notaharness"
-# omp (Oh My Pi) is a single binary whose live process name is the bare word
-# `omp`; the two decoys are the substrings an unanchored glob would misread.
-ln -s "$STANDIN_BIN" "$LAB/bin/omp"
-ln -s "$STANDIN_BIN" "$LAB/bin/ompd"
-ln -s "$STANDIN_BIN" "$LAB/bin/comp"
-
-# A launcher whose own process identity is a bare shell, running the harness as
-# a child in the same foreground process group - the shape the real Pi Launcher
-# path takes, and the one where trusting a single name source can produce a
-# false `dead`.
+# A launcher whose own process identity is a bare shell, running a harness as
+# a child in the same foreground process group.
 cat > "$LAB/bin/agent-launcher" <<SH
 #!/bin/sh
-"$LAB/bin/pi" 900 &
+"$LAB/bin/codex" 900 &
 wait
 SH
 chmod +x "$LAB/bin/agent-launcher"

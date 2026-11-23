@@ -4,9 +4,9 @@
 #
 # Usage: fm-autodispatch.sh <task-id>
 #
-# The watcher calls this for each task `fm-tasks-axi.sh ready` lists that has a
-# brief, passes `work dispatch-check` (no hold, group pause or dependency) and
-# has no spawn-deferred marker, once capacity admits. It derives only what a
+# The watcher calls this in `fm-tasks-axi.sh work continuations` order for a
+# queued task with a brief and no spawn-deferred marker once capacity admits.
+# The backlog's current `ready` view must still contain the task. It derives only what a
 # person would read off the brief and the registry, in the same order:
 #   1. repo      the backlog row's repo; its directory is projects/<repo>, else
 #                the one existing absolute path in its data/projects.md line;
@@ -15,14 +15,15 @@
 #                a gerrit or external forge, where fm-spawn.sh refuses it;
 #   4. profile   when config/crew-dispatch.json declares categories, the rule
 #                named by the brief's "Dispatch category:" line, only if it
-#                has exactly one profile and no captain approval; with no
-#                dispatch file no harness flag is passed;
+#                has exactly one profile and no captain approval; without a
+#                dispatch file the brief carries the primary's selected axes;
 #   5. branch    --branch-prefix and --base-branch read back from the brief.
 # Then it runs fm-spawn.sh, which still owns every admission, category and
 # delivery check; a spawn that refuses reports its own error here.
 #
 # Exit: 0 launched (fm-spawn's line on stdout), 75 spawn deferred for capacity
 #   (its marker is written; the watcher's deferral tick relaunches it),
+#   76 allocation lock held (marker records the lock; the watcher retries),
 #   3 not auto-launchable (reason on stderr; the primary decides as before),
 #   any other nonzero: the spawn itself failed (its last line on stderr).
 set -u
@@ -87,17 +88,28 @@ BASE=$(sed -n 's/^Base branch: //p' "$BRIEF" | head -n 1)
 if [ -f "$CONFIG/crew-dispatch.json" ]; then
   category=$(sed -n 's/^Dispatch category: //p' "$BRIEF" | head -n 1)
   profile=$(jq -r --arg c "$category" '
-    [.rules[]? | select(.category == $c)] as $r
+    (if $c == "default" and has("default") then [{use: .default}] else [.rules[]? | select(.category == $c)] end) as $r
     | if ($c | test("^[a-z0-9-]+$")) and ($r | length) == 1 and ($r[0].use | type) == "object"
         and ($r[0].approval // null) == null and ($r[0].use.harness // "") != ""
       then [$r[0].use.harness, ($r[0].use.model // ""), ($r[0].use.effort // "")] | join("|")
       else empty end' "$CONFIG/crew-dispatch.json" 2>/dev/null)
   [ -n "$profile" ] || skip "dispatch category '$category' has no single approved profile"
   IFS="|" read -r h m e <<< "$profile"
+  [ -n "$m" ] || m=$(sed -n 's/^Dispatch model: //p' "$BRIEF" | head -n 1)
+  [ -n "$e" ] || e=$(sed -n 's/^Dispatch effort: //p' "$BRIEF" | head -n 1)
+  case "$e" in low|medium|high|xhigh|max) ;; *) skip "dispatch category '$category' needs a recorded effort" ;; esac
+  [ -n "$m" ] && [ "$m" != default ] || skip "dispatch category '$category' needs a concrete model"
   args+=(--harness "$h")
   [ -z "$m" ] || args+=(--model "$m")
   [ -z "$e" ] || args+=(--effort "$e")
+else
+  h=$(sed -n 's/^Dispatch harness: //p' "$BRIEF" | head -n 1)
+  m=$(sed -n 's/^Dispatch model: //p' "$BRIEF" | head -n 1)
+  e=$(sed -n 's/^Dispatch effort: //p' "$BRIEF" | head -n 1)
+  [ -n "$h" ] && [ -n "$m" ] && [ "$m" != default ] || skip "brief needs a selected dispatch harness and model"
+  case "$e" in low|medium|high|xhigh|max) ;; *) skip "brief needs a selected dispatch effort" ;; esac
+  args+=(--harness "$h" --model "$m" --effort "$e")
 fi
 
-FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
+FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 FM_AUTODISPATCH=1 \
   exec "$SCRIPT_DIR/fm-spawn.sh" "${args[@]}" </dev/null

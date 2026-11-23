@@ -80,6 +80,7 @@ spawn_abort_cleanup() {
     { [ "${RELAUNCH:-0}" -eq 1 ] || { [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; }; }; then
     SPAWN_ENDPOINT_CREATED=0
     if fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" >/dev/null 2>&1; then
+      SPAWN_ENDPOINT_CLOSED=1
       echo "cleanup: closed endpoint $T that this failed spawn created" >&2
     else
       echo "warning: endpoint $T that this failed spawn created could not be closed; close it by hand" >&2
@@ -96,7 +97,15 @@ spawn_abort_cleanup() {
   # already released that lock and leaves the claim for the next spawn's
   # atomic replacement rather than racing it. The release never removes
   # another task's claim.
-  if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ -n "${WT:-}" ] &&
+  if [ "$SPAWN_SLOT_LEASED" = 1 ] && [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ] &&
+    [ "$SPAWN_ENDPOINT_CLOSED" = 1 ] && [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    if (cd "$PROJ_ABS" && treehouse return --force --if-lease-holder "firstmate:$ID" "$WT") >/dev/null; then
+      SPAWN_SLOT_LEASED=0
+    else
+      echo "warning: could not release the failed spawn's reserved slot $WT" >&2
+    fi
+  fi
+  if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ "$SPAWN_SLOT_LEASED" = 0 ] && [ -n "${WT:-}" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
     fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
     SPAWN_SLOT_CLAIMED=0

@@ -159,7 +159,7 @@
 # A progress publication records its own reported_at, status-boundary fingerprint,
 # task contract and code head. Card-only patches never refresh that checkpoint.
 # A new status boundary, promotion or code head demands an explicit checkpoint,
-# even when no step completed. There is no elapsed-work or periodic heartbeat TTL.
+# even when no step completed. Checkpoint freshness has no elapsed-work or periodic heartbeat TTL.
 # work snapshot returns progress only for a current checkpoint, declared_progress
 # for retained measurements, phase, verified_gates and progress_evidence separately.
 # Existing watcher slow checks and wake-drain surface missing/stale obligations
@@ -182,6 +182,7 @@
 #   work request-status --request-id ID   Durable receipt; retries never repeat effects.
 #   work close --request-id ID            Close only workers at that pause's safe point.
 #   work reconcile                        Advance safe closes and queued resumes in «Mi orden».
+#   work continuations                    Read eligible queued and in-flight tasks in request priority, dependency and age order.
 #   work pause.preview | pause.request | pause.cancel
 #   work resume.preview | resume.request | resume.dequeue
 # Signal verbs read JSON {scope, rev, request_id, actor?, reason?}; previews
@@ -249,8 +250,9 @@
 # contains confirmed live workers only; it never starts an absent worker.
 #   work assign --task ID --subproject KEY|none   Firstmate-only membership maintenance.
 #   work supervision --tasks ID...          Read-only bounded supervision predicate.
-# Captures current source texts under the work lock, then parses and probes
-# outside it; missing/invalid data needs supervision. No history or alias writes.
+# Captures source texts under a nonblocking shared work lock, then parses and
+# probes outside it. A busy or unreadable snapshot cannot exempt a task.
+# No history or alias writes.
 #   work dispatch-check --task ID         Nonzero if group pause/dependency prevents launch.
 #   work normalize-plan --map FILE --additions FILE   Read-only current-source manifest.
 #   work normalize-plan --metadata-only --map FILE   Only project visibility, zero task operations.
@@ -317,6 +319,9 @@
 # Partial migrations keep their backup/receipt and refuse automatic replay.
 # Presentation file input also accepts progress: {steps: [{label: 1..80 chars,
 # state: done|active|todo}]}, 1..30 authored steps; null clears the declaration.
+# Optional progress.deliverables lists up to 30 {root: worktree|data, path: relative-file}
+# objects. The data root is this task's data directory. An absent or empty list
+# leaves deliverable progress unknown; only named files are observed for changes.
 # Data/control schema: fm-work-contract.v1; capabilities revision 1.3 adds
 # stable_aliases, normalized_hierarchy, question_provenance, removal_consultation.
 # question.origin contains key, alias, available, title, backlog_state, completed,

@@ -60,8 +60,8 @@
 #          upgrade command, which runs no first-install-only step such as
 #          `setup hooks` or a `curl | sh` installer. MISSING stays for absent
 #          tools only.
-#          treehouse is OUTDATED when its installed version lacks
-#          "treehouse get --lease" support.
+#          treehouse is OUTDATED when its installed version lacks the durable
+#          acquisition, in-place lease, or JSON status operations.
 #          no-mistakes is OUTDATED when its installed version is older than
 #          1.46.0 (structured pipeline attestation floor; see CONTRIBUTING.md).
 #          The AXI-family floor policy is owned beside GH_AXI_MIN and
@@ -191,6 +191,9 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+python3 "$SCRIPT_DIR/fm-standing-grants.py" init "$DATA/standing-grants.json" || {
+  echo 'MISSING: could not initialize standing grants' >&2
+}
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
@@ -959,7 +962,9 @@ LAVISH_AXI_MIN=0.1.80
 LAVISH_AXI_BOARD_MIN=0.1.77
 
 treehouse_supports_lease() {
-  treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
+  treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' &&
+    treehouse lease --help 2>&1 | grep -q -- '--lease-holder' &&
+    treehouse status --help 2>&1 | grep -q -- '--json'
 }
 
 # Shared semantic-version floor for the tool gates below. A version string that
@@ -1553,7 +1558,7 @@ detect_local_tools() {
   # backend actually requires treehouse.
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
-    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
+    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires get --lease, lease, and status --json; upgrade: $(upgrade_cmd treehouse))"
   fi
   if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
     echo "OUTDATED: no-mistakes (installed: $(tool_version no-mistakes); requires $NO_MISTAKES_MIN; upgrade: $(upgrade_cmd no-mistakes))"
@@ -1691,6 +1696,7 @@ local_phase && detect_local_config
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   local_phase && bash "$SCRIPT_DIR/fm-home-instructions.sh" "$FM_HOME"
+  local_phase && bash "$SCRIPT_DIR/fm-primary-effort.sh" "$FM_HOME"
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
   # those two always run together in the same phase. Clone refresh does not
   # depend on them, so it starts in the background and overlaps their wall clock.

@@ -52,11 +52,14 @@ make_primary() {  # <name>
   git init -q "$root"
   : > "$root/AGENTS.md"
   : > "$root/config/supervision-host"
+  : > "$root/config/fleet-ledger"
   ln -s "$ROOT/bin" "$root/bin"
-  jq '.hooks |= (with_entries(.value |= (map(.hooks |= map(select(.command | contains("fm-host-mirror.sh")))) | map(select(.hooks | length > 0)))) | with_entries(select(.value | length > 0))) | {hooks}' \
+  jq '.hooks |= (with_entries(.value |= (map(.hooks |= map(select(.command | contains("fm-host-mirror.sh") or contains("fm-primary-final.sh")))) | map(select(.hooks | length > 0)))) | with_entries(select(.value | length > 0))) | {hooks}' \
     "$ROOT/.claude/settings.json" > "$root/.claude/settings.json"
-  jq '.hooks |= (with_entries(.value |= map(select(.command | contains("fm-host-mirror.sh")))) | with_entries(select(.value | length > 0)))' \
-    "$ROOT/.cursor/hooks.json" > "$root/.cursor/hooks.json"
+  if [ -f "$ROOT/.cursor/hooks.json" ]; then
+    jq '.hooks |= (with_entries(.value |= map(select(.command | contains("fm-host-mirror.sh")))) | with_entries(select(.value | length > 0)))' \
+      "$ROOT/.cursor/hooks.json" > "$root/.cursor/hooks.json"
+  fi
   printf '%s\n' "$root"
 }
 
@@ -76,6 +79,11 @@ wait_mirrored() {  # <root> <seconds>
 
 check() {  # <harness> <version> <root>
   if mirrored "$3" captain "$PROMPT" && mirrored "$3" main mirror-ok; then
+    if [ "$1" = claude ]; then
+      jq -e 'select(.event == "primary.final" and .value.harness == "claude"
+        and (.value.text | contains("mirror-ok")) and (.value.session | length > 0))' \
+        "$3/state/fleet-ledger.jsonl" >/dev/null || fail "$1 $2: the final writer did not also record the fleet ledger"
+    fi
     printf 'ok - %s %s: the tracked registrations mirrored the captain prompt and main reply\n' "$1" "$2"
     CHECKED=$((CHECKED + 1))
     return 0

@@ -351,10 +351,18 @@ fi
 TASK_BACKEND=$(fm_backend_of_meta "$META")
 BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
+PANE_TAIL_CACHED=0
+PANE_TAIL=""
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
     tmux) fm_backend_target_exists tmux "$1" ;;
-    *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
+    *)
+      # Reuse the scrollback for activity; preserve the short probe on failure.
+      if [ "$KIND" != secondmate ] && PANE_TAIL=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null); then
+        PANE_TAIL_CACHED=1
+        return 0
+      fi
+      fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }
 # crew_busy_verdict: the crew's native observation JSON from the one contract
@@ -371,7 +379,11 @@ pane_readable() {  # <target>
 # unknown - the exact split issue #1792 describes for a different cause.
 crew_busy_verdict() {  # <target>
   local tail40
-  tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
+  if [ "$PANE_TAIL_CACHED" = 1 ]; then
+    tail40=$PANE_TAIL
+  else
+    tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
+  fi
   fm_busy_native_activity "$META" "$ID" "$STATE" "$tail40"
 }
 

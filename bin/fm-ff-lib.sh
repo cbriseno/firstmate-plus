@@ -383,7 +383,8 @@ FF_STATUS=""
 FF_INSTR=""
 ff_target() {
   local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no} ignore_seed_marker=${5:-no}
-  local secondmate_id=${6:-} reconciliation_state=${7:-}
+  local secondmate_id=${6:-} reconciliation_state=${7:-} recover_primary=${8:-no}
+  FF_REASON=""
   FF_STATUS="skipped"
   FF_INSTR=""
 
@@ -433,7 +434,8 @@ ff_target() {
   fi
 
   if [ -n "$(dirty_status "$dir" "$ignore_seed_marker")" ]; then
-    echo "$label: skipped: dirty working tree"
+    FF_REASON="dirty"
+    [ "$recover_primary" = yes ] || echo "$label: skipped: dirty working tree"
     return 0
   fi
 
@@ -479,7 +481,10 @@ ff_target() {
         echo "$label: skipped: diverged from $base; reconciliation required, but its durable record could not be written"
       fi
     else
-      echo "$label: skipped: diverged from $base"
+      # Consumed by the primary updater after this function returns.
+      # shellcheck disable=SC2034
+      FF_REASON="diverged"
+      [ "$recover_primary" = yes ] || echo "$label: skipped: diverged from $base"
     fi
     return 0
   fi
@@ -549,6 +554,9 @@ process_secondmate() {
   FF_SEEN_HOMES="$FF_SEEN_HOMES $home_real"
 
   ff_target "$home_real" "secondmate $id" "$base_mode" yes yes "$id" "${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+  if { [ "$FF_STATUS" = "updated" ] || [ "$FF_STATUS" = "current" ]; } && [ -f "$home_real/bin/fm_nudge.py" ]; then
+    FM_HOME="$home_real" FM_STATE_OVERRIDE="$home_real/state" FM_DATA_OVERRIDE="$home_real/data" python3 "$home_real/bin/fm_nudge.py" import-legacy
+  fi
   if [ -n "$window" ] && { [ "$FF_STATUS" = "updated" ] || [ "$FF_STATUS" = "current" ]; } \
     && type fm_ff_after_secondmate_settled >/dev/null 2>&1; then
     fm_ff_after_secondmate_settled "$id" "$home_real" "$window" "$FF_STATUS" "$FF_INSTR"

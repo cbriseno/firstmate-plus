@@ -1748,6 +1748,11 @@ SH
 }
 
 
+if [ "${FM_TEST_ONLY:-}" = rearm-decision ]; then
+  test_rearm_resurfaces_durable_queue_and_remote_open_decision
+  exit $?
+fi
+
 if [ "${FM_TEST_ONLY:-}" = state-removal ]; then
   test_watcher_exits_when_its_state_directory_is_removed
   test_watcher_exits_when_its_state_directory_is_removed recovery

@@ -4,6 +4,9 @@
 Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND [HOME CONFIG]
        python3 fm-worker-processes.py cleanup-meta STATE/TASK.meta
        python3 fm-worker-processes.py sample STATE
+       python3 fm-worker-processes.py footprint STATE
+       python3 fm-worker-processes.py park-safe STATE/TASK.meta
+       python3 fm-worker-processes.py park-gone STATE/TASK.meta
 
 Spawn records process_scope=STATE/TASK:spawn_gen and runs this wrapper with
 FM_WORKER_PROCESS_SCOPE set to that value, after environment filtering.
@@ -26,6 +29,12 @@ Spawn passes HOME and CONFIG explicitly, including when STATE is elsewhere;
 standalone callers may omit them for the standard HOME/state layout.
 sample appends one worker.procs diagnostic event (bin/fm-diag.sh) per live
 scope under STATE: its processes, the zombies they have not reaped, and RSS.
+footprint prints one "<task> <rss-kb>" line per live scope under STATE whose
+task metadata still records that exact process_scope: the resident memory of
+the lane's whole process tree, read through the same per-platform ownership
+adapter. bin/fm-capacity.sh owns how admission uses it.
+park-safe returns 0 for a verified idle process tree, 1 for extra work, and
+2 when the scope or platform cannot establish that fact.
 """
 
 import ctypes
@@ -197,7 +206,8 @@ def run(scope, command, home=None, config=None):
                 pass
 
 
-def sample(state):
+def usage(state):
+    """Yield (task, meta, procs, zombies, rss_kb) for each live scope under STATE."""
     probe = subprocess.run(["ps", "-axo", "pid=,ppid=,uid=,stat=,rss="], capture_output=True, text=True, check=True)
     rows = {}
     for line in probe.stdout.splitlines():
@@ -219,21 +229,87 @@ def sample(state):
                 break
             members = grown
         task = scope.rsplit(":", 1)[0].rsplit("/", 1)[-1]
-        meta = Path(state) / f"{task}.meta"
-        harness = ""
-        if meta.is_file():
-            harness = next((line[8:] for line in meta.read_text().splitlines() if line.startswith("harness=")), "")
+        path = Path(state) / f"{task}.meta"
+        meta = {}
+        if path.is_file():
+            meta = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
         zombies = sum(1 for parent, stat, _ in rows.values() if stat.startswith("Z") and parent in members)
-        rss_mb = sum(rows[pid][2] for pid in members) // 1024
+        yield scope, task, meta, len(members), zombies, sum(rows[pid][2] for pid in members)
+
+
+def sample(state):
+    for _, task, meta, procs, zombies, rss_kb in usage(state):
         subprocess.run(["bash", str(Path(__file__).resolve().parent / "fm-diag.sh"), "emit", "worker.procs", f"task={task}",
-                        f"harness={harness}", f"procs={len(members)}", f"zombies={zombies}", f"rss_mb={rss_mb}"],
+                        f"harness={meta.get('harness', '')}", f"procs={procs}", f"zombies={zombies}", f"rss_mb={rss_kb // 1024}"],
                        stdin=subprocess.DEVNULL, timeout=10)
     return 0
 
 
+def footprint(state):
+    for scope, task, meta, _, _, rss_kb in usage(state):
+        if meta.get("process_scope") == scope:
+            print(task, rss_kb)
+    return 0
+
+
+def park_safe(path, gone=False):
+    """Return success only for a verified idle worker process tree on Linux."""
+    if sys.platform != 'linux':
+        return 2
+    try:
+        path = Path(path)
+        meta = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
+        scope = meta['process_scope']
+        if scope != f"{path.parent.resolve()}/{path.stem}:{meta['spawn_gen']}":
+            return 2
+        members = owned(scope)
+        if gone:
+            return 1 if members else 0
+        rows = snapshot()
+        names = {pid: Path(f'/proc/{pid}/comm').read_text().strip() for pid in members}
+        wrappers = []
+        for pid in members:
+            args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+            if any(arg.endswith(b'/fm-worker-processes.py') for arg in args) and b'run' in args and os.fsencode(scope) in args:
+                wrappers.append(pid)
+        if len(wrappers) != 1:
+            return 2
+        wrapper = wrappers[0]
+        children = lambda pid: [p for p in members if rows[p][0] == pid]
+        shells = children(wrapper)
+        if len(shells) != 1 or names[shells[0]] not in ('sh', 'bash'):
+            return 1
+        agents = children(shells[0])
+        family = subprocess.run(
+            ['bash', '-c', '. "$1"; fm_control_harness_family "$2"', '_',
+             str(Path(__file__).resolve().parent / 'fm-control-lib.sh'), meta.get('harness', '')],
+            capture_output=True, text=True, timeout=10)
+        if family.returncode:
+            return 2
+        harness = family.stdout
+        if len(agents) != 1 or names[agents[0]] != harness or harness not in ('codex', 'claude'):
+            return 1
+        agent = agents[0]
+        allowed = {wrapper, shells[0], agent}
+        # Codex's persistent code-mode server is idle only when it has no child.
+        for pid in children(agent):
+            if harness != 'codex' or names[pid] != 'codex-code-mode' or children(pid):
+                return 1
+            allowed.add(pid)
+        return 0 if set(members) == allowed else 1
+    except (OSError, KeyError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+        return 2
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == 'park-safe':
+        return park_safe(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == 'park-gone':
+        return park_safe(sys.argv[2], gone=True)
     if len(sys.argv) == 3 and sys.argv[1] == "sample":
         return sample(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == "footprint":
+        return footprint(sys.argv[2])
     if len(sys.argv) in (4, 6) and sys.argv[1] == "run":
         scope = sys.argv[2]
         if os.environ.get(KEY[:-1].decode()) != scope:

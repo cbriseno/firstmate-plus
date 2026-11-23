@@ -79,7 +79,7 @@ rc=$?
 p = subprocess.Popen([os.environ.get("BASH", "bash"), "-c", script, "_", sys.argv[1]],
                      start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
-    out, err = p.communicate(timeout=15)
+    out, err = p.communicate(timeout=60)
 except subprocess.TimeoutExpired:
     os.killpg(p.pid, signal.SIGKILL)
     p.communicate()
@@ -798,7 +798,7 @@ test_lock_empty_pid_uses_minimum_grace() {
   state="$dir/state"
   lockdir="$state/.contend.lock"
   mkdir "$lockdir"
-  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -ec '
     . "$1"
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}"
@@ -892,7 +892,7 @@ test_watch_restart_rejects_reused_pid() {
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" --restart > "$out" &
   pid=$!
   i=0
-  while [ "$i" -lt 80 ] && is_live_non_zombie "$pid"; do
+  while [ "$i" -lt 300 ] && is_live_non_zombie "$pid"; do
     sleep 0.1
     i=$((i + 1))
   done

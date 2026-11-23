@@ -709,9 +709,26 @@ def presentation_fields(value):
         if key == 'progress':
             if text is None:
                 continue
-            if (not isinstance(text, dict) or set(text) != {'steps'}
+            if (not isinstance(text, dict) or set(text) - {'steps', 'deliverables'} or 'steps' not in text
                     or not isinstance(text['steps'], list) or not 1 <= len(text['steps']) <= 30):
                 raise ValueError('progress requires 1..30 declared steps')
+            if 'deliverables' in text:
+                paths = text['deliverables']
+                if not isinstance(paths, list) or len(paths) > 30:
+                    raise ValueError('deliverables must be a list of up to 30 files')
+                seen = set()
+                for item in paths:
+                    if (not isinstance(item, dict) or set(item) != {'root', 'path'}
+                            or item['root'] not in ('worktree', 'data')
+                            or not isinstance(item['path'], str) or not item['path']
+                            or len(item['path']) > 512
+                            or any(part in ('', '.', '..') for part in item['path'].split('/'))
+                            or any(ord(c) < 32 or ord(c) == 127 for c in item['path'])):
+                        raise ValueError('deliverables require relative worktree or data file paths')
+                    entry = (item['root'], item['path'])
+                    if entry in seen:
+                        raise ValueError('duplicate deliverable')
+                    seen.add(entry)
             for step in text['steps']:
                 if (not isinstance(step, dict) or set(step) - {'label', 'state', 'gate'}
                         or not {'label', 'state'} <= set(step)
@@ -729,11 +746,19 @@ def presentation_fields(value):
     return value
 
 
+def presentation_root(home, data=None):
+    base = Path(os.path.abspath(data)) if data else home / 'data'
+    if os.path.commonpath((str(home), str(base))) == str(home):
+        return home
+    return base.resolve(strict=True)
+
+
 def presentation_path(home, task_id, data=None):
     if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', task_id):
         raise ValueError('invalid presentation task identity')
     base = os.path.abspath(data) if data else str(home / 'data')
-    parts = parts_in_home(home, base)
+    root = presentation_root(home, data)
+    parts = parts_in_home(root, base) if root == home else []
     return '/'.join(parts + [task_id, 'presentation.json'])
 
 
@@ -741,7 +766,7 @@ def read_presentation(home, task_id, data=None, verify=True, reader=read_text):
     empty = dict.fromkeys(k for k in PRESENTATION_FIELDS if k != 'installed_at')
     try:
         path = presentation_path(home, task_id, data)
-        value = json.loads(reader(home, path, 32768))
+        value = json.loads(reader(presentation_root(home, data), path, 32768))
         if not isinstance(value, dict):
             raise ValueError('presentation declaration must be an object')
         if (value.get('schema') != 'fm-task-presentation.v1' or value.get('home') != str(home)
@@ -761,7 +786,7 @@ def read_presentation(home, task_id, data=None, verify=True, reader=read_text):
         view, _ = reconcile_progress(home, task_id, fields, record, reader, verify)
         return dict(presentation=dict(empty, **fields), outcome_occurrence=occurrence, progress_record=record, lifecycle=view,
                     evidence=dict(source=value['source'], observed_at=value['observed_at'],
-                                  current_state=False, path=path, available=True))
+                                  current_state=False, path=path if presentation_root(home, data) == home else str(presentation_root(home, data) / path), available=True))
     except FileNotFoundError:
         view, _ = reconcile_progress(home, task_id, empty, None, reader, verify)
         return dict(presentation=empty, evidence=None, progress_record=None, lifecycle=view)
@@ -1064,11 +1089,12 @@ def presentation(home, args):
         if args.task or patch or args.clear or args.presentation_file or args.repair or args.reconcile or args.replan:
             raise ValueError('--groups is a home-wide read; it takes no task or field flags')
         return presentation_groups(home, args.data)
+    root = presentation_root(home, args.data)
     path = presentation_path(home, args.task, args.data)
     if args.repair and not args.presentation_file:
         raise ValueError('--repair requires a separate --presentation-file')
     if args.presentation_file:
-        target = home / path
+        target = root / path
         input_path = Path(args.presentation_file)
         if (input_path.resolve() == target.resolve()
                 or (input_path.exists() and target.exists() and os.path.samefile(input_path, target))):
@@ -1103,8 +1129,8 @@ def presentation(home, args):
     if retained and not any(row['id'] == args.task for row in
                             retained_history(home, include_non_deliveries=True)['records']):
         raise ValueError('presentation write needs an exact task from the backlog owner')
-    folder = home
-    for part in parts_in_home(home, path)[:-1]:
+    folder = root
+    for part in parts_in_home(root, path)[:-1]:
         folder = folder / part
         if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
             raise ValueError('unsafe presentation task directory')
@@ -1120,7 +1146,7 @@ def presentation(home, args):
                 raise ValueError('invalid existing declaration; use --repair with a separate --presentation-file')
             # A deliberate repair preserves the bounded regular source exactly;
             # unsafe paths and unreadable sources remain refusals, not overwrites.
-            original = read_text(home, path, 32768).encode('utf-8')
+            original = read_text(root, path, 32768).encode('utf-8')
             fd, backup = tempfile.mkstemp(prefix='.presentation-invalid.', suffix='.json', dir=folder)
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(original)
@@ -1173,7 +1199,7 @@ def presentation(home, args):
             with os.fdopen(fd, 'w') as stream:
                 json.dump(value, stream, ensure_ascii=False)
                 stream.write('\n')
-            os.replace(temp, home / path)
+            os.replace(temp, root / path)
             result = dict(id=args.task, **read_presentation(home, args.task, args.data))
             fleet_event(home, 'task.presentation', args.task, result)
         finally:

@@ -9,16 +9,21 @@ The owning watcher starts the command; NAME must be unique within this task.
 STATE/TASK.jobs/NAME.json records pending/starting/running/done/failed, PID and exit code;
 NAME.log holds redacted combined output. Poll the record before taking a safe
 point, record it in the relay note, and wait for completion before task teardown.
-Jobs survive conversation relaunch, not machine restart or task teardown.
+Jobs survive conversation relaunch, not machine restart or task teardown;
+--dispatch removes TASK.jobs once TASK.meta is gone and no autodispatch
+retry (the one job submitted before TASK.meta exists) is pending or running.
 Temporary children should continue using the normal worker process scope.
-Internal: --dispatch STATE (owning watcher), --run RECORD (outside worker scope).
+Internal: --dispatch STATE (owning watcher), --run RECORD (outside worker scope),
+--autodispatch STATE TASK HOME CONFIG (queued allocation retry).
 """
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parent
 
@@ -30,7 +35,37 @@ def write(path, value):
 
 
 def main():
+    if sys.argv[1] == '--autodispatch':
+        _, _, state, task, home, config = sys.argv
+        if not re.fullmatch(r'[a-zA-Z0-9_-][a-zA-Z0-9._-]*', task):
+            raise ValueError('invalid task name')
+        directory = Path(state) / (task + '.jobs')
+        directory.mkdir(exist_ok=True)
+        for path in directory.glob('autodispatch-*.json'):
+            previous = json.loads(path.read_text())
+            if previous.get('kind') == 'autodispatch' and previous.get('state') in ('pending', 'starting', 'running'):
+                return
+        env = {k: os.environ[k] for k in ('PATH', 'HOME', 'TMPDIR', 'GOTMPDIR', 'LANG') if k in os.environ}
+        item = dict(kind='autodispatch', state='pending',
+                    argv=['bash', str(ROOT / 'fm-autodispatch-retry.sh'), task, home, state, config],
+                    cwd=str(ROOT.parent), env=env)
+        fd, stage = tempfile.mkstemp(prefix='.autodispatch-', suffix='.submit', dir=directory)
+        path = directory / (Path(stage).name[1:-len('.submit')] + '.json')
+        try:
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(item, stream)
+            os.link(stage, path)
+        finally:
+            os.unlink(stage)
+        return
     if sys.argv[1] == '--dispatch':
+        for directory in Path(sys.argv[2]).glob('*.jobs'):
+            # Only a queued autodispatch retry runs before TASK.meta exists, so
+            # without TASK.meta and without a live retry the task was torn down.
+            if not (directory.parent / (directory.name[:-5] + '.meta')).exists() and not any(
+                    item.get('kind') == 'autodispatch' and item.get('state') in ('pending', 'starting', 'running')
+                    for item in (json.loads(path.read_text()) for path in directory.glob('*.json'))):
+                shutil.rmtree(directory)
         for path in Path(sys.argv[2]).glob('*.jobs/*.json'):
             item = json.loads(path.read_text())
             if item['state'] != 'pending':

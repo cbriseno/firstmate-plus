@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Self-update a running firstmate and its secondmates to the latest origin.
 #
-# Mechanical half of the /updatefirstmate skill. Fast-forwards the running
-# firstmate repo's default branch from origin, then fast-forwards every
+# Mechanical half of the /updatefirstmate skill. Updates the running
+# firstmate repo from origin, preserving its local work, then fast-forwards every
 # registered secondmate home. Local homes are treehouse worktrees or standalone
 # clones; remote routes update their configured code root on that host and then
 # fast-forward the persistent home to that root. FAST-FORWARD ONLY, exactly like
-# fm-fleet-sync.sh: never force, never create a merge commit, never stash.
+# fm-fleet-sync.sh for secondmates. The primary may save tracked changes and
+# merge origin when it has local work; conflicts leave that work preserved.
 # A secondmate divergence whose complete local tree result is already present at
 # the target is reconciled with reset --keep; every other unsafe target is
 # skipped and reported, with divergence recorded durably by fm-ff-lib.sh.
@@ -72,6 +73,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
+# shellcheck source=bin/fm-update-local-lib.sh
+. "$SCRIPT_DIR/fm-update-local-lib.sh"
 # shellcheck source=bin/fm-secondmate-restart-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-restart-lib.sh"
 
@@ -88,7 +91,10 @@ fi
 # --- main firstmate repo ---------------------------------------------------
 
 reread_firstmate="no"
-ff_target "$FM_ROOT" "firstmate" origin no no
+ff_target "$FM_ROOT" "firstmate" origin no no "" "" yes
+if [ "$FF_REASON" = dirty ] || [ "$FF_REASON" = diverged ]; then
+  update_primary_local "$FM_ROOT" "origin/$(default_branch "$FM_ROOT")" || true
+fi
 if [ "$FF_STATUS" = "updated" ]; then
   if [ -n "$FF_INSTR" ]; then
     reread_firstmate="yes"
@@ -102,6 +108,11 @@ if [ "$FF_STATUS" = "updated" ]; then
   # always where this very script file happens to live (FM_ROOT_OVERRIDE, as
   # this test suite uses to point fm-update.sh at a fixture checkout).
   FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-procevent-when.sh" rebind-all || true
+fi
+
+# Import this home's historical nudge table once, when present.
+if { [ "$FF_STATUS" = "updated" ] || [ "$FF_STATUS" = "current" ]; } && [ -f "$FM_ROOT/bin/fm_nudge.py" ]; then
+  FM_HOME="$FM_HOME" python3 "$FM_ROOT/bin/fm_nudge.py" import-legacy
 fi
 
 # --- secondmates -----------------------------------------------------------

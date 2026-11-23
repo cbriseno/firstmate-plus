@@ -1169,8 +1169,8 @@ test_spawn_fallback_chain_and_crew_scout_unaffected() {
   [ "$(meta_field "$meta" effort)" = default ] || fail "fallback: meta effort should stay default with no tokens anywhere"
 
   # Crew/scout launch: same crew-harness config, no --secondmate. Must resolve
-  # the crew harness and record no model/effort - this codepath must never read
-  # config/secondmate-harness's tokens at all.
+  # the crew harness and preserve its explicit profile - this codepath must not
+  # read config/secondmate-harness's tokens at all.
   id="crew-unaffected-z1"
   home="$w/home"
   proj="$w/crew-project"
@@ -1192,15 +1192,15 @@ EOF
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_LAUNCH_LOG="$launchlog" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" --mode no-mistakes --yolo off >/dev/null 2>&1
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" --model crew-test --effort high --mode no-mistakes --yolo off >/dev/null 2>&1
   meta="$home/state/$id.meta"
   [ "$(meta_field "$meta" kind)" = ship ] || fail "crew-unaffected: expected an ordinary ship task"
   [ "$(meta_field "$meta" harness)" = codex ] || fail "crew-unaffected: crew harness resolution changed"
-  [ "$(meta_field "$meta" model)" = default ] || fail "crew-unaffected: crew task must not invent a model"
-  [ "$(meta_field "$meta" effort)" = default ] || fail "crew-unaffected: crew task must not invent an effort"
+  [ "$(meta_field "$meta" model)" = crew-test ] || fail "crew-unaffected: crew model changed"
+  [ "$(meta_field "$meta" effort)" = high ] || fail "crew-unaffected: crew effort changed"
   launch=$(cat "$launchlog")
-  assert_not_contains "$launch" "--model" "crew-unaffected: crew launch must not carry a --model flag"
-  assert_not_contains "$launch" "--effort" "crew-unaffected: crew launch must not carry an --effort flag"
+  assert_contains "$launch" "crew-test" "crew-unaffected: crew launch lost its selected model"
+  assert_contains "$launch" 'model_reasoning_effort="high"' "crew-unaffected: crew launch lost its selected effort"
   pass "C9 spawn: the harness fallback chain still resolves with no tokens; crew/scout launches are unaffected by this feature"
 }
 

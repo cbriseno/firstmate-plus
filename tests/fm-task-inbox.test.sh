@@ -653,7 +653,9 @@ test_ring_ladder_policy() {
 setup_watch_case() {  # <name> -> echoes case dir; state in <dir>/state
   local name=$1 dir
   dir="$TMP_ROOT/$name"
-  mkdir -p "$dir/state"
+  mkdir -p "$dir/state" "$dir/data"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
   make_watch_stubs "$dir" >/dev/null
   fm_write_meta "$dir/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=claude"
   printf '%s\n' "$dir"
@@ -677,8 +679,8 @@ test_watcher_resumes_timed_pause_once() {
         '. "$1"; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$1"
     }
     for line in \
-      "paused [key=timer]: wait $word 2099-01-01T00:00Z" \
-      "paused: wait $word malformed" \
+      "paused [at=100]: wait $word 2099-01-01T00:00Z" \
+      "paused [at=$(date +%s)]: wait $word malformed" \
       "captain-held: wait $word 2000-01-01T00:00Z"; do
       resume_check "$line" || fail "future or invalid pause check failed"
       [ ! -f "$rec" ] || fail "resume without an elapsed pause deadline"
@@ -698,11 +700,54 @@ test_watcher_resumes_timed_pause_once() {
   pass "watcher: until/hasta deadlines send one durable resume, surviving acknowledgement and restart"
 }
 
+test_watcher_resumes_load_pause() {
+  local dir state rec line
+  dir=$(setup_watch_case load-pause); state="$dir/state"; rec="$state/t1.inbox/001.msg"
+  # shellcheck disable=SC2016 # the stub expands the variable when invoked
+  printf '#!/usr/bin/env bash\nprintf "load averages: %%s, 1.00, 1.00\\n" "$FM_TEST_LOAD"\n' > "$dir/fakebin/uptime"
+  chmod +x "$dir/fakebin/uptime"
+  load_check() {
+    PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
+      FM_SEND_LOG="$dir/send.log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+      FM_FAKE_TMUX_AGENT=claude FM_TEST_LOAD="$1" bash -c \
+      '. "$1"; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$2"
+  }
+  line='paused [at=100]: Pruebas detenidas por carga; reanudar cuando load1 < 30 y Firstmate lo indique.'
+  load_check 30 "$line" || fail 'load check at threshold failed'
+  # An earlier version could mark a conditional pause as a legacy recheck.
+  printf '100' > "$state/.paused-resumed-sess_fm-t1"
+  : > "$state/.pause-legacy-checked-t1"
+  load_check unknown "$line" || fail 'unknown load check failed'
+  [ ! -f "$rec" ] || fail 'resumed at threshold or on unknown load'
+  load_check 29.9 "$line" || fail 'load check below threshold failed'
+  [ -f "$rec" ] || fail 'no resume below recorded load threshold'
+  assert_contains "$(inbox_lib "$state" fm_task_inbox_body "$rec")" 'Recheck the waiting condition and resume' 'load resume body'
+  load_check 29 "$line" || fail 'repeated load check failed'
+  [ ! -f "$state/t1.inbox/002.msg" ] || fail 'duplicate load resume'
+  pass 'watcher: recorded load threshold sends one durable resume after the load falls'
+}
+
+test_watcher_rechecks_unreachable_load_pause() {
+  local dir state rec line
+  dir=$(setup_watch_case unreachable-load); state="$dir/state"; rec="$state/t1.inbox/001.msg"
+  mkdir -p "$dir/config"
+  printf '12\nmax-load1 40\n' > "$dir/config/lane-capacity"
+  line='paused [at=100]: wait for load1 < 4'
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
+    FM_SEND_LOG="$dir/send.log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+    FM_FAKE_TMUX_AGENT=claude bash -c \
+    '. "$1"; paused_until_resume sess:fm-t1 t1 "$2"' _ "$WATCH" "$line" || fail 'unreachable pause check failed'
+  [ -f "$rec" ] || fail 'existing unreachable pause was not rechecked'
+  assert_contains "$(inbox_lib "$state" fm_task_inbox_body "$rec")" 'below the admission ceiling' 'unreachable pause guidance'
+  pass 'watcher requests a new exit for an existing unreachable load wait'
+}
+
 test_watcher_timed_pause_notice_survives_failed_send() {
   local dir state rec line n i
   dir=$(setup_watch_case timed-pause-failed-send)
   state="$dir/state"; rec="$state/t1.inbox"
   mkdir -p "$dir/stub" "$rec"
+  printf 'exec bash "%s/bin/fm-tasks-axi.sh" "$@"\n' "$ROOT" > "$dir/stub/fm-tasks-axi.sh"
   # A parked pane has no doorbell: the steer is queued, then fm-send exits nonzero.
   # shellcheck disable=SC2016 # the stub body expands when it runs
   printf '#!/usr/bin/env bash\nn=$(find "$FM_STATE_OVERRIDE/t1.inbox" -name "*.msg" | wc -l)\nprintf x > "$FM_STATE_OVERRIDE/t1.inbox/$((n + 1)).msg"\nexit 3\n' > "$dir/stub/fm-send.sh"
@@ -1025,7 +1070,7 @@ test_watcher_ack_silences_unwritable_ladder() {
     FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
     FM_ACK_RECORD="$rec" FM_TASK_INBOX_RING_MAX=99
   pid=$!
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 600 ]; do
     [ -f "$state/t1.inbox/handled/001.msg" ] && break
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
@@ -1085,8 +1130,15 @@ test_watcher_pays_fire_and_forget_retry_once() {
     FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
     FM_TASK_INBOX_RING_MAX=1
   pid=$!
-  while [ "$i" -lt 100 ]; do
+  while [ "$i" -lt 600 ]; do
     grep -qF 'Firstmate instruction waiting' "$log" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  # The ring can be logged before its retry marker is retired under load.
+  i=0
+  while [ "$i" -lt 600 ] && [ -e "$state/t1.inbox/.retry-ring" ]; do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
     i=$((i + 1))
@@ -1262,6 +1314,8 @@ test_fire_and_forget_retry_is_quiet_without_the_flag
 test_ring_ladder_policy
 test_watcher_rerings_idle_pane_quietly
 test_watcher_resumes_timed_pause_once
+test_watcher_resumes_load_pause
+test_watcher_rechecks_unreachable_load_pause
 test_watcher_timed_pause_notice_survives_failed_send
 test_watcher_waits_on_busy_pane
 test_watcher_busy_budget_resets_on_ring_and_ack

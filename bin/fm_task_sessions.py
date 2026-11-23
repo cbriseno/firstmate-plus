@@ -9,6 +9,8 @@ keep null. sessions_file in task metadata selects data/<id>/sessions.jsonl,
 which teardown leaves intact. Repeated callbacks do not add duplicate sessions.
 New launch rows also carry project (the recorded path, null for host), launch
 (spawn generation), status (active or archived), and reason (null when bound).
+model and effort retain the requested values; observed_model and observed_effort
+hold transcript observations or null when the harness has not recorded them.
 start archives earlier active launches of this task; exit alone does not archive
 its resumable chat. Historical rows are retained unchanged, never guessed active.
 list HOME [--task ID | --project PATH] [--status active|archived|unknown] reads
@@ -82,6 +84,45 @@ def diagnostic(task, harness, result, reason):
         pass
 
 
+def observed_profile(harness, session):
+    """Read what the harness recorded, without guessing from a launch alias."""
+    model = effort = requested_model = None
+    if not session:
+        return model, effort
+    try:
+        if not Path(session).is_file():
+            return model, effort
+        with Path(session).open(encoding="utf-8", errors="replace") as stream:
+            for _, line in zip(range(60), stream):
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if harness == "claude":
+                    if row.get("type") == "assistant":
+                        model = model or (row.get("message") or {}).get("model")
+                    if row.get("type") == "api-request":
+                        params = row.get("params") or {}
+                        requested_model = requested_model or params.get("model")
+                        effort = effort or params.get("effort") or (params.get("output_config") or {}).get("effort")
+                elif harness == "codex" and row.get("type") == "turn_context":
+                    params = row.get("payload") or {}
+                    model = model or params.get("model")
+                    effort = effort or params.get("effort") or params.get("reasoning_effort")
+    except OSError:
+        pass
+    return model or requested_model, effort
+
+
+def profile_observation(row):
+    model, effort = observed_profile(row.get("harness"), row.get("session"))
+    row["observed_model"] = model or row.get("observed_model")
+    row["observed_effort"] = effort or row.get("observed_effort")
+    return row
+
+
 def record(state, task, session=None, gen=None, reason=None):
     meta = metadata(state, task)
     if "sessions_file" not in meta:
@@ -109,9 +150,11 @@ def record(state, task, session=None, gen=None, reason=None):
                        status="active", launch=launch, reason="awaiting-transcript")
         rows.append(current)
     if session:
-        if current.get("session") == session:
-            return
+        previous = dict(current)
         current.update(session=session, reason=None)
+        profile_observation(current)
+        if current == previous:
+            return
     elif reason:
         if current.get("session") or current.get("reason") == reason:
             return
@@ -136,6 +179,7 @@ def list_sessions(home, task=None, project=None, status=None):
             continue
         for line in path.read_text().splitlines():
             row = json.loads(line)
+            profile_observation(row)
             row.setdefault("project", None)
             row.setdefault("status", "unknown")
             row.setdefault("reason", None if row.get("session") else "legacy-unrecorded")
@@ -242,14 +286,7 @@ def diagnose(home, claude, codex, selected=None):
             if own and not selected:
                 for task in own:
                     info.setdefault(task, dict(starts=[], meta={}, anchors=[]))
-            model = effort = None
-            for row in rows:
-                params = (row.get("params") if harness == "claude" else row.get("payload")) or {}
-                if row.get("type") in ("api-request", "turn_context"):
-                    model = model or params.get("model")
-                    effort = effort or params.get("effort") or params.get("reasoning_effort") or (params.get("output_config") or {}).get("effort")
-                if row.get("type") == "assistant":
-                    model = model or (row.get("message") or {}).get("model")
+            model, effort = observed_profile(harness, path)
             session = dict(harness=harness, model=model, effort=effort,
                 started_at=next((r["timestamp"] for r in rows if r.get("timestamp")), None), session=str(path.resolve()))
             transcripts.append((session, explicit, "worker-contract" if own else "cwd-task-id"))
@@ -320,9 +357,12 @@ def recover(home, review, backup, live):
             if len(placeholders) == 1:
                 placeholder = placeholders[0]
                 rows.remove(placeholder)
+                requested_model = placeholder.get("requested_model") or placeholder.get("model")
                 row = dict(placeholder, session=row["session"], reason=None,
                     model=row.get("model") or placeholder.get("model"),
                     effort=row.get("effort") or placeholder.get("effort"), recovery=row["recovery"])
+                if requested_model and requested_model != row.get("model"):
+                    row["requested_model"] = requested_model
             rows.append(row)
             changed = True
         if changed:

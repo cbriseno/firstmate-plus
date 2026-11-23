@@ -14,7 +14,14 @@ set -eu
 fm_live_gate opt-in FM_CODEX_ACTIVITY_LIVE codex tmux python3
 
 version=$(codex --version 2>/dev/null)
-[ "$version" = 'codex-cli 0.166.0' ] || fail "Codex activity guard needs refreshed evidence for $version"
+case "$version" in
+  'codex-cli 0.166.0') ;;
+  'codex-cli 0.169.0')
+    [ "${FM_CODEX_ACTIVITY_NOTIFY_ONLY:-0}" = 1 ] \
+      || fail "$version: use FM_CODEX_ACTIVITY_NOTIFY_ONLY=1; the tmux fixture cannot submit its follow-up turns on this version"
+    ;;
+  *) fail "Codex activity guard needs refreshed evidence for $version" ;;
+esac
 [ "$(uname -s)" = Linux ] || fail "$version: native rollout ownership needs Linux /proc"
 TMP_ROOT=$(fm_test_tmproot fm-codex-activity-live)
 activity_home="$TMP_ROOT/home"
@@ -34,7 +41,7 @@ auth="${CODEX_HOME:-$HOME/.codex}/auth.json"
 [ -f "$auth" ] || fail "Codex $version: this private guard needs a readable auth.json; no credential-store changes made"
 mkdir -p "$TMP_ROOT/codex"
 install -m 600 "$auth" "$TMP_ROOT/codex/auth.json"
-FM_ACTIVITY_ROOT="$ROOT" FM_ACTIVITY_LAB="$TMP_ROOT" \
+FM_ACTIVITY_ROOT="$ROOT" FM_ACTIVITY_LAB="$TMP_ROOT" FM_ACTIVITY_VERSION="$version" \
   python3 "$ROOT/tests/fixtures/codex-activity-live.py"
 
 jq -e -s 'any(.[]; .event == "agent.activity" and .value.source == "codex-notify" and .value.state == "idle")' \

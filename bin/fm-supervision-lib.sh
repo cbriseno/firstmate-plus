@@ -91,7 +91,6 @@ fm_supervision_relay_handoff() {
 # Always returns 0; callers read the vars, or use fm_supervision_unhealthy below.
 fm_supervision_status() {
   local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} meta source check id beat m age lavish_status lavish_script lavish_home snapshot owner home
-  FM_SUP_IN_FLIGHT=0
   FM_SUP_NEEDED=false
   FM_SUP_WATCHER_FRESH=false
   FM_SUP_BEACON_DESC=never
@@ -111,15 +110,16 @@ fm_supervision_status() {
   if [ "$#" -gt 0 ] && [ -x "$owner" ]; then
     snapshot=$(FM_HOME="$home" bash "$owner" work supervision --tasks "$@" 2>/dev/null) || snapshot=
   fi
-  for id in "$@"; do
-    if [ -n "$snapshot" ] && printf '%s' "$snapshot" | jq -e --arg id "$id" '
-      .schema == "fm-work-supervision.v1" and
-      ([.tasks[] | select(.id == $id and .needed == false)] | length == 1)
-    ' >/dev/null 2>&1; then
-      continue
-    fi
-    FM_SUP_IN_FLIGHT=$((FM_SUP_IN_FLIGHT + 1))
-  done
+  FM_SUP_IN_FLIGHT=$#
+  if [ -n "$snapshot" ]; then
+    FM_SUP_IN_FLIGHT=$(printf '%s' "$snapshot" | jq -ers --args '
+      select(length == 1) | .[0] | select(.schema == "fm-work-supervision.v1")
+      | reduce (.tasks[] | select(.needed == false and (.id | type) == "string")) as $task
+          ({}; .[$task.id] += 1)
+      | . as $exemptions
+      | [$ARGS.positional[] | select($exemptions[.] != 1)] | length
+    ' -- "$@" 2>/dev/null) || FM_SUP_IN_FLIGHT=$#
+  fi
   FM_SUP_SOURCES=0
   for source in "$state"/procevent/*.source; do
     [ -e "$source" ] || continue

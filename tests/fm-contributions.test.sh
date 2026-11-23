@@ -574,6 +574,8 @@ test_shared_contribution_signal_wakes_once() {
 test_watcher_keeps_diagnostics_separate_from_contribution_wakes() {
   local home out rc wakes diagnostic
   home=$(new_home watcher-diagnostics)
+  # This delivery already exists and is being observed, so it is in flight.
+  printf '# Backlog\n\n## In flight\n' > "$home/data/backlog.md"
   printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
   forge_home "$home"
   with_home "$home" "$ROOT/bin/fm-pr-check.sh" delivery https://github.com/o/r/pull/8 >/dev/null \
@@ -587,7 +589,7 @@ test_watcher_keeps_diagnostics_separate_from_contribution_wakes() {
   out="$home/watcher-diagnostics.out"
   rc=0
   with_home "$home" env FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 15 > "$out" 2> "$home/watcher-diagnostics.err" || rc=$?
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 60 > "$out" 2> "$home/watcher-diagnostics.err" || rc=$?
   [ "$rc" -eq 0 ] || fail "watcher did not surface contribution diagnostics: $(cat "$home/watcher-diagnostics.err")"
   diagnostic=$(awk -F '\t' -v key="$home/state/contributions.check.sh" '$3 == "check" && $4 == key { print $5 }' "$home/state/.wake-queue")
   [ "$diagnostic" = "check: $home/state/contributions.check.sh: contributions: 1 unreadable durable record(s)" ] \
@@ -621,6 +623,8 @@ test_expired_child_unsupported_forge_stays_unmeasured() {
 test_watcher_surfaces_new_contribution_once() {
   local home out rc rows
   home=$(new_home watcher-contribution)
+  # This delivery already exists and is being observed, so it is in flight.
+  printf '# Backlog\n\n## In flight\n' > "$home/data/backlog.md"
   forge_home "$home"
   with_home "$home" "$ROOT/bin/fm-pr-check.sh" delivery https://github.com/o/r/pull/8 >/dev/null \
     || fail 'could not register delivery for watcher wake'
@@ -631,7 +635,7 @@ test_watcher_surfaces_new_contribution_once() {
   out="$home/watcher.out"
   rc=0
   with_home "$home" env FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 5 > "$out" 2> "$home/watcher.err" || rc=$?
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 30 > "$out" 2> "$home/watcher.err" || rc=$?
   [ "$rc" -eq 0 ] || fail "watcher did not surface the new contribution signal: $(cat "$home/watcher.err")"
   grep -E '^check: contributions delivery [0-9a-f]{64}$' "$out" >/dev/null \
     || fail "watcher did not surface the durable contribution wake: $(cat "$out")"

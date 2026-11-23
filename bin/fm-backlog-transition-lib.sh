@@ -38,10 +38,9 @@
 # with no `.tasks.toml` gets tasks-axi's built-in defaults.
 # bin/fm-tasks-axi-lib.sh owns backend precedence and configuration failures.
 #
-# CRASH RECOVERY. Only teardown needs a durable record: it removes the meta and
-# with it the completion links, so a process killed between the two halves would
-# leave nothing to reconstruct the close from. It writes
-# `state/<id>.backlog-close` first, and removes it once the close lands.
+# CRASH RECOVERY. Teardown writes `state/<id>.backlog-close` before destructive
+# cleanup so it can replay the close if interrupted. It applies the backlog
+# transition before retiring the task records, then removes the marker last.
 # The writer and replay share one complete-record validator, and teardown stages
 # that record before destructive cleanup, so it never publishes or acts on a close
 # replay would reject. The validator pins the data path to this home's configured
@@ -498,6 +497,99 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   return 0
 }
 
+# Section-aware extraction from a .tasks.toml: only the named keys inside the
+# named section, comments stripped. Prints "<key> <value>" lines.
+fm_backlog_toml_section_entries() {  # <toml-file> <section> <key-alternation>
+  [ -f "$1" ] || return 0
+  LC_ALL=C awk -v section="[$2]" -v keys="^($3)[[:space:]]*=" '
+    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    BEGIN { insection = 0 }
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      line = trim(line)
+      if (line ~ /^\[[^]]+\]$/) { insection = (line == section); next }
+      if (!insection) next
+      if (line ~ keys) {
+        key = line
+        sub(/[[:space:]]*=.*/, "", key)
+        sub(/^[^=]*=[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
+        printf "%s %s\n", key, line
+      }
+    }
+  ' "$1"
+}
+
+# The [markdown] archive key tasks-axi would honour, resolved with tasks-axi's
+# own source precedence: the backlog root's .tasks.toml first, then the
+# user-level $HOME/.tasks-axi/config.toml. Empty when neither sets it; a relative
+# value resolves against the backlog root wherever it was configured, the way
+# tasks-axi resolves it.
+fm_backlog_markdown_archive_setting() {  # <backlog-root>
+  local root=$1 archive
+  archive=$(fm_backlog_toml_section_entries "$root/.tasks.toml" markdown archive | sed -n 's/^archive //p' | head -1)
+  if [ -z "$archive" ] && [ -n "${HOME:-}" ]; then
+    archive=$(fm_backlog_toml_section_entries "$HOME/.tasks-axi/config.toml" markdown archive | sed -n 's/^archive //p' | head -1)
+  fi
+  printf '%s\n' "$archive"
+}
+
+# The archive tasks-axi writes: the [markdown] archive key resolved against the
+# backlog root, else done-archive.md beside the addressed backlog file. Returns
+# 1 when the configured backend keeps no markdown archive.
+fm_backlog_markdown_archive_path() {  # <data-dir>
+  local data root backend archive file
+  data=$(fm_backlog_data_absolute "$1") || return 1
+  root=$(fm_backlog_root "$data") || return 1
+  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 1
+  [ "$backend" = markdown ] || return 1
+  archive=$(fm_backlog_markdown_archive_setting "$root")
+  case "$archive" in
+    '')
+      file=$(fm_backlog_file "$data") || return 1
+      archive="${file%/*}/done-archive.md"
+      ;;
+    /*) ;;
+    *) archive="$root/$archive" ;;
+  esac
+  printf '%s\n' "$archive"
+}
+
+fm_backlog_archive_rows() {  # <archive-file> <exact-id|--list>
+  local archive=$1 id=$2
+  LC_ALL=C awk -v id="$id" '
+    /^- \[.\] / {
+      rest = substr($0, 7)
+      split(rest, fields, /[[:space:]]/)
+      key = fields[1]
+      inrow = (id == "--list" || key == id)
+      if (inrow) blocks[key] = $0 "\n"
+      next
+    }
+    inrow && ($0 == "" || $0 ~ /^[[:space:]]/) { blocks[key] = blocks[key] $0 "\n"; next }
+    { inrow = 0 }
+    END {
+      if (id == "--list") { for (key in blocks) printf "%s", blocks[key] }
+      else printf "%s", blocks[id]
+    }
+  ' "$archive"
+}
+
+# A current row supersedes its archived history, including after reopening.
+fm_backlog_task_closed() {  # <data-dir> <exact-id>
+  local data=$1 id=$2 archive
+  if fm_backlog_row_probe "$data" "$id"; then
+    [ "${FM_BACKLOG_ROW_STATE%% *}" = 'done' ]
+    return
+  fi
+  [ "$FM_BACKLOG_ROW_RESULT" = not_found ] || return 1
+  archive=$(fm_backlog_markdown_archive_path "$data") || return 1
+  [ -f "$archive" ] && [ -r "$archive" ] && [ ! -L "$archive" ] || return 1
+  fm_backlog_archive_rows "$archive" "$id" |
+    LC_ALL=C awk 'NR == 1 && /^- \[x\] / { closed = 1 } END { exit !closed }'
+}
+
 # Run one tasks-axi mutation against <home>'s backlog, capturing its first
 # output line in FM_BACKLOG_TRANSITION_ERROR on failure. The home boundary is
 # authorized through fm_backlog_source_present first; fm_backlog_tasks_axi owns
@@ -889,6 +981,43 @@ fm_backlog_row_dispatchable() {
   esac
 }
 
+# Read-only dispatch eligibility shared by a fresh launch and a relaunch.
+# Sets BACKLOG_TRANSITION and BACKLOG_ROW_STATE for the launch owner.
+fm_backlog_dispatch_preflight() { # <config> <data> <state> <kind> <id> [relaunch]
+  local config=$1 data=$2 state=$3 kind=$4 id=$5 relaunch=${6:-0} rc
+  BACKLOG_TRANSITION=0
+  BACKLOG_ROW_STATE=
+  if fm_backlog_transition_applies "$config" "$data" "$kind"; then
+    BACKLOG_TRANSITION=1
+    if fm_backlog_row_probe "$data" "$id"; then
+      BACKLOG_ROW_STATE=$FM_BACKLOG_ROW_STATE
+    elif [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+      echo "error: task $id has no backlog item in this home, so dispatching it would leave a worker no record owns; add it first (bin/fm-tasks-axi.sh add $id '<title>' --kind $kind) and re-run" >&2
+      return 1
+    else
+      echo "error: task $id's backlog item could not be read before dispatch ($FM_BACKLOG_ROW_ERROR)" >&2
+      return 1
+    fi
+    if [ "$relaunch" -ne 1 ] && { [ -e "$data/work-structure.json" ] || [ -L "$data/work-structure.json" ]; }; then
+      FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$data" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$config" \
+        bash "$SCRIPT_DIR/fm-tasks-axi.sh" work dispatch-check --task "$id" >&2 || {
+        echo "error: work hierarchy prevents dispatch of $id" >&2
+        return 1
+      }
+    fi
+    if ! fm_backlog_row_dispatchable "$BACKLOG_ROW_STATE"; then
+      echo "error: this home's backlog item $id is not dispatchable in state $BACKLOG_ROW_STATE; refusing before creating its endpoint or local copy" >&2
+      return 1
+    fi
+  else
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+      echo "error: task $id cannot be dispatched because its backlog data directory is inaccessible: $data ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      return 1
+    fi
+  fi
+}
+
 fm_backlog_dispatch_transition() {
   local meta=$1 data=$2 id=$3 state=$4 row row_status
   fm_backlog_record_present "$meta" "task record" "$state" || return 1
@@ -930,22 +1059,14 @@ fm_backlog_dispatch_rollback() {
   return 0
 }
 
-fm_backlog_close_transition() {
-  local meta=$1 marker=$2 data=$3 id=$4 state=$5
-  shift 5
-  [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
-  fm_backlog_done "$data" "$id" "$@" || return 1
-  fm_backlog_record_remove "$marker" "pending-close record" "$state"
-}
-
-# The captain-held twin of the close transition: same record, same ordering,
-# `reopen` with the deliverable recorded instead of `done`.
-fm_backlog_retain_transition() {
-  local meta=$1 marker=$2 data=$3 id=$4 state=$5
-  shift 5
-  [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
-  fm_backlog_retain "$data" "$id" "$@" || return 1
-  fm_backlog_record_remove "$marker" "pending-close record" "$state"
+fm_backlog_apply_close() {  # <close|retain> <data-dir> <id> [flag...]
+  local mode=$1
+  shift
+  case "$mode" in
+    close) fm_backlog_done "$@" ;;
+    retain) fm_backlog_retain "$@" ;;
+    *) FM_BACKLOG_TRANSITION_ERROR="unknown backlog close mode $mode"; return 2 ;;
+  esac
 }
 
 fm_backlog_atomic_transition() {
@@ -956,8 +1077,6 @@ fm_backlog_atomic_transition() {
     remove) fm_backlog_record_remove "$@" ;;
     dispatch) fm_backlog_dispatch_transition "$@" ;;
     rollback) fm_backlog_dispatch_rollback "$@" ;;
-    close) fm_backlog_close_transition "$@" ;;
-    retain) fm_backlog_retain_transition "$@" ;;
     *) FM_BACKLOG_TRANSITION_ERROR="unknown backlog atomic transition $operation"; return 2 ;;
   esac
 }
@@ -1232,7 +1351,7 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 # any meta or backlog mutation.
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 marker_name expected_id
-  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete mode
+  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete mode result
   local args=() mode_flags=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
   fm_backlog_directory_present "$state" "state directory" || return 1
@@ -1270,8 +1389,8 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
       "$marker_spawn_gen" "${mode_flags[@]+"${mode_flags[@]}"}" "${args[@]+"${args[@]}"}" \
       || return 1
     cleanup_incomplete=1
-    fm_backlog_atomic_transition remove "$meta" "the interrupted task record" "$state" \
-      || return 1
+  else
+    meta=
   fi
   if fm_backlog_row_probe "$data" "$id"; then
     row_state=$FM_BACKLOG_ROW_STATE
@@ -1285,46 +1404,16 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     fi
     row_state=
   fi
-  case "$row_state" in
-    done\ *)
-      if [ "$mode" = retain ]; then
-        # The captain's answer closed the row before this replay; the retained
-        # transition owes it nothing more than retiring the record.
-        fm_backlog_close_marker_remove "$marker" "$state" || return 1
-        FM_BACKLOG_CLOSE_REPLAY_RESULT=answered
-        return 0
-      fi
-      if fm_backlog_atomic_transition close '' "$marker" "$data" "$id" "$state" \
-          "${args[@]+"${args[@]}"}"; then
-        if [ "$cleanup_incomplete" = 1 ]; then
-          FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
-        else
-          FM_BACKLOG_CLOSE_REPLAY_RESULT=closed
-        fi
-        return 0
-      fi
-      return 1
-      ;;
-    '')
-      fm_backlog_close_marker_remove "$marker" "$state" || return 1
-      FM_BACKLOG_CLOSE_REPLAY_RESULT=stale
-      return 0
+  case "${row_state%% *}:$mode" in
+    done:retain) result=answered ;;
+    :*) result=stale ;;
+    *)
+      fm_backlog_apply_close "$mode" "$data" "$id" "${args[@]+"${args[@]}"}" || return 1
+      if [ "$mode" = close ]; then result=closed; else result=retained; fi
+      [ "$cleanup_incomplete" = 0 ] || result=${result}_incomplete
       ;;
   esac
-  if fm_backlog_atomic_transition "$mode" '' "$marker" "$data" "$id" "$state" \
-      "${args[@]+"${args[@]}"}"; then
-    if [ "$mode" = retain ]; then
-      if [ "$cleanup_incomplete" = 1 ]; then
-        FM_BACKLOG_CLOSE_REPLAY_RESULT=retained_incomplete
-      else
-        FM_BACKLOG_CLOSE_REPLAY_RESULT=retained
-      fi
-    elif [ "$cleanup_incomplete" = 1 ]; then
-      FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
-    else
-      FM_BACKLOG_CLOSE_REPLAY_RESULT=closed
-    fi
-    return 0
-  fi
-  return 1
+  [ -z "$meta" ] || fm_backlog_record_remove "$meta" "the interrupted task record" "$state" || return 1
+  fm_backlog_close_marker_remove "$marker" "$state" || return 1
+  FM_BACKLOG_CLOSE_REPLAY_RESULT=$result
 }

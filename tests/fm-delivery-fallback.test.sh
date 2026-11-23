@@ -160,6 +160,11 @@ test_refusals_change_nothing() {
   dir=$(setup_case gerrit no-mistakes --forge gerrit)
   assert_refused_unchanged "$dir" "a forge-bound task must not fall back to local-only" --mode local-only --reason "x"
   assert_contains "$(cat "$dir/err")" "forge=gerrit cannot ship mode=local-only" "the forge refusal does not name the forge"
+  dir=$(setup_case missing-rule no-mistakes)
+  sed -i.bak '/^1\. Never push/d' "$dir/home/data/t1/brief.md"
+  rm -f "$dir/home/data/t1/brief.md.bak"
+  assert_refused_unchanged "$dir" "a brief without its delivery rule must refuse" --mode direct-PR --reason "x"
+  assert_contains "$(cat "$dir/err")" "could not re-render" "the missing rule refusal must name the failed rewrite"
   dir=$(setup_case scout no-mistakes)
   fm_write_meta "$dir/home/state/t1.meta" "window=sess:fm-t1" "kind=scout" "harness=claude"
   assert_refused_unchanged "$dir" "a scout has no delivery path to fall back from" --mode direct-PR --reason "x"

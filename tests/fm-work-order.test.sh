@@ -91,5 +91,12 @@ with tempfile.TemporaryDirectory(prefix='fm-work-order-') as tmp:
     check(requests(s)[0]=='D' and s['sigue'][0]=='task:d1','an urgent new request enters by its priority')
     check(s['yields'] is None,'an unplaced request never makes running work give way')
     check(json.loads((home/'data/work-structure.json').read_text())['order'][:3]==['request:C','request:B','request:A'],'placed requests keep the captain order')
+    add('a-new','D',0)
+    order = [t['id'] for t in cli('work','continuations')['tasks']]
+    check(order[:2] == ['d1', 'a-new'], 'the older task wins an equal-priority tie despite its name')
+    cli('add','depends','Depends on newer task','--repo','alpha','--blocked-by','a-new',raw=True)
+    order = [t['id'] for t in cli('work','continuations')['tasks']]
+    check(order[:2] == ['a-new', 'd1'], 'releasing a dependency wins the tie before age')
+    check('depends' not in order and order.index('c1') < order.index('b1'), 'the continuation respects the dependency and placed order')
     print('PASS: %d work order assertions' % checks)
 PY

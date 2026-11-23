@@ -362,7 +362,7 @@ test_codex_unverified_gate() {
 # Codex guard proves that separately). No harness, account, or backend is used.
 test_codex_process_owned_rollout() {
   CODEX_ACTIVITY_ROOT="$ROOT" CODEX_ACTIVITY_TMP="$TMP_ROOT" python3 - <<'PY' || fail 'Codex process-owned rollout regression failed'
-import json, os, pathlib, signal, subprocess, sys, time
+import json, os, pathlib, runpy, signal, subprocess, sys, time
 root = pathlib.Path(os.environ['CODEX_ACTIVITY_ROOT'])
 base = pathlib.Path(os.environ['CODEX_ACTIVITY_TMP']) / 'codex-rollout'
 base.mkdir()
@@ -463,6 +463,43 @@ try:
     check('unknown codex-rollout')
     with log.open('a') as f:f.write('\n')
     check('busy codex-rollout')
+
+    # Write through the same real rollout while the reader holds its descriptor.
+    sys.path.insert(0, str(root / 'bin'))
+    sys.dont_write_bytecode = True
+    classify = runpy.run_path(str(root / 'bin/fm-codex-activity.py'))['classify']
+    fold = classify.__globals__['fold']
+    def check_overlap(expected, *updates):
+        reads = []
+        def interleave(handle, *args):
+            reads.append(handle.tell())
+            try:
+                return fold(handle, *args)
+            finally:
+                if len(reads) <= len(updates):
+                    updates[len(reads) - 1]()
+        classify.__globals__['fold'] = interleave
+        try:
+            actual = classify(state, 'codex')
+            assert (actual, reads) == (expected, [0, 0]), (expected, actual, reads)
+        finally:
+            classify.__globals__['fold'] = fold
+
+    def finish_line():
+        with log.open('a') as handle:
+            handle.write('\n')
+
+    with log.open('a') as handle:
+        handle.write(json.dumps(row('token_count')))
+    check_overlap('busy codex-rollout', finish_line)
+    check_overlap('idle codex-rollout', lambda: append(row('task_complete')))
+    write(meta, row('task_started'))
+
+    def record_usage():
+        append(row('token_count'))
+
+    check_overlap('unknown codex-rollout', record_usage, record_usage)
+    write(meta, row('task_started'))
     append(row('task_started','overlap')); check('unknown codex-rollout')
     write(meta,row('task_started'))
     with log.open('a') as f:f.write('{"type":"event_msg","payload":{"type":"task_complete","turn_id":"foreign","turn_id":"turn-1"}}\n')
@@ -508,6 +545,13 @@ try:
         time.sleep(.05)
     assert not review_ready.exists(), 'holder did not close the review descriptors'
     assert (base/'notified').exists(), 'parent completion lost its original notification'
+    # The rollout must match the version attested by its owner even when both
+    # versions are qualified. A quiet new turn still blocks automatic cleanup.
+    owner.write_text(json.dumps(dict(original,version='0.169.0')))
+    check('unknown codex-rollout')
+    newer_meta = json.loads(json.dumps(meta)); newer_meta['payload']['cli_version'] = '0.169.0'
+    write(newer_meta,row('task_started')); check('busy codex-rollout')
+    append(row('task_complete')); check('idle codex-rollout')
     owner.write_text(json.dumps(original));write(meta,row('task_started'));check('busy codex-rollout')
     # A replaced file at the same pathname cannot stand in for the held inode.
     log.rename(log.with_suffix('.old'));write(meta,row('task_started'));check('unknown codex-rollout')
@@ -741,7 +785,7 @@ test_claude_session_launch() {
   fm_test_spawn_home "$home" claude
   fm_test_spawn_brief "$home" proof
   fm_git_worktree "$dir/project" "$dir/wt" proof
-  fm_test_run_spawn "$home" "$dir/wt" "$fakebin" proof "$dir/project" --mode local-only --yolo off >"$dir/spawn.log" \
+  fm_test_run_spawn "$home" "$dir/wt" "$fakebin" proof "$dir/project" --model claude-test --effort high --mode local-only --yolo off >"$dir/spawn.log" \
     || fail "session launch failed: $(cat "$dir/spawn.log")"
   sessions="$home/data/proof/sessions.jsonl"
   jq -e '.harness == "claude" and .session == null and (.started_at | length > 0)' "$sessions" >/dev/null || fail "launch metadata missing"

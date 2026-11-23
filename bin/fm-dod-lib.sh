@@ -305,15 +305,15 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<
   esac
 }
 
-# Return 0 when a Task subsection still consists only of its scaffold
-# placeholder. A missing file and legacy briefs carry no such placeholders.
+# Return 0 when a Task subsection still contains its scaffold
+# placeholder on a line of its own. A missing file and legacy briefs carry no such placeholders.
 fm_brief_task_placeholders_present() {  # <file>
   local file=$1 intent spec
   [ -f "$file" ] || return 1
   intent=$(fm_brief_task_heading_body "$file" "## Captain's intent")
   spec=$(fm_brief_task_heading_body "$file" "## Firstmate spec")
-  [ "$(printf '%s' "$intent" | tr -d '[:space:]')" = '{TASK}' ] && return 0
-  [ "$(printf '%s' "$spec" | tr -d '[:space:]')" = '{FIRSTMATE_SPEC}' ] && return 0
+  printf '%s\n' "$intent" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF '{TASK}' && return 0
+  printf '%s\n' "$spec" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF '{FIRSTMATE_SPEC}' && return 0
   fm_brief_task_heading_body "$file" "## Captain's requirements" | grep -qF '{CAPTAIN_REQUIREMENTS}' && return 0
   return 1
 }

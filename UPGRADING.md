@@ -5,6 +5,22 @@ The primary checks these notes at locked session startup and after `/updatefirst
 A manual `git pull` is covered by the next session start; run `FM_HOME=/absolute/home bash bin/fm-upgrade.sh check` to check immediately.
 The command's header and help own detection, per-home records and application.
 
+## Updating an existing checkout
+
+1. Save any pending work and end the primary session through its normal close procedure.
+2. In the Firstmate checkout, with a clean working tree on the branch that follows your distributor's `main`, run:
+
+   ```sh
+   git pull --ff-only origin main
+   ```
+
+   If Git reports a divergence, preserve your local changes and resolve it before proceeding.
+3. Start the primary again using your usual launch command, in the same home, to load the updated instructions and hooks.
+4. Review any upgrade actions offered at startup and the standing-grants notice below if it appears.
+   If the native rule file action runs, restart the primary again as that entry directs.
+
+On a managed Mac, the [read-only tool inventory](README.md#required-versus-optional-tools) can check the tools already available to the updated installation.
+
 ## Client instructions for the next package
 
 Before reporting an error, check the installed version and the received package changelog. Do not report an already reported error whose fix was pulled; if it persists after updating, include the version, a fresh reproduction, and a link to the prior report.
@@ -14,6 +30,17 @@ On each machine, the client primary reviews with the user which extensions to in
 For Lavish, install or upgrade the `cbriseno/lavish-axi` copy instead of `npm install -g lavish-axi`, even when the same version number is already installed: `git clone --depth 1 https://github.com/cbriseno/lavish-axi "${TMPDIR:-/tmp}/lavish-axi-src" && (cd "${TMPDIR:-/tmp}/lavish-axi-src" && npm install && npm pack) && npm install -g "${TMPDIR:-/tmp}"/lavish-axi-src/lavish-axi-*.tgz && lavish-axi setup hooks`.
 That copy opens a board once without a false other-tab warning and shows the replying agent's model, reasoning, harness, chat, pane, project and task.
 After installing it, stop the shared Lavish server with `lavish-axi stop` while no review is open, so the next board starts the new version.
+
+## Standing grants
+
+For each existing home, the primary transcribes the captain's permanent authorizations once from `data/captain.md`, `data/captain-shared.md`, and the operator's global instructions into `data/standing-grants.json`.
+Use the exact captain quotation and its original file and line as `source`, the exact action class as `action`, the grant date as `granted`, and the exclusions as `limits`; include `scope` only for a project-specific grant.
+The versioned format starts with `{"version": 1, "grants": [], "migration": "pending"}`; each entry is an object with those fields.
+Keep existing entries and their citations when updating; do not invent an authorization from a general preference.
+After transcribing all existing grants for the home, run `python3 bin/fm-standing-grants.py migrated "${FM_DATA_OVERRIDE:-$FM_HOME/data}/standing-grants.json"`; startup repeats the instruction until this step succeeds.
+`bash bin/fm-doctor.sh` reports the number of grants.
+For future answers, `fm-captain-hold.sh answer --standing` records the action and the captain's exact answer immediately; Use `--scope` for a project-specific grant and `--limits` for exclusions.
+For an older open call that predates recorded actions, also pass `--action` with the exact class.
 
 ## Manual procedure
 

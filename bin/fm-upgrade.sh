@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # fm-upgrade.sh - offer and apply UPGRADING.md actions for an explicit FM_HOME.
 # Usage: FM_HOME=/absolute/home bash bin/fm-upgrade.sh check|apply [--help]
-# check creates one captain hold per newly encountered batch, never applies data
-# changes, and records offered ids in data/upgrades/offered. Session startup
+# check imports the historical nudge table when present, creates one captain hold
+# per newly encountered batch, and records offered ids in data/upgrades/offered.
+# It never applies the offered upgrade actions. Session startup
 # calls check only with a verified lock; manual callers need the same authority.
 # apply is for the primary/worker after the captain accepts and the primary
 # records the answer through fm-captain-hold.sh. It runs pending Command entries

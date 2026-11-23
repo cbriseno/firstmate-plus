@@ -3,6 +3,10 @@
 # task card and progress checkpoint in the same report.
 # Usage: FM_HOME=<owning-home> fm-task-status.sh <task-id> <state> <note>
 #          [--card-status TEXT] [--summary TEXT] [--presentation-file FILE]
+# For paused, put [wait-task=ID] in the note to wait for another task in this home.
+# The watcher sends a resume notice when that task is integrated or closed.
+# Workers reporting terminal failure must pass --exhausted-recovery with the
+# recovery evidence in <note>. See the worker contract for when to stop.
 # Timestamps are generated here. Routine progress stays silent; decisions,
 # blockers and terminal events reach the queue even without a watcher.
 # The watcher remains the backstop for legacy plain status appends.
@@ -16,13 +20,18 @@
 # republish with `fm-tasks-axi.sh presentation <id> --presentation-file FILE`.
 set -eu
 [ -n "${FM_HOME:-}" ] || { echo 'error: FM_HOME is required' >&2; exit 2; }
-[ "$#" -ge 3 ] || { sed -n '2,16p' "$0" >&2; exit 2; }
+[ "$#" -ge 3 ] || { sed -n '2,20p' "$0" >&2; exit 2; }
 ID=$1 VERB=$2 NOTE=$3
 shift 3
 case "$ID" in ''|*[!A-Za-z0-9._-]*) exit 2 ;; esac
-case "$VERB" in working|resolved|needs-decision|blocked|paused|done|failed|captain-held) ;; *) exit 2 ;; esac
-PFILE='' OVERRIDES=() PUBLISH=0
+case "$VERB" in working|resolved|needs-decision|blocked|paused|done|failed|captain-held) ;; *) echo "error: invalid state '$VERB'; expected working, resolved, needs-decision, blocked, paused, done, failed, or captain-held" >&2; exit 2 ;; esac
+PFILE='' OVERRIDES=() PUBLISH=0 EXHAUSTED=0
 while [ "$#" -gt 0 ]; do
+  if [ "$1" = --exhausted-recovery ] && [ "$VERB" = failed ]; then
+    EXHAUSTED=1
+    shift
+    continue
+  fi
   [ "$#" -ge 2 ] || { echo "error: $1 requires a value" >&2; exit 2; }
   case "$1" in
     --card-status) OVERRIDES+=(card_status "$2") ;;
@@ -33,11 +42,24 @@ while [ "$#" -gt 0 ]; do
   PUBLISH=1
   shift 2
 done
+if [ "$VERB" = failed ] && [ -n "${FM_TASK_ID:-}" ] && [ "$EXHAUSTED" = 0 ]; then
+  echo 'error: if authorized work remains, choose a reversible step, record why, and continue. For terminal failure, follow Obstacles and escalation, describe the exhausted recovery in the status note, and pass --exhausted-recovery.' >&2
+  exit 2
+fi
 SCRIPT_DIR=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+if threshold=$(FM_CLASSIFY_PAUSED_VERB=paused status_paused_load1 "$VERB: $NOTE"); then
+  check_rc=0
+  ceiling=$(FM_CONFIG_OVERRIDE="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" bash "$SCRIPT_DIR/fm-capacity.sh" --check-load-wait "$threshold") || check_rc=$?
+  case "$check_rc" in
+    0) echo "error: load1 < $threshold is below the admission ceiling $ceiling; choose another exit condition" >&2; exit 2 ;;
+    1) ;;
+    *) echo 'error: cannot compare the load wait with admission; repair capacity configuration or choose another exit condition' >&2; exit 2 ;;
+  esac
+fi
 FILE="$STATE/$ID.status"
 printf '%s [at=%s]: %s\n' "$VERB" "$(date +%s)" "$NOTE" >> "$FILE"
 CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}

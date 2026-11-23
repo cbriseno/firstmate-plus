@@ -22,7 +22,7 @@ For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary sin
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 
 Tear down a ship task only after landing is confirmed.
-The watcher parks an idle done ship whose branch is not yet integrated and closes it automatically once its content lands; steering it with `fm-send` resumes it, for example to rebase a diverged branch.
+The watcher keeps a done ship open while its branch is not yet integrated and closes it automatically once its content lands; steering it with `fm-send` can request a rebase of a diverged branch.
 Once its required verification and installation are complete and the result is relayed, perform guarded cleanup in the same handling turn rather than keeping a finished agent idle.
 If cleanup must wait for a decision, monitoring, or a real remaining operation, record that reason and its owner; an automatic ready signal alone is not permission to discard work or stop active validation.
 For a completed host task, relay the operation and verification results and perform ordinary teardown in that same turn; branch landing does not apply.

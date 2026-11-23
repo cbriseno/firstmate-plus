@@ -77,7 +77,7 @@ in_home() {  # <command...>: run one real script against the case home
 # Spawn, write status lines, poll once, land locally, clean up.
 run_lifecycle() {
   local out
-  out=$(in_home "$ROOT/bin/fm-spawn.sh" "$TASK" "$PROJ_DIR" --mode local-only --yolo off 2>&1) \
+  out=$(in_home "$ROOT/bin/fm-spawn.sh" "$TASK" "$PROJ_DIR" --model claude-test --effort high --mode local-only --yolo off 2>&1) \
     || fail "spawn failed: $out"
   {
     printf 'working [at=1790000000]: setup done\n'
@@ -86,7 +86,7 @@ run_lifecycle() {
     printf 'partial line without its newline'
   } >> "$HOME_DIR/state/$TASK.status"
   out=$(in_home env FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 2 2>&1)
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 20 2>&1)
   case "$out" in *"checkpoint:"*|*"signal:"*|*"check: progress reconciliation required"*) ;; *) fail "watcher checkpoint did not run: $out" ;; esac
   LEDGER_AFTER_POLL=$(cat "$HOME_DIR/state/fleet-ledger.jsonl" 2>/dev/null || true)
   printf ' finished\ndone: ready in branch\n' >> "$HOME_DIR/state/$TASK.status"
@@ -113,7 +113,7 @@ test_flag_on_records_the_task_lifecycle() {
     || fail "every record must carry v, ts, event, and task: $(cat "$HOME_DIR/state/fleet-ledger.jsonl")"
   rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task, .home, .declared_at, .observation, .status_token) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
-["task.dispatched","$TASK","ship","sample","claude",null]
+["task.dispatched","$TASK","ship","sample","claude","claude-test"]
 ["task.status","$TASK","working",null," setup done"]
 ["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c"]
 ["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a"]
@@ -159,7 +159,7 @@ test_flag_on_records_a_pr_registration() {
   # An unreadable forge answer: no draft refusal and no recorded head.
   printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKEBIN/gh"
   chmod +x "$FAKEBIN/gh"
-  out=$(in_home "$ROOT/bin/fm-spawn.sh" "$TASK" "$PROJ_DIR" --mode direct-PR --yolo off 2>&1) \
+  out=$(in_home "$ROOT/bin/fm-spawn.sh" "$TASK" "$PROJ_DIR" --model claude-test --effort high --mode direct-PR --yolo off 2>&1) \
     || fail "spawn failed: $out"
   printf 'done: PR %s\n' "$pr_url" >> "$HOME_DIR/state/$TASK.status"
   out=$(in_home "$ROOT/bin/fm-pr-check.sh" "$TASK" "$pr_url" 2>&1) || fail "PR registration failed: $out"
@@ -186,18 +186,25 @@ worker_status_command() {  # <state> <note> [<state-dir> [<config-dir>]]
     FM_CONFIG_OVERRIDE="${4:-$HOME_DIR/config}" \
     "$ROOT/bin/fm-brief.sh" "$TASK" sample --mode no-mistakes >/dev/null) \
     || fail "brief scaffold failed"
+  printf '## Queued\n\n- [ ] %s - Ledger fixture (repo: sample)\n' "$TASK" > "$HOME_DIR/data/backlog.md"
+  printf '%s\n' '- sample [local-only +yolo] - Fixture project' > "$HOME_DIR/data/projects.md"
   # shellcheck disable=SC2016 # Match literal backticks in the generated brief.
-  cmd=$(sed -n '/`echo "{state}/s/.*`\(echo .*\)`.*/\1/p' "$HOME_DIR/data/$TASK/brief.md" | head -1)
+  cmd=$(sed -n '/^Status command: `/s/^Status command: `\(.*\)`$/\1/p' "$HOME_DIR/data/$TASK/brief.md" | head -1)
   [ -n "$cmd" ] || fail "the brief carries no status command"
   cmd=${cmd//\{state\}/$1}
-  cmd=${cmd//<epoch>/1790000000}
+  cmd=${cmd//\{what is happening now\}/ledger test in progress}
   printf '%s\n' "${cmd//\{one short line\}/$2}"
 }
 
 # Run a filled status command as a worker would: a plain shell with no
 # firstmate environment.
 run_worker_command() {  # <command>
-  env -i PATH="$PATH" HOME="$HOME_DIR/user-home" bash -c "$1"
+  cat > "$FAKEBIN/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = +%s ]; then printf '%s\n' 1790000000; else exec /bin/date "$@"; fi
+SH
+  chmod +x "$FAKEBIN/date"
+  env -i PATH="$FAKEBIN:$PATH" HOME="$HOME_DIR/user-home" bash -c "$1"
 }
 
 test_worker_status_line_is_recorded_when_written() {
@@ -209,10 +216,11 @@ test_worker_status_line_is_recorded_when_written() {
   assert_equals "needs-decision [at=1790000000]: pick a lamp colour" \
     "$(cat "$HOME_DIR/state/$TASK.status")" "status log"
   assert_equals '["task.status","needs-decision"," pick a lamp colour"]' \
-    "$(ledger_rows '[.event, .state, .text]')" "ledger rows right after the append"
+    "$(ledger_rows 'select(.event == "task.status") | [.event, .state, .text]')" "ledger status right after the append"
+  assert_equals 'task.presentation' "$(ledger_rows 'select(.event == "task.presentation") | .event' | jq -r .)" "presentation event"
   out=$(in_home "$ROOT/bin/fm-fleet-ledger.sh" capture 2>&1) || fail "backstop capture failed: $out"
-  assert_equals 1 "$(wc -l < "$HOME_DIR/state/fleet-ledger.jsonl" | tr -d ' ')" \
-    "ledger records after the backstop capture"
+  assert_equals 2 "$(wc -l < "$HOME_DIR/state/fleet-ledger.jsonl" | tr -d ' ')" \
+    "status and presentation records after the backstop capture"
   pass "flag on: a worker's status command records its line at once, and the watcher backstop does not record it again"
 }
 
@@ -225,7 +233,7 @@ test_worker_status_line_is_recorded_under_a_state_override() {
     || fail "the worker status command failed: $out"
   assert_equals "blocked [at=1790000000]: need a token" "$(cat "$state_dir/$TASK.status")" "status log"
   assert_equals '["task.status","blocked"]' \
-    "$(jq -c '[.event, .state]' "$state_dir/fleet-ledger.jsonl" 2>/dev/null)" \
+    "$(jq -c 'select(.event == "task.status") | [.event, .state]' "$state_dir/fleet-ledger.jsonl" 2>/dev/null)" \
     "ledger rows right after the append"
   pass "flag on, state override outside the home: the worker's status command records its line at once"
 }
@@ -237,7 +245,7 @@ test_worker_status_line_is_recorded_under_a_relative_config_override() {
   out=$(cd "$PROJ_DIR" && run_worker_command \
     "$(worker_status_command needs-decision 'which lamp' "$HOME_DIR/state" config)" 2>&1) \
     || fail "the worker status command failed: $out"
-  assert_equals '["task.status","needs-decision"]' "$(ledger_rows '[.event, .state]')" \
+  assert_equals '["task.status","needs-decision"]' "$(ledger_rows 'select(.event == "task.status") | [.event, .state]')" \
     "ledger rows right after the append"
   pass "flag on, relative config override: a worker running elsewhere still records its line at once"
 }
@@ -253,19 +261,20 @@ test_worker_status_command_fails_when_the_append_fails() {
 }
 
 test_worker_status_line_lands_when_the_ledger_fails() {
-  local out
+  local out rc=0
   make_case on-failing on
   mkdir -p "$HOME_DIR/data" "$HOME_DIR/state/fleet-ledger.jsonl"
-  out=$(run_worker_command "$(worker_status_command failed 'tests broke')" 2>&1) \
-    || fail "a ledger failure changed the worker status command's result: $out"
-  assert_equals "" "$out" "worker status command output"
+  out=$(run_worker_command "$(worker_status_command failed 'tests broke')" 2>&1) || rc=$?
+  assert_equals 3 "$rc" "ledger failure must report unconfirmed presentation"
+  assert_contains "$out" 'status recorded; presentation not confirmed published' "ledger failure diagnostic"
+  [ -s "$HOME_DIR/data/$TASK/presentation.json" ] || fail "ledger failure lost the saved presentation"
   assert_equals "failed [at=1790000000]: tests broke" \
     "$(cat "$HOME_DIR/state/$TASK.status")" "status log"
   rmdir "$HOME_DIR/state/fleet-ledger.jsonl"
   out=$(in_home "$ROOT/bin/fm-fleet-ledger.sh" capture 2>&1) || fail "backstop capture failed: $out"
   assert_equals '["task.status","failed"]' "$(ledger_rows '[.event, .state]')" \
     "ledger rows after the backstop capture"
-  pass "ledger failing: the worker's status line still lands exactly, quietly, and the backstop records it later"
+  pass "ledger failing: the worker's status line and card are saved, reporting names the ledger failure, and the backstop records the status later"
 }
 
 test_worker_status_line_with_the_flag_absent() {
@@ -274,11 +283,12 @@ test_worker_status_line_with_the_flag_absent() {
   mkdir -p "$HOME_DIR/data"
   out=$(run_worker_command "$(worker_status_command 'done' 'ready')" 2>&1) \
     || fail "the worker status command failed: $out"
-  assert_equals "" "$out" "worker status command output"
+  printf '%s' "$out" | jq -e '.ok == true and .state == "published"' >/dev/null \
+    || fail "worker status did not publish its card: $out"
   assert_equals "done [at=1790000000]: ready" "$(cat "$HOME_DIR/state/$TASK.status")" "status log"
   leftovers=$(cd "$HOME_DIR/state" && find . -name '*fleet-ledger*')
   assert_equals "" "$leftovers" "ledger files with the flag absent"
-  pass "flag off: the worker's status command is a plain append and leaves no ledger file, offset, or lock"
+  pass "flag off: the worker's status command publishes its card and leaves no ledger file, offset, or lock"
 }
 
 test_flag_off_writes_nothing() {
@@ -318,6 +328,14 @@ assert rows()[-1]['event']=='agent.retired'
 (home/'.tasks.toml').write_text('backend="markdown"\n[markdown]\npath="data/backlog.md"\n')
 (home/'data/backlog.md').write_text('## In flight\n\n## Queued\n\n## Done\n')
 run('fm-tasks-axi.sh','add','one','First task','--repo','alpha')
+seed=home/'seed.json'
+seed.write_text(json.dumps(dict(schema='fm-work-alias-seed.v1', home=str(home), entries=[
+    dict(key='task:one', alias='T-222', primary=True),
+    dict(key='task:one', alias='T-223', primary=False)])))
+run('fm-tasks-axi.sh','work','aliases-init','--map',seed,'--request-id','contract-alias-init-0001')
+aliases=[r['value'] for r in rows() if r['event']=='work.aliases']
+assert aliases and aliases[-1] == json.loads((home/'data/work-aliases.json').read_text())
+assert len(aliases[-1]['reverse']) >= 2, 'historical alias reservation disappeared'
 run('fm-tasks-axi.sh','update','one','--priority','1')
 assert rows()[-1]['event']=='task.changed' and rows()[-1]['value']['task']['priority']==1
 payload=home/'authored.json'
@@ -335,7 +353,7 @@ r=subprocess.run(['python3',str(root/'bin/fm_delivery.py'),'ledger-task','--task
 assert r.returncode==0, r.stderr
 assert rows()[-1]['value']['task']['priority']==2
 assert 'priority: 2' in run('fm-tasks-axi.sh','show','one','--full')
-run('fm-captain-hold.sh','hold','answer-one','--title','Question','--repo','alpha','--reason','Test original words','--category','product-design','--challenge','fixture',
+run('fm-captain-hold.sh','hold','answer-one','--title','Question','--repo','alpha','--reason','Test original words','--action','fixture','--category','product-design','--challenge','fixture',
     '--question','Proceed?','--option','yes=Proceed','--option','no=Wait','--recommended','yes')
 call=json.loads((home/'data/answer-one/captain-call.json').read_text())
 answer_file=home/'answer.txt'; answer_file.write_text('Adelante.')
@@ -378,6 +396,71 @@ PYFINAL
   pass "complete primary final is captured only by the session owner and creates no call"
 }
 
+test_complete_entity_contract() {
+  local home="$TMP_ROOT/complete-entity" event
+  mkdir -p "$home/config" "$home/state"
+  : > "$home/config/fleet-ledger"
+  for event in call.opened call.resolved call.application task.presentation task.changed task.completion task.review task.usage work.structure work.control work.aliases task.dispatch_wait agent.activity agent.retired agent.liveness primary.final; do
+    printf '%s\n' '{"forward":{"old":"a","new":"b"},"nested":{"text":"complete value","null":null},"items":[1,2,3]}' |
+      FM_HOME="$home" bash "$ROOT/bin/fm-fleet-ledger.sh" entity "$event" example || fail "entity $event failed"
+  done
+  python3 - "$home/state/fleet-ledger.jsonl" "$home" <<'PYCONTRACT' || fail 'entity value changed or was shortened'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+expected = {"forward": {"old": "a", "new": "b"}, "nested": {"text": "complete value", "null": None}, "items": [1, 2, 3]}
+assert len(rows) == 16
+for row in rows:
+    assert row['v'] == 1 and row['home'] == sys.argv[2] and row['task'] == 'example'
+    assert isinstance(row['ts'], int) and row['value'] == expected, row
+PYCONTRACT
+  pass 'every entity event preserves the complete supplied value'
+}
+
+# The ledger's growth comes from history no reader uses: bootstrap reads only
+# the latest record per home, task and event, and for a cleaned-up task only
+# its dispatch and what followed its cleanup.
+test_hourly_compaction_keeps_what_bootstrap_reads() {
+  local home="$TMP_ROOT/compaction" ledger before after got want
+  mkdir -p "$home/state" "$home/config"
+  : > "$home/config/fleet-ledger"
+  ledger="$home/state/fleet-ledger.jsonl"
+  r() { printf '{"v":1,"ts":%s,"event":"%s","task":"%s","home":"%s"%s}\n' "$1" "$2" "$3" "$home" "${4:-}"; }
+  {
+    r 1 task.dispatched gone ',"kind":"ship"'
+    r 2 task.presentation gone ',"value":{"n":1}'
+    r 3 task.presentation open ',"value":{"n":1}'
+    r 4 agent.liveness gone ',"value":{"state":"alive"}'
+    r 5 task.cleaned_up gone
+    r 6 task.changed gone ',"value":{"n":2}'
+    r 7 task.presentation open ',"value":{"n":2}'
+    printf 'not json\n'
+  } > "$ledger"
+  chmod 600 "$ledger"
+  before=$(stat -c %i "$ledger" 2>/dev/null || stat -f %i "$ledger")
+  # No compaction mark yet: an installation that updates compacts on its next write.
+  printf '{"n":3}' | FM_HOME="$home" bash "$ROOT/bin/fm-fleet-ledger.sh" entity task.usage open \
+    || fail "entity write failed"
+  got=$(jq -rc '[.ts, .event, .task] | @tsv' "$ledger" | tr '\t' ' ')
+  want=$(printf '%s\n' '1 task.dispatched gone' '5 task.cleaned_up gone' '6 task.changed gone' '7 task.presentation open')
+  # The triggering write itself is the newest record.
+  assert_equals "$want" "$(printf '%s\n' "$got" | sed '$d')" "compacted records in their original order"
+  assert_contains "$(tail -n 1 "$ledger")" '"event":"task.usage"' "the write that compacted is kept"
+  after=$(stat -c %i "$ledger" 2>/dev/null || stat -f %i "$ledger")
+  [ "$before" != "$after" ] || fail "compaction must replace the file so followers rebuild from a fresh base"
+  assert_equals "600" "$(stat -c %a "$ledger" 2>/dev/null || stat -f %Lp "$ledger")" "ledger mode kept"
+  [ -e "$home/state/.fleet-ledger.compacted" ] || fail "no compaction mark"
+  # Within the hour a write only appends.
+  r 8 task.presentation open ',"value":{"n":4}' >> "$ledger"
+  printf '{"n":5}' | FM_HOME="$home" bash "$ROOT/bin/fm-fleet-ledger.sh" entity task.usage open || fail "second write failed"
+  assert_equals "7" "$(wc -l < "$ledger" | tr -d ' ')" "no compaction within the hour"
+  # An hour later the next write compacts again.
+  touch -t 202001010000 "$home/state/.fleet-ledger.compacted"
+  printf '{"n":6}' | FM_HOME="$home" bash "$ROOT/bin/fm-fleet-ledger.sh" entity task.usage open || fail "third write failed"
+  assert_equals "5" "$(wc -l < "$ledger" | tr -d ' ')" "compacted again after an hour"
+  pass "hourly compaction keeps the latest record per task and event and a retired task's dispatch and cleanup"
+}
+
+test_hourly_compaction_keeps_what_bootstrap_reads
 test_flag_on_records_the_task_lifecycle
 test_flag_on_records_a_pr_merge_once
 test_flag_on_records_a_pr_registration
@@ -392,3 +475,5 @@ test_flag_off_writes_nothing
 test_resulting_entities
 
 test_primary_final_scope
+
+test_complete_entity_contract

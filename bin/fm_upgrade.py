@@ -8,6 +8,8 @@ import shlex
 import subprocess
 import sys
 
+from fm_nudge import import_legacy
+
 
 BIN = Path(__file__).resolve().parent
 
@@ -22,6 +24,8 @@ def run():
         parser.error('FM_HOME must name an absolute home')
     if any(os.environ.get(k) for k in ('FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE', 'FM_CONFIG_OVERRIDE')):
         parser.error('unset directory overrides; this command addresses FM_HOME')
+    if args.mode == 'check':
+        import_legacy(home / 'state', home / 'data')
     root = Path(os.environ.get('FM_ROOT_OVERRIDE') or BIN.parent)
     notes = root / 'UPGRADING.md'
     if not notes.exists() and args.mode == 'check':
@@ -59,6 +63,7 @@ def run():
         command = ['bash', str(BIN / 'fm-captain-hold.sh'), 'hold', task,
                    '--title', 'Acciones pendientes de actualización',
                    '--reason', 'Aceptar o posponer las acciones de actualización',
+                   '--action', 'apply pending update actions',
                    '--category', 'product-design',
                    '--challenge', 'Update actions change the installed setup; this offer asks before applying them',
                    '--question', question, '--context', labels[:200],

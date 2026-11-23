@@ -7,14 +7,17 @@
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
 # rule #1 "never run state-changing git in projects/", and it is narrow: it only
 # runs for mode=local-only tasks, only after the captain approves (or yolo=on
-# auto-approves), and only as a clean fast-forward - it refuses a diverged branch
-# and tells you to have the crewmate rebase. See SUPERVISOR.md prime directives,
-# project management, and task lifecycle.
+# auto-approves), and only as a clean fast-forward. A branch that fell behind
+# the default is first rebased in a throwaway clone; a conflict refuses with
+# the exact cause and changes nothing.
+# See SUPERVISOR.md prime directives, project management, and task lifecycle.
 # The task's existing per-task control lock serializes the captain-hold check
 # through that fast-forward. A still-held or unreadable row refuses before the
 # merge, so a captain approval must be recorded as an `answer --release` before
 # this entrypoint is invoked. The lock ends when the fast-forward returns;
 # docs/captain-hold-lifecycle.md owns the accepted merge-to-cleanup residual.
+# Each successful movement records the integration task and request in the
+# default branch reflog and the anonymized installation diagnostics.
 # After the project's own checkout holds the landed work (the fast-forward, or
 # the rebase of its local integration branch), a project that declares a
 # service in config/restart/<project directory name> gets it restarted and
@@ -133,17 +136,45 @@ if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   exit 1
 fi
 
-# Clean fast-forward only: DEFAULT must be an ancestor of BRANCH.
+# Clean fast-forward only: DEFAULT must be an ancestor of BRANCH. A branch that
+# fell behind because another task landed first is rebased onto DEFAULT in a
+# throwaway clone before updating either branch. A conflict or a branch already
+# published to a remote refuses and leaves every ref as it was.
+TIP=$BRANCH
+REBASED=
+REBASE_TMP=
+rebase_cleanup() { [ -z "$REBASE_TMP" ] || rm -rf -- "$REBASE_TMP"; }
+trap 'rebase_cleanup; merge_control_cleanup' EXIT
 if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
-  echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged)." >&2
-  echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry." >&2
-  exit 1
+  refuse_diverged() {
+    echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged): $1" >&2
+    echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry. $BRANCH and $DEFAULT are unchanged." >&2
+    exit 1
+  }
+  if [ -n "$(git -C "$PROJ" branch -r --contains "$BRANCH" 2>/dev/null | head -1)" ]; then
+    refuse_diverged "it is already published, so it is not rewritten"
+  fi
+  REBASE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-merge-rebase.XXXXXX")
+  git clone -q --local --no-checkout "$PROJ" "$REBASE_TMP/c" || refuse_diverged "could not prepare a copy to rebase in"
+  base_sha=$(git -C "$PROJ" rev-parse "$DEFAULT")
+  name=$(git -C "$PROJ" config user.name || git -C "$PROJ" log -1 --format=%an "$BRANCH")
+  email=$(git -C "$PROJ" config user.email || git -C "$PROJ" log -1 --format=%ae "$BRANCH")
+  git -C "$REBASE_TMP/c" checkout -q --detach "$(git -C "$PROJ" rev-parse "$BRANCH")" || refuse_diverged "could not prepare a copy to rebase in"
+  if ! git -C "$REBASE_TMP/c" -c "user.name=$name" -c "user.email=$email" rebase --quiet "$base_sha" >"$REBASE_TMP/rebase.out" 2>&1; then
+    conflicts=$(git -C "$REBASE_TMP/c" diff --name-only --diff-filter=U | tr '\n' ' ')
+    patch=$(git -C "$REBASE_TMP/c" rebase --show-current-patch 2>/dev/null | head -1 | cut -c1-80)
+    refuse_diverged "rebasing onto $DEFAULT conflicts in: ${conflicts:-unknown files}(commit ${patch:-unknown}); resolve it in the branch"
+  fi
+  REBASED=$(git -C "$REBASE_TMP/c" rev-parse HEAD)
+  git -C "$PROJ" fetch -q "$REBASE_TMP/c" "$REBASED" || refuse_diverged "could not bring the rebased commits into the project"
+  TIP=$REBASED
+  echo "rebased $BRANCH onto $DEFAULT in a separate copy"
 fi
 
 # Captain rule 37: no commit whose whole message (subject or body) carries the
 # word WIP, in any case, and no worker-close preservation commit, enters main.
 wip=
-for commit in $(git -C "$PROJ" rev-list "$DEFAULT..$BRANCH"); do
+for commit in $(git -C "$PROJ" rev-list "$DEFAULT..$TIP"); do
   message=$(git -C "$PROJ" log -1 --format=%B "$commit")
   if printf '%s\n' "$message" | grep -Eiqw 'wip' || [ "${message%%$'\n'*}" = "Save pending work before worker close" ]; then
     wip=$(git -C "$PROJ" rev-parse --short "$commit")
@@ -171,10 +202,21 @@ case "$hold_status" in
     ;;
 esac
 merge_status=0
+if [ -n "$REBASED" ]; then
+  git -C "$PROJ" update-ref "refs/heads/$BRANCH" "$REBASED" "$(git -C "$PROJ" rev-parse "$BRANCH")" || {
+    echo "error: $BRANCH moved while rebasing; nothing landed" >&2
+    exit 1
+  }
+fi
+# Attach the owner and request to the actual ref change. A failed merge or one
+# already up to date contributes no movement. Preserve landing if attribution
+# is unavailable while reconciling an older installation.
+integration_note=$(FM_HOME="$FM_HOME" python3 "$SCRIPT_DIR/fm_integration.py" "$ID" "$DATA") \
+  || integration_note="firstmate integrate [\"$ID\", null]"
 if [ -z "$INTEGRATION" ]; then
-  git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
+  GIT_REFLOG_ACTION="$integration_note" git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
 else
-  git -C "$PROJ" update-ref "refs/heads/$DEFAULT" "$(git -C "$PROJ" rev-parse "$BRANCH")" \
+  git -C "$PROJ" update-ref -m "$integration_note" "refs/heads/$DEFAULT" "$(git -C "$PROJ" rev-parse "$BRANCH")" \
     "$(git -C "$PROJ" rev-parse "$DEFAULT")" || merge_status=$?
 fi
 fm_lock_release "$MERGE_CONTROL_LOCK" || true
@@ -183,7 +225,13 @@ MERGE_CONTROL_LOCK=
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 # shellcheck source=bin/fm-merge-outcome-lib.sh
 . "$SCRIPT_DIR/fm-merge-outcome-lib.sh"
-[ "$before" = "$after" ] || fm_merge_notify_waiters "$FM_HOME" "$STATE" "$ID" "$PROJ"
+if [ "$before" != "$after" ]; then
+  # shellcheck source=bin/fm-diag.sh
+  . "$SCRIPT_DIR/fm-diag.sh"
+  integration_request=$(printf '%s' "${integration_note#firstmate integrate }" | jq -r '.[1] // empty') || integration_request=
+  fm_diag_emit integration.ok "task=$ID" "project=$PROJ" "request=$integration_request"
+  fm_merge_notify_waiters "$FM_HOME" "$STATE" "$ID" "$PROJ"
+fi
 # A separate integration task can land a previously preserved fm/<id> branch.
 # Reconcile only matching queued rows whose exact branch is now contained in the
 # local default; ordinary task branches and captain-held rows stay untouched.

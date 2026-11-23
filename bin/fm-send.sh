@@ -259,11 +259,26 @@ fi
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
+# shellcheck source=bin/fm-diag.sh
+. "$SCRIPT_DIR/fm-diag.sh" 2>/dev/null || {
+  fm_diag_stage_begin() { :; }
+  fm_diag_stage_end() { :; }
+  fm_diag_stage_next() { :; }
+}
+fm_diag_stage_begin protected-send guard
+fm_send_diag_exit() {
+  local rc=$?
+  if declare -F fm_lease_guard_release >/dev/null; then fm_lease_guard_release; fi
+  fm_diag_stage_end "$rc"
+  return "$rc"
+}
+trap fm_send_diag_exit EXIT
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 
 # shellcheck source=bin/fm-send-target-lib.sh
 . "$SCRIPT_DIR/fm-send-target-lib.sh"
 
+fm_diag_stage_next resolve
 RAW_TARGET=$1
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
@@ -279,7 +294,6 @@ if [ -n "$TARGET_META" ]; then
   LEASE_GUARD_TASK=$(fm_send_id_from_meta "$TARGET_META")
   if [ -n "$LEASE_GUARD_TASK" ]; then
     fm_lease_guard "$LEASE_GUARD_TASK" "steer (fm-send)"
-    trap 'fm_lease_guard_release' EXIT
   fi
 fi
 
@@ -581,6 +595,7 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # error with the attempted resolution attached.
 
 if [ "${1:-}" = "--key" ]; then
+  fm_diag_stage_next key
   [ -z "$FIRE_AND_FORGET_ID" ] ||
     {
       echo "error: --fire-and-forget cannot accompany --key" >&2
@@ -711,6 +726,7 @@ else
       esac
     fi
   fi
+  fm_diag_stage_next delivery
   if [ "$INBOX_PLANE" = 1 ] && [ "$TARGET_BACKEND" = remote ]; then
     # Remote inbox leg: the message becomes a durable record in the remote
     # home's steering inbox, written idempotently by the host-local leg, then
@@ -937,8 +953,10 @@ else
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
     # because the watcher owns loss detection from here, either through its
     # bounded re-ring ladder or direct unavailable-endpoint recovery.
+    fm_diag_stage_next doorbell
     ring_rc=0
     fm_task_inbox_ring "$TARGET_BACKEND" "$T" "$INBOX_RECORD" "$EXPECTED_LABEL" || ring_rc=$?
+    fm_diag_stage_next result "$ring_rc"
     ring_retry="the watcher will re-ring"
     if [ -n "$FIRE_AND_FORGET_ID" ] \
       && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/wait-no-turns" ]; then
@@ -981,12 +999,14 @@ else
   # verdict preserves the loud refusal boundary. Only LOCAL targets reach this
   # block: remote text rides the inbox leg above, and remote --key exits
   # earlier.
+  fm_diag_stage_next transport
   send_rc=0
   if verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     :
   else
     send_rc=$?
   fi
+  fm_diag_stage_next result "$send_rc"
   if [ "$send_rc" -ne 0 ]; then
     fm_send_known_undelivered_cleanup ||
       echo "error: known-undelivered pending-reply state could not be reset for $TARGET_TASK_ID" >&2

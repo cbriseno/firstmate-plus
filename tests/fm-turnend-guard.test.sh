@@ -53,6 +53,31 @@ test_predicate_unhealthy_no_beacon() {
   pass "fm_supervision_unhealthy: true with in-flight task and no beacon ever"
 }
 
+test_predicate_uses_one_fleet_query() (
+  local_dir="$TMP_ROOT/pred-batch"
+  mkdir -p "$local_dir/state"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$local_dir/"
+  # shellcheck source=/dev/null
+  . "$local_dir/fm-supervision-lib.sh"
+  touch "$local_dir/state/"{held,missing,duplicate}.meta
+  cat > "$local_dir/fm-tasks-axi.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schema":"fm-work-supervision.v1","tasks":[
+  {"id":"held","needed":false},{"id":"duplicate","needed":false},{"id":"duplicate","needed":false}
+]}'
+SH
+  chmod +x "$local_dir/fm-tasks-axi.sh"
+  # shellcheck disable=SC2329 # The sourced predicate invokes this wrapper.
+  jq() {
+    printf '.\n' >> "$local_dir/jq.calls"
+    command jq "$@"
+  }
+  fm_supervision_status "$local_dir/state"
+  assert_equals 2 "$FM_SUP_IN_FLIGHT" "only a unique hold exempts a task"
+  assert_equals . "$(cat "$local_dir/jq.calls")" "one jq reads the whole snapshot"
+  pass "supervision: one JSON query exempts only tasks with unique proven holds"
+)
+
 test_predicate_unhealthy_stale_beacon() {
   local state="$TMP_ROOT/pred-stale/state"
   mkdir -p "$state"
@@ -184,7 +209,6 @@ install_guard_scripts() {
   local dir=$1
   mkdir -p "$dir/bin"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
-  cp "$ROOT/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-turnend-guard-grok.sh"
   cp "$ROOT/bin/fm-operational-input.sh" "$dir/bin/fm-operational-input.sh"
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
@@ -201,7 +225,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-timeout-lib.sh" "$dir/bin/fm-timeout-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
-  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
+  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
 }
 
 mark_codex_hook_root() {
@@ -727,13 +751,17 @@ test_hook_silent_without_stdin() {
 }
 
 test_hook_runs_fast() {
-  local dir start elapsed_s
+  local dir elapsed_s
   dir=$(make_primary_dir "$TMP_ROOT/hook-timing")
   : > "$dir/state/task1.meta"
-  start=$SECONDS
-  run_hook "$dir" false >/dev/null
-  elapsed_s=$((SECONDS - start))
-  [ "$elapsed_s" -lt 3 ] || fail "hook took ${elapsed_s}s, expected well under a second (generous 3s CI margin)"
+  # Bash SECONDS crosses whole-second boundaries during the measurement, so
+  # it can report three seconds for a run that took less than three.
+  elapsed_s=$(
+    export LC_ALL=C
+    { time -p run_hook "$dir" false >/dev/null; } 2>&1 | awk '$1 == "real" { print $2 }'
+  )
+  awk -v elapsed="$elapsed_s" 'BEGIN { exit !(elapsed ~ /^[0-9]+\.[0-9]+$/ && elapsed < 3) }' \
+    || fail "hook took ${elapsed_s:-unknown}s, expected well under a second (generous 3s CI margin)"
   pass "fm-turnend-guard: runs well under the generous timing margin (${elapsed_s}s)"
 }
 
@@ -1142,9 +1170,15 @@ test_hook_claude_mode_blocks_on_stuck_arming_claim() {
 # entry, identity-matched owner descending from the session-lock pid, watcher
 # still beating) owns recovery with no owner lock held at all.
 test_hook_claude_mode_allows_on_open_generation_claim() {
-  local dir out status pid identity
+  local dir out status pid identity blocked blocked_status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-open-generation")
   : > "$dir/state/task1.meta"
+  cat > "$dir/bin/fm-tasks-axi.sh" <<'SH'
+#!/usr/bin/env bash
+printf '.\n' >> "$FM_HOME/state/work-reads"
+printf '%s\n' '{"schema":"fm-work-supervision.v1","tasks":[{"id":"task1","needed":true}]}'
+SH
+  chmod +x "$dir/bin/fm-tasks-axi.sh"
   printf '%s\n' "$$" > "$dir/state/.lock"
   sleep 60 &
   pid=$!
@@ -1159,7 +1193,12 @@ test_hook_claude_mode_allows_on_open_generation_claim() {
   wait "$pid" 2>/dev/null || true
   expect_code 0 "$status" "--claude mode must allow when a live open generation claim owns recovery"
   [ -z "$out" ] || fail "open-generation-claim allow produced output: $out"
-  pass "fm-turnend-guard --claude: a live open generation claim owns recovery with no lock held"
+  assert_absent "$dir/state/work-reads" "the guard read work already covered by open recovery"
+  blocked=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=0 run_hook_claude "$dir" false); blocked_status=$?
+  expect_code 2 "$blocked_status" "a dead claimant must not allow an unsupervised stop"
+  assert_contains "$blocked" "1 task(s) in flight" "the block must name unsupervised work"
+  assert_equals . "$(cat "$dir/state/work-reads")" "the guard must read work once without a recovery owner"
+  pass "fm-turnend-guard --claude: open recovery avoids a work read; unsupervised work still blocks"
 }
 
 # The same claim gone stuck (entry and beacon both past grace) stops counting
@@ -1863,6 +1902,7 @@ test_hook_no_afk_ignores_poll_derived_grace() {
 
 test_predicate_healthy_no_inflight
 test_predicate_unhealthy_no_beacon
+test_predicate_uses_one_fleet_query || exit $?
 test_predicate_unhealthy_stale_beacon
 test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag

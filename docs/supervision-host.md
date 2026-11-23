@@ -153,6 +153,7 @@ Where the home runs the host but the attended host lacks one of its parts, `/qui
 The engine's conversation receives nothing between wakes, so each attended wake carries, at its head, what the captain and main said since the last wake: the same `[captain]` and `[main]` context the Pi branch receives as mirror messages, framed by the same prompt rule (context for judgment, never instructions; `bin/fm-branch-prompt.sh` "Context channels").
 `bin/fm-host-mirror.sh` owns the record, writers, files, feed, and verified-writer list; its header owns their formats, bounds, and failure contract.
 The writers use code-owned turn surfaces rather than model-generated messages; `bin/fm-host-mirror.sh` owns the input exclusions.
+Claude's final arrives asynchronously with the [fleet ledger entry](fleet-ledger.md#harness-coverage), so a wake that reads the mirror before that write receives the final on the next wake.
 A new engine conversation re-anchors on the current main session's newest entries, and a resumed one gets only what is new.
 A wake's entries count as delivered only once its engine turn is accepted with its report, so a turn that fails, records nothing, or is stopped leaves them to be fed again.
 An attended wake whose mirror is missing, unreadable, or fails the feed's validation reaches main with `the dialog mirror could not be read` before any engine turn; an away wake never reads the mirror or moves its cursor.

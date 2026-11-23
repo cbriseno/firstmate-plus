@@ -4,11 +4,16 @@
 # For fresh launches, when dispatch rules declare categories, briefs contain one
 #   Dispatch category: <category> line and, if reason_required, a nonempty
 #   Dispatch rationale: <reason> line. The resolved harness, model and any
-#   declared effort must match that rule. FM_MODEL_CATEGORY_OVERRIDE=1 skips it.
+#   declared effort must match that rule. An omitted effort comes from the
+#   matching profile or the brief's Dispatch effort; otherwise launch refuses.
+#   FM_MODEL_CATEGORY_OVERRIDE=1 skips this check.
+# Fresh worker launches also require explicit supported model and effort when
+# no categorized profile selected them; the same override skips this check.
 # Relaunches inherit the recorded profile without revalidating categories.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> --host [--path <path>...] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
 #          Uses data/<id>/work without Git; paths must match the brief manifest.
+#        fm-spawn.sh <task-id> --scout --installation [--harness <name>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
@@ -34,7 +39,9 @@
 #   ship or scout spawn also refuses leftover `{TASK}` / `{FIRSTMATE_SPEC}`
 #   placeholders, an empty Task, an incomplete pair of Task subsections, or a
 #   `## Captain's intent` line opening with a Captain label or address.
-#   When config/herdr-lifecycle-spawn-guard exists, a brief naming
+#   A ship or scout launch adds the Herdr isolation contract to a legacy brief
+#   that lacks it, without changing the durable brief. When
+#   config/herdr-lifecycle-spawn-guard exists, a host brief naming
 #   bin/fm-herdr-lab.sh or a listed Herdr session/server lifecycle command must
 #   carry the Herdr isolation contract emitted by bin/fm-brief.sh --herdr-lab;
 #   the refusal names the first such match.
@@ -106,9 +113,9 @@
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <default|low|medium|high|xhigh|max|ultra> are concrete profile
-#   axes chosen by firstmate at intake. They are only threaded into harnesses whose
-#   installed CLIs were verified to support that axis; unsupported axes are omitted
-#   from that harness's launch rather than guessed. Explicit ultra refuses through
+#   axes chosen by firstmate at intake. Fresh workers refuse unsupported axes
+#   unless the explicit category override is used; supported axes are threaded
+#   into the harness launch. Explicit ultra refuses through
 #   bin/fm-harness.sh validate-native-effort on the verified adapters.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
@@ -170,8 +177,8 @@
 #   creation through metadata publication, so concurrent same-id spawns serialize
 #   even when they select different backends. A fresh spawn first takes the
 #   per-home task-set lock and refuses rather than waits when another operation
-#   owns it. The refusal names another spawn or forced teardown when the recorded
-#   holder role is known, otherwise another operation. --relaunch is exempt
+#   owns it. Automatic dispatch defers a competing spawn to a managed retry;
+#   other refusals name forced teardown or another operation when known. --relaunch is exempt
 #   because the existing task's control lock covers it.
 #   A fresh Treehouse-backed spawn also takes the project-identity lock in the local
 #   root Firstmate home's state directory before slot allocation and holds it through
@@ -188,7 +195,8 @@
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
-#   contention refuses rather than waits.
+#   manual contention refuses; automatic dispatch records the held lock and
+#   exits 76 so a managed job retries without blocking the watcher.
 #   Project capacity: when this machine declares how many workers a project
 #   admits at once (config/project-capacity; bin/fm-project-capacity-lib.sh owns
 #   the declaration, what holds a place, and the race argument), a fresh ship or
@@ -207,12 +215,15 @@
 #   That script owns the opt-in lane ceiling and live resource verdict; exit 75
 #   keeps the item queued, while invalid configuration remains an error.
 #   Either deferral writes state/<id>.spawn-deferred: the absolute project path
-#   on line 1, then this invocation's arguments separated by NUL. The watcher
-#   rechecks admission each poll and, when both limits allow dispatch and the
+#   on line 1, then this invocation's arguments separated by NUL; its one-line
+#   cause, without paths, goes to state/<id>.spawn-deferred.reason and to the
+#   task.dispatch_wait reason, where task views show it. The watcher
+#   rechecks admission in the current work order, refreshes that cause while
+#   home admission stays closed, and, when both limits allow dispatch and the
 #   task is still ready with a brief, reruns this script with those arguments
 #   and queues one `check: capacity available:` wake naming the launch or its
-#   failure; another deferral rewrites the marker silently. It retires the
-#   reminder when the task already has metadata or no longer has a brief;
+#   failure; another deferral rewrites the marker and its cause. It retires the
+#   reminder and its cause when the task already has metadata;
 #   spawning still owns the locked admission verdict.
 #   Batch pairs run one at a time, rereading capacity after the previous spawn
 #   has published its record. Host tasks retain their separate admission path.
@@ -672,6 +683,7 @@ fm_refuse_if_gate_agent
 HOST_PATHS=()
 KIND=ship
 KIND_SET=0
+INSTALLATION=0
 HARNESS_ARG=
 MODEL=
 EFFORT=
@@ -760,6 +772,7 @@ for a in "$@"; do
   fi
   case "$a" in
   --host) KIND=host; KIND_SET=1 ;;
+  --installation) INSTALLATION=1 ;;
   --path) want_value=path ;;
   --path=*) HOST_PATHS+=("${a#--path=}") ;;
   --scout)
@@ -881,6 +894,10 @@ case "$EFFORT" in
   exit 1
   ;;
 esac
+
+if [ "$INSTALLATION" -eq 1 ] && { [ "$KIND" != scout ] || [ "$RELAUNCH" -eq 1 ] || [ "$BASE_BRANCH_SET" -eq 1 ]; }; then
+  echo 'error: --installation requires a fresh --scout without a base branch' >&2; exit 2
+fi
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
@@ -1007,6 +1024,7 @@ SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_SLOT_CLAIMED=0
+SPAWN_SLOT_LEASED=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1112,6 +1130,7 @@ if [ "$RELAUNCH" -eq 1 ] && [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart"
   exit 1
 fi
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac then
+  [ "$INSTALLATION" != 1 ] || { echo 'error: --installation does not support project batches' >&2; exit 2; }
   if [ "$KIND" != secondmate ] && [ -z "$HARNESS_ARG" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
@@ -1289,7 +1308,17 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
-    case "$(fm_lock_role "$SPAWN_TASK_SET_LOCK" 2>/dev/null || true)" in
+    lock_role=$(fm_lock_role "$SPAWN_TASK_SET_LOCK" 2>/dev/null || true)
+    if [ "${FM_AUTODISPATCH:-0}" = 1 ] && [ -z "$lock_role" ]; then
+      sleep 0.1
+      lock_role=$(fm_lock_role "$SPAWN_TASK_SET_LOCK" 2>/dev/null || true)
+    fi
+    if [ "${FM_AUTODISPATCH:-0}" = 1 ] && { [ "$lock_role" = task-spawn ] ||
+      { [ -z "$lock_role" ] && [ -n "${FM_LOCK_HELD_PID:-}" ] && [ ! -e "$SPAWN_TASK_SET_LOCK" ] && [ ! -L "$SPAWN_TASK_SET_LOCK" ]; }; }; then
+      printf '%s\n' "$SPAWN_TASK_SET_LOCK" > "$STATE/.autodispatch-lock-$ID" || exit 1
+      exit 76
+    fi
+    case "$lock_role" in
       task-spawn)
         echo "error: this home's task set is locked by another spawn; refusing to create task $ID rather than racing it" >&2
         ;;
@@ -1442,6 +1471,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
+  INSTALLATION=$(fm_meta_get "$RELAUNCH_META" installation_audit)
+  [ "$INSTALLATION" = 1 ] || INSTALLATION=0
   # A secondmate whose endpoint is gone already has ONE owner for that
   # recovery: the session-start liveness sweep respawns it with
   # `fm-spawn.sh <id> --secondmate`, which stands its home's own workspace back
@@ -1473,7 +1504,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     [ -n "$FIRSTMATE_HOME" ] || FIRSTMATE_HOME=$RELAUNCH_WT
   else
     PROJ=$(fm_meta_get "$RELAUNCH_META" project)
-    [ -n "$PROJ" ] || {
+    [ -n "$PROJ" ] || [ "$INSTALLATION" = 1 ] || {
       echo "error: task $ID has no recorded project; refusing to relaunch" >&2
       exit 1
     }
@@ -1501,7 +1532,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
     exit 1
   }
-elif [ "$KIND" = host ]; then
+elif [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || { echo 'error: --host takes no project; use --harness' >&2; exit 2; }
   [ "$BASE_BRANCH_SET" -eq 0 ] || { echo 'error: --host has no base branch' >&2; exit 2; }
   ARG3=$HARNESS_ARG
@@ -1617,6 +1648,28 @@ fi
 if [ "$RELAUNCH" -eq 1 ] && [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ]; then
   [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
   [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -r "$DATA/$ID/brief.md" ] && [ "${FM_MODEL_CATEGORY_OVERRIDE:-0}" != 1 ]; then
+  brief_harness=$(sed -n 's/^Dispatch harness: //p' "$DATA/$ID/brief.md" 2>/dev/null || true)
+  [ -z "$brief_harness" ] || [ "$brief_harness" = "$HARNESS" ] || { echo 'error: pass the harness selected in the brief' >&2; exit 1; }
+  if [ -f "$CONFIG/crew-dispatch.json" ]; then
+    brief_category=$(sed -n 's/^Dispatch category: //p' "$DATA/$ID/brief.md" 2>/dev/null || true)
+    if [ -z "$MODEL" ]; then
+      MODEL=$(jq -r --arg c "$brief_category" --arg h "$HARNESS" '
+        (if $c == "default" and has("default") then [.default] else [.rules[]? | select(.category == $c) | .use] end)
+        | map(if type == "array" then .[] else . end) | map(select(.harness == $h))
+        | if length == 1 then (.[0].model // "") else "" end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || MODEL=
+    fi
+  fi
+  [ -n "$MODEL" ] || MODEL=$(sed -n 's/^Dispatch model: //p' "$DATA/$ID/brief.md" 2>/dev/null || true)
+  if [ -z "$EFFORT" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
+    EFFORT=$(jq -r --arg c "$brief_category" --arg h "$HARNESS" --arg m "$MODEL" '
+      (if $c == "default" and has("default") then [.default] else [.rules[]? | select(.category == $c) | .use] end)
+      | map(if type == "array" then .[] else . end)
+      | map(select(.harness == $h and ((.model // "") == "" or .model == $m)))
+      | if length == 1 then (.[0].effort // "") else "" end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || EFFORT=
+  fi
+  [ -n "$EFFORT" ] || EFFORT=$(sed -n 's/^Dispatch effort: //p' "$DATA/$ID/brief.md" 2>/dev/null || true)
 fi
 # No verified adapter supports ultra.
 # Validate the fully resolved profile before worktree or endpoint provisioning.
@@ -1925,6 +1978,12 @@ if [ "$KIND" = secondmate ]; then
   else
     BRIEF="$DATA/$ID/brief.md"
   fi
+elif [ "$INSTALLATION" = 1 ]; then
+  [ "${#HOST_PATHS[@]}" -eq 0 ] || { echo 'error: installation audits do not take host paths' >&2; exit 2; }
+  WT="$DATA/$ID/work"
+  PROJ_ABS=$WT
+  BRIEF="$DATA/$ID/brief.md"
+  grep -qxF 'Installation audit: read-only' "$BRIEF" || { echo 'error: installation audit requires a matching --scout --installation brief' >&2; exit 1; }
 elif [ "$KIND" = host ]; then
   [ ! -L "$DATA/$ID/host-paths" ] && [ -f "$DATA/$ID/host-paths" ] || { echo 'error: --host requires an fm-brief.sh --host path manifest' >&2; exit 1; }
   HOST_DECLARED=()
@@ -1935,7 +1994,7 @@ elif [ "$KIND" = host ]; then
     [ "$(fm_host_paths "${HOST_PATHS[@]}")" = "$HOST_TARGETS" ] || { echo 'error: --path disagrees with host brief' >&2; exit 1; }
   fi
   for host_path in "${HOST_DECLARED[@]}"; do
-    grep -qxF -- "$host_path" "$DATA/$ID/brief.md" || { echo 'error: host brief must name every authorized path' >&2; exit 1; }
+    grep -qxF -- "$host_path" "$DATA/$ID/brief.md" || { printf "error: host brief must declare authorized path on its own line: %s\nAllowed paths:\n%s\n" "$host_path" "$HOST_TARGETS" >&2; exit 1; }
   done
   WT="$DATA/$ID/work"
   PROJ_ABS=$WT
@@ -1946,7 +2005,7 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] &&
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ] &&
   git -C "$PROJ_ABS" rev-parse --git-dir >/dev/null 2>&1 &&
   ! git -C "$PROJ_ABS" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "error: spawn refused: project $PROJ_ABS has no commit yet (unborn HEAD), so there is nothing to branch a worktree from; make one commit in the project, for example 'git -C $PROJ_ABS commit --allow-empty -m \"chore: initial commit\"', then spawn again" >&2
@@ -1966,7 +2025,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-disp
       ($category | test("^[a-z0-9-]+$")) and ($rules | length == 1) and
       (($rules[0].reason_required // false) != true or ($rationale | test("[^[:space:]]"))) and
       (($rules[0].use | if type == "array" then . else [.] end) |
-        any(.[]; .harness == $harness and (.model // "") == $model and
+        any(.[]; .harness == $harness and ((.model // "") == "" or .model == $model) and
           ((.effort // "") == "" or .effort == $effort)))
     ' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
       echo 'error: dispatch category, rationale or profile mismatch; correct the brief/profile or skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2
@@ -1974,30 +2033,36 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-disp
     fi
   fi
 fi
-unset FM_MODEL_CATEGORY_OVERRIDE
-if [ "$KIND" = host ]; then
-  if [ "$RELAUNCH" -eq 0 ]; then
-    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
-    mkdir -m 700 "$WT" || exit 1
-  fi
-  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
+# Without categories the caller still selects difficulty and both axes.
+# Ambient harness defaults do not encode the task's difficulty.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$BRIEF" ] && [ "${FM_MODEL_CATEGORY_OVERRIDE:-0}" != 1 ]; then
+  case "$EFFORT" in low|medium|high|xhigh|max) ;; *) echo 'error: pass a concrete --effort selected for the task; skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1 ;; esac
+  [ -n "$MODEL" ] && [ "$MODEL" != default ] || { echo 'error: pass a concrete --model selected for the task; skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1; }
+  [ -n "$(model_flag_for_harness "$HARNESS" "$MODEL")" ] && [ -n "$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")" ] || {
+    echo 'error: this harness cannot pass the selected model and effort; choose a supported profile or skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1;
+  }
 fi
+unset FM_MODEL_CATEGORY_OVERRIDE
 # Line 1 is the project; the NUL-separated rest is this invocation's arguments.
-spawn_defer_marker() {
-  { printf '%s\n' "$PROJ_ABS"; printf '%s\0' "${SPAWN_ARGS[@]}"; } > "$STATE/$ID.spawn-deferred"
+# The cause and the ledger wait carry the same one-line reason.
+spawn_defer_marker() {  # <reason> <project-limit|null>
+  { printf '%s\n' "$PROJ_ABS"; printf '%s\0' "${SPAWN_ARGS[@]}"; } > "$STATE/$ID.spawn-deferred" || return 1
+  printf '%s\n' "$1" > "$STATE/$ID.spawn-deferred.reason" || return 1
+  [ ! -e "$CONFIG/fleet-ledger" ] || jq -cn --arg reason "$1" --argjson limit "$2" \
+    '{source:"spawn-deferred",project_limit:$limit,reason:$reason}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
 }
 # Read live home capacity for each fresh worker, never the watcher's cached
 # document. The existing task-set lock stays held through metadata publication,
 # so the next spawn sees this worker before making its own admission decision.
 if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   spawn_capacity_rc=0
-  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit || spawn_capacity_rc=$?
+  spawn_capacity_err=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_PROJECTS_OVERRIDE="$PROJECTS" bash "$SCRIPT_DIR/fm-capacity.sh" --admit 2>&1 >/dev/null) || spawn_capacity_rc=$?
+  [ -z "$spawn_capacity_err" ] || printf '%s\n' "$spawn_capacity_err" >&2
   if [ "$spawn_capacity_rc" -ne 0 ]; then
     if [ "$spawn_capacity_rc" -eq 75 ]; then
-      spawn_defer_marker || exit 1
-      [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{"source":"spawn-deferred","project_limit":null}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-        "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
+      spawn_defer_marker "$(printf '%s\n' "$spawn_capacity_err" | sed -n 's/^deferred: .* does not admit another lane: //p' | head -n 1)" null || exit 1
       echo "deferred: task $ID was not launched and its backlog item stays queued; the watcher will wake dispatch when capacity is available; to skip this opt-in check, temporarily move $CONFIG/lane-capacity aside" >&2
     fi
     exit "$spawn_capacity_rc"
@@ -2010,7 +2075,7 @@ fi
 # deferral leaves the task exactly as queued as it was. A relaunch replaces a
 # worker that already holds a place, and a secondmate is not a worker.
 SPAWN_PROJECT_CAPACITY=
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
   SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
     echo "error: could not resolve the root Firstmate home that declares project capacity for $PROJ_ABS" >&2
     exit 1
@@ -2021,16 +2086,109 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; th
   fi
   SPAWN_PROJECT_CAPACITY=$FM_PROJECT_CAPACITY
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+    if [ "${FM_AUTODISPATCH:-0}" = 1 ] && { [ -d "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] || [ -n "${FM_LOCK_HELD_PID:-}" ]; }; then
+      printf '%s\n' "$SPAWN_TREEHOUSE_PROJECT_LOCK" > "$STATE/.autodispatch-lock-$ID" || exit 1
+      exit 76
+    fi
     echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
     exit 1
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+fi
+# A process-owned Treehouse checkout becomes available as soon as its worker
+# exits. Reserve recorded copies before another acquisition, including tasks
+# parked by an older installation. The project lock also protects the owner
+# claims and serializes this reconciliation with allocation and return.
+spawn_reserve_slot() { # <worktree> <task-id> [fresh]
+  local worktree=$1 owner=$2 fresh=${3:-0} listing slot lease holder result
+  if ! treehouse lease --help 2>&1 | grep -q -- '--lease-holder' ||
+     ! treehouse status --help 2>&1 | grep -q -- '--json'; then
+    echo 'error: Treehouse must support lease and status --json to protect task copies; update Treehouse before spawning' >&2
+    return 1
+  fi
+  listing=$(cd "$PROJ_ABS" && treehouse status --json) || return 1
+  slot=$(printf '%s' "$listing" | jq -er --arg path "$worktree" \
+    '[.[] | select(.path == $path)] | if length == 1 then .[0].name else error("slot not found") end') || return 1
+  lease=$(printf '%s' "$listing" | jq -er --arg path "$worktree" \
+    '.[] | select(.path == $path) | .lease_id // ""') || lease=
+  holder=$(printf '%s' "$listing" | jq -er --arg path "$worktree" \
+    '.[] | select(.path == $path) | .lease_holder // ""') || holder=
+  if [ -n "$lease" ]; then
+    [ "$holder" = "firstmate:$owner" ] || {
+      echo "error: Treehouse slot $worktree is already reserved by another holder; refusing to change it" >&2
+      return 1
+    }
+    return 0
+  fi
+  result=$(cd "$PROJ_ABS" && treehouse lease "$slot" --lease-holder "firstmate:$owner") || return 1
+  [ "$fresh" != 1 ] || SPAWN_SLOT_LEASED=1
+  [ "$result" = "$worktree" ] || {
+    echo "error: Treehouse reserved an unexpected slot for $owner; refusing to continue" >&2
+    return 1
+  }
+}
+
+spawn_reserve_existing_slots() {
+  local state meta id worktree other_state other field other_worktree
+  fm_local_firstmate_state_dirs "$STATE" || {
+    echo "error: cannot inspect existing task copies: $FM_LOCAL_FIRSTMATE_ERROR" >&2
+    return 1
+  }
+  for state in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
+    if [ -e "$state" ] && { [ ! -d "$state" ] || [ ! -r "$state" ] || [ ! -x "$state" ]; }; then
+      echo "error: cannot read task records in $state" >&2
+      return 1
+    fi
+    for meta in "$state"/*.meta; do
+      [ -e "$meta" ] || [ -L "$meta" ] || continue
+      [ -f "$meta" ] && [ ! -L "$meta" ] && [ -r "$meta" ] || {
+        echo "error: cannot safely read task record $meta" >&2
+        return 1
+      }
+      case "$(fm_meta_get "$meta" kind)" in secondmate|host) continue ;; esac
+      id=${meta##*/}; id=${id%.meta}
+      worktree=$(fm_meta_get "$meta" worktree)
+      if [ -z "$worktree" ] || ! fm_treehouse_pool_slot "$PROJ_ABS" "$worktree"; then
+        continue
+      fi
+      worktree=$(CDPATH='' cd -- "$worktree" && pwd -P) || return 1
+      fm_treehouse_slot_owner_state "$worktree" "$id"
+      case "$FM_TREEHOUSE_SLOT_OWNER" in
+        other) continue ;; # A newer owner already holds this stale record's copy.
+        unsafe) echo "error: cannot read the owner of $worktree" >&2; return 1 ;;
+        absent)
+          for other_state in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
+            for other in "$other_state"/*.meta; do
+              [ -e "$other" ] || [ -L "$other" ] || continue
+              [ -f "$other" ] && [ ! -L "$other" ] && [ -r "$other" ] || return 1
+              [ "$other" != "$meta" ] || continue
+              for field in worktree home; do
+                other_worktree=$(fm_meta_get "$other" "$field")
+                [ -d "$other_worktree" ] || continue
+                other_worktree=$(CDPATH='' cd -- "$other_worktree" && pwd -P) || return 1
+                [ "$other_worktree" != "$worktree" ] || {
+                  echo "error: multiple tasks name unclaimed Treehouse slot $worktree; reconcile its owner before spawning" >&2
+                  return 1
+                }
+              done
+            done
+          done ;;
+      esac
+      spawn_reserve_slot "$worktree" "$id" || return 1
+    done
+  done
+}
+if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+  spawn_reserve_existing_slots || {
+    echo "error: cannot reserve existing task copies for $PROJ_ABS; refusing to allocate another" >&2
+    exit 1
+  }
 fi
 if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   if ! fm_project_capacity_occupants "$SPAWN_TREEHOUSE_PROJECT_LOCK" "$PROJ_ABS" "$STATE" "$ID"; then
@@ -2038,9 +2196,7 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
     exit 1
   fi
   if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
-    spawn_defer_marker || exit 1
-    [ ! -e "$CONFIG/fleet-ledger" ] || printf '{"source":"spawn-deferred","project_limit":%s}\n' "$SPAWN_PROJECT_CAPACITY" | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
+    spawn_defer_marker "project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place" "$SPAWN_PROJECT_CAPACITY" || exit 1
     echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - the watcher will wake dispatch when capacity is available" >&2
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
   fi
@@ -2051,7 +2207,7 @@ fi
 }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   HERDR_LIFECYCLE_BRIEF_GUARD=$(fm_config_source_present "$CONFIG/herdr-lifecycle-spawn-guard") || exit 1
-  if [ "$HERDR_LIFECYCLE_BRIEF_GUARD" = 1 ]; then
+  if [ "$HERDR_LIFECYCLE_BRIEF_GUARD" = 1 ] && [ "$KIND" = host ]; then
     HERDR_LIFECYCLE_COMMAND=$(perl -ne '
       if (m{(bin/fm-herdr-lab\.sh|(?<![[:alnum:]_])herdr[[:space:]]+(?:session|server)[[:space:]]+(?:start|stop|delete|restart|reload-config|live-handoff)(?![[:alnum:]_-]))}) { print $1; exit }
     ' -- "$BRIEF")
@@ -2061,11 +2217,22 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
     fi
   fi
   if fm_brief_task_placeholders_present "$BRIEF"; then
-    echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
+    echo "error: $BRIEF still contains {TASK}, {FIRSTMATE_SPEC}, or {CAPTAIN_REQUIREMENTS}; fill ## Captain's intent and ## Firstmate spec, and generate ## Captain's requirements with fm-brief.sh --requirements before spawn" >&2
     exit 1
   fi
   if ! fm_brief_task_content_valid "$BRIEF"; then
     echo "error: $BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before spawn" >&2
+    exit 1
+  fi
+  # Inspect the filled spec, not the scaffold's general pre-publication rule.
+  if fm_brief_task_heading_present "$BRIEF" "## Firstmate spec"; then
+    CHANGED_INSTRUCTIONS=$(fm_brief_task_heading_body "$BRIEF" "## Firstmate spec")
+  else
+    CHANGED_INSTRUCTIONS=$(fm_brief_heading_body "$BRIEF" "# Task")
+  fi
+  if printf '%s\n' "$CHANGED_INSTRUCTIONS" | grep -E -- '(^|[^[:alnum:]_-])--changed([^[:alnum:]_-]|$)' | grep -Eiv '(^|[[:space:]])(no|never|do not|don.t)([[:space:]]|$)' >/dev/null &&
+     ! grep -Ei '^(Publication task: yes|Outward effect: .*(publish|publication|publica|publicación|push))' "$BRIEF" >/dev/null; then
+    echo "error: $BRIEF requests the --changed batch without a publication effect; use targeted tests and the project check, or declare the publication effect" >&2
     exit 1
   fi
   if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
@@ -2106,6 +2273,37 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   SOURCE_BRIEF=$BRIEF
   BRIEF="$DATA/$ID/launch-brief.md"
   BRIEF_TMP="$DATA/$ID/.launch-brief.md.${BASHPID:-$$}"
+  # shellcheck source=bin/fm-herdr-contract-lib.sh
+  . "$SCRIPT_DIR/fm-herdr-contract-lib.sh"
+  render_source_brief() {
+    # shellcheck disable=SC2016 # Match the literal helper variables in the brief.
+    if [ "$KIND" = host ] || fm_brief_heading_body "$SOURCE_BRIEF" '# Herdr isolation - HARD SAFETY CONTRACT' | grep -Fq '"$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION"'; then
+      cat "$SOURCE_BRIEF"
+    else
+      fm_herdr_contract "$FM_ROOT" "$ID" || return
+      printf '\n\n' || return
+      awk '
+        {
+          scan=$0
+          sub(/^   ? ?/, "", scan)
+          marker=substr(scan,1,1)
+          count=0
+          if (marker == "`" || marker == "~")
+            while (substr(scan,count+1,1) == marker) count++
+          was_fenced=fenced
+          if (count >= 3) {
+            rest=substr(scan,count+1)
+            if (!fenced) { fenced=1; fence_marker=marker; fence_len=count }
+            else if (marker == fence_marker && count >= fence_len && rest ~ /^[[:space:]]*$/) fenced=0
+          }
+          if (!was_fenced && $0 == "# Herdr lifecycle declaration - NOT ENABLED") { skip=1; next }
+          if (skip && !was_fenced && /^# /) skip=0
+          if (!skip) print
+        }
+      ' "$SOURCE_BRIEF"
+    fi
+  }
+  # shellcheck disable=SC2016 # Match the literal legacy scaffold text.
   {
     fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT" &&
       printf '\n' &&
@@ -2113,7 +2311,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
       printf '# Current progress reporting contract\nThis supersedes earlier progress reporting instructions, including in a retained brief.\n' &&
       FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-tasks-axi.sh" progress-contract "$ID" &&
       printf '\n' &&
-      cat "$SOURCE_BRIEF" &&
+      (set -o pipefail; render_source_brief | sed '/^After filling intent, replace the requirements placeholder with the output of `fm-brief.sh --requirements <this-brief>`; bin\/fm-dod-lib.sh owns acceptance\.$/d; /^For complex work, list the independent deliverables and how they integrate in this spec before dispatch\.$/d') &&
       if [ "$HARNESS" = codex ]; then
         printf '\n## Native loader evidence\nThis launch attempts native registration of additional repository skills. Unsupported registration is reported without restricting edits or changing configured approval. Continue the assigned work, including edits. Native activation evidence must come from the running worker, not this brief.\n'
       fi &&
@@ -2130,6 +2328,14 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
     echo "error: could not publish current launch contract for $SOURCE_BRIEF" >&2
     exit 1
   fi
+fi
+
+if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
+  if [ "$RELAUNCH" -eq 0 ]; then
+    [ ! -e "$WT" ] && [ ! -L "$WT" ] || { echo 'error: host scratch already exists; refusing reuse' >&2; exit 1; }
+    mkdir -m 700 "$WT" || exit 1
+  fi
+  fm_host_scratch_valid "$WT" || { echo 'error: unsafe host scratch directory' >&2; exit 1; }
 fi
 
 delivery_rigor_rank() { # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
@@ -2337,7 +2543,7 @@ spawn_worktree_isolated() { # <path>
   local path=$1 wt_real wt_top_real wt_git_dir proj_common
   SPAWN_WT_TOP=
   SPAWN_WT_REASON=
-  if [ "$KIND" = host ]; then
+  if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
     SPAWN_WT_TOP=$path
     fm_host_scratch_valid "$path" && return 0
     SPAWN_WT_REASON='it is not the exact host scratch directory'
@@ -2608,42 +2814,12 @@ herdr_projection_existing_meta_allows_flat() { # <meta>
 # transitionable BEFORE any endpoint, worktree, or record exists: a refusal here
 # costs nothing to unwind, while the same refusal after publication would strand
 # a live pane. The authoritative mutation still runs under the meta lock below.
-BACKLOG_TRANSITION=0
-BACKLOG_ROW_STATE=
-if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
-  BACKLOG_TRANSITION=1
-  if fm_backlog_row_probe "$DATA" "$ID"; then
-    BACKLOG_ROW_STATE=$FM_BACKLOG_ROW_STATE
-  elif [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
-    echo "error: task $ID has no backlog item in this home, so dispatching it would leave a worker no record owns; add it first (bin/fm-tasks-axi.sh add $ID '<title>' --kind $KIND) and re-run" >&2
-    exit 1
-  else
-    echo "error: task $ID's backlog item could not be read before dispatch ($FM_BACKLOG_ROW_ERROR)" >&2
-    exit 1
-  fi
-  # The home-owned hierarchy can hold work without overwriting individual holds.
-  # This check applies to every harness and backend before launch allocation.
-  if [ -e "$DATA/work-structure.json" ] || [ -L "$DATA/work-structure.json" ]; then
-    FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-      bash "$SCRIPT_DIR/fm-tasks-axi.sh" work dispatch-check --task "$ID" >&2 || {
-      echo "error: work hierarchy prevents dispatch of $ID" >&2
-      exit 1
-    }
-  fi
+fm_backlog_dispatch_preflight "$CONFIG" "$DATA" "$STATE" "$KIND" "$ID" "$RELAUNCH" || exit 1
+if [ "$BACKLOG_TRANSITION" = 1 ]; then
   spawn_preflight_actor=$(fm_lease_actor) || exit "$FM_LEASE_REFUSE_EXIT"
-  if [ "$RELAUNCH" -ne 1 ] && [ "$spawn_preflight_actor" = branch ] && fm_lease_away_relocated; then
-    if [ "$BACKLOG_ROW_STATE" != "queued no no" ]; then
-      echo "error: spawn refused - the supervision branch under the away-posture record may dispatch only queued unblocked work (already queued, or filed by the branch from the captain's away words); task $ID has no dispatchable backlog item in this home" >&2
-      exit 1
-    fi
-  elif ! fm_backlog_row_dispatchable "$BACKLOG_ROW_STATE"; then
-    echo "error: this home's backlog item $ID is not dispatchable in state $BACKLOG_ROW_STATE; refusing before creating its endpoint or local copy" >&2
-    exit 1
-  fi
-else
-  BACKLOG_GATE_STATUS=$?
-  if [ "$BACKLOG_GATE_STATUS" -eq 2 ]; then
-    echo "error: task $ID cannot be dispatched because its backlog data directory is inaccessible: $DATA ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+  if [ "$RELAUNCH" -ne 1 ] && [ "$spawn_preflight_actor" = branch ] && fm_lease_away_relocated \
+      && [ "$BACKLOG_ROW_STATE" != "queued no no" ]; then
+    echo "error: spawn refused - the supervision branch under the away-posture record may dispatch only queued unblocked work (already queued, or filed by the branch from the captain's away words); task $ID has no dispatchable backlog item in this home" >&2
     exit 1
   fi
 fi
@@ -2657,6 +2833,13 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ]; then
     echo "error: $ID cannot launch: its project links a local installation whose follow-up could not be queued (see above); fix that and spawn again" >&2
     exit 1
   }
+fi
+
+if [ "$KIND" != secondmate ]; then
+  case "$HARNESS" in
+    codex|claude) python3 "$FM_ROOT/bin/fm-worker-relay.py" --status "$FM_HOME" "$HARNESS" "$MODEL" || true ;;
+    *) echo "worker context relay ($HARNESS): unsupported harness; supported: codex, claude" ;;
+  esac
 fi
 
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
@@ -2880,10 +3063,10 @@ else
     # it stands up a DIFFERENT home's own workspace by design - so it asks for
     # the per-home container instead of inheriting this launcher's.
     HERDR_LABEL_HOME=$FM_HOME
-    HERDR_LAUNCHER_RELATIONSHIP=launcher-home
+    HERDR_LAUNCHER_RELATIONSHIP='launcher-home'
     if [ "$KIND" = secondmate ]; then
       HERDR_LABEL_HOME=$PROJ_ABS
-      HERDR_LAUNCHER_RELATIONSHIP=other-home
+      HERDR_LAUNCHER_RELATIONSHIP='other-home'
     fi
     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
     HERDR_PROJECTED=0
@@ -3168,7 +3351,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
+elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -3205,6 +3388,7 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   last_seen=""
   last_reason="the pane reported no path"
   waited=0
+  recycled=0
   while :; do
     previous_candidate=$candidate
     p=$(spawn_current_path "$WT_TARGET" || true)
@@ -3225,7 +3409,15 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
     if [ "$waited" -ge 60 ] && ! spawn_treehouse_running "$WT_TARGET"; then
       # The subshell can take the foreground just as its isolated cwd first
       # appears. Give that new candidate its existing second-read check.
-      [ -n "$candidate" ] && [ -z "$previous_candidate" ] || break
+      if [ -z "$candidate" ] || [ -n "$previous_candidate" ]; then
+        if [ "$recycled" = 0 ] && "$SCRIPT_DIR/fm-treehouse-recycle.sh" "$PROJ_ABS" "$STATE"; then
+          recycled=1
+          waited=0
+          spawn_send_text_line "$WT_TARGET" 'treehouse get'
+          continue
+        fi
+        break
+      fi
     fi
     if [ $((waited % 15)) -eq 0 ]; then
       echo "task $ID: waiting for Treehouse to enter the isolated worktree ($waited polls); $(spawn_endpoint_hint)" >&2
@@ -3234,32 +3426,32 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
   done
   if [ -z "$WT" ]; then
     echo "error: treehouse get did not enter an isolated worktree after $waited polls and no foreground Treehouse was observed (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); $(spawn_endpoint_hint)" >&2
+    treehouse_output=$(fm_backend_capture "$BACKEND" "$WT_TARGET" 50 2>/dev/null || true)
+    case "$treehouse_output" in
+      *"worktrees are in use or dirty"*)
+        bash "$SCRIPT_DIR/fm-treehouse-diagnose.sh" "$PROJ_ABS" >&2 ;;
+    esac
     exit 1
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
 
-  # Claim the pool slot for this task. The interactive `treehouse get` sent to
-  # the pane above records only a process lease (Treehouse's durable
-  # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
-  # homes, is not this path), so Treehouse cannot say which task a slot belongs
-  # to once that task's worker exits - and that is exactly when the slot is
-  # handed on and this task's worktree= line goes stale. The claim is what lets
-  # bin/fm-teardown.sh leave a slot that has since been reassigned untouched, so
-  # a slot that cannot be claimed is refused here, at the cheapest point, rather
-  # than launching a worker whose slot teardown could later release out from
-  # under its successor.
-  # Written under the Treehouse project lock held from before slot allocation
-  # through metadata publication, so no other spawn or return sees a half-claim.
+  # The claim protects old reassigned records; the durable lease prevents this
+  # new task's copy from being handed out after its worker stops. Both are
+  # written under the project lock before metadata publication.
   if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
     if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
       echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; $(spawn_endpoint_hint)" >&2
       exit 1
     fi
     SPAWN_SLOT_CLAIMED=1
+    spawn_reserve_slot "$WT" "$ID" 1 || {
+      echo "error: could not reserve Treehouse slot $WT for task $ID" >&2
+      exit 1
+    }
   fi
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ]; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
   LANDS_LOCALLY=0
   if [ "$KIND" = ship ]; then
     [ "$MODE" != local-only ] || LANDS_LOCALLY=1
@@ -3276,7 +3468,7 @@ fi
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
 
-if [ "$KIND" != host ]; then
+if [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
   "$FM_ROOT/bin/fm-git-identity.sh" "$WT" "$PROJ_ABS" "$FM_HOME" || exit 1
 fi
 
@@ -3298,7 +3490,7 @@ fi
 # behind.
 case "$HARNESS" in
 claude*)
-  if [ "$KIND" = host ]; then
+  if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
     spawn_trust_args=(--host-task "$WT" "$DATA/$ID")
   elif [ "$KIND" = secondmate ]; then
     spawn_trust_args=(--secondmate-home "$PROJ_ABS" "$ID")
@@ -3349,7 +3541,7 @@ mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
-  [ "$KIND" != host ] || return 0
+  [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ] || return 0
   local rel=$1 EXCL
   # git rev-parse --git-path is relative to the repository, not to this
   # process's cwd. A caller sitting in another worktree must not mkdir
@@ -3544,8 +3736,8 @@ BUSY_GEN=
 # External-review ships retain their origin/namespace restriction.
 GIT_HOOKS_DIR="$STATE_REAL/$ID.git-hooks"
 GIT_HOOKS_INSTALLED=0
-if [ "$KIND" = host ]; then
-  : # Host tasks have no Git repository or publication lifecycle.
+if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
+  : # Scratch tasks have no Git repository or publication lifecycle.
 elif [ "$EXTERNAL_REVIEW" = 1 ]; then
   PUSH_GUARD_FILE="$STATE_REAL/$ID.push-guard"
   guard_args=("$PUSH_GUARD_FILE" "$WT" "$BRANCH" "$(fm_ship_branch_prefix "$BRANCH" "$ID")")
@@ -3633,7 +3825,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen process_scope spawned_at sessions_file status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project installation_audit harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider busy_gen spawn_gen process_scope spawned_at sessions_file status_start_bytes approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3643,7 +3835,7 @@ preserve_relaunch_meta() {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
-  echo "project=$PROJ_ABS"
+  if [ "$INSTALLATION" = 1 ]; then echo "project="; echo "installation_audit=1"; else echo "project=$PROJ_ABS"; fi
   echo "harness=$HARNESS"
   if [ "$RAW_LAUNCH" = 0 ]; then
     case "$HARNESS" in
@@ -4142,7 +4334,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   fi
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
-if [ "$KIND" = host ]; then
+if [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; then
   # Prevent Git discovery from walking out of ignored scratch into the home.
   # Applied after env filtering and as an export for compound launch commands.
   LAUNCH="export GIT_CEILING_DIRECTORIES=$(shell_quote "$DATA/$ID"); $LAUNCH"

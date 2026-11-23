@@ -102,7 +102,12 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
+        *pane_current_command*)
+          if [ -f "$D/recover-on-note" ]; then
+            id=$(cat "$D/recover-on-note")
+            [ ! -f "$FM_HOME/state/$id.control-relaunch.brief-prior" ] || printf 'claude' > "$D/command"
+          fi
+          cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
@@ -366,6 +371,48 @@ SH
 
 # --- 1. same-harness relaunch -----------------------------------------------
 
+test_automatic_relaunch_refuses_a_live_agent() {
+  local dir out rc=0
+  dir=$(new_case automatic-live auto-live)
+  mkdir -p "$dir/wt" "$dir/proj" "$dir/home/data/auto-live"
+  printf '%s' "$dir/wt" > "$dir/fake/cwd"
+  printf 'window=fmses:fm-auto-live\nendpoint_task_id=auto-live\nworktree=%s\nproject=%s\nharness=claude\nkind=ship\n' \
+    "$dir/wt" "$dir/proj" > "$dir/home/state/auto-live.meta"
+  printf 'working: still running\n' > "$dir/home/state/auto-live.status"
+  out=$(run_control "$dir" auto-live relaunch --if-dead --note 'continue') || rc=$?
+  expect_code 1 "$rc" 'automatic relaunch must refuse a live agent'
+  assert_contains "$out" 'no longer confirmed dead' 'the refusal must name the recovered agent'
+  [ ! -s "$dir/fake/literal" ] || fail 'automatic relaunch sent input to the live agent'
+  printf 'zsh' > "$dir/fake/command"
+  printf 'window=fmses:fm-auto-live\nendpoint_task_id=auto-live\nworktree=%s\nproject=%s\nharness=claude\nkind=host\n' \
+    "$dir/wt" "$dir/proj" > "$dir/home/state/auto-live.meta"
+  printf 'blocked [key=prior]: earlier obstacle\ndone: completed\n' > "$dir/home/state/auto-live.status"
+  rc=0
+  out=$(run_control "$dir" auto-live relaunch --if-dead --note 'continue') || rc=$?
+  expect_code 1 "$rc" 'automatic relaunch must refuse a completed host task'
+  assert_contains "$out" 'no longer eligible' 'the terminal status must take precedence'
+  pass 'automatic relaunch leaves a recovered agent running'
+}
+
+test_automatic_relaunch_refuses_agent_recovered_after_gate() {
+  local dir out rc=0
+  dir=$(new_case automatic-recovered auto-race)
+  mkdir -p "$dir/proj" "$dir/home/data/auto-race/work"
+  printf '%s' "$dir/home/data/auto-race/work" > "$dir/fake/cwd"
+  printf 'zsh' > "$dir/fake/command"
+  printf 'auto-race' > "$dir/fake/recover-on-note"
+  printf 'window=fmses:fm-auto-race\nendpoint_task_id=auto-race\nworktree=%s\nproject=%s\nharness=claude\nkind=host\n' \
+    "$dir/home/data/auto-race/work" "$dir/proj" > "$dir/home/state/auto-race.meta"
+  printf 'original instructions\n' > "$dir/home/data/auto-race/brief.md"
+  printf 'working: still running\n' > "$dir/home/state/auto-race.status"
+  out=$(run_control "$dir" auto-race relaunch --if-dead --note 'continue') || rc=$?
+  expect_code 1 "$rc" 'automatic relaunch must refuse an agent recovered after its first check'
+  assert_contains "$out" 'no longer confirmed dead' 'the later refusal must name the recovered agent'
+  [ ! -s "$dir/fake/literal" ] || fail 'automatic relaunch sent input after recovery'
+  [ "$(cat "$dir/home/data/auto-race/brief.md")" = 'original instructions' ] || fail 'refusal changed the brief'
+  pass 'automatic relaunch preserves an agent recovered after the gate'
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   local dir out rc gen_before gen_after
   dir=$(new_case same rl1)
@@ -391,6 +438,34 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" "the replacement should have been launched"
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
+
+test_relaunch_bypasses_new_dispatch_hierarchy() (
+  # This fixture uses a disposable clone, not the shared worktree pool.
+  fm_git_worktree() {
+    fm_git_init_commit "$1"
+    fm_git_add_origin "$1" "$1.origin.git"
+    git clone -q "$1" "$2"
+    git -C "$2" checkout -qb "$3"
+  }
+  local dir out rc
+  dir=$(new_case hierarchy rl-hierarchy)
+  add_ship_task "$dir" rl-hierarchy codex
+  printf 'tasktmp=%s\n' "$dir/tasktmp" >> "$dir/home/state/rl-hierarchy.meta"
+  printf codex > "$dir/fake/command"
+  printf codex > "$dir/fake/becomes"
+  seed_backlog "$dir" rl-hierarchy in_flight
+  cat > "$dir/home/data/work-structure.json" <<'JSON'
+{"schema":"fm-work-structure.v1","groups":{},"membership":{},"order":[],"edge_meta":{},"freeze":{"reason":"hold new work","except":[]}}
+JSON
+  if FM_HOME="$dir/home" bash "$ROOT/bin/fm-tasks-axi.sh" work dispatch-check --task rl-hierarchy >/dev/null 2>&1; then
+    fail "fixture must block new dispatch"
+  fi
+  out=$(run_control "$dir" rl-hierarchy relaunch --note "continue existing work"); rc=$?
+  expect_code 0 "$rc" "in-flight replacement must bypass new dispatch hierarchy"$'\n'"$out"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" "replacement must start"
+  [ "$(backlog_state "$dir" rl-hierarchy)" = in_flight ] || fail "task must remain in flight"
+  pass "relaunch continues in-flight work while new dispatch is held"
+)
 
 test_spawn_respects_tmpdir() {
   local dir out rc=0 hash
@@ -629,11 +704,14 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
   dir=$(new_case note rl2)
   add_ship_task "$dir" rl2 claude
   cp "$ROOT/AGENTS.md" "$dir/wt/AGENTS.md"
+  mkdir -p "$dir/home/state/rl2.jobs"
+  printf '{"state":"running","pid":1234}\n' > "$dir/home/state/rl2.jobs/validation.json"
   out=$(run_control "$dir" rl2 relaunch --note "reproduced the crash in parser.go"); rc=$?
   expect_code 0 "$rc" "relaunch should succeed"$'\n'"$out"
   brief="$dir/home/data/rl2/brief.md"
   assert_grep "Exercise relaunch behavior for rl2." "$brief" "the original instructions must survive"
   assert_grep "## Progress note" "$brief" "the note should be a dated section in the instructions"
+  assert_grep "$dir/home/state/rl2.jobs/validation.json: running" "$brief" "the replacement must see the active job record and state"
   assert_grep "reproduced the crash in parser.go" "$brief" "the note text should reach the replacement"
   assert_grep "a paused status for this handoff request" "$brief" "a consumed handoff wait must be explicitly satisfied"
   assert_grep "Do not wait for another handoff request" "$brief" "the replacement must continue without another request"
@@ -950,6 +1028,7 @@ test_host_park_and_resume_preserves_scratch() {
   add_ship_task "$dir" host2 claude
   wt="$dir/home/data/host2/work"
   mkdir -p "$wt" "$dir/home/config" "$dir/home/projects"
+  printf 'claude\n' > "$dir/home/config/crew-harness"
   printf 'keep\n' > "$wt/keep"
   printf '%s\n' "$dir/host-target" > "$dir/home/data/host2/host-paths"
   printf '\n%s\n' "$dir/host-target" >> "$dir/home/data/host2/brief.md"
@@ -968,6 +1047,51 @@ test_host_park_and_resume_preserves_scratch() {
   grep -qx 'phase=complete' "$dir/home/state/host2.control-relaunch" \
     || fail "host resume journal did not complete: $out"
   pass 'host park and resume accept an empty checkpoint list and preserve scratch'
+}
+
+test_expired_parked_pause_retries_after_enqueue() {
+  local dir home state id=timed-park out line
+  dir=$(new_case timed-park "$id")
+  add_ship_task "$dir" "$id" claude
+  home="$dir/home"; state="$home/state"
+  mkdir -p "$home/config" "$dir/user-home"
+  fm_test_tasks_toml "$home/.tasks.toml"
+  seed_backlog "$dir" "$id" in_flight || fail 'could not seed the parked worker backlog item'
+  printf '{"rules":[{"use":{"harness":"claude"}}],"default":{"harness":"codex"}}\n' > "$home/config/crew-dispatch.json"
+  line='paused [at=100]: wait until 2000-01-01T00:00Z'
+  printf '%s\n' "$line" > "$state/$id.status"
+  { cat "$state/$id.meta"; printf 'park_phase=parked\npark_wait=%s\n' "$line"; } > "$state/$id.parked"
+  printf 'Resume from the saved progress.\n' > "$home/data/$id/park-note.md"
+  printf zsh > "$dir/fake/command"
+  mv "$home/data/$id/brief.md" "$dir/brief.md"
+  check_expired_parked_pause() {
+    # shellcheck disable=SC2016 # the child shell expands the watcher arguments
+    env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
+      -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+      PATH="$dir/fakebin:$PATH" HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_FAKE_DIR="$dir/fake" \
+      FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SPAWN_NO_GUARD=1 FM_CONTROL_POLL=0.01 FM_TASK_INBOX_GRACE_SECS=900 FM_DIAGNOSTICS=0 \
+      bash -c '. "$1"; paused_until_resume "fmses:fm-$2" "$2" "$(status_declared_wait_line "$STATE/$2.status")"' \
+      _ "$ROOT/bin/fm-watch.sh" "$id" 2>&1
+  }
+  out=$(check_expired_parked_pause) || fail "initial deadline check failed: $out"
+  assert_contains "$out" 'has no instructions' 'fixture must refuse after the inbox enqueue'
+  [ -f "$state/$id.parked" ] && [ -f "$state/$id.inbox/001.msg" ] \
+    || fail "failed resume must retain the parking record and the notice: $out"
+  assert_contains "$(cat "$state/.watch-triage.log")" 'watcher owns resume retries after 900s' 'failed resume names the retry owner and cadence'
+
+  # Model an installed home updating while the original notice is queued.
+  mv "$state/.pause-notice-$id" "$state/.paused-resumed-fmses_fm-$id"
+  mv "$dir/brief.md" "$home/data/$id/brief.md"
+  check_expired_parked_pause >/dev/null || fail 'deadline check inside the retry grace failed'
+  [ -e "$state/$id.parked" ] || fail 'watcher retried inside the grace period'
+  touch -t 202001010000 "$state/.pause-notice-$id"
+  out=$(check_expired_parked_pause) || fail "deadline retry failed: $out"
+  [ ! -e "$state/$id.parked" ] || fail "watcher left the worker parked after the launch prerequisite was restored: $out"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "the replacement agent did not start: $out"
+  [ -f "$state/$id.inbox/001.msg" ] && [ ! -e "$state/$id.inbox/002.msg" ] \
+    || fail 'watcher lost or duplicated the deadline notice on retry'
+  pass 'watcher retries an expired parked worker with a durable notice after a launch refusal'
 }
 
 test_explicit_model_wins_over_the_recorded_one() {
@@ -2892,11 +3016,14 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
   exit $?
 fi
 
+test_automatic_relaunch_refuses_a_live_agent
+test_automatic_relaunch_refuses_agent_recovered_after_gate
 test_relaunch_keeps_profile_without_revalidating_category
 
 test_exit_and_relaunch_remove_the_dialog_file
 test_exit_removes_the_dialog_file_before_releasing_the_lock
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_relaunch_bypasses_new_dispatch_hierarchy
 test_spawn_respects_tmpdir
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
@@ -2917,6 +3044,7 @@ test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_exclude_tools_refusals_happen_before_the_agent_stops
 test_host_relaunch_preserves_scratch
 test_host_park_and_resume_preserves_scratch
+test_expired_parked_pause_retries_after_enqueue
 test_explicit_model_wins_over_the_recorded_one
 test_control_relaunch_explicitly_resets_profile
 test_relaunch_onto_an_unverified_harness_is_refused

@@ -4,6 +4,9 @@
 # fm_platform_require refuses unsupported POSIX/process environments before any
 # operational mutation. No installs, probes of agents, or platform overrides.
 
+fm_platform_epoch() { date +%s; }
+fm_platform_mtime() { python3 -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$1"; }
+
 fm_platform_name() {
   local kernel release
   kernel=$(uname -s 2>/dev/null) || kernel=

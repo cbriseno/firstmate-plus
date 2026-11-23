@@ -52,10 +52,13 @@ EOF
 }
 
 run_case_spawn() {
+  local arg
+  local -a profile=(--model fixture-model --effort high)
+  for arg in "$@"; do [ "$arg" != --secondmate ] || profile=(); done
   : > "$LAUNCH_LOG"
   : > "$PANE_LOG"
   FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" FM_FAKE_PANE_LOG="$PANE_LOG" \
-    fm_test_run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$@"
+    fm_test_run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${profile[@]}" "$@"
 }
 
 # Replace the harness binary with a probe that reports the single environment
@@ -378,7 +381,7 @@ printf '%s\n' "${COMPACT_ADVISER_DISABLE-unset}"
 SH
   chmod +x "$probe_dir/probe"
 
-  out=$(run_case_spawn raw-compound-a1 "$PROJ_DIR" --mode no-mistakes --yolo off \
+  out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_case_spawn raw-compound-a1 "$PROJ_DIR" --mode no-mistakes --yolo off \
     "cd $probe_dir && ./probe")
   status=$?
   expect_code 0 "$status" "raw compound launch spawn should succeed: $out"

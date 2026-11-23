@@ -3,7 +3,7 @@
 # tasks-axi, including hierarchy pause, graph expansion, retries, progress,
 # manual order/Undo, normalization/rollback and lossless source preservation.
 # FM_WORK_TEST_SNAPSHOT=1 selects snapshot contention and its setup checks.
-# FM_WORK_TEST_SUPERVISION=1 selects bounded supervision and writer exclusion.
+# FM_WORK_TEST_SUPERVISION=1 selects bounded supervision, endpoint probes and writer exclusion.
 # FM_WORK_TEST_REPORT=1 selects on-demand report review and listener reuse.
 set -euo pipefail
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -264,9 +264,28 @@ exec /bin/bash "$@"
         tmux=fakebin/'tmux'
         tmux.write_text('#!/usr/bin/env bash\ncase "$1" in list-windows) echo fm-a ;; display-message) echo codex ;; *) exit 1 ;; esac\n')
         tmux.chmod(0o755); env['PATH']=str(fakebin)+os.pathsep+env['PATH']
+        structure.write_text(json.dumps(base))
         cli('start','a',raw=True)
         (home/'state/a.meta').write_text(f'window=example:fm-a\nworktree={home}\nproject={home}\nkind=ship\nbackend=tmux\nmode=local-only\n')
+        bash_probe=fakebin/'bash'
+        bash_probe.write_text('''#!/bin/sh
+if [ "$1" = -c ] && [ "$3" = fm-work ]; then
+    printf 'probe\\n' >> "$FM_HOME/endpoint-probes"
+fi
+exec /bin/bash "$@"
+''')
+        bash_probe.chmod(0o755)
+        probes=home/'endpoint-probes'
+        bounded_args=['work','supervision','--tasks','a']
+        check(cli(*bounded_args)['tasks'][0]['needed'], 'running work needs supervision')
+        check(not probes.exists(), 'unheld work needs no endpoint probe')
+        cli('hold','a','--kind','external','--reason','Outside wait',raw=True)
+        check(not cli(*bounded_args)['tasks'][0]['needed'], 'external hold exempts work')
+        check(not probes.exists(), 'external hold without a safe point request needs no endpoint probe')
+        cli('unhold','a',raw=True)
         structure.write_text(json.dumps(base|dict(task_pauses={'a':dict(kind='parked',reason='Own')})))
+        check(cli(*bounded_args)['tasks'][0]['needed'] and probes.exists(), 'parking work still checks its endpoint')
+        bash_probe.unlink()
         compare(True)  # stopping, even without a request marker
         records=home/'data/work-requests'; records.mkdir()
         request=dict(at='2020-01-01T00:00:00Z',safe_tasks=['a'],phase='verified',result=dict(state='applied'),scope='task:a',
@@ -281,6 +300,14 @@ exec /bin/bash "$@"
         invalid=subprocess.run(wrapper+['work','supervision','--tasks','a'],env=env,text=True,capture_output=True)
         check(invalid.returncode != 0 and json.loads(invalid.stdout)['state']=='failed','invalid structure refuses')
         structure.write_text(json.dumps(base))
+        def supervision_during_lock(mode):
+            with (home/'data/.work.lock').open('a') as held:
+                fcntl.flock(held, mode)
+                # Leave headroom for the reader, but exclude the mutation lock's five-second wait.
+                reply = subprocess.check_output(wrapper+bounded_args, env=env, text=True, timeout=4)
+            return json.loads(reply)
+        check(supervision_during_lock(fcntl.LOCK_SH)['tasks'][0]['needed'], 'supervision can share the read lock')
+        check(supervision_during_lock(fcntl.LOCK_EX)['code']=='busy', 'supervision declines an occupied write lock promptly')
         result_file=home/'result.json'
         result_file.write_text(json.dumps(dict(summary='Result',outcome=dict(role='final',review='needed'))))
         published=cli('presentation','a','--presentation-file',str(result_file))
@@ -451,7 +478,7 @@ exec /bin/bash "$@"
                   'malformed cache stays unknown and preserves valid peer usage: '+repr(invalid))
         bad_cache.unlink()
         cache.write_bytes(saved)
-        held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--category','product-design','--challenge','fixture','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
+        held = subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold','decision','--reason','Fixture','--action','fixture','--category','product-design','--challenge','fixture','--question','Choose?', '--option','a=Yes','--option','b=No'], env=ue, text=True, capture_output=True)
         check(held.returncode==0, held.stderr+held.stdout)
         projected = ucli('work','snapshot')['requests'][0]['usage']
         check(not projected['usd_complete'] and projected['tasks']['no_agent']==1 and projected['tasks']['unknown']==1 and any(r['task']=='missing' for r in projected['unknown']), 'agent-free decisions and missing launched sessions are distinct')
@@ -828,7 +855,7 @@ exec /bin/bash "$@"
     cli('done','origin',raw=True)
     for key in ('question-a','question-b','question-c'):
         p=subprocess.run(['bash',str(root/'bin/fm-captain-hold.sh'),'hold',key,'--title','Cache decision','--origin','origin',
-                          '--reason','Decision unanswered','--category','product-design','--challenge','fixture','--question','Clean this cache?', '--option','yes=Clean','--option','no=Keep'],env=env,text=True,capture_output=True)
+                          '--reason','Decision unanswered','--action','fixture','--category','product-design','--challenge','fixture','--question','Clean this cache?', '--option','yes=Clean','--option','no=Keep'],env=env,text=True,capture_output=True)
         check(p.returncode==0,('real unanswered call',p.stdout,p.stderr))
     original_backlog=(home/'data/backlog.md').read_bytes()
     original_registry=(home/'data/projects.md').read_bytes()

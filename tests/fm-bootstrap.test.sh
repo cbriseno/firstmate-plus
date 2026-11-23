@@ -52,6 +52,8 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH __C
 # treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
 make_fake_toolchain() {
   local dir=$1 fakebin
+  python3 "$ROOT/bin/fm-standing-grants.py" init "$dir/home/data/standing-grants.json" >/dev/null || return 1
+  python3 "$ROOT/bin/fm-standing-grants.py" migrated "$dir/home/data/standing-grants.json" || return 1
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi
   fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.80
@@ -79,12 +81,18 @@ if [ "${1:-}" = --version ]; then
   exit 0
 fi
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ]; then
+  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ] || [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = legacy ]; then
     printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
   else
     printf '%s\n' 'Usage: treehouse get'
   fi
   exit 0
+fi
+if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ] && [ "${2:-}" = --help ]; then
+  case "${1:-}" in
+    lease) printf '%s\n' 'Usage: treehouse lease [--lease-holder <holder>]' ;;
+    status) printf '%s\n' 'Usage: treehouse status [--json]' ;;
+  esac
 fi
 exit 0
 SH
@@ -308,7 +316,7 @@ SH
   assert_not_contains "$out" brew 'Mac must not suggest brew'
   assert_not_contains "$out" sudo 'Mac must not suggest sudo'
   rc=0
-  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" \
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$env_file" FM_HOME="$case_dir/home" \
     bash "$ROOT/bin/fm-bootstrap.sh" install node 2>&1) || rc=$?
   [ "$rc" = 1 ] || fail 'Mac installer must defer manual installation'
   assert_contains "$out" 'requires manual installation' 'Mac installer explains manual setup'
@@ -408,7 +416,8 @@ test_bootstrap_reporting() {
   done <<'ROWS'
 treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
 absent treehouse is needed only at dispatch^absent^0.2.6^1^-^empty^^
-treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease support; upgrade: treehouse update)^NEEDS_GH_AUTH
+treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires get --lease, lease, and status --json; upgrade: treehouse update)^NEEDS_GH_AUTH
+treehouse with only old lease support reports an upgrade^legacy^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires get --lease, lease, and status --json; upgrade: treehouse update)^NEEDS_GH_AUTH
 compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 incompatible tasks-axi reports an upgrade by default^1^0.1.0^1^-^exact^OUTDATED: tasks-axi (installed: 0.1.0; requires 0.2.6; upgrade: npm install -g tasks-axi)^
@@ -782,8 +791,10 @@ ROWS
 }
 
 test_herdr_install_requires_manual_action() {
-  local out status
-  out=$("$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
+  local out status case_dir
+  case_dir="$TMP_ROOT/herdr-install"
+  make_fake_toolchain "$case_dir" >/dev/null
+  out=$(FM_HOME="$case_dir/home" "$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "install herdr should fail instead of evaluating its manual-install hint"
   [ "$out" = "error: herdr requires manual installation (instructions: https://herdr.dev)" ] \

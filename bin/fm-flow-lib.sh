@@ -61,10 +61,12 @@ FM_FLOW_JQ_DEFS='
        owner:$owner,
        reason:(if $record.hold_reason != null then $record.hold_reason
                elif $record.blocked_reason != null then $record.blocked_reason
+               elif $record.dispatch_reason != null then $record.dispatch_reason
                elif $state != "unknown" then ($current.detail // $state)
                else ($declaration.note // $current.detail // "Motivo no registrado") end),
        source:(if $record.hold_reason != null then "backlog.hold_reason"
                elif $record.blocked_reason != null then "backlog.blocked_reason"
+               elif $record.dispatch_reason != null then "spawn.deferral"
                elif $state != "unknown" then ("current_state." + ($current.source // "unknown"))
                elif $declaration.note != null then "status.declaration (historical)"
                else "unknown" end),

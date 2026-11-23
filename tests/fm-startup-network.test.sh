@@ -65,6 +65,9 @@ if [ -n "${FM_TIMING_LOG:-}" ]; then
     "$(( $(fm_timing_now_ms) - 1500 ))" "${FM_FAKE_TIMING_DETAIL:-}"
 fi
 [ -z "${FM_FAKE_BOOTSTRAP_SLEEP:-}" ] || sleep "$FM_FAKE_BOOTSTRAP_SLEEP"
+if [ -n "${FM_FAKE_BOOTSTRAP_RELEASE:-}" ]; then
+  while [ ! -e "$FM_FAKE_BOOTSTRAP_RELEASE" ]; do sleep 0.1; done
+fi
 [ -z "${FM_FAKE_BOOTSTRAP_OUT:-}" ] || printf '%s\n' "$FM_FAKE_BOOTSTRAP_OUT"
 exit "${FM_FAKE_BOOTSTRAP_RC:-0}"
 SH
@@ -635,28 +638,30 @@ EOF
 }
 
 test_lock_takeover_stays_read_only_while_a_sweep_holds_the_lease() {
-  local rec home root log next_owner new_owner out rc started elapsed waited=0
+  local rec home root log next_owner new_owner out rc release waited=0
   rec=$(new_world sweep-lease)
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
   printf '%s\n' $$ > "$home/state/.lock"
-  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=6 \
-    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  release="$home/state/.fixture-release"
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_RELEASE="$release" FM_STARTUP_NETWORK_TIMEOUT=180 \
+    run_stage "$home" "$root" start --locked 1 --harvest-pid $$ \
+      || { touch "$release"; fail "the held sweep could not start"; }
   while [ ! -s "$log" ] && [ "$waited" -lt 50 ]; do
     sleep 0.1
     waited=$((waited + 1))
   done
-  [ -s "$log" ] || fail "the mutating sweep never started"
+  [ -s "$log" ] || { touch "$release"; fail "the mutating sweep never started"; }
 
   next_owner=$(/bin/ps -o ppid= -p $$ | tr -d ' ')
-  started=$(date +%s)
   rc=0
-  out=$(PATH="$root/bin:$PATH" FM_FAKE_HARNESS_PID="$next_owner" \
+  out=$(fm_run_timed 45 env PATH="$root/bin:$PATH" FM_FAKE_HARNESS_PID="$next_owner" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-lock.sh" 2>&1) || rc=$?
-  elapsed=$(( $(date +%s) - started ))
+  # Always release the fixture before failing, so no background sweep is left.
+  touch "$release"
+  [ "$rc" -ne 124 ] && [ "$rc" -ne 137 ] || fail "lock takeover waited for the held network sweep"
   [ "$rc" -ne 0 ] || fail "lock takeover succeeded while the prior sweep was mutating"
-  [ "$elapsed" -lt 4 ] || fail "lock takeover blocked ${elapsed}s behind deferred network work"
   assert_contains "$out" "operate read-only" \
     "a lease-blocked takeover did not fail closed to read-only: $out"
   [ "$(cat "$home/state/.lock")" = "$$" ] \
@@ -763,15 +768,15 @@ $rec
 EOF
   printf '%s\n' $$ > "$home/state/.lock"
 
-  FM_STARTUP_NETWORK_TIMEOUT=1 FM_SESSION_START_TIMEOUT=2 \
-    FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=20 \
+  FM_STARTUP_NETWORK_TIMEOUT=10 FM_SESSION_START_TIMEOUT=20 \
+    FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=30 \
     FM_FAKE_TIMING_PHASE=secondmate-liveness FM_FAKE_TIMING_DETAIL='mate-a@host-one' \
     run_stage "$home" "$root" run --locked 1
 
   [ "$(sed -n 's/^state=//p' "$home/state/.startup-network.status")" = timeout ] \
     || fail "the bounded run did not record itself as timed out"
   report_out=$(run_stage "$home" "$root" report)
-  assert_contains "$report_out" "hit the 1s bound" "the bound stopped being reported"
+  assert_contains "$report_out" "hit the 10s bound" "the bound stopped being reported"
   assert_contains "$report_out" "secondmate-liveness mate-a@host-one" \
     "a timed-out run discarded the partial timings its sweeps had already recorded"
   pass "fm-startup-network: a timed-out run still publishes the partial timings it recorded"

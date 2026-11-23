@@ -388,6 +388,9 @@ cmd_sync() {
   ff_target "$TARGET_HOME" "remote home" "$commit" yes yes "$id" "$TARGET_HOME/state" > "$report" 2>&1
   out=$(cat "$report")
   rm -f "$report"
+  if { [ "$FF_STATUS" = "updated" ] || [ "$FF_STATUS" = "current" ]; } && [ -f "$TARGET_HOME/bin/fm_nudge.py" ]; then
+    FM_HOME="$TARGET_HOME" FM_STATE_OVERRIDE="$TARGET_HOME/state" FM_DATA_OVERRIDE="$TARGET_HOME/data" python3 "$TARGET_HOME/bin/fm_nudge.py" import-legacy
+  fi
   case "$FF_STATUS" in
     # instr= names the watched instruction paths this advance changed, with no
     # spaces so the whole result stays one parseable line. The parent needs it to

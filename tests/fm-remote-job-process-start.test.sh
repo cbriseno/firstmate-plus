@@ -16,8 +16,9 @@ set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job-process-start)
 mkdir -p "$TMP_ROOT"
-FIXTURE_ROOT="$TMP_ROOT/remote-root"
+FIXTURE_ROOT="$TMP_ROOT/a-long-installation-path-for-checking-process-arguments-beyond-terminal-width/remote-root"
 ACCOUNT_HOME="$TMP_ROOT/account"
+export COLUMNS=80
 mkdir -p "$FIXTURE_ROOT/bin" "$ACCOUNT_HOME"
 cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" "$FIXTURE_ROOT/bin/"
 printf 'fixture\n' > "$FIXTURE_ROOT/AGENTS.md"
@@ -34,7 +35,7 @@ LOCK="$STATE_ROOT/worker.lock"
 
 # Only processes whose command names this fixture's own worker are ever touched.
 fixture_pids() { # <supervisors|all>
-  ps -eo pid=,command= 2>/dev/null | awk -v worker="$WORKER" -v mode="$1" '
+  ps -ww -eo pid=,command= 2>/dev/null | awk -v worker="$WORKER" -v mode="$1" '
     index($0, worker) {
       cmd = $0; sub(/^[ \t]*[0-9]+[ \t]+/, "", cmd)
       if (mode == "all" || substr(cmd, length(cmd) - length(worker) + 1) == worker) print $1

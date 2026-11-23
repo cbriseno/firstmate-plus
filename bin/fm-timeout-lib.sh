@@ -154,7 +154,7 @@ fm_load_scaled_seconds() {  # <seconds>
 # now holding it started after <path> was last written, so the pid was reused.
 # 1 when the owner may be alive; other platforms cannot tell reuse apart.
 fm_scratch_owner_gone() {
-  local pid=$1 owned=$2 stat btime ticks start mtime
+  local pid=$1 owned=$2 stat btime ticks start mtime value
   case "$pid" in '' | *[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 0
   [ -r "/proc/$pid/stat" ] && IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
@@ -163,7 +163,9 @@ fm_scratch_owner_gone() {
   btime=$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)
   ticks=$(getconf CLK_TCK 2>/dev/null)
   mtime=$(stat -c %Y "$owned" 2>/dev/null)
-  case "$start$btime$ticks$mtime" in '' | *[!0-9]*) return 1 ;; esac
+  for value in "$start" "$btime" "$ticks" "$mtime"; do
+    case "$value" in '' | *[!0-9]*) return 1 ;; esac
+  done
   [ "$ticks" -gt 0 ] && [ $((btime + start / ticks)) -gt "$mtime" ]
 }
 
@@ -270,6 +272,16 @@ fm_run_external_timeout() {
   esac
   case "$runner_rc" in
     124|137)
+      # Test suites may need to finish their TERM traps before group cleanup.
+      # Other callers kill leftovers immediately so they cannot keep acting.
+      if [ "${FM_TIMEOUT_WAIT_CLEANUP:-0}" = 1 ]; then
+        local waited=0 grace_ticks
+        grace_ticks=$(( $(fm_load_scaled_seconds "$(fm_timeout_grace)") * 10 ))
+        while kill -0 -- "-$runner_pid" 2>/dev/null && [ "$waited" -lt "$grace_ticks" ]; do
+          sleep 0.1
+          waited=$((waited + 1))
+        done
+      fi
       kill -KILL -- "-$runner_pid" 2>/dev/null || true
       return 124
       ;;

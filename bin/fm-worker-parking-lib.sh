@@ -8,14 +8,14 @@
 # shellcheck disable=SC2034,SC2153
 
 do_park() {
-  local pending wait_line state verdict socket='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
+  local pending wait_line state verdict process_check socket='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
   case "$KIND" in ship|scout|host) ;; *) die 'parking applies to task workers only' ;; esac
   # shellcheck source=bin/fm-classify-lib.sh
   . "$SCRIPT_DIR/fm-classify-lib.sh"
   wait_line=$(status_current_line "$STATE/$ID.status" "$KIND")
   case "$(status_line_verb "$wait_line")" in
     done|needs-decision|captain-held) ;;
-    paused) status_paused_until "$wait_line" >/dev/null || die 'parking a pause requires an until date' ;;
+    paused) status_paused_until "$wait_line" >/dev/null || status_paused_load1 "$wait_line" >/dev/null || die 'parking a pause requires an until date or load1 threshold' ;;
     *) die 'parking requires a declared done, needs-decision, captain-held or dated pause' ;;
   esac
   if [ -f "$saved" ] && [ "$(fm_meta_get "$saved" park_phase)" = parked ]; then
@@ -60,6 +60,12 @@ do_park() {
     done
   fi
   safe_checkpoint
+  if [ "$PARK_WHEN_IDLE" = 1 ]; then
+    process_check=park-safe
+    [ "$state" != missing ] || process_check=park-gone
+    python3 "$SCRIPT_DIR/fm-worker-processes.py" "$process_check" "$META" \
+      || die 'worker process scope has active or unverified work; retry park when it is clear'
+  fi
   mkdir -p "$DATA/$ID"
   if [ "$BACKEND" = tmux ]; then
     socket=$(tmux display-message -p '#{socket_path}') || die 'cannot save tmux socket identity'
@@ -93,14 +99,15 @@ do_park() {
 
 # Natural-language dispatch selection belongs to Firstmate. A policy whose
 # profiles all use one adapter is unambiguous without selecting a rule/model.
+# For a mixed policy retain the saved adapter when it remains a candidate.
 resume_policy_harness() {
   local config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
   if [ -f "$config/crew-dispatch.json" ]; then
-    jq -er '
+    jq -er --arg saved "$HARNESS" '
       [((.rules // [])[] | .use), (.default // empty)] | flatten |
       if length == 0 or any(.[]; type != "object" or (.harness | type) != "string")
       then error("invalid dispatch profiles") else map(.harness) | unique end |
-      if length == 1 then .[0] else error("resolve the current dispatch profile") end
+      if length == 1 then .[0] elif index($saved) then $saved else error("resolve the current dispatch profile") end
     ' "$config/crew-dispatch.json" \
       || die 'resolve the current dispatch profile before resume; do not fall back to crew-harness'
   else
@@ -121,7 +128,7 @@ resume_check_policy() {
   CONTROL_LOCK_HELD=0
   fm_lock_release "$CONTROL_LOCK"
   fm_lease_guard_release
-  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --category product-design \
+  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --action "resume a worker under a different harness" --category product-design \
     --challenge 'Resuming on another harness than the saved worker would override the recorded usage policy choice' \
     --reason "El worker guardado usa $HARNESS y la política actual usa $policy" \
     --question 'Cambió el arnés de la política de uso. ¿Cómo quieres retomar este trabajo?' \

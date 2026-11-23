@@ -415,6 +415,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
       continue;
     }
     if (kind === "check") {
+      // The primary owns preparing briefs and reconciling local branches.
+      // Preserve the row for it even if the optional engine is away.
+      if (key.startsWith("ready-work:primary:")) {
+        needsDecisionKeys.push(key);
+        continue;
+      }
       // This is the report owner's explicit delivery request, including a
       // visible routine outcome missing from a return brief, not a check
       // observation. Never consume MAIN's relay on another engine turn.

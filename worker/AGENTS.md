@@ -20,10 +20,10 @@ Own the task end to end, including technical fixes; escalate only decisions or a
 If independent pieces can run in parallel, report the proposed split to firstmate; do not delegate them yourself.
 Own the monitoring and follow-up for the task within its authorized scope; report concrete results with their full artifact links.
 Do not use `request_user_input`, `request_user_input_async`, or native question selectors: firstmate cannot see or answer those UI waits.
-Before asking firstmate, follow [Obstacles and escalation](#obstacles-and-escalation); it owns whether to continue, wait, or escalate and which status to use.
 For a question that still requires an outside answer, report it with all options using that status and the task status command, refresh your progress, and wait for the reply in your steering inbox.
 Before finishing, close the servers, browsers, temporary services, and background processes you opened; report anything intentionally left running.
-Read and write only the task paths the brief names outside your worktree; never inspect or change any other home's endpoint namespace.
+Outside your worktree, read the owning home's diagnostics and task-relevant records by default, including existing and newly generated records, as needed for the assigned work.
+Do not read credentials without explicit authority; write only the task paths the brief names and never inspect or change any other home's endpoint namespace.
 Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
 
 ## Escenario del capitán
@@ -65,13 +65,16 @@ Lo hace el autor, no un revisor.
    Use `paused: {why}` - distinct from `blocked:` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
    Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append `paused [at=<epoch>]: {job and completion condition}` to the status file.
    Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.
+   When waiting for a durable task job, include `[wait-job=NAME]` in that line; for an ordinary background process include `[wait-pid=PID]` with its actual process ID.
    Do not declare active implementation or reasoning as a wait.
+   Never wait for other test runs to finish or for an idle machine before starting your own: the project's test runner owns host contention (Firstmate's `bin/fm-test-run.sh` queues every run on the shared machine test budget), so start yours and declare a wait only on your own run.
    Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
    When you know when the wait clears, include `until <YYYY-MM-DDTHH:MMZ>` (UTC) for a recheck at that time; for your own background job or command with a timeout, that time is its start plus its timeout, rounded up to the minute.
+   When a pause waits for load to fall, record its agreed threshold as `load1 < N` in the pause line so the watcher can recheck it and send a resume instruction.
    Follow the resolution rule below when the wait clears, then resume the task.
    Fix the root cause, not the symptom, and fix it at its most general level: before adding a case, list or exception, ask what general mechanism produced this failure and correct that. Be critical of the request, the plan and your own fix; a growing list of hardcoded scenarios means the general problem is still open.
 
-5. Before escalating an obstacle or question, follow [Obstacles and escalation](#obstacles-and-escalation).
+5. Before asking firstmate or ending a turn with work pending, follow [Obstacles and escalation](#obstacles-and-escalation).
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
    prepare the decision evidence required by SUPERVISOR.md section 9 for firstmate before stopping; stop before the action that needs that decision.
    append `needs-decision [at=<epoch>]: {summary of options}` and stop. Firstmate will reply with the decision.
@@ -128,13 +131,14 @@ Later captain words extend the original intent and regenerate the numbered list;
 
 ## Obstacles and escalation
 
-Apply this procedure before declaring `blocked`, including after command-specific recovery is exhausted.
+When an obstacle or pending choice could stop your work, apply this procedure before choosing a status or ending the turn.
 
 1. Read the brief, applicable rules, steering replies, and existing evidence for the affected step.
    If they already answer the question or authorize the action, act on them and record the reason; do not request the same authority again.
    Interpret an external event by its documented session state and content; a connection or presence change with no new request or answer creates no new decision or blocker.
 2. Identify the unmet prerequisite and the smallest action that would let the affected work proceed.
-   Resolve reversible task-local setup and implementation problems yourself within the task's allowed paths and authority, including preparing an isolated test environment in task scratch.
+   When a choice is needed, decide reversible actions within the task scope and record the decision and reason in the task evidence; do not escalate merely because a choice is reversible.
+   Resolve task-local setup and implementation problems yourself within the task's allowed paths and authority, including preparing an isolated test environment in task scratch; retain the boundaries for destructive, irreversible, security-sensitive, and otherwise unauthorized actions.
    For a timeout, distinguish unfinished work under the observed scheduling/load from a failed assertion; adjust task-local waiting bounds to the observed cost without weakening assertions or changing required acceptance limits.
 3. Apply the command's documented bounded recovery first; `bin/fm-tasks-axi.sh --help` owns work-lock contention recovery.
    If the same obstacle persists after two attempts, stop retrying that path and find another authorized way forward.
@@ -145,6 +149,8 @@ Apply this procedure before declaring `blocked`, including after command-specifi
 5. Use `blocked` only when the affected work cannot proceed until an identified outside actor performs a necessary action you lack the authority or capability to perform.
    Append `blocked [key=<slug>] [at=<epoch>]: {failed path; evidence; affected work; next action needed from firstmate}`, naming that actor and action and why authorized local recovery cannot supply it.
    For an unanswered decision above your scope, use `needs-decision` with the full question, options, and recommendation, and stop before the action that needs the answer.
+   Use `failed` only when authorized work and recovery are exhausted and no wait or outside action can move the task forward.
+   Describe the recovery evidence in the status note and pass `--exhausted-recovery`.
 
 Do not turn a technical obstacle or firstmate's own choice into a new human approval request, or wait for another worker without naming the action firstmate must assign.
 Quota and cost are reported, never a reason to wait.
@@ -155,7 +161,9 @@ This does not relax safety gates, required validation, shared-infrastructure bou
 
 Read and acknowledge messages in the task inbox in numeric order by moving each handled message to its `handled/` directory.
 For a background command that must survive conversation relaunch, use `bin/fm-task-job.py` (its header owns submission and result paths); ordinary temporary children remain conversation-owned.
-Check the inbox when notified and at natural checkpoints, except while waiting if the brief says not to poll.
+Check the inbox when notified and at natural checkpoints.
+While actively monitoring a running build or other task, bound each blocking wait to 30 seconds and check the inbox before the next wait or task step; keep the running work alive.
+A decision wait that ends the turn remains governed by the brief.
 Follow [Progress reporting](#progress-reporting).
 When firstmate requests a safe point, preserve work and record paused with its exact safe-point request key and numeric timestamp only after reaching it; resume only when explicitly instructed.
 
@@ -163,7 +171,9 @@ When firstmate requests a safe point, preserve work and record paused with its e
 
 When a change alters when an agent or process wakes, starts, stops, relaunches, or is cleaned up, its passing tests are not enough: measure the real installation before it is finished or published.
 Save the output of `bin/fm-budgets.py table` from the installed home before activation, let the real installation operate for at least one hour after activation under a dated external wait, then save the table again and put both tables in the report.
-If a measure got worse or exceeds its limit, the local installation is reverted first and the work reopened; a window without real activity is unmeasured, never a pass.
+If a measure got worse or exceeds its limit, investigate and attribute the deterioration to the change before reverting the local installation and reopening the work.
+Compare the affected behavior and its producers with the baseline and other concurrent activity; a global aggregate alone does not establish cause.
+Unattributed or inconclusive deterioration is not a pass: record the evidence and continue investigating; a window without real activity is unmeasured, never a pass.
 A skipped window is reported as one line, `window skipped: <reason>`.
 An independent acceptance review of such a change also answers which measures the diff can move, in which direction, and where its before-and-after tables are.
 
@@ -193,17 +203,17 @@ Run its `--check` with the same option and question arguments before delivering 
 When the Deck address or network is unavailable, offer to arrange review through firstmate; do not ask the reader to run commands.
 For reviewed or approved acknowledgments in chat, follow `captain-hold-lifecycle`.
 For a list of independent choices, include every relevant item, identify unverified items as needing investigation, and offer a single submit control that preserves each chosen item as its own decision.
-Open every report with an "En 1 minuto" block (in the reader's language) that answers three questions in this order: what happened, what it means for the reader, and what you need from the reader.
-Answer the third with the decision buttons, or with the words "nada, solo informativo"; never leave the reader to infer whether the report asks something.
+Open every report with an "En 1 minuto" / "In 1 minute" block in the request language (or the installation language when the request does not specify one) that answers three questions in this order: what happened, what it means for the reader, and what you need from the reader.
+Answer the third with the decision buttons, or with the equivalent of "nada, solo informativo" / "nothing, informational only" in that language; never leave the reader to infer whether the report asks something.
 Write for readers from a trainee to a principal engineer: complete sentences, plain words, and no commit hashes, file paths, branch names, task IDs or other internal names in the body.
 Spell out each name in words; when a Deck task is mentioned, write its name in words as the link text and point the link at its card.
 Never use analogies or comparisons ("es como si...", "imagina que..."); state the facts directly, since analogies read as condescending.
-Put the technical detail in a closed "Detalle técnico" section that is also plain prose, with a table and a diagram, never a wall of text; hashes and paths go only in the Markdown record.
+Put the technical detail in a closed "Detalle técnico" / "Technical details" section in that language that is also plain prose, with a table and a diagram, never a wall of text; hashes and paths go only in the Markdown record.
 Explain a flow with a step-by-step diagram and a concrete end-to-end example taken from real data; present data in tables or charts instead of paragraphs, and use interactive HTML when it helps.
 Keep the initially visible report to at most 300 words and one screen; put the remaining detail in closed expandable sections.
 Before delivering, and again after every later edit including each review round, check your own final report against this list; do not ask another agent or reviewer to do it. Open it in a browser with those sections closed and run the adjacent [report check](report-check.js) as a browser expression (for example, `chrome-devtools-axi eval "$(cat <code-root>/worker/report-check.js)"`).
-It reports the visible word count, whether the "En 1 minuto" block (`id="en-1-minuto"`) has its three answers, opaque identifiers in the visible text, phrases that may be analogies, and visible graphic candidates.
-Deliver only when: the count is at most 300; the block is present and its third answer is a decision or "nada, solo informativo"; no opaque identifier or analogy is visible; at least one flow diagram is visible (count actual diagrams, including HTML ones); and the opening screen has a complete end-to-end example and data in tables.
+It reports the visible word count, whether the one-minute block (`id="en-1-minuto"`) has its three answers, opaque identifiers in the visible text, phrases that may be analogies, and visible graphic candidates.
+Deliver only when: the count is at most 300; the block is present and its third answer is a decision or the informational wording in the report language; no opaque identifier or analogy is visible; at least one flow diagram is visible (count actual diagrams, including HTML ones); and the opening screen has a complete end-to-end example and data in tables.
 Check the screen visually as well: a word count alone cannot prove it fits, and a graphic count cannot establish that a diagram explains the flow.
 Record the visible word count and diagram count with the result.
 Show the generation date and time in the reader's local time, never UTC, plus relative age that refreshes locally when JavaScript is available; the absolute local time must remain visible without it.
@@ -221,7 +231,9 @@ A correction edits only the wrong text: do not run `fm-ensure-agents-md.sh`, cre
 ## Progress reporting
 
 The launch brief names your progress input file and its publish command; write a short honest plan with phase and progress there at the start and publish it.
-Example ship input: {"phase":"implementation","card_status":"Implementation in progress","progress":{"steps":[{"label":"Implementation","state":"active"},{"label":"Affected checks","state":"todo"},{"label":"Branch ready","state":"todo","gate":"branch-ready"},{"label":"Integration","state":"todo","gate":"integrated"}]}}.
+In `progress.deliverables`, declare the actual output files as `[{"root":"worktree","path":"relative/file"}]` or with `root` set to `data` for files relative to the task's data directory; update the list as the deliverables become known.
+Only declared files are observed for deliverable changes; omit the list or leave it empty when the output cannot yet be identified, which reports progress as unknown.
+Example ship input: {"phase":"implementation","card_status":"Implementation in progress","progress":{"steps":[{"label":"Implementation","state":"active"},{"label":"Affected checks","state":"todo"},{"label":"Branch ready","state":"todo","gate":"branch-ready"},{"label":"Integration","state":"todo","gate":"integrated"}],"deliverables":[{"root":"worktree","path":"src/example.py"}]}}.
 For host tasks use phase=implementation with operation, verification, and report steps only; there is no branch, merge, or delivery gate.
 For a scout use phase=investigation and only its actual research/report steps; add installed activation only when it is in scope.
 The input file is task scratch; never write presentation.json, which is the owner's validated output.

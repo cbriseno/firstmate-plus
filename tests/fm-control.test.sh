@@ -617,8 +617,8 @@ test_park_refuses_active_or_undated_wait() {
   [ ! -f "$dir/home/state/t1.parked" ] || fail 'refused automatic park wrote parking record'
   bash "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" t1 idle --gen "$gen" --source claude-hook --event Stop \
     || fail 'could not record the idle turn end'
-  out=$(run_control "$dir" t1 park --when-idle) || fail "automatic park refused an idle worker: $out"
-  assert_contains "$out" 'parked t1' 'automatic park closes an idle worker'
+  if out=$(run_control "$dir" t1 park --when-idle); then fail 'automatic park accepted an unverified process scope'; fi
+  assert_contains "$out" 'active or unverified work' 'an idle turn alone cannot prove the scope is safe'
   dir=$(new_case park-unread)
   add_task "$dir" t1 claude
   printf 'done: ready\n' > "$dir/home/state/t1.status"
@@ -645,13 +645,24 @@ test_resume_changed_policy_opens_choice() {
     "$dir/home/data/t1/captain-call.json" >/dev/null || fail "missing harness choice: $out"
   [ -f "$dir/home/state/t1.parked" ] || fail 'choice removed parked continuation'
   [ -z "$(literals "$dir")" ] || fail 'choice launched or typed before an answer'
-  # Dispatch overrides the static pin; a mixed policy needs Firstmate judgment.
+  # Use a separate worker without an open captain hold for the continuation.
+  dir=$(new_case resume-mixed-policy)
+  add_task "$dir" t1 codex
+  printf 'done [at=1]: ready for merge\n' > "$dir/home/state/t1.status"
+  run_control "$dir" t1 park >/dev/null || fail 'could not park mixed-policy fixture'
+  mkdir -p "$dir/home/config"
+  printf claude > "$dir/home/config/crew-harness"
+  # Dispatch overrides the static pin; a mixed policy retains the saved adapter.
   printf '{"rules":[{"when":"all","use":{"harness":"codex"}}]}' > "$dir/home/config/crew-dispatch.json"
   out=$(FM_HOME="$dir/home" SCRIPT_DIR="$ROOT/bin" bash -c '. "$SCRIPT_DIR/fm-worker-parking-lib.sh"; die() { echo "$*" >&2; exit 1; }; resume_policy_harness') || fail "$out"
   [ "$out" = codex ] || fail 'dispatch was ignored in favor of static harness'
+  printf '{"rules":[{"when":"all","use":[{"harness":"claude"},{"harness":"pi"}]}]}' > "$dir/home/config/crew-dispatch.json"
+  out=$(run_control "$dir" t1 resume) || true
+  assert_contains "$out" 'resolve the current dispatch profile' 'mixed policy without saved harness must remain unresolved'
   printf '{"rules":[{"when":"all","use":[{"harness":"codex"},{"harness":"claude"}]}]}' > "$dir/home/config/crew-dispatch.json"
   out=$(run_control "$dir" t1 resume) || true
-  assert_contains "$out" 'resolve the current dispatch profile' 'mixed policy silently guessed a harness'
+  assert_contains "$out" 'the replacement agent for t1 could not be launched' 'mixed policy must reach launch with the saved harness'
+  [ -f "$dir/home/state/t1.parked" ] || fail 'failed launch lost parking record'
   pass 'resume: changed usage policy opens a recommended choice before launch; dispatch remains authoritative'
 }
 
@@ -1243,6 +1254,7 @@ test_relay_waits_for_background_work() {
   printf '{"status":"active","session":"fixture-session"}\n' > "$dir/home/data/t1/sessions.jsonl"
   printf requested > "$dir/home/data/t1/relay-request-$gen"
   printf 'safe point\n' > "$dir/home/data/t1/relay-note-$gen.md"
+  printf '["%s","checker",0]\n' "$gen" > "$dir/home/state/t1.relay-ready"
   env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_CONTROL_POLL=0.01 \
     FM_CONTROL_SETTLE_WAIT=0.05 FM_CONTROL_EXIT_WAIT=0.05 \
     python3 "$ROOT/bin/fm-worker-relay.py" "$dir/home" "$dir/home/state" t1 "$gen" checker --control 0
@@ -1299,6 +1311,25 @@ PY
   pass 'explicit task job advances after conversation exit and completes once'
 }
 
+# Submission needs TASK.meta, so a jobs directory without it belongs to a torn-down
+# task and only grows state; a stale "running" record must not keep it forever.
+test_task_jobs_leave_with_their_task() {
+  local dir state
+  dir=$(new_case task-job-retire)
+  state="$dir/home/state"
+  mkdir -p "$state/live.jobs" "$state/gone.jobs" "$state/queued.jobs"
+  printf 'kind=ship\n' > "$state/live.meta"
+  printf '{"state":"done","argv":["true"]}' > "$state/live.jobs/a.json"
+  printf '{"state":"running","pid":1,"argv":["true"]}' > "$state/gone.jobs/a.json"
+  printf 'output\n' > "$state/gone.jobs/a.log"
+  printf '{"kind":"autodispatch","state":"running","pid":1,"argv":["true"]}' > "$state/queued.jobs/autodispatch-a.json"
+  env -u FM_WORKER_PROCESS_SCOPE python3 "$ROOT/bin/fm-task-job.py" --dispatch "$state" || fail 'dispatch failed'
+  [ ! -e "$state/gone.jobs" ] || fail "a torn-down task's jobs directory stayed"
+  [ -s "$state/live.jobs/a.json" ] || fail "a live task's job record was removed"
+  [ -s "$state/queued.jobs/autodispatch-a.json" ] || fail "a queued task's live autodispatch retry was removed"
+  pass "task job records leave with their task's metadata and stay while it lives or awaits its retry"
+}
+
 # Captain rule 27: a worker holding a live Lavish listener on a board it owns is
 # not stopped, paused, relaunched or interrupted until the captain has been
 # asked; FM_LAVISH_IN_USE_OK=1 is the one-line skip.
@@ -1343,6 +1374,30 @@ test_live_lavish_board_blocks_stop_pause_and_relaunch() {
   pass "fm-control: a live Lavish board blocks interrupt, exit, park and relaunch until the skip"
 }
 
+test_relaunch_blocked_dispatch_keeps_owner_running() {
+  local dir out rc
+  dir=$(new_case relaunch-blocked-dispatch)
+  mkdir -p "$dir/home/data/t1/work" "$dir/home/config"
+  fm_test_tasks_toml "$dir/home/.tasks.toml"
+  (cd "$dir/home" && tasks-axi add t1 'Pilot' --kind host --start && \
+    tasks-axi add blocker 'Dependency' --kind host && tasks-axi block t1 --by blocker) >/dev/null
+  printf '# pilot\n' > "$dir/home/data/t1/brief.md"
+  {
+    printf 'window=fmses:fm-t1\nendpoint_task_id=t1\n'
+    printf 'worktree=%s\nproject=%s\n' "$dir/home/data/t1/work" "$dir/home/data/t1/work"
+    printf 'harness=claude\nkind=host\nmodel=default\neffort=default\n'
+  } > "$dir/home/state/t1.meta"
+  printf 'fm-t1\n' > "$dir/fake/windows"
+  printf '%s' "$dir/home/data/t1/work" > "$dir/fake/cwd"
+  alive_as "$dir" claude
+  out=$(run_control "$dir" t1 relaunch --note 'Continue pilot'); rc=$?
+  expect_code 1 "$rc" "blocked dispatch must refuse relaunch"$'\n'"$out"
+  assert_contains "$out" 'not dispatchable' 'the dispatch check must explain the refusal'
+  [ -z "$(literals "$dir")" ] || fail 'blocked dispatch sent an exit command'
+  [ "$(cat "$dir/fake/command")" = claude ] || fail 'blocked dispatch stopped the owner'
+  pass 'relaunch refuses blocked dispatch before stopping its owner'
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit $?
@@ -1351,6 +1406,7 @@ fi
 test_relay_generation_and_lost_callback
 test_relay_waits_for_background_work
 test_task_job_survives_worker_scope
+test_task_jobs_leave_with_their_task
 
 test_live_lavish_board_blocks_stop_pause_and_relaunch
 test_exit_types_each_harness_verified_command
@@ -1369,6 +1425,7 @@ test_remote_secondmate_is_refused_by_placement
 test_interrupt_and_exit_lock_before_task_state_resolution
 test_verb_allowlist_is_closed
 test_resume_requires_parking
+test_relaunch_blocked_dispatch_keeps_owner_running
 test_park_declared_waits_preserves_work
 test_session_mechanics_preserve_declared_wait
 test_park_refuses_active_or_undated_wait

@@ -40,7 +40,7 @@ run_spawn() {  # <home> <wt> <fakebin> <spawn-args...>
   local home=$1 wt=$2 fakebin=$3
   shift 3
   GROK_HOME="$home/grok-home" \
-    fm_test_run_spawn "$home" "$wt" "$fakebin" "$@" --mode no-mistakes --yolo off
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$@" --model fixture-model --effort high --mode no-mistakes --yolo off
 }
 
 read_case_record() {
@@ -128,7 +128,7 @@ test_claude_hooks_semantic_lifecycle() {
   local rec id=busy-cl-1 out state settings
   rec=$(make_spawn_case claude-lifecycle claude "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --model test-model --effort high)
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
   settings="$state/$id.claude-settings.json"
@@ -166,7 +166,7 @@ test_claude_permission_dialog_writes_status_blocker() {
   local rec id=busy-cl-3 out state settings status open clear
   rec=$(make_spawn_case claude-permission claude "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --model test-model --effort high)
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
   status="$state/$id.status"
@@ -198,7 +198,7 @@ test_claude_hooks_stale_incarnation_harmless() {
   local rec id=busy-cl-2 out state settings
   rec=$(make_spawn_case claude-stale claude "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --model test-model --effort high)
   expect_code 0 $? "claude spawn should succeed: $out"
   state="$HOME_DIR/state"
   settings="$state/$id.claude-settings.json"
@@ -214,7 +214,7 @@ test_codex_unverified_until_a_semantic_source_exists() {
   local rec id=busy-cx-1 out state launch
   rec=$(make_spawn_case codex-unverified codex "$id")
   read_case_record "$rec"
-  out=$(FM_FAKE_LAUNCH_LOG="$HOME_DIR/codex-launch" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  out=$(FM_FAKE_LAUNCH_LOG="$HOME_DIR/codex-launch" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --model test-model --effort high)
   expect_code 0 $? "codex spawn should succeed: $out"
   assert_contains "$out" 'spawned '"$id"' harness=codex' "codex spawn did not complete normally"
   state="$HOME_DIR/state"
@@ -235,7 +235,7 @@ test_codex_unverified_until_a_semantic_source_exists() {
   fm_test_spawn_brief "$HOME_DIR" "$id-raw"
   "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id-raw" --state unknown >/dev/null \
     || fail 'could not seed the prior incarnation before raw replacement'
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id-raw" "$PROJ_DIR" 'codex --custom-launch')
+  out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id-raw" "$PROJ_DIR" 'codex --custom-launch')
   expect_code 0 $? "raw codex launch should retain its existing behavior: $out"
   assert_absent "$state/$id-raw.busy-gen" 'raw launch must not acquire canonical Codex activity wiring'
   pass "codex seeds unknown and requires a verified process-owned rollout, never footer text"

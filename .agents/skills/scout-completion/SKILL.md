@@ -12,7 +12,8 @@ A completed scout must leave a self-contained report before its scratch worktree
 Verify its visible actions with `bin/fm-report-actions.py --check` under the worker report contract before relaying the HTML.
 Once the report is relayed and the shared completion gate below passes, close the scout through `bin/fm-teardown.sh` in the same handling turn rather than leaving its agent idle; preserve local changes under the existing cleanup contract.
 When the captain asks to review or continue a closed scout, have a worker restore its backup into a new copy using the recovery command printed by `bin/fm-teardown.sh`, then inspect or continue the preserved changes instead of repeating the investigation.
-Route unresolved work from the report through `SUPERVISOR.md` section 7, reusing the originating task when promotion fits.
+Inventory every outstanding recommendation in the report and route it through `SUPERVISOR.md` section 7, reusing the originating task when promotion fits.
+Before teardown, record every resulting implementation task or captain-held decision with `bin/fm-captain-hold.sh followups <scout> <task>...`, or attest `--none` only when no recommendation remains.
 A report supplies evidence and grants no new implementation authority.
 Compare the report with the brief's original numbered requirements under `bin/fm-dod-lib.sh` before accepting completion or promoting; retain that list in the plan and unit briefs, and require acceptance for every original requirement rather than only the reduced plan.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.

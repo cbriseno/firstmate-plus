@@ -280,6 +280,39 @@ test_snapshot_does_not_ack_a_later_append() {
   pass "presentation cursor advances only through its captured endpoint"
 }
 
+test_presentation_reads_each_unread_span_once() {
+  local dir state out status reader spans cursor_spans
+  dir=$(make_case span-once)
+  state="$dir/state"
+  out="$dir/drain.out"
+  status="$state/task-span.status"
+  spans="$dir/spans.log"
+  reader="$dir/span-reader"
+  prime_cursor "$state" "$status"
+  printf 'working: routine progress line\n' >> "$status"
+  printf 'note: captain answer after the cursor\n' >> "$status"
+  cat > "$reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$FM_TEST_SPAN_LOG"
+tail -c "+$(($2 + 1))" "$1" | head -c "$3"
+SH
+  chmod +x "$reader"
+
+  FM_STATE_OVERRIDE="$state" FM_STATUS_SPAN_READER="$reader" FM_TEST_SPAN_LOG="$spans" "$DRAIN" > "$out" \
+    || fail "drain failed while counting unread span reads"
+  grep -F 'task-span note: captain answer after the cursor' "$out" >/dev/null \
+    || fail "the unread note was not surfaced: $(cat "$out")"
+  # Both the presentation cursor and the decision-fold cursor sit after the
+  # bootstrap line, so span reads starting there are the unread-surface read
+  # and the decision fold's own read; the backstop starts at offset 0.
+  # Acknowledgement and presentation must share the one unread-surface read.
+  cursor_spans=$(awk -F '\t' -v f="$status" -v start="$(printf 'note: bootstrap cursor line\n' | wc -c | tr -d ' ')" \
+    '$1 == f && $2 == start' "$spans" | wc -l | tr -d ' ')
+  [ "$cursor_spans" -le 2 ] && [ "$cursor_spans" -ge 1 ] \
+    || fail "one drain read the same unread span $cursor_spans times: $(cat "$spans")"
+  pass "a drain presentation reads each task's unread span once for both acknowledgement and presentation"
+}
+
 test_retired_task_id_starts_new_status_unread() {
   local dir state out offset event old_ident
   dir=$(make_case retired-task-reuse)
@@ -457,6 +490,7 @@ test_pending_reply_resolution_surfaces_once
 test_self_announced_pending_reply_close_still_surfaces
 test_unread_output_over_cap_remains_recoverable
 test_snapshot_does_not_ack_a_later_append
+test_presentation_reads_each_unread_span_once
 test_retired_task_id_starts_new_status_unread
 test_weak_identity_still_presents_and_advances
 test_snapshot_failure_is_visible

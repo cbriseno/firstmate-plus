@@ -189,7 +189,7 @@ run_spawn() {  # <case-dir> <home> <pane-path> <args...>
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_BACKEND=tmux \
     FM_FAKE_PANE_PATH="$pane" FM_FAKE_CALL_LOG="$case_dir/calls.log" \
     PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$@" 2>&1
+    "$SPAWN" "$@" --model codex-test --effort high 2>&1
 }
 
 spawn_ship() {  # <case-dir> <id> [pane-path]
@@ -281,7 +281,7 @@ test_available_capacity_admits_the_worker() {
 }
 
 test_exhausted_capacity_defers_without_leaving_anything_behind() {
-  local case_dir home out rc=0 before worktrees pid
+  local case_dir home out rc=0 before worktrees pid reason
   case_dir=$(make_case exhausted task-c)
   home="$case_dir/home"
   touch "$home/config/fleet-ledger"
@@ -298,11 +298,15 @@ test_exhausted_capacity_defers_without_leaving_anything_behind() {
     "the deferral did not say the task stays queued"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
   jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value.project_limit == 2)' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral event missing"
+  reason='project project admits 2 worker(s) at once on this machine and 2 already hold a place'
+  jq -e --arg r "$reason" 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value.reason == $r)' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral event lost its cause"
+  assert_equals "$reason" "$(cat "$home/state/task-c.spawn-deferred.reason")" "project deferral did not record its cause for the task"
   capacity_watch "$case_dir"; pid=$!
   wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet at full project capacity"
   assert_present "$home/state/task-c.spawn-deferred" "project deferral has no persistent retry reminder"
   rm -f -- "$home/state/live-b.meta"
   expect_capacity_wake "$home" "$pid"
+  assert_absent "$home/state/task-c.spawn-deferred.reason" "a launched task kept its deferral cause"
   jq -e 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value == {})' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "deferral clear event missing"
   pass "a spawn beyond capacity is deferred before any record, brief, endpoint, worktree, or backlog move exists"
 }
@@ -546,8 +550,9 @@ test_unreadable_holders_refuse_admission() {
   out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
   chmod 600 "$root/state/live-a.meta"
   expect_code 1 "$rc" "an unreadable task record did not refuse admission: $out"
-  assert_contains "$out" "task record $root/state/live-a.meta cannot be read" \
-    "the refusal did not name the unreadable task record"
+  assert_contains "$out" "$root/state/live-a.meta" "the refusal did not name the unreadable task record"
+  printf '%s\n' "$out" | grep -Eq 'cannot( safely)? read|cannot be read' \
+    || fail "the refusal did not report a failed read"
   assert_absent "$root/state/task-c.meta" "a spawn published past an unreadable task record"
 
   chmod 000 "$mate/state"
@@ -555,8 +560,9 @@ test_unreadable_holders_refuse_admission() {
   out=$(spawn_ship "$case_dir" task-c "$case_dir/unused") || rc=$?
   chmod 755 "$mate/state"
   expect_code 1 "$rc" "an unreadable local state directory did not refuse admission: $out"
-  assert_contains "$out" "local Firstmate state directory $mate/state cannot be read" \
-    "the refusal did not name the unreadable state directory"
+  assert_contains "$out" "$mate/state" "the refusal did not name the unreadable state directory"
+  printf '%s\n' "$out" | grep -Eq 'cannot( safely)? read|cannot be read' \
+    || fail "the refusal did not report a failed read"
   assert_absent "$root/state/task-c.meta" "a spawn published past an unreadable state directory"
 
   rc=0
@@ -592,6 +598,34 @@ test_concurrent_spawns_cannot_both_take_the_last_place() {
   expect_code "$DEFER_EXIT" "$rc" "the retried spawn was not deferred once the place was taken: $out"
   assert_absent "$home/state/task-b.meta" "the retried spawn published past capacity"
   pass "concurrent spawns can never both take the last place"
+}
+
+# An automatic launch waits for another allocation to finish, then proceeds
+# without another watcher review when there is still capacity.
+test_automatic_spawn_waits_for_allocation() {
+  local case_dir home hold wt_a wt_b first i rc=0
+  case_dir=$(make_case auto-wait task-a task-b)
+  home="$case_dir/home"
+  declare_capacity "$home" "project 3"
+  hold="$case_dir/hold"
+  wt_a=$(new_worktree "$case_dir" task-a)
+  wt_b=$(new_worktree "$case_dir" task-b)
+  FM_MODEL_CATEGORY_OVERRIDE=1 FM_FAKE_HOLD="$hold" spawn_ship "$case_dir" task-a "$wt_a" > "$case_dir/a.out" 2>&1 &
+  first=$!
+  for ((i=0; i<400; i++)); do
+    [ ! -f "$hold.reached" ] || break
+    kill -0 "$first" 2>/dev/null || break
+    sleep 0.05
+  done
+  [ -f "$hold.reached" ] || fail "first allocation did not reach its hold: $(cat "$case_dir/a.out")"
+  FM_MODEL_CATEGORY_OVERRIDE=1 FM_AUTODISPATCH=1 spawn_ship "$case_dir" task-b "$wt_b" > "$case_dir/b.out" 2>&1 || rc=$?
+  [ "$rc" = 76 ] || fail "automatic contention did not defer (exit $rc): $(cat "$case_dir/b.out")"
+  [ -s "$home/state/.autodispatch-lock-task-b" ] || fail "automatic contention did not record the held lock"
+  : > "$hold.release"
+  wait "$first" || fail "first allocation failed"
+  FM_MODEL_CATEGORY_OVERRIDE=1 FM_AUTODISPATCH=1 spawn_ship "$case_dir" task-b "$wt_b" > "$case_dir/b.out" 2>&1 || fail "retry after release failed: $(cat "$case_dir/b.out")"
+  assert_present "$home/state/task-b.meta" "automatic launch did not publish after release"
+  pass "automatic contention records its lock and admits a retry after release"
 }
 
 # A spawn that fails after admission removes nothing it did not create and
@@ -670,6 +704,7 @@ test_resource_verdict_defers_then_admits() {
   command -v jq >/dev/null 2>&1 || { printf 'ok - skipped resource beat cases (jq absent)\n'; return; }
   case_dir=$(make_case resources task-c)
   home="$case_dir/home"
+  touch "$home/config/fleet-ledger"
   printf '2\nmax-load1 12\nmin-avail-gb 2\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
   # A stale published admission must never override the current sample.
   printf '{"verdict":{"admit":true}}\n' > "$home/state/lane-capacity.json"
@@ -684,10 +719,17 @@ test_resource_verdict_defers_then_admits() {
     assert_contains "$out" "task task-c was not launched and its backlog item stays queued" "resource deferral lost queue advice"
     assert_contains "$out" "temporarily move $home/config/lane-capacity aside" "resource deferral lost its opt-out instruction"
     assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+    assert_equals "$reason" "$(cat "$home/state/task-c.spawn-deferred.reason")" "resource deferral did not record its cause for the task"
+    jq -e --arg r "$reason" 'select(.event == "task.dispatch_wait" and .task == "task-c" and .value.reason == $r)' "$home/state/fleet-ledger.jsonl" >/dev/null || fail "resource deferral event lost its cause"
   done <<'ROWS'
 12.28|6|load: 12.28 over its max-load1 12
-0.25|2.5|memory: no room for a 1 GB lane: 2.5 GB available, 2 GB kept
+0.25|2.4|memory: no room for a 0.5 GB lane (default): 2.4 GB available, 2 GB kept
 ROWS
+  # Half a gigabyte per lane fits once above the kept 2 GB, where 1 GB never did.
+  write_capacity_beat "$home" 0.25 2.5
+  rc=0
+  FM_HOME="$home" bash "$ROOT/bin/fm-capacity.sh" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a measured-size lane must fit in 0.5 GB above the reserve"
   write_capacity_beat "$home" 11.9 6
   rc=0
   FM_HOME="$home" bash "$ROOT/bin/fm-capacity.sh" --admit >/dev/null 2>&1 || rc=$?
@@ -695,8 +737,12 @@ ROWS
   capacity_watch "$case_dir"; pid=$!
   wait_poll_cycle "$home/state" "$pid" || fail "watcher woke with less than one load point of headroom"
   assert_present "$home/state/task-c.spawn-deferred" "load margin lost the retry reminder"
-  write_capacity_beat "$home" 0.25 2.5
+  assert_equals 'load: 11.9 is less than 1 below max-load1 12' "$(cat "$home/state/task-c.spawn-deferred.reason")" \
+    "the watcher did not refresh the cause that still holds the task"
+  write_capacity_beat "$home" 0.25 2.4
   wait_poll_cycle "$home/state" "$pid" || fail "watcher did not stay quiet under memory pressure"
+  assert_equals 'memory: no room for a 0.5 GB lane (default): 2.4 GB available, 2 GB kept' "$(cat "$home/state/task-c.spawn-deferred.reason")" \
+    "the watcher did not refresh the memory cause"
   FM_HOME="$home" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1
   wait "$pid" || true
   ack_stopped_cycle "$home/state" || fail "could not settle the intentional capacity test stop"
@@ -748,6 +794,11 @@ test_batch_rereads_lane_capacity_after_each_spawn() {
   pass "batch publishes one worker before rereading live capacity for the next"
 }
 
+if [ "${FM_PROJECT_CAPACITY_TEST_AUTO_WAIT:-0}" = 1 ]; then
+  test_automatic_spawn_waits_for_allocation
+  exit 0
+fi
+
 if [ "${FM_PROJECT_CAPACITY_TEST_EVENTS:-0}" != 0 ]; then
   test_dispatch_wait_events
   exit 0
@@ -768,6 +819,7 @@ test_occupancy_counts_only_this_projects_workers
 test_capacity_is_shared_by_every_local_home
 test_unreadable_holders_refuse_admission
 test_concurrent_spawns_cannot_both_take_the_last_place
+test_automatic_spawn_waits_for_allocation
 test_failed_spawn_after_admission_holds_no_place
 test_unreadable_declaration_refuses_every_spawn
 test_batch_reports_a_deferred_pair

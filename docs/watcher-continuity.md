@@ -125,7 +125,7 @@ The next Stop then re-arms as before.
 
 Every watcher delivery checks whether the queued event still requires action.
 Answered decisions and declared waits remain recorded without opening an individual model turn.
-An elapsed endpoint timer follows the same observation rule as a stale pane; a live endpoint alone establishes no action, while endpoint loss, undelivered instructions and explicit native input retain immediate delivery.
+An ordinary elapsed endpoint timer follows the stale-pane observation rule. A confirmed live endpoint whose enriched wedge reaches its threshold is escalated; endpoint loss, undelivered instructions and explicit native input also retain immediate delivery. Completed workers remain silent.
 Ordinary completion and decision events stay queued until the same fleet-wide hourly deadline as informational summaries, owned by `bin/fm-push-transition-lib.sh`.
 Successful primary delivery starts the next shared interval; open blockers, failures, direct human messages, native input and operational errors bypass it.
 `tests/fm-watch-triage.test.sh` exercises paused and active fleet-hours, durable deferred actions, real acknowledgement and urgent failures.

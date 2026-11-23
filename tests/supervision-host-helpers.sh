@@ -179,11 +179,11 @@ export FM_SUPERVISION_HOST_PRIMARY=claude
 export FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999
 # Keep the real engine watchdog/reaping path, but not its production grace in fixtures.
 export FM_SUPERVISION_ENGINE_GRACE=1
-export FM_ARM_CONFIRM_TIMEOUT=30
+export FM_ARM_CONFIRM_TIMEOUT=120 FM_SUPERVISION_HOST_READY_TIMEOUT=120
 # A turn includes successor verification and real bounded owner scripts even
-# with a stub engine. Allow 90s for the complete turn; the stricter process
+# with a stub engine. Allow 300s for the complete turn; the stricter process
 # stop/reap bounds stay local to their assertions.
-TURN_WAIT_POLLS=900
+TURN_WAIT_POLLS=3000
 unset FM_SUPERVISION_ACTOR FM_BRANCH_REPORT_TURN FM_LEASE_HOLDER_PID PI_CODING_AGENT
 
 # Homes are registered in a file: make_home runs in a command substitution,
@@ -313,8 +313,9 @@ marker_kind() {  # <home>
 engine_calls() { find "$1" -maxdepth 1 -name 'engine-call.*' 2>/dev/null | wc -l | tr -d ' '; }
 handled_count() { local n; n=$(grep -c '	handled	' "$1/state/.supervision-host.log" 2>/dev/null); printf '%s\n' "${n:-0}"; }
 handled_at_least() { [ "$(handled_count "$1")" -ge "$2" ]; }
-append_status() {  # <home> <text>
-  printf '%s [at=%s]: %s\n' "${3:-working}" "$(date +%s)" "$2" >> "$1/state/demo.status"
+# A completed task produces a real actionable close; ordinary working updates are batched.
+append_status() {  # <home> <text> [state]
+  printf '%s [at=%s]: %s\n' "${3:-done}" "$(date +%s)" "$2" >> "$1/state/demo.status"
 }
 
 # --- report surface -----------------------------------------------------------

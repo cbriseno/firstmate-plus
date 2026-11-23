@@ -159,14 +159,24 @@ FM_CLASSIFY_EVENT_WINDOW_LINES=200
 # always reads the whole file, since a bounded window cannot bound two events.
 # This is an event read; status_current_line below reconciles open decisions.
 last_status_line() {  # <status-file> [<previous-event-var>]
-  local f=$1 scan=''
+  _fm_status_latest_line '' "$@"
+}
+
+# The latest work-phase declaration for a completion check. Notes and decision
+# resolutions are events, but neither starts work or withdraws a result.
+status_last_phase_line() {  # <status-file>
+  _fm_status_latest_line phase "$1"
+}
+
+_fm_status_latest_line() {  # <scope> <status-file> [<previous-event-var>]
+  local scope=$1 f=$2 scan=''
   [ -f "$f" ] && [ -r "$f" ] || return 0
-  if [ "$#" -gt 1 ]; then
-    scan=$(_fm_status_event_scan < "$f") || :
-  elif ! scan=$(tail -n "$FM_CLASSIFY_EVENT_WINDOW_LINES" "$f" 2>/dev/null | _fm_status_event_scan); then
-    scan=$(_fm_status_event_scan < "$f") || :
+  if [ "$#" -gt 2 ]; then
+    scan=$(_fm_status_event_scan "$scope" < "$f") || :
+  elif ! scan=$(tail -n "$FM_CLASSIFY_EVENT_WINDOW_LINES" "$f" 2>/dev/null | _fm_status_event_scan "$scope"); then
+    scan=$(_fm_status_event_scan "$scope" < "$f") || :
   fi
-  [ "$#" -lt 2 ] || printf -v "$2" '%s' "${scan%%$'\n'*}"
+  [ "$#" -lt 3 ] || printf -v "$3" '%s' "${scan%%$'\n'*}"
   printf '%s\n' "${scan##*$'\n'}"
 }
 
@@ -243,9 +253,13 @@ status_prefix_unrecognized() {  # <status-line>
 # An unrecognized status prefix is an event too, so that declaration is the
 # latest line instead of disappearing behind an earlier recognized one.
 _fm_status_event_scan() {
-  local line last='' prev='' fallback='' legacy_re
+  local line last='' prev='' fallback='' legacy_re verb
   legacy_re="^[[:space:]]*(${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT})"
   while IFS= read -r line || [ -n "$line" ]; do
+    if [ "${1-}" = phase ]; then
+      status_line_verb "$line" verb
+      case "$verb" in note|"${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}") continue ;; esac
+    fi
     case "$line" in *[![:space:]]*) fallback=$line ;; *) continue ;; esac
     _fm_status_line_is_event "$line" "$legacy_re" && { prev=$last; last=$line; }
   done
@@ -430,6 +444,19 @@ status_paused_until() {  # <status-line> -> epoch on stdout
     | head -1)
   [ -n "$token" ] || return 1
   fm_utc_iso_to_epoch "$token"
+}
+
+# A load wait records its installation-specific threshold in the status line.
+status_paused_load1() {  # <status-line> -> threshold on stdout
+  status_is_paused "$1" || return 1
+  printf '%s\n' "$1" | sed -nE 's/.*load1[[:space:]]*<[[:space:]]*([0-9]+([.][0-9]+)?)([^0-9.]|$).*/\1/p' | head -1 | grep -E '^[0-9]+([.][0-9]+)?$'
+}
+
+# The same-home task named by an explicit wait, independent of its prose.
+status_wait_task_id() {  # <status-line or note> -> task ID on stdout
+  local LC_ALL=C pattern='\[wait-task=([A-Za-z0-9_][A-Za-z0-9._-]*)\]'
+  [[ "$1" =~ $pattern ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 # --- optional event emission time -------------------------------------------
@@ -694,9 +721,10 @@ status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
       ;;
     *) out=$v ;;
   esac
-  # Waiting for firstmate or a main landing opens the existing decision path;
-  # ordinary validation/vendor pauses retain their external-wait semantics.
-  if [ "$out" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] || [ "$out" = blocked ]; then
+  # Unstructured pauses about firstmate or main open the decision path.
+  # A named task supplies its own mechanical exit condition.
+  if { [ "$out" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] || [ "$out" = blocked ]; } \
+    && ! { [ "$out" != blocked ] && status_wait_task_id "$1" >/dev/null; }; then
     _fm_status_unstamped "$1" word
     word=${word#*:}
     if status_note_waits_for_main "$word" || _fm_classify_matches "$word" \
@@ -1239,10 +1267,11 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 # 10: pauses waiting for firstmate or main open decisions, so rebuild cursors
 # that previously classified those declarations as ordinary external waits.
 # 11: addressed blockers use the same main-only decision routing as pauses.
+# 12: an explicit task dependency stays a pause even when its note mentions main.
 # Version 4 was already spent on the bracketed-tag parser change above, and a
 # cursor persisted under that reading predates this one, so it must still be
 # discarded and rebuilt from byte 0 under the new reading.
-FM_OPEN_DECISIONS_FOLD_VERSION=11
+FM_OPEN_DECISIONS_FOLD_VERSION=12
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity
@@ -1685,7 +1714,7 @@ _status_observed_path_state() {
 
 status_observed_signature() {
   local f=$1 size=${2-} ident=${3-} path_state link_target=- access kind encoded
-  path_state=$(_status_observed_path_state "$f") || path_state=stat-error
+  path_state=$(_status_observed_path_state "$f") || path_state='stat-error'
   if [ -L "$f" ]; then
     link_target=$(readlink "$f" 2>/dev/null) || link_target=readlink-error
     kind=symlink
@@ -1855,40 +1884,6 @@ EOF
   [ -z "$archive_tmp" ] || rm -f -- "$archive_tmp"
   fm_lock_release "$lock" || rc=1
   return "$rc"
-}
-
-status_acknowledge_presented_snapshot() {  # <state> <snapshot> [<fully-presented-task-ids>]
-  local state=$1 snapshot=$2 fully_presented=${3:-} task endpoint ident f offset lines line safe
-  while IFS=$(printf '\t') read -r task endpoint ident; do
-    [ -n "$task" ] || continue
-    safe=false
-    case "
-$fully_presented
-" in *$'\n'"$task"$'\n'*) safe=true ;; esac
-    if [ "$safe" = false ]; then
-      f="$state/$task.status"
-      offset=$(status_presentation_cursor_offset "$f") || return 1
-      lines=$(status_new_lines_since_cursor "$f" "$endpoint") || return 1
-      # Once any informational line in this span is presented fleet-wide, the
-      # contiguous cursor may advance through the captured endpoint. Routine
-      # lines remain unacknowledged only while they are the sole unread content,
-      # preserving delayed signal annotations without replaying a handled note
-      # that happened to follow a routine line.
-      while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-          *[![:space:]]*)
-            if status_line_is_unread_surface "$line"; then safe=true; break; fi
-            ;;
-        esac
-      done <<EOF
-$lines
-EOF
-      if [ "$safe" = false ]; then endpoint=$offset; fi
-    fi
-    printf '%s\t%s\t%s\n' "$task" "$endpoint" "$ident" || return 1
-  done <<EOF
-$snapshot
-EOF
 }
 
 status_commit_presentation_snapshot() {  # <state> <snapshot>
@@ -2116,23 +2111,47 @@ EOF
   return 0
 }
 
-scan_unread_surface_snapshot() {  # <state> <task-and-endpoint-snapshot>
-  local state=$1 snapshot=$2 task endpoint ident f lines line
+# One pass over a captured presentation snapshot: read each task's unread span
+# once and derive both its one-shot surface and its acknowledgement from it.
+# Sets STATUS_SCAN_UNREAD to "<task>\t<status-line>" rows for still-unread
+# `note:` lines and pending-reply resolutions, and STATUS_SCAN_ACKNOWLEDGED to
+# "<task>\t<endpoint>\t<ident>" rows for status_commit_presentation_snapshot.
+# A task acknowledges through its captured endpoint when it was fully presented
+# or when any line in its span is informational; once that line is presented
+# fleet-wide the contiguous cursor may advance. Routine lines remain
+# unacknowledged only while they are the sole unread content, preserving delayed
+# signal annotations without replaying a handled note that followed a routine
+# line.
+status_scan_presented_snapshot() {  # <state> <snapshot> [<fully-presented-task-ids>]
+  local state=$1 snapshot=$2 fully_presented=${3:-} task endpoint ident f lines line safe
+  STATUS_SCAN_UNREAD=''
+  STATUS_SCAN_ACKNOWLEDGED=''
   while IFS=$(printf '\t') read -r task endpoint ident; do
     [ -n "$task" ] || continue
     f="$state/$task.status"
+    safe=false
+    case "
+$fully_presented
+" in *$'\n'"$task"$'\n'*) safe=true ;; esac
     lines=$(status_new_lines_since_cursor "$f" "$endpoint") || return 1
-    [ -n "$lines" ] || continue
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       status_line_is_unread_surface "$line" || continue
-      printf '%s\t%s\n' "$task" "$line"
+      STATUS_SCAN_UNREAD+="$task"$'\t'"$line"$'\n'
+      safe=true
     done <<EOF
 $lines
 EOF
+    if [ "$safe" = false ]; then endpoint=$(status_presentation_cursor_offset "$f") || return 1; fi
+    STATUS_SCAN_ACKNOWLEDGED+="$task"$'\t'"$endpoint"$'\t'"$ident"$'\n'
   done <<EOF
 $snapshot
 EOF
+}
+
+scan_unread_surface_snapshot() {  # <state> <task-and-endpoint-snapshot>
+  status_scan_presented_snapshot "$1" "$2" || return 1
+  printf '%s' "$STATUS_SCAN_UNREAD"
 }
 
 # Fold material routed-work phases in the same keyed event stream.

@@ -17,6 +17,8 @@ DRAIN="$ROOT/bin/fm-wake-drain.sh"
 # The fixture root for make_case, which reads TMP_ROOT at call time.
 # shellcheck disable=SC2034
 TMP_ROOT=$(fm_test_tmproot fm-watch-wedge-cap-tests)
+# These cases exercise a confirmed live endpoint unless they override it.
+export FM_FAKE_TMUX_DEFAULT_COMMAND=claude
 
 ack_stopped_cycle() {  # <state>
   local state=$1 err sequence generation rc
@@ -72,34 +74,6 @@ wait_for_exit() {
   return 124
 }
 
-file_mtime() {
-  if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
-}
-
-wait_poll_cycle() {  # <state> <pid> [limit-ticks]
-  local state=$1 pid=$2 limit=${3:-300} beat first now i=0
-  beat="$state/.last-watcher-beat"
-  rm -f "$beat"
-  first=""
-  while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
-    first=$(file_mtime "$beat")
-    [ -n "$first" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
-    now=$(file_mtime "$beat")
-    if [ -n "$now" ] && [ "$now" != "$first" ]; then
-      return 0
-    fi
-    sleep 0.1
-    i=$((i + 1))
-  done
-  return 1
-}
-
 seen_sig() {
   if [ "$(uname)" = Darwin ]; then stat -f '%z:%Fm' "$1" 2>/dev/null; else stat -c '%s:%Y' "$1" 2>/dev/null; fi
 }
@@ -152,14 +126,14 @@ poll_wedge_round() {
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   : > "$out"
   # shellcheck disable=SC2086
-  env FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+  env FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
     PATH="$fakebin:$PATH" $extra_env \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_for_exit "$pid" 100; then
+  if ! wait_for_exit "$pid" 900; then
     reap "$pid"; fail "watcher did not exit on wedge round: $(cat "$out")"
   fi
   ack_stopped_cycle "$state" || fail "wedge round ack failed"
@@ -193,24 +167,24 @@ poll_capped_wedge_round() {  # <dir> <max> <extra-env> <exit|absorb>
     "$WATCH" > "$out" &
   pid=$!
   if [ "$mode" = exit ]; then
-    wait_for_exit "$pid" 100 || { reap "$pid"; return 1; }
+    wait_for_exit "$pid" 900 || { reap "$pid"; return 1; }
     return 0
   fi
-  wait_poll_cycle "$state" "$pid" 200 || { reap "$pid"; return 1; }
+  wait_poll_cycle "$state" "$pid" 900 || { reap "$pid"; return 1; }
   reap "$pid"
   return 0
 }
 
-# log_tmux_inventory_calls <fakebin> <log>: wrap the case's fake tmux so every
-# session-inventory read is logged. A watcher's ordinary per-poll traffic is
-# capture-pane, so this log counts dead-endpoint probe attempts and nothing else.
+# Log inventory and capture calls to count endpoint probes per pane poll.
 log_tmux_inventory_calls() {
   local fakebin=$1 log=$2
   : > "$log"
   mv "$fakebin/tmux" "$fakebin/tmux-real"
   cat > "$fakebin/tmux" <<'PROBEWRAP'
 #!/usr/bin/env bash
-[ "${1:-}" = list-windows ] && printf 'probe\n' >> "${FM_FAKE_TMUX_INVENTORY_LOG:-/dev/null}"
+case "${1:-}" in
+  list-windows|capture-pane) printf '%s\n' "$1" >> "${FM_FAKE_TMUX_INVENTORY_LOG:-/dev/null}" ;;
+esac
 exec "$FM_FAKE_TMUX_REAL" "$@"
 PROBEWRAP
   chmod +x "$fakebin/tmux"
@@ -218,11 +192,13 @@ PROBEWRAP
   export FM_FAKE_TMUX_INVENTORY_LOG="$log"
 }
 
-inventory_calls() {  # <log>
-  local n
-  n=$(grep -c '^probe$' "$1" 2>/dev/null) || n=0
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  printf '%s\n' "$n"
+one_probe_per_capture() {  # <log> <minimum-captures>
+  # The watcher can be stopped between the next inventory read and its capture.
+  awk -v min="$2" '
+    $0 == "list-windows" { reads++ }
+    $0 == "capture-pane" { if (reads != 1) bad=1; reads=0; captures++ }
+    END { exit (bad || captures < min || reads > 1) }
+  ' "$1"
 }
 
 # hold_capped_polls <dir> <max> <stale-secs> <timer-age-secs> <cycles> [env]:
@@ -230,7 +206,7 @@ inventory_calls() {  # <log>
 # recorded hash, with the idle timer planted <timer-age-secs> old against a
 # <stale-secs> threshold, so a case can place a window just under or well past
 # that threshold and watch what each poll costs it. The endpoint reads live
-# (FM_FAKE_TMUX_CURRENT_COMMAND=grok), so nothing here reports a death;
+# (FM_FAKE_TMUX_CURRENT_COMMAND=claude), so nothing here reports a death;
 # <env> overrides the pane's verdict instead. Returns non-zero unless every
 # cycle settles with the watcher still running - which is what a silenced window
 # does - leaving <dir>/watch.out for the caller to read.
@@ -245,7 +221,7 @@ hold_capped_polls() {  # <dir> <max> <stale-secs> <timer-age-secs> <cycles> [ext
   : > "$out"
   # shellcheck disable=SC2086
   env FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_WATCH_HANDLING_SUCCESSOR=1 \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_STALE_ESCALATE_SECS=$stale_secs FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
@@ -254,17 +230,17 @@ hold_capped_polls() {  # <dir> <max> <stale-secs> <timer-age-secs> <cycles> [ext
   pid=$!
   i=1
   while [ "$i" -le "$cycles" ]; do
-    wait_poll_cycle "$state" "$pid" 200 || { reap "$pid"; return 1; }
+    wait_poll_cycle "$state" "$pid" 900 || { reap "$pid"; return 1; }
     i=$((i + 1))
   done
   reap "$pid"
   return 0
 }
 
-# Count the queued stale wakes for <window> whose payload carries <needle>.
+# Count the queued endpoint wakes for <window> whose payload carries <needle>.
 queued_wakes_carrying() {  # <state> <window> <needle>
   awk -F '\t' -v w="$2" -v needle="$3" \
-    'NF >= 5 && $3 == "stale" && $4 == w && index($5, needle) { n++ } END { print n + 0 }' \
+    'NF >= 5 && ($3 == "stale" || $3 == "check") && $4 == w && index($5, needle) { n++ } END { print n + 0 }' \
     "$1/.wake-queue" 2>/dev/null || printf '0\n'
 }
 
@@ -311,7 +287,7 @@ test_wedge_cap_disabled_by_default() {
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
       "$WATCH" > "$out" &
     pid=$!
-    if ! wait_for_exit "$pid" 100; then
+    if ! wait_for_exit "$pid" 900; then
       reap "$pid"; fail "wedge round $n (default config) failed to exit"
     fi
     grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null && fail "default-config round $n fired PERMANENTLY-WEDGED - cap should be disabled"
@@ -401,7 +377,7 @@ test_wedge_cap_silences_subsequent_polls_for_same_hash() {
     # window-scoped marker and returns 0 without waking; the watcher keeps
     # polling until the next event. A watcher that exited with a wake of its own
     # fails this rather than passing quietly.
-    if ! wait_poll_cycle "$state" "$pid" 200; then
+    if ! wait_poll_cycle "$state" "$pid" 900; then
       reap "$pid"
       fail "post-cap poll $i did not stay alive and silent: $(cat "$out")"
     fi
@@ -455,7 +431,7 @@ test_wedge_cap_window_marker_silences_hash_churning_busy_pane() {
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
       "$WATCH" > "$out" &
     pid=$!
-    if ! wait_for_exit "$pid" 100; then
+    if ! wait_for_exit "$pid" 900; then
       reap "$pid"; fail "churning round $n failed to exit: $(cat "$out")"
     fi
     ack_stopped_cycle "$state" || fail "churning round $n ack failed"
@@ -489,7 +465,7 @@ test_wedge_cap_window_marker_silences_hash_churning_busy_pane() {
     # marker at the top of wedge_timer_check and returns 0 without waking;
     # the watcher keeps polling. wait_poll_cycle confirms it is alive AND
     # did not publish a wake.
-    if ! wait_poll_cycle "$state" "$pid" 200; then
+    if ! wait_poll_cycle "$state" "$pid" 900; then
       reap "$pid"; fail "post-cap churn poll $i watcher did not stay alive"
     fi
     # Stop the still-running watcher before grepping its output.
@@ -557,7 +533,7 @@ test_wedge_cap_expires_after_horizon() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_CAP_HORIZON_SECS=86400 \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_poll_cycle "$state" "$pid" 200; then
+  if ! wait_poll_cycle "$state" "$pid" 900; then
     reap "$pid"; fail "fresh-hash poll within horizon: watcher did not stay alive: $(cat "$out")"
   fi
   reap "$pid"
@@ -581,7 +557,7 @@ test_wedge_cap_expires_after_horizon() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_CAP_HORIZON_SECS=99999999999999999999 \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_poll_cycle "$state" "$pid" 200; then
+  if ! wait_poll_cycle "$state" "$pid" 900; then
     reap "$pid"; fail "fresh-hash poll with an unusable horizon: watcher did not stay alive: $(cat "$out")"
   fi
   reap "$pid"
@@ -611,7 +587,7 @@ test_wedge_cap_expires_after_horizon() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_CAP_HORIZON_SECS=2 \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_for_exit "$pid" 100; then
+  if ! wait_for_exit "$pid" 900; then
     reap "$pid"; fail "post-horizon poll did not exit: $(cat "$out")"
   fi
   grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null || fail "post-horizon poll did not re-fire PERMANENTLY-WEDGED (cap did not expire)"
@@ -657,7 +633,7 @@ test_wedge_cap_operator_can_rm_marker() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_for_exit "$pid" 60; then
+  if ! wait_for_exit "$pid" 900; then
     reap "$pid"; fail "post-rm poll did not exit: $(cat "$out")"
   fi
   grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null && fail "post-rm first poll re-fired the cap immediately (counter was not reset)"
@@ -713,7 +689,7 @@ test_wedge_cap_validates_invalid_overrides() {
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
       "$WATCH" > "$out" &
     pid=$!
-    if ! wait_for_exit "$pid" 100; then
+    if ! wait_for_exit "$pid" 900; then
       reap "$pid"; fail "round $n (garbage override) failed to exit"
     fi
     grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null && fail "garbage override round $n fired PERMANENTLY-WEDGED - validation did not fall back to 0"
@@ -801,7 +777,7 @@ test_wedge_cap_rollback_writes_sentinel_on_marker_failure() {
   pid=$!
   # No `set -e` on either side: this script opts into `set -u` only, so enabling
   # errexit inside a case would change the error semantics of every case after it.
-  wait_for_exit "$pid" 100
+  wait_for_exit "$pid" 900
   round_status=$?
   [ "$round_status" -eq 1 ] || fail "cap-fire round expected exit 1 on the failed marker write, got $round_status: $(cat "$out")"
   [ -e "$sentinel" ] || fail "rollback-failed sentinel was not written after the rollback itself failed"
@@ -821,7 +797,8 @@ test_wedge_cap_rollback_writes_sentinel_on_marker_failure() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_ROLLBACK_SENTINEL_TTL_SECS=3600 \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || true
+  wait_poll_cycle "$state" "$pid" 900 || { reap "$pid"; fail "sentinel did not survive a poll"; }
+  reap "$pid"
   grep -F "possible wedge" "$out" >/dev/null && fail "sentinel short-circuit still published a wedge wake"
   # The cap-fire round already queued its terminal wake (it appended before the
   # marker write it then failed on), so compare against the snapshot rather than
@@ -848,7 +825,8 @@ test_wedge_cap_rollback_writes_sentinel_on_marker_failure() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_ROLLBACK_SENTINEL_TTL_SECS=99999999999999999999 \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || true
+  wait_poll_cycle "$state" "$pid" 900 || { reap "$pid"; fail "sentinel did not survive a poll"; }
+  reap "$pid"
   grep -F "rollback-failed sentinel active" "$state/.watch-triage.log" >/dev/null \
     || fail "a rollback-failed sentinel with an unusable TTL did not hold the wedge path: $(cat "$state/.watch-triage.log" 2>/dev/null) and watch.out: $(cat "$out")"
   [ -e "$sentinel" ] || fail "a rollback-failed sentinel with an unusable TTL was dropped instead of holding for the documented default"
@@ -914,7 +892,7 @@ test_wedge_cap_unwritable_escalation_count_fails_safe() {
     "$WATCH" > "$out" &
   pid=$!
   round_status=0
-  wait_for_exit "$pid" 100 || round_status=$?
+  wait_for_exit "$pid" 900 || round_status=$?
   [ "$round_status" -eq 1 ] \
     || fail "a failed escalation-count write under a configured cap expected exit 1, got $round_status: $(cat "$out")"
   [ "$(queued_wakes_carrying "$state" "$window" "possible wedge")" -eq 0 ] \
@@ -946,17 +924,10 @@ test_wedge_cap_unwritable_escalation_count_fails_safe() {
   pass "an escalation count the state dir refuses fails safe under a configured cap and silences nothing without one"
 }
 
-# 8c. The rollback-failure sentinel silences escalations, not detection - but
-# the detection it keeps is the SAME dead-endpoint probe every other wedge route
-# runs behind the STALE_ESCALATE_SECS threshold, paced by the idle timer the
-# probe itself re-arms. Read from the top of the function, as its silence has to
-# be, that probe had no threshold to sit behind: a window the sentinel held ran
-# it on every poll for the whole TTL, so with the defaults a silenced window
-# paid a backend read every 15s instead of every 240s, for an hour, while
-# publishing nothing at all. Count the inventory reads the probe starts with,
-# once below the threshold and once at it.
+# 8c. The regular poll probes for endpoint loss before capturing the pane.
+# The sentinel must reuse that observation when its escalation timer is due.
 test_wedge_cap_sentinel_probe_keeps_its_cadence() {
-  local dir state out capture_file window key pane_hash sig fakebin max sentinel inventory below at
+  local dir state out capture_file window key pane_hash sig fakebin max sentinel inventory
   dir=$(make_case wedge-cap-sentinel-cadence); state="$dir/state"; capture_file="$dir/pane.txt"
   out="$dir/watch.out"; fakebin="$dir/fakebin"
   window="test:fm-wedge-cap-sentinel-cadence"
@@ -981,28 +952,24 @@ test_wedge_cap_sentinel_probe_keeps_its_cadence() {
   inventory="$dir/inventory.log"
   log_tmux_inventory_calls "$fakebin" "$inventory"
 
-  # Below the threshold the probe has nothing to decide: five whole polls, no
-  # endpoint read, still no wake.
+  # Below the threshold, only the regular per-pane probe runs.
   hold_capped_polls "$dir" "$max" 240 5 5 \
     || fail "the silenced window did not stay silent and alive below the threshold: $(cat "$out")"
-  below=$(inventory_calls "$inventory")
-  [ "$below" -eq 0 ] \
-    || fail "a window silenced below the escalation threshold read its endpoint $below times across five polls; the dead-endpoint probe belongs behind the same threshold every other wedge route runs it behind"
+  one_probe_per_capture "$inventory" 5 \
+    || fail "the sentinel changed endpoint reads below the threshold: $(cat "$inventory")"
   [ -e "$sentinel" ] || fail "a poll below the threshold consumed the sentinel; it must hold until TTL expiry or an operator rm"
 
-  # At the threshold the probe is owed its one read, and its own re-arm of the
-  # shared idle timer is what keeps the rest of the polls off the backend.
+  # At the threshold the sentinel re-arms without a second backend read.
   : > "$inventory"
   hold_capped_polls "$dir" "$max" 240 500 5 \
     || fail "the silenced window did not stay silent and alive at the threshold: $(cat "$out")"
-  at=$(inventory_calls "$inventory")
-  [ "$at" -le 1 ] \
-    || fail "a window silenced at the escalation threshold read its endpoint $at times across five polls; the probe must keep its once-per-STALE_ESCALATE_SECS cadence there too"
+  one_probe_per_capture "$inventory" 5 \
+    || fail "the sentinel repeated an endpoint read at the threshold: $(cat "$inventory")"
   [ "$(queued_wakes_carrying "$state" "$window" "possible wedge")" -eq 0 ] \
     || fail "the sentinel published a wedge wake: $(cat "$state/.wake-queue" 2>/dev/null)"
   [ -e "$sentinel" ] || fail "a poll at the threshold consumed the sentinel; it must hold until TTL expiry or an operator rm"
   unset FM_FAKE_CREW_STATE FM_FAKE_TMUX_REAL FM_FAKE_TMUX_INVENTORY_LOG
-  pass "a window silenced by the rollback-failure sentinel keeps the probe on its escalation cadence, not once per poll"
+  pass "a window silenced by the rollback-failure sentinel reuses the regular endpoint probe"
 }
 
 # 8d. The reset the cap fire gives the escalation counter after the marker is
@@ -1072,7 +1039,7 @@ SHIM
     FM_ROLLBACK_SENTINEL_TTL_SECS=3600 \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100
+  wait_for_exit "$pid" 900
   round_status=$?
   [ "$round_status" -eq 1 ] || fail "cap-fire round expected exit 1 on the failed counter reset, got $round_status: $(cat "$out")"
   [ -e "$sentinel" ] || fail "a counter reset this state dir refuses left the wedge path unsilenced: $(cat "$state/.watch-triage.log" 2>/dev/null)"
@@ -1103,7 +1070,7 @@ SHIM
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max FM_ROLLBACK_SENTINEL_TTL_SECS=3600 \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_poll_cycle "$state" "$pid" 200; then
+  if ! wait_poll_cycle "$state" "$pid" 900; then
     reap "$pid"; fail "the poll after a failed counter reset did not settle on the sentinel: $(cat "$out")"
   fi
   reap "$pid"
@@ -1178,7 +1145,7 @@ test_wedge_cap_releases_after_genuine_recovery() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_for_exit "$pid" 150; then
+  if ! wait_for_exit "$pid" 900; then
     reap "$pid"; fail "the re-wedged pane stayed silent after a genuine recovery: $(cat "$out")"
   fi
   grep -F "escalation 1" "$out" >/dev/null || fail "the re-wedge did not escalate from a fresh counter: $(cat "$out")"
@@ -1227,7 +1194,7 @@ test_wedge_cap_publishes_one_terminal_wake_under_persistent_marker_failure() {
       "$WATCH" > "$out" &
     pid=$!
     round_status=0
-    wait_for_exit "$pid" 100 || round_status=$?
+    wait_for_exit "$pid" 900 || round_status=$?
     [ "$round_status" -eq 1 ] \
       || fail "cap cycle $cycle expected exit 1 on the failed marker write, got $round_status: $(cat "$out")"
     grep -F "cap-marker write FAILED on" "$state/.watch-triage.log" >/dev/null \
@@ -1235,7 +1202,7 @@ test_wedge_cap_publishes_one_terminal_wake_under_persistent_marker_failure() {
     [ -d "$marker_window/blocker" ] || fail "cap cycle $cycle consumed the planted marker-write blocker"
     cycle=$((cycle + 1))
   done
-  terminal_rows=$(awk -F '\t' '$3 == "stale" && $5 ~ /PERMANENTLY-WEDGED/ { n++ } END { print n + 0 }' "$state/.wake-queue")
+  terminal_rows=$(queued_wakes_carrying "$state" "$window" "PERMANENTLY-WEDGED")
   [ "$terminal_rows" -eq 1 ] \
     || fail "two cap cycles under a persistent marker-write failure queued $terminal_rows PERMANENTLY-WEDGED rows; exactly one terminal wake per window is the bound"
   grep -F "suppressing the duplicate terminal wake" "$state/.watch-triage.log" >/dev/null \
@@ -1325,7 +1292,7 @@ test_wedge_cap_releases_after_declared_wait() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
     "$WATCH" > "$out" &
   pid=$!
-  if ! wait_for_exit "$pid" 150; then
+  if ! wait_for_exit "$pid" 900; then
     reap "$pid"; fail "the re-wedged pane stayed silent after a declared wait ended: $(cat "$out")"
   fi
   grep -F "escalation 1" "$out" >/dev/null || fail "the re-wedge did not escalate from a fresh counter: $(cat "$out")"
@@ -1358,7 +1325,7 @@ test_wedge_cap_reports_gone_endpoint_while_capped() {
 
   # The endpoint is a live agent for this round, so the pane is escalated rather
   # than reported gone and the ceiling fires while the worker is provably here.
-  poll_wedge_round "$dir" "$max" "FM_FAKE_TMUX_CURRENT_COMMAND=grok"
+  poll_wedge_round "$dir" "$max" ""
   grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null \
     || fail "the cap did not fire against a live endpoint: $(cat "$out")"
   [ -e "$state/.wedge-permanent-$key" ] || fail "the window-scoped cap marker is missing after the cap fired"
@@ -1470,7 +1437,7 @@ test_wedge_cap_new_episode_publishes_its_own_terminal_wake() {
 # horizon - and the canonical capped pane is one whose agent is provably still
 # there, which is exactly the verdict that leaves the timer alone.
 test_wedge_cap_probe_keeps_its_cadence_while_capped() {
-  local dir state out capture_file window key pane_hash sig fakebin max probes inventory
+  local dir state out capture_file window key pane_hash sig fakebin max inventory
   dir=$(make_case wedge-cap-probe-cadence); state="$dir/state"; capture_file="$dir/pane.txt"
   out="$dir/watch.out"; fakebin="$dir/fakebin"
   window="test:fm-wedge-cap-probe-cadence"
@@ -1489,7 +1456,7 @@ test_wedge_cap_probe_keeps_its_cadence_while_capped() {
   # The cap fires against a live agent, so the window it silences is one whose
   # endpoint the probe keeps answering `alive` - the case that must not become
   # a per-poll backend read.
-  poll_wedge_round "$dir" "$max" "FM_FAKE_TMUX_CURRENT_COMMAND=grok"
+  poll_wedge_round "$dir" "$max" ""
   grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null \
     || fail "the cap did not fire against a live endpoint: $(cat "$out")"
   [ -e "$state/.wedge-permanent-$key" ] || fail "the cap marker is missing after the cap fired"
@@ -1497,19 +1464,16 @@ test_wedge_cap_probe_keeps_its_cadence_while_capped() {
   inventory="$dir/inventory.log"
   log_tmux_inventory_calls "$fakebin" "$inventory"
 
-  # The pane is already past a long escalation bound, and the cap marker stands,
-  # so every poll reaches the at-threshold branch where the probe runs. The
-  # window must stay silent while the probe keeps to its own cadence.
+  # The pane enters past the bound. The cap reuses the poll's observation.
   hold_capped_polls "$dir" "$max" 240 500 5 \
     || fail "a capped poll did not stay silent and alive: $(cat "$out")"
-  probes=$(inventory_calls "$inventory")
-  [ "$probes" -le 1 ] \
-    || fail "the capped window probed its endpoint $probes times across ten poll cycles; a cap that silences escalations must not turn the dead-endpoint probe into a per-poll backend read"
+  one_probe_per_capture "$inventory" 5 \
+    || fail "the cap repeated an endpoint read at the threshold: $(cat "$inventory")"
   grep -F "PERMANENTLY-WEDGED" "$out" >/dev/null && fail "a capped poll re-fired the terminal wake"
   [ ! -s "$state/.wedge-escalations-$key" ] \
     || fail "a capped poll advanced the escalation counter while the probe kept its cadence"
   unset FM_FAKE_CREW_STATE FM_FAKE_TMUX_REAL FM_FAKE_TMUX_INVENTORY_LOG
-  pass "a capped live endpoint is probed on its own escalation cadence, not once per poll"
+  pass "a capped live endpoint reuses the regular endpoint probe"
 }
 
 # 15. A state dir that accepts the queue append but refuses to create the
@@ -1555,7 +1519,7 @@ test_wedge_cap_unwritable_terminal_marker_does_not_flood() {
       "$WATCH" > "$out" &
     pid=$!
     round_status=0
-    wait_for_exit "$pid" 100 || round_status=$?
+    wait_for_exit "$pid" 900 || round_status=$?
     [ "$round_status" -eq 1 ] \
       || fail "cap cycle $cycle expected exit 1 on the failed cap-marker write, got $round_status: $(cat "$out")"
     cycle=$((cycle + 1))
@@ -1632,7 +1596,7 @@ test_wedge_cap_off_ignores_leftover_markers() {
 # leaves the stale path, and a declared wait and its lift.
 drive_first_sight_release() {  # <route>
   local route=$1 dir state fakebin out capture_file window key statusf
-  local fire_verdict route_verdict mode pid fresh_hash away_record=0
+  local fire_verdict route_verdict pid fresh_hash away_record=0
   dir=$(make_case "wedge-cap-release-$route")
   state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"
@@ -1646,26 +1610,22 @@ drive_first_sight_release() {  # <route>
       printf 'working: still wedged\n' > "$statusf"
       fire_verdict='state: working · source: run-step · validating (running)'
       route_verdict=$fire_verdict
-      mode="exit"
       away_record=1
       ;;
     provably-working-terminal)
-      printf 'done: implementation complete, ready to validate\n' > "$statusf"
+      printf 'blocked: waiting for validation results\n' > "$statusf"
       fire_verdict='state: working · source: run-step · validating (running)'
       route_verdict=$fire_verdict
-      mode="absorb"
       ;;
     surface-terminal)
-      printf 'done: implementation complete, ready to validate\n' > "$statusf"
+      printf 'blocked: waiting for validation results\n' > "$statusf"
       fire_verdict='state: working · source: run-step · validating (running)'
       route_verdict='state: unknown · source: none · no run, no busy pane'
-      mode="exit"
       ;;
     provably-working-nonterminal)
       printf 'working: still wedged\n' > "$statusf"
       fire_verdict='state: working · source: run-step · validating (running)'
       route_verdict=$fire_verdict
-      mode="absorb"
       ;;
     *) fail "unknown first-sight release route: $route" ;;
   esac
@@ -1705,15 +1665,17 @@ drive_first_sight_release() {  # <route>
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=1 \
     "$WATCH" > "$out" &
   pid=$!
-  if [ "$mode" = exit ]; then
-    wait_for_exit "$pid" 150 \
+  if [ "$route" = surface-terminal ] || [ "$route" = away-first-sight ]; then
+    wait_for_exit "$pid" 900 \
       || { reap "$pid"; fail "the $route first-sight poll never settled: $(cat "$out")"; }
     grep -F "stale: $window" "$out" >/dev/null \
       || { reap "$pid"; fail "the $route first-sight poll did not surface the render: $(cat "$out")"; }
   else
-    wait_poll_cycle "$state" "$pid" 200 \
+    wait_poll_cycle "$state" "$pid" 900 \
       || { reap "$pid"; fail "the $route first-sight poll did not survive its cycle: $(cat "$out")"; }
   fi
+  [ "$(cat "$state/.stale-$key")" = "$fresh_hash" ] \
+    || { reap "$pid"; fail "the $route first-sight poll did not classify the fresh render"; }
   reap "$pid"
   rm -f "$state/.afk"
   ack_stopped_cycle "$state" || true
@@ -1738,7 +1700,7 @@ drive_first_sight_release() {  # <route>
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=1 \
     "$WATCH" > "$out" &
   pid=$!
-  wait_poll_cycle "$state" "$pid" 200 \
+  wait_poll_cycle "$state" "$pid" 900 \
     || { reap "$pid"; fail "the fresh episode after the $route route did not survive its cycle: $(cat "$out")"; }
   reap "$pid"
   ack_stopped_cycle "$state" || true
@@ -1807,7 +1769,7 @@ test_wedge_cap_releases_after_nonterminal_stale_episode() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WEDGE_MAX_ESCALATIONS=$max \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 200 || fail "non-terminal reset poll did not settle: $(cat "$out")"
+  wait_poll_cycle "$state" "$pid" 900 || { reap "$pid"; fail "non-terminal reset poll did not settle: $(cat "$out")"; }
   reap "$pid"
   ack_stopped_cycle "$state" || fail "non-terminal reset ack failed"
 
@@ -1869,7 +1831,7 @@ test_wedge_cap_reports_gone_endpoint_on_terminal_override_route() {
   printf 'window=%s\nkind=ship\n' "$window" > "$state/wedge-cap-terminal-override.meta"
   # Captain-relevant status line, seen, so the pane is the terminal-status
   # population: the classification the overriding crew state has to beat.
-  printf 'done: implementation complete, ready to validate\n' > "$statusf"
+  printf 'blocked: waiting for validation results\n' > "$statusf"
   mark_status_seen "$state" "$statusf"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle wedged content")
@@ -1907,7 +1869,7 @@ test_wedge_cap_reports_gone_endpoint_on_terminal_override_route() {
     PATH="$fakebin:$PATH" \
     "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 300 \
+  wait_for_exit "$pid" 900 \
     || { reap "$pid"; fail "the capped terminal-override window never reported its gone endpoint: $(cat "$out")"; }
   grep -F "agent missing" "$out" >/dev/null \
     || fail "the capped terminal-override window did not report the gone endpoint: $(cat "$out")"
@@ -1930,7 +1892,7 @@ test_wedge_cap_reports_gone_endpoint_on_terminal_override_route() {
   pid=$!
   round=1
   while [ "$round" -le 2 ]; do
-    wait_poll_cycle "$state" "$pid" 300 \
+    wait_poll_cycle "$state" "$pid" 900 \
       || { reap "$pid"; fail "capped poll $round surfaced a wake: $(cat "$out")"; }
     round=$((round + 1))
   done

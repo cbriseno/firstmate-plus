@@ -306,7 +306,8 @@ def contract(home, task_id, data=None):
     import shlex
     quote = shlex.quote
     input_path = str(Path(os.path.abspath(data or home / 'data')) / task_id / 'progress-input.json')
-    command = ('FM_HOME=' + quote(str(home)) + ' bash ' + quote(str(BIN / 'fm-tasks-axi.sh'))
+    command = ('FM_HOME=' + quote(str(home)) + ' FM_DATA_OVERRIDE=' + quote(str(Path(input_path).parent.parent))
+               + ' bash ' + quote(str(BIN / 'fm-tasks-axi.sh'))
                + ' presentation ' + quote(task_id) + ' --presentation-file ' + quote(input_path))
     template = """At the start, write a short honest plan with phase and progress to {input_path}, then publish it with:
 `{command}`

@@ -22,7 +22,8 @@ Judge difficulty from uncertainty, scale, reader needs, and consequences, not wh
 If a configured choice cannot meet the required class, report the mismatch rather than silently downgrading the task or replacing an explicit choice.
 Record the selected concrete model, effort, class, and short fit rationale in the dispatch note; `fm-spawn.sh` records the concrete axes in task metadata.
 For profile arrays, `quota-array-dispatch` owns selection among candidates that meet this class.
-When the existing dispatch rules declare categories, pass `--category <category>` to `fm-brief.sh` and `--rationale <reason>` when the rule requires it; `fm-spawn.sh --help` owns matching, legacy briefs, and the skip mechanics.
+When the existing dispatch rules declare categories, pass `--category <category>` to `fm-brief.sh`, record any omitted model or effort with `--dispatch-model` or `--dispatch-effort`, and supply `--rationale <reason>` for complex work or when the rule requires it; `fm-spawn.sh --help` owns matching, legacy briefs, and the skip mechanics.
+Without a dispatch profile file, record the selected harness, model, and effort with the brief's `--dispatch-harness`, `--dispatch-model`, and `--dispatch-effort` options so automatic dispatch can use the same selection.
 Choose the category from the work itself, including when another requester proposes a model.
 
 Effort precedence is a per-task captain instruction, then applicable dispatch profile or secondmate pin, then the fallback below.

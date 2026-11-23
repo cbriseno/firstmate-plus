@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert rows['task:projectless']['execution_context'] == 'unknown'
     assert rows['task:registered']['execution_context'] == 'project'
     assert rows['task:unresolved']['repository_project'] == 'project:typo'
-    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture',
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--action', 'fixture', '--category', 'product-design', '--challenge', 'fixture',
         '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
     filed = next(t['question'] for t in json.loads(run('fm-tasks-axi.sh', 'work', 'snapshot'))['tasks'] if t['key'] == 'task:decision')
     assert filed['open'] and not filed['filing_required'] and filed['call'] is not None
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
         assert broken_task['placement']['code'] == 'call_record_required' and broken_task['placement']['attention'] == []
         replay = Projection(broken)
         assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision') == question
-        run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture',
+        run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture', '--action', 'fixture', '--category', 'product-design', '--challenge', 'fixture',
             '--repair-call', '--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait')
         repaired = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
         question = next(t['question'] for t in repaired['snapshot']['tasks'] if t['key'] == 'task:decision')
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
             replay.apply(json.loads(line))
         assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
     # An intentional no-options wait is supported even without a question.
-    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture login', '--category', 'credentials-security', '--challenge', 'fixture',
+    run('fm-captain-hold.sh', 'hold', 'decision', '--reason', 'Fixture login', '--action', 'fixture', '--category', 'credentials-security', '--challenge', 'fixture',
         '--no-options', 'The user must log in')
     freeform = json.loads(run('fm-tasks-axi.sh', 'work', 'bootstrap'))
     question = next(t['question'] for t in freeform['snapshot']['tasks'] if t['key'] == 'task:decision')
@@ -112,11 +112,11 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     assert next(t['question'] for t in replay.value['tasks'] if t['key'] == 'task:decision')['open']
     # Explicit recovery must not turn a known human action into a question.
     run('fm-captain-hold.sh', 'hold', 'action', '--title', 'Synthetic login action', '--repo', 'firstmate',
-        '--reason', 'Login', '--category', 'credentials-security', '--challenge', 'fixture', '--call-kind', 'action',
+        '--reason', 'Login', '--action', 'fixture', '--category', 'credentials-security', '--challenge', 'fixture', '--call-kind', 'action',
         '--instruction', 'Complete the login in chat', '--where', 'chat')
     action_record = (home / 'data/action/captain-call.json').read_bytes()
     refused = subprocess.run(['bash', str(root / 'bin/fm-captain-hold.sh'), 'hold', 'action', '--repair-call',
-        '--reason', 'Fixture', '--category', 'product-design', '--challenge', 'fixture', '--question', 'Choose?',
+        '--reason', 'Fixture', '--action', 'fixture', '--category', 'product-design', '--challenge', 'fixture', '--question', 'Choose?',
         '--option', 'yes=Proceed', '--option', 'no=Wait'], env=env, capture_output=True, text=True)
     assert refused.returncode != 0 and 'outstanding action cannot become a question' in refused.stderr
     assert (home / 'data/action/captain-call.json').read_bytes() == action_record
@@ -125,7 +125,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-activity-') as directory:
     # Real snapshot reports the orphan instead of inventing a worker.
     assert base['snapshot']['main_inventory']['valid'] is False
     # Direct users of the bootstrap function receive the same observed facts.
-    direct_code = 'import json,sys; sys.path.insert(0,sys.argv[1]); from fm_work import Owner; from fm_work_projection import bootstrap,position; owner=Owner(); owner.ledger_start=position(owner.home); owner.load(); print(json.dumps(bootstrap(owner)))'
+    direct_code = 'import json,sys; sys.path.insert(0,sys.argv[1]); from fm_work import Owner; from fm_work_projection import bootstrap,position; owner=Owner(); owner.ledger_start, owner.ledger_prefix = position(owner.home); owner.load(); print(json.dumps(bootstrap(owner)))'
     direct = json.loads(subprocess.check_output([sys.executable, '-c', direct_code, str(root / 'bin')], env=env, text=True))
     assert direct['snapshot']['main_inventory']['valid'] is False
     assert 'activity' in base['snapshot']['main_inventory']['orphan_in_flight']
@@ -557,7 +557,7 @@ with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     for key, options in [('human', ['--question', 'Choose?', '--option', 'yes=Proceed', '--option', 'no=Wait']),
                          ('action', ['--call-kind', 'action', '--instruction', 'Inspect the result', '--where', 'chat']),
                          ('approval', ['--call-kind', 'approval', '--question', 'Approve?', '--option', 'yes=Approve', '--option', 'no=Wait'])]:
-        cli('fm-captain-hold.sh', 'hold', key, '--reason', 'Human response', '--category', 'product-design', '--challenge', 'fixture', *options)
+        cli('fm-captain-hold.sh', 'hold', key, '--reason', 'Human response', '--action', 'fixture', '--category', 'product-design', '--challenge', 'fixture', *options)
     draft = home / 'data/draft.json'
     draft.write_text(json.dumps(dict(outcome=dict(role='final', review='needed'))))
     cli('fm-tasks-axi.sh', 'presentation', 'human', '--presentation-file', str(draft))
@@ -600,10 +600,14 @@ with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     assert model.apply(dict(event='home.configuration', ts=stamp, value=dict(lane_capacity='', projects=base['registry_text'])))
     assert model.value['counts']['capacity']['state'] == 'unknown' and model.value['counts']['capacity']['limit'] is None
     assert rows()['capacity']['placement']['section'] == 'ready'
-    for value, section in [(dict(source='spawn-deferred', project_limit=1), 'capacity'), ({}, 'ready')]:
+    cause = 'memory: no room for a 0.5 GB lane (default): 2.4 GB available, 2 GB kept'
+    for value, section, reason in [(dict(source='spawn-deferred', project_limit=1), 'capacity', 'capacity_dispatch'),
+                                   (dict(source='spawn-deferred', project_limit=1, reason=cause), 'capacity', cause),
+                                   ({}, 'ready', 'not_started')]:
         cli('fm-fleet-ledger.sh', 'entity', 'task.dispatch_wait', 'ready', payload=value)
         event = json.loads((home / 'state/fleet-ledger.jsonl').read_text().splitlines()[-1])
         assert model.apply(event) and rows()['ready']['placement']['section'] == section
+        assert rows()['ready']['placement']['reason'] == reason, rows()['ready']['placement']
     assert model.apply(dict(event='task.status', task='running', ts=stamp, declared_at=stamp, state='working', text='paused waiting capacity approval'))
     assert rows()['running']['placement']['section'] == 'running'  # prose has no classification power
     decision = home / 'data/answer.txt'; decision.write_text('yes\n')
@@ -613,9 +617,14 @@ with tempfile.TemporaryDirectory(prefix='fm-work-state-') as directory:
     (home / 'config/lane-capacity').unlink()
     (home / 'config/project-capacity').write_text('alpha 1\n')
     (home / 'state/ready.spawn-deferred').write_text(str(home / 'projects/alpha') + '\n')
+    (home / 'state/ready.spawn-deferred.reason').write_text('project alpha admits 1 worker(s) at once on this machine and 1 already hold a place\n')
     deferred = next(t for t in work('snapshot')['tasks'] if t['key'] == 'task:ready')
     assert deferred['placement']['code'] == 'capacity_dispatch'
     assert deferred['dispatch_wait']['project_limit'] == 1
+    assert deferred['placement']['reason'] == 'project alpha admits 1 worker(s) at once on this machine and 1 already hold a place', deferred['placement']
+    fleet = json.loads(subprocess.run(['bash', str(root / 'bin/fm-fleet-snapshot.sh')], env=env, capture_output=True, text=True, check=True).stdout)
+    record = next(r for r in fleet['backlog']['records'] if r['id'] == 'ready')
+    assert record['dispatch_reason'] == deferred['placement']['reason'], record
     (home / 'config/project-capacity').unlink()
     unconfigured = next(t for t in work('snapshot')['tasks'] if t['key'] == 'task:ready')
     assert unconfigured['placement']['section'] == 'ready' and unconfigured['dispatch_wait']['project_limit'] is None

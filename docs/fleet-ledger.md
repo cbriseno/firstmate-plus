@@ -12,7 +12,7 @@ While the flag is absent, each producer performs one file-existence test and not
 ## The file
 
 The ledger is `state/fleet-ledger.jsonl` in that home, in JSON Lines format: one JSON object per line, each ending in a newline.
-Records are only ever appended, in the order they are written.
+Records are appended in the order they are written; hourly compaction (see [Limits](#limits)) is the only rewrite.
 
 Every record carries these members:
 
@@ -54,6 +54,8 @@ Readers must ignore members and events they do not recognize, so later versions 
 | `home.configuration` | `home`, `value` | Explicit configuration publication records lane_capacity, project_capacity and projects text (null when absent). |
 
 For entity events, `home` is the explicit owning home and `value` is the complete resulting entity, without status-text truncation.
+Each entity publication contains the entire supplied value, including unchanged members, nested values and nulls; it is not a patch or a reference to another record.
+Readers can use an entity value without applying earlier values for that entity; this alone does not reconstruct the complete board.
 `call.opened` and `call.resolved` values carry the canonical task row and `call` record, its existing lifecycle `identity` (`hold_set#prior-resolution-count`), `occurrence`, and the canonical `answer` when available, including its separate application state.
 Direct status appends and task dispatches carry an optional `observation` containing local inventory, pause/validation, activity and spawn-deferral facts from the canonical fleet snapshot.
 Entity events publish their supplied resulting value without sampling the fleet while the producer holds the shared work lock.
@@ -109,8 +111,10 @@ Example:
 - When a home turns the ledger on, status lines already in a live task's log are recorded on that task's next capture (which may be a worker status command, PR registration, merge, cleanup, or monitor poll); tasks dispatched or cleaned up while the flag was absent have no record of that.
 - There is no sequence number and no gap detection.
 - Writes are plain appends with no forced flush to disk, so a machine crash can lose the newest records.
-- The file is never rotated and grows until truncated.
-  To truncate it, stop readers, then empty it with `: > state/fleet-ledger.jsonl`; restart readers from an explicit canonical base, never an earlier cursor or projection.
+- The first write after an hour since the last compaction (or with no `state/.fleet-ledger.compacted` mark) compacts the file under the writer's lock and replaces it by rename.
+  It keeps the latest record for each home, task and event, and for a task cleaned up it keeps only its latest `task.dispatched` and what was recorded from its latest `task.cleaned_up` on; it drops unreadable lines.
+  Bootstrap reads only those records, so a fresh base is the same before and after; history older than that is not kept.
+  A reader that sees a new file identity, or a file shorter than its offset, continues from a fresh canonical base (`work bootstrap`), never from an earlier cursor or projection.
 - The ledger copies status text verbatim from the home's `state/` directory and adds no scrubbing, so give its readers exactly the trust you give `state/`.
   Entity events also contain complete private call, answer, presentation and final-message text.
 
@@ -128,9 +132,10 @@ These are possible follow-ups, deliberately left out of this version:
 
 ## Harness coverage
 
-Claude's existing Stop guard captures the primary final before its supervision and loop allowances, only in the primary checkout with verified session-lock ownership.
-Codex project hooks remain unverified and worker launches keep hooks disabled.
-For a Codex primary, launch with `-c 'notify=["bash","/absolute/firstmate/bin/fm-primary-final.sh","codex"]'` to capture normal finals through its verified notify surface; combine this with an existing notify consumer if one is configured, rather than replacing it silently.
+Claude's asynchronous final writer captures the primary final and updates the supervision host's dialog mirror from the same Stop payload, only in the primary checkout with verified session-lock ownership.
+Codex's asynchronous Stop hook captures the primary final when project hooks are enabled and trusted.
+If project hooks are unavailable, a Codex primary can launch with `-c 'notify=["bash","/absolute/firstmate/bin/fm-primary-final.sh","codex"]'` to capture normal finals through its verified notify surface.
+Combine it with an existing notify consumer if one is configured.
 Codex workers publish normal completion through their existing notify command, bound to the busy generation; this does not enable hook trust or change the rollout classifier.
 Other adapters' turn activity comes from their existing busy writer.
 A final capture never identifies a free-form question semantically, opens a call, resolves an answer, closes a task or releases a lane.

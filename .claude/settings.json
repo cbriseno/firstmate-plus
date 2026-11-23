@@ -55,6 +55,11 @@
             "type": "command",
             "command": "exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-host-mirror.sh hook claude",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-question-turn-reset.sh",
+            "timeout": 10
           }
         ]
       }
@@ -74,7 +79,8 @@
           },
           {
             "type": "command",
-            "command": "exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-host-mirror.sh hook claude",
+            "command": "exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-primary-final.sh claude",
+            "async": true,
             "timeout": 30
           }
         ]

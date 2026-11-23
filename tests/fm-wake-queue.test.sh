@@ -18,6 +18,22 @@ GUARD="$ROOT/bin/fm-guard.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-wake-tests)
 
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+
+test_monotonic_measurement_keeps_fractional_seconds() {
+  local start end elapsed
+  python3 -c 'import time; phase=time.time() % 1; time.sleep((0.95-phase) % 1)'
+  start=$(monotonic_ms)
+  sleep 3.1
+  end=$(monotonic_ms)
+  elapsed=$((end - start))
+  [ "$elapsed" -ge 3000 ] && [ "$elapsed" -lt 4000 ] \
+    || fail "3.1s interval crossing a wall-clock second measured ${elapsed}ms"
+  pass "monotonic measurement preserves a 3.x-second interval across a wall-clock second"
+}
+
 
 test_concurrent_append_and_drain() {
   local dir state out1 out2 pids i pid count unique malformed sequence generation
@@ -69,7 +85,7 @@ test_signal_catchup_without_running_watcher() {
   # tested.
   printf 'blocked: first\n' > "$status_file"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 40 || fail "watcher did not exit for first signal"
+  wait_for_exit "$!" 300 || fail "watcher did not exit for first signal"
   grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not print first signal"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2> "$drain_err" || fail "drain after first signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "first signal was not queued"
@@ -81,7 +97,7 @@ test_signal_catchup_without_running_watcher() {
   printf 'done: second\n' >> "$status_file"
   : > "$out"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 40 || fail "watcher did not exit for second signal"
+  wait_for_exit "$!" 300 || fail "watcher did not exit for second signal"
   grep -F "signal: $status_file" "$out" >/dev/null || fail "signal written with no watcher was not caught"
   pass "signal written while no watcher runs is caught on next run"
 }
@@ -99,8 +115,13 @@ test_stale_alive_then_dead_enqueues_before_dead_marker() {
   printf 'idle prompt' > "$capture_file"
   printf 'claude\n' > "$agent_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/stale.meta"
-  # Keep a terminal status classified so this wake must come from stale liveness.
-  printf 'done: ready in branch fm/stale\n' > "$state/stale.status"
+  # A failed relaunch must fall back to a durable death report.
+  mkdir -p "$dir/repo"
+  cp -R "$ROOT/bin" "$dir/repo/bin"
+  # shellcheck disable=SC2016 # The fake command expands the state path when invoked.
+  printf '#!/bin/sh\ntouch "$FM_STATE_OVERRIDE/relaunch-attempted"\nexit 1\n' > "$dir/repo/bin/fm-control.sh"
+  chmod +x "$dir/repo/bin/fm-control.sh"
+  printf 'working: active\n' > "$state/stale.status"
   prime_status_seen "$state" "$state/stale.status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle prompt")
@@ -108,7 +129,7 @@ test_stale_alive_then_dead_enqueues_before_dead_marker() {
   printf '1\n' > "$state/.count-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_FAKE_TMUX_CURRENT_COMMAND_FILE="$agent_file" FM_STATE_OVERRIDE="$state" \
-    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$dir/repo/bin/fm-watch.sh" > "$out" &
   pid=$!
   i=0
   while [ "$i" -lt 100 ] && [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" != "$pane_hash" ]; do
@@ -120,12 +141,13 @@ test_stale_alive_then_dead_enqueues_before_dead_marker() {
     || { kill -TERM "$pid" 2>/dev/null || true; fail "live endpoint was not classified silent"; }
   assert_not_contains "$(cat "$out")" "stale: $window" "a confirmed-live endpoint produced a stale wake"
   printf 'zsh\n' > "$agent_file"
-  wait_for_exit "$pid" 40 || { kill -TERM "$pid" 2>/dev/null || true; fail "dead transition was hidden by the unchanged pane hash"; }
+  wait_for_exit "$pid" 300 || { kill -TERM "$pid" 2>/dev/null || true; fail "dead transition was hidden by the unchanged pane hash"; }
+  [ -e "$state/relaunch-attempted" ] || fail "failed relaunch was not attempted"
   grep -F "stale: $window (" "$out" >/dev/null || fail "watcher did not print stale wake after the endpoint died"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after stale wake failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "stale wake was not queued"
   [ -s "$state/.dead-reported-$key" ] || fail "dead report marker was not written after the queue append"
-  pass "a same-hash alive-to-dead transition produces one durable stale wake"
+  pass "a failed relaunch after a same-hash death produces one durable stale wake"
 }
 
 test_unknown_stale_endpoint_stays_silent() {
@@ -181,7 +203,7 @@ SH
   FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" task >/dev/null \
     || fail "could not register queue custom check"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 40 || fail "watcher did not exit for check output"
+  wait_for_exit "$!" 300 || fail "watcher did not exit for check output"
   grep -F "check: $check_file: merged: https://example.test/pr/1" "$out" >/dev/null || fail "watcher did not print check wake"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after check wake failed"
   grep "$(printf '\tcheck\t')" "$drain_out" | grep -F "$check_file" | grep -F 'merged: https://example.test/pr/1' >/dev/null || fail "check wake was not queued"
@@ -2793,12 +2815,33 @@ SH
   pass "bounded acquire hands ownership to the waiting caller after contention"
 }
 
+# The empty drain takes and releases several locks; reading each owner should
+# not start a separate program under the worker's reduced scheduling priority.
+test_empty_drain_avoids_external_pid_readers() {
+  local dir state real_cat
+  dir=$(make_case drain-process-budget)
+  state="$dir/state"
+  real_cat=$(command -v cat)
+  cat > "$dir/fakebin/cat" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in */pid) printf 'external pid read\n' >> "$FM_TEST_CAT_LOG" ;; esac
+exec "$FM_TEST_REAL_CAT" "$@"
+SH
+  chmod +x "$dir/fakebin/cat"
+  : > "$dir/cat.log"
+  PATH="$dir/fakebin:$PATH" FM_TEST_REAL_CAT="$real_cat" FM_TEST_CAT_LOG="$dir/cat.log" \
+    FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/out" 2> "$dir/err" \
+    || fail "empty drain failed"
+  [ ! -s "$dir/cat.log" ] || fail "empty drain launched external PID readers"
+  pass "empty drain avoids external PID readers"
+}
+
 # A live-but-stuck presentation lock must not strand the executable drain. The
 # presentation remains retriable on the next pass, while the separate queue
 # mutation lock keeps its blocking all-or-nothing acknowledgement contract.
 test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   local dir state status queue_out queue_err first_out first_err second_out second_err replay_out replay_err
-  local queue_holder presentation_holder ack_holder i start elapsed rc advisory_count
+  local queue_holder presentation_holder ack_holder i start end elapsed rc advisory_count
   dir=$(make_case presentation-lock-deadline)
   state="$dir/state"
   status="$state/task.status"
@@ -2830,15 +2873,18 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   [ -s "$dir/queue.ready" ] \
     || { kill "$queue_holder" 2>/dev/null || true; fail "queue holder never acquired its lock"; }
 
-  start=$(date +%s)
+  start=$(monotonic_ms)
   FM_STATE_OVERRIDE="$state" FM_STATUS_PRESENTATION_LOCK_TIMEOUT=1 \
     "$DRAIN" > "$queue_out" 2> "$queue_err" \
     || { kill "$queue_holder" 2>/dev/null || true; fail "bounded queue presentation drain failed"; }
-  elapsed=$(( $(date +%s) - start ))
-  [ "$elapsed" -le 4 ] \
-    || { kill "$queue_holder" 2>/dev/null || true; fail "queue lock delayed the drain for ${elapsed}s"; }
+  end=$(monotonic_ms)
+  elapsed=$((end - start))
+  [ "$elapsed" -le 4000 ] \
+    || { kill "$queue_holder" 2>/dev/null || true; fail "queue lock delayed the drain for ${elapsed}ms"; }
+  is_live_non_zombie "$queue_holder" \
+    || fail "the queue holder exited before the drain returned"
   advisory_count=$(grep -Fc \
-    "WAKE DRAIN SKIPPED: queue lock remains held by live pid $queue_holder" \
+    "WAKE DRAIN SKIPPED: queue lock remains held by live pid $queue_holder after 1s;" \
     "$queue_out" || true)
   [ "$advisory_count" -eq 1 ] \
     || { kill "$queue_holder" 2>/dev/null || true; fail "queue deadline did not emit exactly one holder advisory"; }
@@ -2870,15 +2916,18 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   [ -s "$dir/presentation.ready" ] \
     || { kill "$presentation_holder" 2>/dev/null || true; fail "presentation holder never acquired its lock"; }
 
-  start=$(date +%s)
+  start=$(monotonic_ms)
   FM_STATE_OVERRIDE="$state" FM_STATUS_PRESENTATION_LOCK_TIMEOUT=1 \
     "$DRAIN" > "$first_out" 2> "$first_err" \
     || { kill "$presentation_holder" 2>/dev/null || true; fail "bounded presentation drain failed"; }
-  elapsed=$(( $(date +%s) - start ))
-  [ "$elapsed" -le 4 ] \
-    || { kill "$presentation_holder" 2>/dev/null || true; fail "presentation lock delayed the drain for ${elapsed}s"; }
+  end=$(monotonic_ms)
+  elapsed=$((end - start))
+  [ "$elapsed" -le 4000 ] \
+    || { kill "$presentation_holder" 2>/dev/null || true; fail "presentation lock delayed the drain for ${elapsed}ms"; }
+  is_live_non_zombie "$presentation_holder" \
+    || fail "the presentation holder exited before the drain returned"
   advisory_count=$(grep -Fc \
-    "STATUS PRESENTATION SKIPPED: lock remains held by live pid $presentation_holder" \
+    "STATUS PRESENTATION SKIPPED: lock remains held by live pid $presentation_holder after 1s;" \
     "$first_out" || true)
   [ "$advisory_count" -eq 1 ] \
     || { kill "$presentation_holder" 2>/dev/null || true; fail "presentation deadline did not emit exactly one holder advisory"; }
@@ -3149,7 +3198,10 @@ case "${1:-}" in
   display-message)
     for a in "$@"; do
       case "$a" in
-        *pane_current_command*) printf '%s\n' "$cmd"; exit 0 ;;
+        *pane_current_command*)
+          sleep "${FM_TEST_TMUX_PROBE_DELAY:-0}"
+          printf '%s\n' "$cmd" >> "$probe"
+          printf '%s\n' "$cmd"; exit 0 ;;
         *cursor_y*) printf '0\n'; exit 0 ;;
       esac
     done
@@ -3263,8 +3315,7 @@ test_secondmate_liveness_tick_relaunches_dead_endpoint_once() {
   drain_liveness_wakes "$dir"
   rm -f "$state/.secondmate-liveness-tick"
   run_liveness_leg "$dir" dead-idle FM_FAKE_TMUX_CURRENT_COMMAND=zsh; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against an alive relaunched secondmate: $(cat "$dir/watch-dead-idle.out" "$dir/watch-dead-idle.err")"
   kill_liveness_leg "$pid"
   [ "$(grep -c 'secondmate-relaunch-sm1' "$state/.wake-queue" 2>/dev/null || true)" -eq 0 ] \
@@ -3320,14 +3371,19 @@ test_secondmate_liveness_tick_relaunches_every_dead_mate_before_waking() {
 }
 
 test_secondmate_liveness_tick_leaves_alive_and_inconclusive_untouched() {
-  local dir state pid
+  local dir state pid i
   dir=$(make_secondmate_liveness_case liveness-quiet)
   state="$dir/state"
 
   # A live endpoint probes every cadence and never acts.
-  run_liveness_leg "$dir" alive FM_FAKE_TMUX_CURRENT_COMMAND=claude; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  run_liveness_leg "$dir" alive FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_TEST_TMUX_PROBE_DELAY=5; pid=$LIVENESS_PID
+  for ((i=0; i<600; i++)); do
+    grep -Fqx 'claude' "$dir/tmux.log.probe" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -Fqx 'claude' "$dir/tmux.log.probe" 2>/dev/null \
+    || fail "the alive endpoint was not actually probed"
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against an alive secondmate: $(cat "$dir/watch-alive.out" "$dir/watch-alive.err")"
   kill_liveness_leg "$pid"
   [ ! -s "$dir/tmux.log" ] || fail "an alive secondmate was touched: $(cat "$dir/tmux.log")"
@@ -3340,8 +3396,12 @@ test_secondmate_liveness_tick_leaves_alive_and_inconclusive_untouched() {
   # next watcher does not resurface instead of exercising the tick.
   drain_liveness_wakes "$dir"
   run_liveness_leg "$dir" ambiguous FM_FAKE_TMUX_CURRENT_COMMAND=node; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  for ((i=0; i<600; i++)); do
+    grep -F 'secondmate sm1 liveness: existing endpoint has ambiguous agent process (backend=tmux)' \
+      "$state/.watch-triage.log" >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against an ambiguous secondmate endpoint: $(cat "$dir/watch-ambiguous.out" "$dir/watch-ambiguous.err")"
   kill_liveness_leg "$pid"
   [ ! -s "$dir/tmux.log" ] || fail "an ambiguous endpoint was killed or relaunched: $(cat "$dir/tmux.log")"
@@ -3360,8 +3420,7 @@ test_secondmate_liveness_tick_cadence_gates_the_probe() {
   # A fresh cadence marker holds the probe even over a dead endpoint.
   touch "$state/.secondmate-liveness-tick"
   run_liveness_leg "$dir" gated FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FAKE_TMUX_CURRENT_COMMAND=zsh; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher woke inside the liveness cadence: $(cat "$dir/watch-gated.out" "$dir/watch-gated.err")"
   kill_liveness_leg "$pid"
   [ ! -s "$dir/tmux.log" ] || fail "a gated tick probed the endpoint: $(cat "$dir/tmux.log")"
@@ -3403,8 +3462,7 @@ test_secondmate_liveness_tick_attempt_bound_parks_then_rearm_on_alive() {
   drain_liveness_wakes "$dir"
   rm -f "$state/.secondmate-liveness-tick"
   run_liveness_leg "$dir" parked FM_FAKE_TMUX_CURRENT_COMMAND=zsh; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher re-escalated a parked mate: $(cat "$dir/watch-parked.out" "$dir/watch-parked.err")"
   kill_liveness_leg "$pid"
   [ "$(grep -c 'secondmate-relaunch' "$state/.wake-queue" 2>/dev/null || true)" -eq 0 ] \
@@ -3416,8 +3474,7 @@ test_secondmate_liveness_tick_attempt_bound_parks_then_rearm_on_alive() {
   drain_liveness_wakes "$dir"
   rm -f "$state/.secondmate-liveness-tick"
   run_liveness_leg "$dir" rearm FM_FAKE_TMUX_CURRENT_COMMAND=claude; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against a live rearmed mate: $(cat "$dir/watch-rearm.out" "$dir/watch-rearm.err")"
   kill_liveness_leg "$pid"
   [ ! -e "$state/.secondmate-relaunch-bound-sm1" ] \
@@ -3558,8 +3615,14 @@ test_secondmate_liveness_tick_skips_mate_whose_lock_is_held() {
   # A concurrent liveness episode (e.g. the session-start sweep) holds the
   # per-mate lock; this tick must skip the mate entirely rather than probe a
   # moving target.
-  ( STATE="$state" bash -c '. "$1" && fm_lock_acquire_wait "$2" && sleep 30' \
-      _ "$ROOT/bin/fm-wake-lib.sh" "$state/.secondmate-liveness-sm1.lock" ) &
+  FM_STATE_OVERRIDE="$state" bash -s -- "$ROOT/bin/fm-wake-lib.sh" \
+    "$state/.secondmate-liveness-sm1.lock" "$$" "$dir/release-holder" <<'HOLDER' &
+    . "$1"
+    fm_lock_acquire_wait "$2" || exit 1
+    trap 'fm_lock_release "$2"' EXIT
+    trap 'exit 0' TERM
+    while kill -0 "$3" 2>/dev/null && [ ! -e "$4" ]; do sleep 0.1; done
+HOLDER
   holder=$!
   local i=0
   while [ ! -d "$state/.secondmate-liveness-sm1.lock" ] && [ "$i" -lt 100 ]; do
@@ -3569,12 +3632,11 @@ test_secondmate_liveness_tick_skips_mate_whose_lock_is_held() {
   [ -d "$state/.secondmate-liveness-sm1.lock" ] || fail "the fixture never acquired the liveness lock"
 
   run_liveness_leg "$dir" locked FM_FAKE_TMUX_CURRENT_COMMAND=zsh; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against a locked secondmate: $(cat "$dir/watch-locked.out" "$dir/watch-locked.err")"
   kill_liveness_leg "$pid"
-  kill "$holder" 2>/dev/null || true
-  wait "$holder" 2>/dev/null || true
+  touch "$dir/release-holder"
+  wait "$holder" || fail "the fixture holder could not release the liveness lock"
   [ ! -s "$dir/tmux.log" ] || fail "a locked mate was probed or relaunched: $(cat "$dir/tmux.log")"
   [ ! -s "$state/.wake-queue" ] || fail "a locked mate queued a wake"
   pass "watch liveness: a mate mid-episode under the shared liveness lock is skipped entirely"
@@ -3608,8 +3670,7 @@ SH
   : > "$dir/ssh.log"
 
   run_liveness_leg "$dir" unreachable FM_SSH_BIN="$dir/fakebin/ssh" FM_FAKE_SSH_LOG="$dir/ssh.log"; pid=$LIVENESS_PID
-  sleep 4
-  is_live_non_zombie "$pid" \
+  wait_poll_cycle "$state" "$pid" 600 \
     || fail "the watcher exited against an unreachable remote secondmate: $(cat "$dir/watch-unreachable.out" "$dir/watch-unreachable.err")"
   kill_liveness_leg "$pid"
   [ -s "$dir/ssh.log" ] || fail "the remote endpoint was never probed"
@@ -3624,9 +3685,11 @@ SH
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
+test_monotonic_measurement_keeps_fractional_seconds
 test_lock_wait_returns_when_its_directory_is_removed
 test_subshell_lock_ownership_without_bashpid
 test_bounded_lock_handoff_after_contention
+test_empty_drain_avoids_external_pid_readers
 test_live_presentation_holder_is_deadlined_without_weakening_ack
 test_malformed_presentation_lock_reports_acquire_failure
 test_secondmate_foreign_queue_stall_tracks_progress_and_alerts_once

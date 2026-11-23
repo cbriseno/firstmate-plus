@@ -44,6 +44,26 @@ PY
 
 printf 'ok - Codex rollout binding records the current task session through the launch interface\n'
 
+# The completed CLI callback also repairs an unbound session. This path does
+# not depend on process ownership sampling, which is unavailable on macOS.
+printf '%s\n' "$gen" > "$state/$task.busy-gen"
+CODEX_HOME="$codex_home" python3 - "$ROOT/bin/fm-codex-activity.py" "$state" "$task" "$gen" "$workspace" "$rollout" "$data/$task/sessions.jsonl" <<'PYCLI'
+import json, subprocess, sys
+from pathlib import Path
+activity, state, task, gen, workspace, rollout, index = sys.argv[1:]
+index = Path(index)
+records = [json.loads(line) for line in index.read_text().splitlines()]
+records[-1]['session'] = None
+records[-1]['reason'] = 'awaiting-transcript'
+index.write_text(''.join(json.dumps(row) + '\n' for row in records))
+session = json.loads(Path(rollout).read_text().splitlines()[0])['payload']['id']
+payload = {'type': 'agent-turn-complete', 'thread-id': session}
+subprocess.run([sys.executable, activity, 'notify-cli', state, task, gen, workspace,
+                json.dumps([sys.executable, '-c', 'pass']), json.dumps(payload)], check=True)
+assert json.loads(index.read_text().splitlines()[-1])['session'] == rollout
+PYCLI
+printf 'ok - completed CLI callback binds its verified session without process sampling\n'
+
 # Registration is capability-based on newer versions; an unavailable API must
 # keep the original writable CLI invocation.
 mkdir -p "$workspace/.claude/skills"
@@ -67,7 +87,7 @@ printf '%s\n' -c 'project_doc_fallback_filenames=["CLAUDE.md"]' --approve-for-me
 [ "$(head -n 1 "$TMP_ROOT/server-args")" = app-server ]
 cmp "$TMP_ROOT/expected-args" "$TMP_ROOT/args"
 [ "$(cat "$workspace/result")" = editable ]
-rg -q 'Unsupported: Codex native skill-root registration unavailable' "$TMP_ROOT/fallback.log"
+grep -Fq 'Unsupported: Codex native skill-root registration unavailable' "$TMP_ROOT/fallback.log"
 printf 'ok - newer Codex attempts native registration; unavailable API retains editable configured launch\n'
 
 # A newer capable server has no qualified activity binding, but its primary
@@ -90,6 +110,11 @@ rows = [{"type": "session_meta", "payload": {"id": session, "cli_version": "0.16
 rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
 delivered = scratch / "notification.json"
 program = [sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])", str(delivered)]
+sessions = Path(dict(line.split('=', 1) for line in (state / (task + '.meta')).read_text().splitlines())['sessions_file'])
+records = [json.loads(line) for line in sessions.read_text().splitlines()]
+records[-1]['session'] = None
+records[-1]['reason'] = 'awaiting-transcript'
+sessions.write_text(''.join(json.dumps(row) + '\n' for row in records))
 def notify(thread):
     subprocess.run([sys.executable, activity, "notify", str(state), task, gen, workspace,
                     json.dumps(program), json.dumps({"thread-id": thread})], check=True)
@@ -97,6 +122,7 @@ with rollout.open("rb"):
     notify(session)
     assert delivered.is_file(), "primary completion was dropped"
     assert json.loads(delivered.read_text())["thread-id"] == session, "wrong thread completion was forwarded"
+    assert json.loads(sessions.read_text().splitlines()[-1])['session'] == str(rollout), "completion did not bind its verified session"
     verdict = subprocess.check_output([sys.executable, activity, "classify", str(state), task], text=True).strip()
     assert verdict == "unknown codex-unverified", verdict
     delivered.unlink()

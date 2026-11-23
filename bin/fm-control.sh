@@ -8,7 +8,7 @@
 #        fm-control.sh <task-id> resume [--harness <chosen>] [--model <name>] [--effort <level>]
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>]
-#                                         (--note <text> | --note-file <path>)
+#                                         (--note <text> | --note-file <path>) [--if-dead]
 #
 # park requires a declared wait and an idle agent; saves metadata, progress and
 # wait in state/<id>.parked and data/<id>/park-note.md, then stops and closes
@@ -263,6 +263,7 @@ EFFORT_SET=0
 NOTE=
 NOTE_SET=0
 PARK_WHEN_IDLE=0
+RELAUNCH_IF_DEAD=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -294,6 +295,7 @@ for control_arg in "$@"; do
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
     --when-idle) PARK_WHEN_IDLE=1 ;;
+    --if-dead) RELAUNCH_IF_DEAD=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -313,6 +315,7 @@ if [ "$VERB" != relaunch ] && [ "$VERB" != resume ]; then
 fi
 [ "$VERB" != resume ] || [ "$NOTE_SET" = 0 ] || die "resume uses the saved progress note"
 [ "$VERB" = park ] || [ "$PARK_WHEN_IDLE" = 0 ] || die "--when-idle applies to 'park' only"
+[ "$VERB" = relaunch ] || [ "$RELAUNCH_IF_DEAD" = 0 ] || die "--if-dead applies to 'relaunch' only"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
@@ -692,6 +695,9 @@ do_exit_agent() {
       esac
       ;;
   esac
+  # An automatic recovery may have observed a dead endpoint just before this
+  # check. Never turn that stale observation into an exit of a live agent.
+  [ "$RELAUNCH_IF_DEAD" != 1 ] || die "task $ID is no longer confirmed dead"
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
     busy*)
@@ -1046,7 +1052,7 @@ safe_checkpoint() {
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
   wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || die "task $ID's recorded worktree $WT cannot be resolved"
-  if [ "$KIND" = host ]; then
+  if [ "$KIND" = host ] || [ "$(fm_meta_get "$META" installation_audit)" = 1 ]; then
     [ ! -L "$DATA/$ID" ] && [ ! -L "$DATA/$ID/work" ] &&
       [ "$wt_real" = "$(cd "$DATA/$ID" && pwd -P)/work" ] && [ ! -e "$WT/.git" ] ||
       die "task $ID has invalid host scratch; refusing relaunch"
@@ -1137,6 +1143,25 @@ record_note() {
         echo
         printf '%s\n' "$NOTE"
         echo
+        python3 - "$STATE/$ID.jobs" <<'PYJOBS'
+import json
+from pathlib import Path
+import sys
+
+records = sorted(Path(sys.argv[1]).glob('*.json'))
+if records:
+    print('Existing task jobs (their records may have changed since this note):')
+    for path in records:
+        try:
+            state = json.loads(path.read_text()).get('state', 'unknown')
+        except (OSError, ValueError, AttributeError):
+            state = 'unknown'
+        if state not in ('pending', 'starting', 'running', 'done', 'failed'):
+            state = 'unknown'
+        print(f'- {path}: {state}')
+    print('Read the current records and logs before starting work that may already be running.')
+PYJOBS
+        echo
         echo "This is the replacement session; the relaunch is already complete."
         echo "After checking the inbox, continue the pending work from the note."
         echo "Any earlier wait in this note or a paused status for this handoff request"
@@ -1179,6 +1204,12 @@ do_relaunch() {
   else
     note_line="note=none"
   fi
+  # Refuse a replacement that cannot be dispatched before stopping its owner.
+  # shellcheck source=bin/fm-tasks-axi-lib.sh
+  . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+  # shellcheck source=bin/fm-backlog-transition-lib.sh
+  . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+  fm_backlog_dispatch_preflight "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$DATA" "$STATE" "$KIND" "$ID" 1 || return 1
   safe_checkpoint
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
@@ -1269,6 +1300,19 @@ case "$VERB" in
     echo "$result $ID harness=$HARNESS backend=$BACKEND endpoint=$T worktree=$WT"
     ;;
   relaunch)
+    if [ "$RELAUNCH_IF_DEAD" = 1 ]; then
+      # Recheck under the control lock so a recovered agent is never stopped.
+      case "$(agent_state)" in dead|missing) ;; *) die "task $ID is no longer confirmed dead" ;; esac
+      # shellcheck source=bin/fm-classify-lib.sh
+      . "$SCRIPT_DIR/fm-classify-lib.sh"
+      current=$(last_status_line "$STATE/$ID.status")
+      case "$(status_line_verb "$current")" in done|failed) die "task $ID is no longer eligible for automatic relaunch" ;; esac
+      current=$(status_current_line "$STATE/$ID.status" "$KIND")
+      case "$(status_line_verb "$current")" in
+        done|failed|needs-decision|captain-held) die "task $ID is no longer eligible for automatic relaunch" ;;
+        paused) until=$(status_paused_until "$current") && [ "$(date +%s)" -lt "$until" ] && die "task $ID is waiting until $until" ;;
+      esac
+    fi
     do_relaunch
     ;;
   park) do_park ;;

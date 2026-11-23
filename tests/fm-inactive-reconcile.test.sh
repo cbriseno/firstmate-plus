@@ -972,7 +972,7 @@ test_watcher_hook_and_idle_secondmate_exemption() {
     i=$((i + 1))
   done
   wait "$pid" 2>/dev/null || true
-  grep -Fq 'check: inactive-outcome' "$out" || fail "watcher did not surface its reconciliation result"
+  grep -Fq 'check: inactive-outcome' "$out" || { cat "$out" >&2; fail "watcher did not surface its reconciliation result"; }
 
   make_world idle-secondmate; bind_secondmate local; write_mate_meta; prime_seen "$MAIN/state" "$MAIN/state/mate.status"
   PATH="$WORLD/fakebin:$PATH" FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
@@ -1005,7 +1005,7 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
     i=$((i + 1))
   done
   reap "$pid"
-  key=$(reported_outcome_key "$MATE" child 'done') || fail "watcher ledger receipt key missing"
+  key=$(reported_outcome_key "$MATE" child 'done') || { cat "$WORLD/mate-watch.out" >&2; fail "watcher ledger receipt key missing"; }
   sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
     || fail "the watcher poll did not deliver the child's ledger line to the parent: $(cat "$MAIN/state/mate.status" 2>/dev/null; cat "$WORLD/mate-watch.out")"
   [ ! -s "$WORLD/forge.log" ] || fail "ledger delivery invoked a forge command"
@@ -1305,7 +1305,7 @@ test_idle_in_flight_skips_live_due_actionable_recent_or_held_work() {
     make_world "idle-skip-$label"; write_child "$MAIN" child "$status"
     seed_in_flight_row "$MAIN" child
     if [ "$label" = held ]; then
-      captain_hold_in "$MAIN" hold child --reason 'ship timing' --category product-design --challenge fixture --question 'Ship it now?' \
+      captain_hold_in "$MAIN" hold child --reason 'ship timing' --action fixture --category product-design --challenge fixture --question 'Ship it now?' \
         --option 'now=Ship now' --option 'later=Ship later' >/dev/null || fail "could not open the existing call"
     fi
     idle_scan "$MAIN" "$bound"

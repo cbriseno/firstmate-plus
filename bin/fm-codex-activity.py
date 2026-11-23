@@ -23,12 +23,16 @@ program and payload only for a verified idle primary, never a guardian turn.
 The ordinary CLI callback forwards only a persisted CLI thread in this workspace;
 ephemeral title-generation turns have no such rollout and cannot end the worker.
 Notifications also accept a parent-owned primary rollout on a newer runtime.
+On a qualified Linux runtime, a verified callback can bind the current owner
+for a launch made before that version was qualified.
 Durable session discovery likewise does not require activity qualification.
 For activity classification, the native executable,
 boot/start identity, workspace, CLI version, session ID,
-and generation must all agree before and after the read. No descriptor, partial
-JSON, conflicting lifecycle, unsupported version, or unreadable evidence means
-unknown. Logs over 32 MiB are unsupported rather than folded incompletely.
+and generation must all agree before and after the read. A partial last line
+or a size change triggers one reread from the same descriptor. A missing
+descriptor, conflicting lifecycle, unsupported version, or evidence still
+unreadable means unknown. Logs over 32 MiB are unsupported rather than folded
+incompletely.
 
 The semantic source is the rollout's task_started / task_complete / turn_aborted
 events, never the process's existence or its output. An error without a verified
@@ -53,13 +57,17 @@ from types import SimpleNamespace
 from fm_task_sessions import bind, metadata, unbound
 
 
-VERSION = "0.166.0"
+QUALIFIED_VERSIONS = {"0.166.0", "0.169.0"}
 LIMIT = 32 * 1024 * 1024
 BIND_SECONDS = 120
 BIND_POLL_SECONDS = .5
 TOKEN = re.compile(r"[A-Za-z0-9._-]+\Z")
 UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 ROLLOUT = re.compile(r"rollout-.+-(" + UUID + r")\.jsonl\Z")
+
+
+class RolloutChanged(ValueError):
+    """The snapshot may have overlapped a rollout write."""
 
 
 def unique_object(pairs):
@@ -95,7 +103,7 @@ def identity(pid):
             os.readlink(proc / "ns/pid")]
 
 
-def record_owner(state, task, gen, workspace, command, pid, source="cli"):
+def record_owner(state, task, gen, workspace, command, pid, source="cli", session=None):
     binary = shutil.which(command[0])
     if sys.platform != "linux" or not binary or generation(state, task) != gen:
         raise ValueError("unsupported launch")
@@ -104,16 +112,21 @@ def record_owner(state, task, gen, workspace, command, pid, source="cli"):
         if handle.read(4) != b"\x7fELF":
             raise ValueError("non-native executable")
     result = subprocess.run([binary, "--version"], capture_output=True, timeout=5, check=True)
-    if result.stdout.decode().strip() != "codex-cli " + VERSION:
+    product, _, version = result.stdout.decode().strip().partition(" ")
+    if product != "codex-cli" or version not in QUALIFIED_VERSIONS:
         raise ValueError("unverified version")
     binding = {
         "schema": 1, "gen": gen, "pid": pid,
         "identity": identity(pid), "executable": binary,
         "workspace": str(Path(workspace).resolve(strict=True)),
         "codex_home": str(Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()),
-        "version": VERSION,
+        "version": version,
         "source": source,
     }
+    if session is not None and (
+        sample(binding)[1] != session or os.getppid() != pid or generation(state, task) != gen
+    ):
+        raise ValueError("callback does not own the current rollout")
     with owner_path(state, task, gen).open("x") as handle:
         json.dump(binding, handle)
     return binary
@@ -199,6 +212,18 @@ def wrap_notify(state, task, gen, workspace, command, mode):
     return result
 
 
+def bind_notifying_owner(state, task, gen, workspace, source, session):
+    if sys.platform != "linux" or owner_path(state, task, gen).exists():
+        return
+    pid = os.getppid()
+    try:
+        binary = shutil.which("codex")
+        if binary and os.path.samefile(Path("/proc") / str(pid) / "exe", binary):
+            record_owner(state, task, gen, workspace, [binary], pid, source, session)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass  # A safe callback can still notify without qualified activity.
+
+
 def cli_notify(state, task, gen, workspace, program, payload):
     """Title generation is ephemeral; only the worker's persisted CLI can end it."""
     try:
@@ -216,6 +241,11 @@ def cli_notify(state, task, gen, workspace, program, payload):
         meta = header["payload"]
         if (header.get("type") == "session_meta" and meta.get("id") == session
                 and meta.get("source") == "cli" and meta.get("cwd") == workspace):
+            bind_notifying_owner(state, task, gen, workspace, "cli", session)
+            try:
+                bind(state, task, gen, str(paths[0]))
+            except (OSError, ValueError, KeyError):
+                pass  # An unavailable session index must not drop the notification.
             subprocess.run([*decode(program), payload], check=False)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print("warning: Codex completion could not be attributed to its worker", file=sys.stderr)
@@ -225,17 +255,17 @@ def native_notify(state, task, gen, workspace, program, payload):
     """Keep guardian completions from invoking the worker's original notify."""
     try:
         data = decode(payload)
-        version = VERSION
         if sys.platform == "linux" and owner_path(state, task, gen).exists():
             binding = decode(owner_path(state, task, gen).read_text())
             if binding["pid"] != os.getppid():
                 return
+            version = binding["version"]
             entry, session, _ = sample(binding)
         else:
             home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
             # Registration can work beyond the activity classifier's version pin.
             # The callback still proves its parent's unique primary rollout.
-            entry = Path(open_rollout(os.getppid(), home, workspace, "vscode", version=None))
+            entry = Path(open_rollout(os.getppid(), home, workspace, "vscode"))
             session = ROLLOUT.fullmatch(entry.name)[1]
             with entry.open("rb") as handle:
                 version = decode(handle.readline(LIMIT + 1))["payload"]["cli_version"]
@@ -247,6 +277,11 @@ def native_notify(state, task, gen, workspace, program, payload):
         with entry.open("rb") as handle:
             if fold(handle, binding, session, version=version) != "idle":
                 return
+        bind_notifying_owner(state, task, gen, workspace, "vscode", session)
+        try:
+            bind(state, task, gen, str(entry))
+        except (OSError, ValueError, KeyError):
+            pass
         subprocess.run([*decode(program), payload], check=False)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print("warning: native Codex completion could not be attributed to its worker", file=sys.stderr)
@@ -280,7 +315,7 @@ def launch(state, task, gen, workspace, command):
     os.execvp(command[0], command)
 
 
-def open_rollout(pid, codex_home, workspace, source="cli", version=VERSION):
+def open_rollout(pid, codex_home, workspace, source="cli"):
     lsof = shutil.which("lsof")
     if not lsof:
         return None
@@ -309,7 +344,7 @@ def open_rollout(pid, codex_home, workspace, source="cli", version=VERSION):
             if not isinstance(payload, dict):
                 continue
             if (first.get("type") != "session_meta" or payload.get("id") != match[1]
-                    or (version is not None and payload.get("cli_version") != version) or payload.get("source") != source
+                    or payload.get("source") != source
                     or str(Path(payload.get("cwd", "")).resolve()) != workspace):
                 continue
             candidates.append(str(resolved))
@@ -333,7 +368,7 @@ def bind_open_session(state, task, gen, workspace, pid, alive=None, source="cli"
     deadline = time.monotonic() + BIND_SECONDS
     while time.monotonic() < deadline and alive():
         # Session ownership is independent of the busy classifier's version pin.
-        session = open_rollout(pid, codex_home, workspace, source, version=None)
+        session = open_rollout(pid, codex_home, workspace, source)
         if not alive():
             break
         if session:
@@ -378,7 +413,7 @@ def sample(binding):
             raise ValueError("invalid session metadata")
         payload = header.get("payload", {})
         if (header.get("type") != "session_meta" or payload.get("id") != session
-                or payload.get("cli_version") != VERSION or payload.get("cwd") != binding["workspace"]):
+                or payload.get("cli_version") != binding["version"] or payload.get("cwd") != binding["workspace"]):
             raise ValueError("session identity mismatch")
         if payload.get("source") == binding.get("source", "cli"):
             primary[name] = (entry, session)
@@ -396,14 +431,14 @@ def sample(binding):
     return entry, session, (name, info.st_dev, info.st_ino)
 
 
-def fold(handle, binding, session, version=VERSION):
+def fold(handle, binding, session, version):
     data = handle.read(LIMIT + 1)
     if len(data) > LIMIT:
         raise ValueError("oversize rollout")
     active, seen, settled, uncertain = None, set(), False, False
     for number, line in enumerate(data.splitlines(keepends=True)):
         if not line.endswith(b"\n"):
-            raise ValueError("partial rollout")
+            raise RolloutChanged("partial rollout")
         row = decode(line)
         if not isinstance(row, dict):
             raise ValueError("invalid row")
@@ -456,7 +491,7 @@ def classify(state, task):
         source = "codex-rollout"
         binding = decode(path.read_text())
         if (sys.platform != "linux" or binding["schema"] != 1
-                or binding["version"] != VERSION or binding["gen"] != gen
+                or binding["version"] not in QUALIFIED_VERSIONS or binding["gen"] != gen
                 or binding.get("source", "cli") not in ("cli", "vscode")):
             raise ValueError("unsupported binding")
         entry, session, before = sample(binding)
@@ -464,9 +499,17 @@ def classify(state, task):
             info = os.fstat(handle.fileno())
             if (info.st_dev, info.st_ino) != before[1:]:
                 raise ValueError("descriptor replaced")
-            verdict = fold(handle, binding, session)
-            if os.fstat(handle.fileno()).st_size != info.st_size:
-                raise ValueError("rollout changed during read")
+            for attempt in range(2):
+                try:
+                    verdict = fold(handle, binding, session, binding["version"])
+                    if os.fstat(handle.fileno()).st_size != info.st_size:
+                        raise RolloutChanged("rollout changed during read")
+                    break
+                except RolloutChanged:
+                    if attempt:
+                        raise
+                    handle.seek(0)
+                    info = os.fstat(handle.fileno())
         _, after_session, after = sample(binding)
         if (session != after_session or before != after or generation(state, task) != gen
                 or decode(path.read_text()) != binding):

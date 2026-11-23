@@ -72,6 +72,7 @@
 #
 # Usage:
 #   fm-host-mirror.sh hook <harness>        a prompt-submit or turn-end hook payload on stdin
+#   fm-host-mirror.sh final <harness> [JSON]  the primary Stop or Codex notify
 #   fm-host-mirror.sh feed <session> new|resume
 #   fm-host-mirror.sh commit
 #   fm-host-mirror.sh check
@@ -110,13 +111,26 @@ case "${1:-}" in
     case " $FM_HOST_MIRROR_VERIFIED " in *" $2 "*) exit 0 ;; esac
     exit 1
     ;;
-  hook)
+  hook|final)
     # Diagnostic log (bin/fm-diag.sh): this hook's duration and exit status.
     # shellcheck source=bin/fm-diag.sh
-    . "$SCRIPT_DIR/fm-diag.sh" 2>/dev/null && fm_diag_hook_begin host-mirror && trap fm_diag_hook_end EXIT
-    # The home gate runs before anything else is sourced or created, so a
-    # home that does not run the host stays inert.
-    fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0
+    . "$SCRIPT_DIR/fm-diag.sh" 2>/dev/null
+    if [ "$1" = final ]; then
+      fm_diag_stage_begin primary-final capture
+      trap 'fm_diag_stage_end "$?"' EXIT
+    else
+      fm_diag_hook_begin host-mirror
+      trap fm_diag_hook_end EXIT
+    fi
+    MIRROR_ENABLED=0 LEDGER_ENABLED=0
+    case "${2:-}" in
+      claude|cursor)
+        fm_supervision_host_enabled "$CONFIG" "$2" && MIRROR_ENABLED=1 ;;
+    esac
+    case "$1:${2:-}" in
+      final:claude|final:codex) [ ! -e "$CONFIG/fleet-ledger" ] || LEDGER_ENABLED=1 ;;
+    esac
+    [ "$MIRROR_ENABLED$LEDGER_ENABLED" != 00 ] || exit 0
     ;;
   feed|commit|check) ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -223,38 +237,63 @@ append_entry() {  # <captain|main> <text> [<id>]
 }
 
 case "$1" in
-  hook)
-    [ "$#" -eq 2 ] || exit 0
-    PAYLOAD=$(cat 2>/dev/null || true)
+  hook|final)
+    case "$1:$#" in
+      hook:2|final:2) PAYLOAD=$(cat 2>/dev/null || true) ;;
+      final:3) PAYLOAD=$3 ;;
+      *) exit 0 ;;
+    esac
     [ -n "$PAYLOAD" ] || exit 0
-    if [ "$2" = claude ]; then
+    if [ "$2" = claude ] || [ "$1" = final ]; then
       # shellcheck source=bin/fm-hook-host-lib.sh
       . "$SCRIPT_DIR/fm-hook-host-lib.sh"
       # Cursor loads the tracked Claude settings too; its own entries mirror it.
       fm_hook_payload_is_foreign_host "$PAYLOAD" && exit 0
     fi
-    # One line per field: event, tag, id; the text follows as the remainder.
-    PARSED=$(printf '%s' "$PAYLOAD" | jq -r '
+    # The ledger keeps the full JSON string. The mirror retains its existing
+    # whitespace and length policy. Separate the JSON, tag and id by lines.
+    PARSED=$(printf '%s' "$PAYLOAD" | jq -r --arg harness "$2" \
+      --argjson mirror "$MIRROR_ENABLED" --argjson ledger "$LEDGER_ENABLED" '
       if type != "object" then empty else
-        ((.hook_event_name // "") | tostring) as $event
-        | if ($event == "UserPromptSubmit" or $event == "beforeSubmitPrompt") then
+        .hook_event_name as $event
+        | (.last_assistant_message // .["last-assistant-message"]) as $final
+        | (if $ledger == 1 and ($event == "Stop" or .type == "agent-turn-complete") then
+            {harness:$harness, session:(.session_id // .["thread-id"]),
+             turn:(.prompt_id // .turn_id // .["turn-id"] // null), text:$final}
+            | select((.session | type) == "string" and (.text | type) == "string")
+            | tojson
+          else empty end // "") as $record
+        | (if $mirror == 0 then ["","",""]
+          elif ($event == "UserPromptSubmit" or $event == "beforeSubmitPrompt") then
             ["captain", ((.prompt_id // .generation_id // "") | tostring), ((.prompt // "") | tostring)]
           elif $event == "Stop" then
-            ["main", ((.prompt_id // .generation_id // "") | tostring),
-             ((.last_assistant_message // "") | tostring)]
+            ["main", ((.prompt_id // .generation_id // "") | tostring), (($final // "") | tostring)]
           elif $event == "afterAgentResponse" then
             ["main", ((.generation_id // "") | tostring), ((.text // "") | tostring)]
-          else empty end
-        | .[2] |= sub("\\s+\\z"; "")
-        | select(.[2] != "")
-        | "\(.[0])\n\(.[1])\n\(.[2])"
-      end' 2>/dev/null) || exit 0
-    [ -n "$PARSED" ] || exit 0
-    TAG=$(printf '%s\n' "$PARSED" | sed -n '1p')
-    ID=$(printf '%s\n' "$PARSED" | sed -n '2p')
-    TEXT=$(printf '%s\n' "$PARSED" | sed '1,2d')
+          else ["","",""] end) as $entry
+        | "\($record)\n\($entry[0])\n\($entry[1])\n\($entry[2] | sub("\\s+\\z"; ""))."
+      end' 2>/dev/null) || PARSED=
+    {
+      IFS= read -r RECORD
+      IFS= read -r TAG
+      IFS= read -r ID
+      IFS= read -r -d '' TEXT
+    } <<< "$PARSED"
+    TEXT=${TEXT%.$'\n'}
+    [ -n "$RECORD$TEXT" ] || { [ "$1:$LEDGER_ENABLED" = final:1 ] || exit 0; }
     writer_in_scope || exit 0
-    append_entry "$TAG" "$TEXT" "$ID"
+    if [ -n "$TEXT" ]; then
+      append_entry "$TAG" "$TEXT" "$ID" || true
+    fi
+    if [ -n "$RECORD" ]; then
+      printf '%s\n' "$RECORD" | FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+        bash "$SCRIPT_DIR/fm-fleet-ledger.sh" entity primary.final primary
+      rc=$?
+      [ "$1" != final ] || exit "$rc"
+    elif [ "$1:$LEDGER_ENABLED" = final:1 ]; then
+      echo 'fm-primary-final: missing final text or session; capture unavailable' >&2
+      exit 1
+    fi
     exit 0
     ;;
   commit)

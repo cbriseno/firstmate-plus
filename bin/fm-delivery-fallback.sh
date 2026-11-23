@@ -134,7 +134,7 @@ RULE_ONE=$(fm_ship_rule_one "$NEW_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE") || exi
 # 1. The brief.
 rewrite_brief() {
   awk -v dod="$TMP/dod" -v rule="$RULE_ONE" '
-    /^# / { in_dod = 0; in_rules = ($0 == "# Rules") }
+    /^# / { in_dod = 0; in_rules = ($0 == "# Rules" || $0 == "# Task-specific rules and paths") }
     $0 == "# Definition of done" {
       while ((getline line < dod) > 0) print line
       in_dod = 1; next
@@ -142,7 +142,8 @@ rewrite_brief() {
     in_dod { next }
     in_rules && !rule_done && /^1\. / { print rule; rule_done = 1; next }
     { print }
-  ' "$BRIEF" > "$TMP/brief" || return 1
+    END { if (!rule_done) exit 1 }
+  ' "$BRIEF" > "$TMP/brief" || { echo "error: could not re-render $BRIEF rule 1" >&2; return 1; }
   if ! grep -q "^Delivery contract: mode=$NEW_MODE\( \|$\)" "$TMP/brief"; then
     echo "error: could not re-render $BRIEF's Definition of done" >&2
     return 1

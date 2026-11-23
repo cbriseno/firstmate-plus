@@ -33,6 +33,9 @@
 # machine reports that precondition explicitly rather than failing the
 # signature.
 #
+# Codex also supplies a real wrapped folder dialog, replayed without writing
+# its trust store, to guard the startup dialog path comparison.
+#
 # Run explicitly with FM_LAUNCH_PROMPT_SIGNALS_LIVE=1. Refresh
 # docs/verification/runtime-backends.md ("Launch-prompt backstop signatures")
 # from this guard's output after any of claude/pi upgrades.
@@ -144,15 +147,59 @@ $tail"
 }
 
 CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
-if [ -x "${CLAUDE_BIN:-}" ]; then
+if [ -x "${CLAUDE_BIN:-}" ] && [ "${FM_TEST_CODEX_WRAPPED_ONLY:-0}" != 1 ]; then
   VERSION_OUT=$("$CLAUDE_BIN" --version 2>&1) || fail "claude --version failed: $VERSION_OUT"
   note "live claude version: $VERSION_OUT"
   check_harness claude fm-lp-claude-$$ '' '' \
     'Is this a project you created or one you trust' '' \
     "$CLAUDE_BIN" --dangerously-skip-permissions hello
   pass "claude: a real launch parked on its own rendered trust dialog surfaces through the watcher gate"
+elif [ "${FM_TEST_CODEX_WRAPPED_ONLY:-0}" = 1 ]; then
+  note "claude check excluded by focused Codex run"
 else
   note "claude not installed - launch-prompt signature not checked"
+fi
+
+# Capture Codex's real wrapped folder dialog without answering it or writing its
+# trust store, then replay that exact screen through the production dialog code.
+CODEX_BIN=$(command -v codex 2>/dev/null || true)
+if [ -x "${CODEX_BIN:-}" ]; then
+  VERSION_OUT=$("$CODEX_BIN" --version 2>&1) || fail "codex --version failed: $VERSION_OUT"
+  note "live codex version: $VERSION_OUT"
+  lab=$(mktemp -d "${TMPDIR:-/tmp}/fm-codex-wrapped-folder.XXXXXX") || fail "codex $VERSION_OUT: cannot create lab"
+  LABS+=("$lab")
+  folder="$lab/a-long-project-directory-to-force-the-folder-access-path-to-wrap-in-the-terminal"
+  mkdir -p "$folder"
+  git -C "$folder" init -q || fail "codex $VERSION_OUT: cannot initialize lab"
+  "$REAL_TMUX" -L "$SOCKET" new-session -d -s codex-real -n w -x 80 -y 35 -c "$folder" "$CODEX_BIN" || fail "codex $VERSION_OUT: launch failed"
+  tail=''
+  update_skipped=0
+  for _ in $(seq 1 300); do
+    tail=$("$REAL_TMUX" -L "$SOCKET" capture-pane -p -t codex-real:w -S -40 2>/dev/null) || true
+    printf '%s' "$tail" | grep -q 'Trust this folder?' && break
+    if [ "$update_skipped" = 0 ] && printf '%s' "$tail" | grep -q 'esc skip'; then
+      "$REAL_TMUX" -L "$SOCKET" send-keys -t codex-real:w Escape
+      update_skipped=1
+    fi
+    sleep 0.2
+  done
+  printf '%s\n' "$tail" | grep -q 'Trust this folder?' || fail "codex $VERSION_OUT: folder dialog did not appear; captured:
+$tail"
+  printf '%s\n' "$tail" | awk '/Folder access/{f=1;next} f && /Trust this folder/{exit} f && NF{n++} END{exit n<2}' || fail "codex $VERSION_OUT: path did not wrap; guard is vacuous"
+  printf '%s\n' "$tail" > "$lab/screen"
+  "$REAL_TMUX" -L "$SOCKET" kill-session -t codex-real >/dev/null 2>&1 || true
+  # The positional parameters belong to the shell inside the replay pane.
+  # shellcheck disable=SC2016
+  "$REAL_TMUX" -L "$SOCKET" new-session -d -s codex-replay -n w -x 80 -y 35 -c "$folder" \
+    bash -c 'cat "$1"; IFS= read -r _; echo accepted > "$2"; sleep 10' _ "$lab/screen" "$lab/accepted" || fail "codex $VERSION_OUT: replay failed"
+  socket_context=$("$REAL_TMUX" -L "$SOCKET" display-message -p '#{socket_path},#{pid},0')
+  out=$(TMUX="$socket_context" FM_STARTUP_DIALOGS_POLL=0.2 bash "$ROOT/bin/fm-startup-dialogs.sh" tmux codex-replay:w codex "$folder" 5 2>&1)
+  [ -f "$lab/accepted" ] || fail "codex $VERSION_OUT: wrapped real dialog was not accepted: $out"
+  "$REAL_TMUX" -L "$SOCKET" kill-session -t codex-replay >/dev/null 2>&1 || true
+  CHECKED=$((CHECKED + 1))
+  pass "codex $VERSION_OUT: real wrapped folder dialog accepted in private replay"
+else
+  note "codex not installed - wrapped folder dialog not checked"
 fi
 
 [ "$CHECKED" -gt 0 ] || fail "no installed harness could be checked; this run verified nothing"

@@ -494,6 +494,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "overseer/AGENTS.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/platforms.md",
       "audience": "operator-current"
     },

@@ -237,7 +237,7 @@ if [ "$HOME_SUMMARY_MODE" = parent ]; then
     else
       parent_error="refresh worker failed with exit $refresh_rc"
     fi
-    fm_run_timed 2 env \
+    FM_TIMEOUT_GRACE=1 fm_run_timed 2 env \
       FM_HOME_SUMMARY_PARENT_ERROR="$parent_error" \
       FM_HOME_SUMMARY_PARENT_STAMP="$attempt_stamp" \
       "$SCRIPT_DIR/fm-home-summary-refresh.sh" --_log-failure >/dev/null || true

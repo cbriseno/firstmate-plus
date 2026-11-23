@@ -41,7 +41,7 @@ make_probes() {
   cat > "$fakebin/sysctl" <<SH
 #!/usr/bin/env bash
 case "\$2" in
-  vm.loadavg) [ -n "$2" ] && echo "{ $2 1.00 1.00 }" ;;
+  vm.loadavg) [ -n "$2" ] && echo "{ $2 ${6:-1.00} 1.00 }" ;;
   kern.memorystatus_level) [ -n "$3" ] && echo "$3" ;;
   hw.logicalcpu) [ -n "$4" ] && echo "$4" ;;
   hw.memsize) [ -f "$fakebin/memsize" ] && cat "$fakebin/memsize" ;;
@@ -61,6 +61,59 @@ SH
 
 run_capacity() {  # <home> <fakebin>
   PATH="$2:$BASE_PATH" FM_HOME="$1" "$CAPACITY" 2>&1
+}
+
+test_configured_load_admission() {
+  local home fakebin rc
+  home=$(make_home configured-load 4 0)
+  fakebin=$(make_probes "$TMP_ROOT/p-configured-load" 7.00 65 4 20971520 7.00)
+  printf '12\nmax-load1 40\nmax-load5-per-core 4\nmin-avail-gb 1\n' > "$home/config/lane-capacity"
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "configured load and available lanes must admit above core count"
+  printf '12\nmax-load5-per-core 4\nmin-avail-gb 1\n' > "$home/config/lane-capacity"
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a configured sustained threshold replaces the generic CPU probe"
+  fakebin=$(make_probes "$TMP_ROOT/p-saturated-load" 5.40 65 4 20971520 16.00)
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 75 "$rc" "configured sustained load per core must defer at its threshold"
+  fakebin=$(make_probes "$TMP_ROOT/p-configured-load" 7.00 65 4 20971520 7.00)
+  printf '4\nmax-load1 16\n' > "$home/config/lane-capacity"
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 75 "$rc" "a full configured lane limit must defer"
+  printf '34359738368\n' > "$fakebin/memsize"
+  printf '12\nmax-load1 16\nmin-avail-gb 21\n' > "$home/config/lane-capacity"
+  rc=0
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
+  expect_code 75 "$rc" "insufficient configured memory must defer"
+  pass "configured load permits admission while lane and memory limits remain enforced"
+}
+
+test_parked_worker_releases_lane() {
+  local home fakebin out
+  home=$(make_home parked-lane 1 0)
+  fakebin=$(make_probes "$TMP_ROOT/p-parked-lane" 0.50 60 8 20971520)
+  printf '#!/usr/bin/env bash\necho "no server running on test" >&2\nexit 1\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+  fm_write_meta "$home/state/ship-0.meta" "kind=ship" "window=test:fm-ship-0" "worktree=$home" "project=$home" "spawn_gen=one"
+  printf 'spawn_gen=one\npark_phase=parked\n' > "$home/state/ship-0.parked"
+  printf '1\n' > "$home/config/lane-capacity"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'free_lanes=1 reason=ok lanes=0' "a fully parked worker must free its lane"
+  mkdir "$home/state/.control-ship-0.lock"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'free_lanes=0 reason=full lanes=1' "a worker resuming must retain its lane"
+  rmdir "$home/state/.control-ship-0.lock"
+  printf 'spawn_gen=one\npark_phase=stopping\n' > "$home/state/ship-0.parked"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'free_lanes=0 reason=full lanes=1' "an incomplete park must retain its lane"
+  printf 'spawn_gen=other\npark_phase=parked\n' > "$home/state/ship-0.parked"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'free_lanes=0 reason=full lanes=1' "an old parking record must not free a new worker's lane"
+  pass "only the current fully parked worker releases its lane"
 }
 
 test_no_target_prints_counts_only() {
@@ -354,18 +407,62 @@ pressure-file %s
   pass "a beat with missing fields keeps its fields aligned and limits fall back to probes"
 }
 
-test_cap_only_memory_rule_unchanged() {
-  local home fakebin out
-  home=$(make_home cap-only 1 0)
-  fakebin=$(make_probes "$TMP_ROOT/p-cap-only" 0.50 11 8 20971520)
+test_memory_counts_the_lanes_that_fit() {
+  local home fakebin out gb level cfg expected
+  home=$(make_home fit 6 0)
+  # Synthetic macOS hosts: hw.memsize bytes and kern.memorystatus_level percent.
+  while IFS='|' read -r gb level cfg expected; do
+    fakebin=$(make_probes "$TMP_ROOT/p-fit-$gb-$level" 0.50 "$level" 8 20971520)
+    printf '%s\n' "$((gb * 1073741824))" > "$fakebin/memsize"
+    printf '16\n%b' "$cfg" > "$home/config/lane-capacity"
+    out=$(run_capacity "$home" "$fakebin")
+    assert_contains "$out" "capacity: free_lanes=$expected " "$gb GB at $level% ($cfg) must open the lanes that fit in memory: $out"
+  done <<'ROWS'
+8|11||0 reason=memory
+8|20||1 reason=ok
+8|30||2 reason=ok
+16|20||3 reason=ok
+16|50||10 reason=ok
+32|10||0 reason=memory
+32|30||10 reason=ok
+32|30|lane-footprint-gb 2\n|3 reason=ok
+8|30|min-avail-gb 1\nlane-footprint-gb 0.45\n|3 reason=ok
+8|30|min-avail-gb 2\n|0 reason=memory
+ROWS
+  fakebin=$(make_probes "$TMP_ROOT/p-fit-8-30" 0.50 30 8 20971520)
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit 2>&1)
+  assert_contains "$out" 'memory: no room for a 0.5 GB lane (default): 2.40 GB available, 2 GB kept' "the memory cause must give the real figures: $out"
+  printf '16\nlane-footprint-gb 0\n' > "$home/config/lane-capacity"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" 'line 2: lane-footprint-gb needs a positive number' "a zero lane footprint must be refused"
+  pass "memory opens only the lanes that fit above the kept reserve, on synthetic macOS hosts"
+}
+
+test_lane_footprint_is_measured_from_live_lanes() {
+  local home fakebin doc state small stale big i
+  command -v python3 >/dev/null 2>&1 || { printf 'ok - skipped measured footprint (python3 absent)\n'; return; }
+  home=$(make_home measured 0 0)
+  state=$(cd "$home/state" && pwd -P)
+  fakebin=$(make_probes "$TMP_ROOT/p-measured" 0.50 50 8 20971520)
   printf '%s\n' 8589934592 > "$fakebin/memsize"
-  printf '4\n' > "$home/config/lane-capacity"
-  out=$(run_capacity "$home" "$fakebin")
-  assert_contains "$out" 'capacity: free_lanes=3 reason=ok ' "a cap-only config must keep the under-10-percent memory rule"
-  printf '4\nmin-avail-gb 0\n' > "$home/config/lane-capacity"
-  out=$(run_capacity "$home" "$fakebin")
-  assert_contains "$out" 'capacity: free_lanes=0 reason=memory ' "min-avail-gb must apply the lane footprint"
-  pass "the lane footprint memory rule applies only with min-avail-gb"
+  printf '16\n' > "$home/config/lane-capacity"
+  fm_write_meta "$home/state/small.meta" "kind=ship" "process_scope=$state/small:g1"
+  fm_write_meta "$home/state/big.meta" "kind=ship" "process_scope=$state/big:g1"
+  fm_write_meta "$home/state/stale.meta" "kind=ship" "process_scope=$state/stale:g2"
+  FM_WORKER_PROCESS_SCOPE="$state/small:g1" sleep 60 & small=$!
+  FM_WORKER_PROCESS_SCOPE="$state/stale:g1" sleep 60 & stale=$!
+  FM_WORKER_PROCESS_SCOPE="$state/big:g1" python3 -c 'import time; b = b"x" * (400 << 20); time.sleep(60)' & big=$!
+  i=0
+  until [ "$(ps -o rss= -p "$big" 2>/dev/null | tr -d ' ')" -gt 400000 ] 2>/dev/null || [ "$i" -ge 100 ]; do sleep 0.1; i=$((i + 1)); done
+  doc=$(capacity_doc "$home" "$fakebin")
+  kill "$small" "$stale" "$big" 2>/dev/null; wait "$small" "$stale" "$big" 2>/dev/null
+  assert_equals 'measured|2' "$(printf '%s\n' "$doc" | jq -r '.memory | "\(.footprint_basis)|\(.measured_lanes)"')" \
+    "only live lanes whose record still owns their scope may be measured"
+  printf '%s\n' "$doc" | jq -e '.memory.lane_footprint_gb > 0.38 and .memory.lane_footprint_gb < 0.6' >/dev/null ||
+    fail "the measured footprint must be the larger live lane's resident memory: $(printf '%s\n' "$doc" | jq -c .memory)"
+  assert_equals '0.5|default|0' "$(capacity_doc "$home" "$fakebin" | jq -r '.memory | "\(.lane_footprint_gb)|\(.footprint_basis)|\(.measured_lanes)"')" \
+    "without a measurable lane the footprint must fall back to half a gigabyte"
+  pass "the lane footprint is measured from the resident memory of live lanes"
 }
 
 test_limits_and_admit() {
@@ -378,7 +475,7 @@ test_limits_and_admit() {
   write_beat "$home/beat.json" ok 5.5 25.2 0.29 24.7 true "" 50
   cat > "$home/config/lane-capacity" <<CFG
 4
-min-avail-gb 5
+min-avail-gb 5.2
 min-disk-gb 60
 max-load1 20
 pressure-file $home/beat.json
@@ -390,7 +487,7 @@ CFG
   out=$(run_capacity_jq "$home" "$fakebin" --admit); rc=$?
   expect_code 75 "$rc" "admit under limits"
   assert_contains "$out" 'deferred: lane capacity of this home' "a deferral must print one deferred line"
-  assert_contains "$out" 'memory: no room for a 1 GB lane: 5.5 GB available, 5 GB kept; disk: disk 50 GB free, under 60 GB; load: 24.7 over its max-load1 20; captain reserve: host reserved by the captain; on battery' \
+  assert_contains "$out" 'memory: no room for a 0.5 GB lane (default): 5.5 GB available, 5.2 GB kept; disk: disk 50 GB free, under 60 GB; load: 24.7 over its max-load1 20; captain reserve: host reserved by the captain; on battery' \
     "the deferral must give every reason in words"
   write_beat "$home/beat.json" ok 13.5 25.2 0.29 2.0 false "" 500
   rm -f "$home/reserved.flag"
@@ -529,6 +626,8 @@ test_watcher_publishes_only_when_opted_in() {
   pass "the watcher publishes lane facts only for an opted-in home"
 }
 
+test_configured_load_admission
+test_parked_worker_releases_lane
 test_no_target_prints_counts_only
 test_no_target_never_prints_constrained_line
 test_target_yields_open_lanes_and_full
@@ -540,7 +639,8 @@ test_fresh_beat_replaces_probes
 test_late_stale_missing_and_malformed_beats
 test_several_pressure_files
 test_beat_with_missing_fields
-test_cap_only_memory_rule_unchanged
+test_memory_counts_the_lanes_that_fit
+test_lane_footprint_is_measured_from_live_lanes
 test_limits_and_admit
 test_publish_document
 test_captain_and_quota
