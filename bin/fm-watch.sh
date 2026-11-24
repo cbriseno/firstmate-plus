@@ -522,6 +522,8 @@ for line in sys.stdin:
 
 pause_task_state() (  # <same-home dependency>: see fm_backlog_task_wait_state
   local target=$1 meta="$STATE/$1.meta" project branch base verb kind
+  # shellcheck source=bin/fm-local-branch-lib.sh
+  . "$SCRIPT_DIR/fm-local-branch-lib.sh"
   [ ! -L "$meta" ] || return 2
   if [ -f "$meta" ]; then
     kind=$(fm_meta_get "$meta" kind)
@@ -550,6 +552,24 @@ pause_task_state() (  # <same-home dependency>: see fm_backlog_task_wait_state
   fm_backlog_task_wait_state "${FM_DATA_OVERRIDE:-$FM_HOME/data}" "$target"
 )
 
+pause_resume_failure() {  # <task> <declaration-key> <failure-output> <retry-file> <notice-file>
+  local task=$1 key=$2 output=$3 file=$4 marker=$5 old='' count=0 reason
+  if [ -f "$file" ]; then
+    { IFS= read -r old; IFS= read -r count; } < "$file" || true
+  fi
+  [ "$old" = "$key" ] || count=0
+  case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  count=$((count + 1))
+  if [ "$count" = 2 ]; then
+    reason="check: resume failed twice for $task: $(printf '%s' "$output" | tr '\n\t' '  ')"
+    watch_event_append check "ready-work:primary:pause:$task" "$reason" || return 1
+    printf '%s\n%s\n' "$key" "$count" > "$file" || return 1
+    touch "$marker" || return 1
+    wake "$reason"
+  fi
+  printf '%s\n%s\n' "$key" "$count" > "$file"
+}
+
 # A declared condition gets the same resume steer a human would send, once
 # per declaration. Run before pane triage, including for changing panes:
 # resumption must not depend on a stale hash or a supervisor handling a wake.
@@ -559,11 +579,13 @@ pause_task_state() (  # <same-home dependency>: see fm_backlog_task_wait_state
 paused_until_resume() {  # <window> <task> <declared-wait-line>
   local win=$1 task=$2 last=$3 until threshold load ceiling marker key before after hold_rc wait_rc=1 legacy stamp age message check_rc due=0 timed=0 valid=1 migration=0 unsafe=0
   local old_marker notice parked=0 retry=0 reason wait_task wait_problem='' target visited
+  local retry_file retry_output retry_rc
   [ -n "$task" ] || return 0
   marker="$STATE/.pause-notice-$task"
+  retry_file="$STATE/.pause-retries-$task"
   old_marker="$STATE/.paused-resumed-$(window_key "$win")"
   if ! status_is_paused "$last"; then
-    rm -f "$marker" "$old_marker" "$STATE/.pause-legacy-checked-$task"
+    rm -f "$marker" "$old_marker" "$STATE/.pause-legacy-checked-$task" "$retry_file"
     fm_obligation_clear "pause-$task" || return 1
     return 0
   fi
@@ -653,14 +675,20 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   fi
   if [ "$notice" = "$key" ]; then
     if [ "$parked" = 1 ] && [ "$(age_of "$marker")" -ge "$retry" ]; then
-      if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-        "$SCRIPT_DIR/fm-control.sh" "$task" resume >&2; then
+      if retry_output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+        "$SCRIPT_DIR/fm-control.sh" "$task" resume 2>&1); then
+        rm -f -- "$retry_file"
         fm_obligation_clear "pause-$task" || return 1
         triage_log "timed-pause resume retry succeeded: $task ($win)"
         return 0
+      else
+        retry_rc=$?
       fi
+      [ -n "$retry_output" ] || retry_output="resume exited with status $retry_rc without a diagnostic"
+      printf '%s\n' "$retry_output" >&2
+      pause_resume_failure "$task" "$key" "$retry_output" "$retry_file" "$marker" || return 1
       touch "$marker" || return 1
-      triage_log "timed-pause resume retry failed: $task ($win); $reason"
+      triage_log "timed-pause resume retry failed: $task ($win); $retry_output"
     fi
     fm_obligation_observe "pause-$task" expired-wait "$key" "$reason" "$marker" || return 1
     return 0
@@ -682,16 +710,23 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   elif [ -n "$wait_problem" ]; then
     message="$wait_problem Verify the reference and declare a live exit or resume the task. Pause: $last"
   fi
-  if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-send.sh" "$task" "$message"; then
+  if retry_output=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-send.sh" "$task" "$message" 2>&1); then
+    rm -f -- "$retry_file"
     triage_log "sent timed-pause resume: $win"
   else
+    retry_rc=$?
+    [ -n "$retry_output" ] || retry_output="send exited with status $retry_rc without a diagnostic"
+    printf '%s\n' "$retry_output" >&2
     after=$(find "$STATE/$task.inbox" -maxdepth 2 -name '*.msg' 2>/dev/null | wc -l)
     if [ "$parked" = 1 ]; then
       if [ "$after" -gt "$before" ]; then
         touch "$marker" || return 1
       else
         printf 'pending:%s' "$key" > "$marker" || return 1
+      fi
+      if [ "$notice" = "pending:$key" ]; then
+        pause_resume_failure "$task" "$key" "$retry_output" "$retry_file" "$marker" || return 1
       fi
       triage_log "$reason"
     elif [ "$after" -le "$before" ]; then
@@ -3286,10 +3321,11 @@ obligation_status_tick() {
     task=${old##*/.progress-unknown-}
     [ -f "$STATE/$task.meta" ] || rm -f -- "$old" || return 1
   done
-  for old in "$STATE"/.pause-legacy-checked-* "$STATE"/.pause-notice-*; do
+  for old in "$STATE"/.pause-legacy-checked-* "$STATE"/.pause-notice-* "$STATE"/.pause-retries-*; do
     [ -f "$old" ] || continue
     case "$old" in
       */.pause-notice-*) task=${old##*/.pause-notice-} ;;
+      */.pause-retries-*) task=${old##*/.pause-retries-} ;;
       *) task=${old##*/.pause-legacy-checked-} ;;
     esac
     [ -f "$STATE/$task.meta" ] || rm -f -- "$old" || return 1
@@ -4440,6 +4476,25 @@ while :; do
   touch "$STATE/.last-watcher-beat"
   FM_HEARTBEAT_ACTIONABLE=0
 
+  # Check every declared wait at the same point. Later actionable wakes can
+  # end this cycle before pane triage, so active workers must not wait for it.
+  PAUSE_HOLD_SCAN=; PAUSE_HOLD_IDS=
+  for meta in "$STATE"/*.meta "$STATE"/*.parked; do
+    [ -f "$meta" ] || continue
+    task=${meta##*/}
+    case "$task" in
+      *.parked) task=${task%.parked}; [ ! -f "$STATE/$task.meta" ] || continue ;;
+      *) task=${task%.meta} ;;
+    esac
+    task_lifecycle_busy "$task" && continue
+    if [ -f "$STATE/$task.parked" ]; then
+      w=$(fm_meta_get "$STATE/$task.parked" window)
+    else
+      w=$(fm_backend_target_of_meta "$meta")
+    fi
+    paused_until_resume "$w" "$task" "$(status_declared_wait_line "$STATE/$task.status")"
+  done
+
   # Status publishers have already committed their span after queueing it, and
   # a queued check row is already classified. Surface those rows before the
   # poll's scanners, which can take minutes under load.
@@ -4486,14 +4541,6 @@ while :; do
 
   login_expiry_tick
 
-  # Parked panes are absent by design; preserve the existing dated-pause
-  # recheck through fm-send, which resumes before ringing its inbox.
-  PAUSE_HOLD_SCAN=; PAUSE_HOLD_IDS=
-  for parked in "$STATE"/*.parked; do
-    [ -f "$parked" ] || continue
-    task=${parked##*/}; task=${task%.parked}
-    paused_until_resume "$(fm_meta_get "$parked" window)" "$task" "$(status_declared_wait_line "$STATE/$task.status")"
-  done
   # A delivery check is due independently of capacity to start another worker.
   # Reuse the budget sampler and let its actionable result go first at return.
   if [ "${FM_BUDGETS:-1}" != 0 ] \
@@ -4935,7 +4982,6 @@ EOF
     [ -z "$task" ] || inbox_steer_check "$w" "$task"
     key=$(window_key "$w")
     last=$(status_declared_wait_line "$STATE/$task.status")
-    paused_until_resume "$w" "$task" "$last"
     if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
       clear_pause_tracking "$key"
     fi

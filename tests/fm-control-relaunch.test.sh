@@ -1035,9 +1035,10 @@ test_host_park_and_resume_preserves_scratch() {
   sed -i.bak "s|^worktree=.*|worktree=$wt|; s|^project=.*|project=$wt|; s/^kind=.*/kind=host/" "$dir/home/state/host2.meta"
   printf '%s' "$wt" > "$dir/fake/cwd"
   printf 'done [at=1]: host work ready\n' > "$dir/home/state/host2.status"
-  # The tmux stub never closes a window, so record a completed park the way
-  # fm-control park leaves it and resume from an endpoint whose agent is gone.
-  { cat "$dir/home/state/host2.meta"; printf 'park_phase=parked\n'; } > "$dir/home/state/host2.parked"
+  # Model a stop interrupted after the endpoint disappeared, preserving the
+  # socket identity recorded before the stop.
+  { cat "$dir/home/state/host2.meta"; printf 'park_phase=stopping\npark_tmux_socket=fakepane\n'; } > "$dir/home/state/host2.parked"
+  : > "$dir/fake/windows"
   printf 'Resume host work from saved scratch.\n' > "$dir/home/data/host2/park-note.md"
   printf zsh > "$dir/fake/command"
   out=$(run_control "$dir" host2 resume) || fail "host resume failed: $out"
@@ -1046,7 +1047,7 @@ test_host_park_and_resume_preserves_scratch() {
   [ "$(cat "$wt/keep")" = keep ] || fail 'host resume did not preserve scratch'
   grep -qx 'phase=complete' "$dir/home/state/host2.control-relaunch" \
     || fail "host resume journal did not complete: $out"
-  pass 'host park and resume accept an empty checkpoint list and preserve scratch'
+  pass 'host resume finishes interrupted parking and preserves scratch'
 }
 
 test_expired_parked_pause_retries_after_enqueue() {

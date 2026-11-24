@@ -2,7 +2,7 @@
 # Idle-worker park/resume mechanics sourced only by fm-control.sh under its
 # per-task lifecycle lock. The parked file copies launch fields from metadata,
 # plus park_phase, park_wait and (tmux only) park_tmux_socket. Work stays put.
-# A failed stop/close retains phase=stopping and must be retried with park.
+# A failed stop/close retains phase=stopping for the next park or resume.
 # Resume clears the parked file only after the replacement is confirmed alive.
 # Globals below belong to the sourcing control command.
 # shellcheck disable=SC2034,SC2153
@@ -143,7 +143,11 @@ resume_check_policy() {
 do_resume() {
   local saved="$STATE/$ID.parked" reason=native-session
   [ -f "$saved" ] || die "task $ID is not parked; use relaunch for ordinary recovery"
-  [ "$(fm_meta_get "$saved" park_phase)" = parked ] || die 'parking is incomplete; retry park before resume'
+  case "$(fm_meta_get "$saved" park_phase)" in
+    stopping) do_park || return 1 ;;
+    parked) ;;
+    *) die 'parking phase is unrecognized; inspect the saved record' ;;
+  esac
   case "$(agent_state)" in
     missing|dead) ;;
     *) die 'parked endpoint is not confirmed agent-free; refusing duplicate worker' ;;

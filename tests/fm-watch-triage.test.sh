@@ -4692,6 +4692,71 @@ test_paused_bg_job_without_reference_is_rechecked_once() {
   pass "a legacy job pause is rechecked once without waking the primary"
 }
 
+test_parked_resume_failure_wakes_after_two_retries() {
+  local dir state
+  dir=$(make_case resume-failures); state="$dir/state"
+  mkdir -p "$dir/scripts" "$dir/config"
+  cat > "$dir/scripts/fm-control.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'specific launch refusal\n' >&2
+exit 1
+SH
+  chmod +x "$dir/scripts/fm-control.sh"
+  printf 'park_phase=parked\n' > "$state/parked.parked"
+  printf '100' > "$state/.pause-notice-parked"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$dir/config" \
+    bash -c '
+      . "$1/bin/fm-watch.sh"
+      SCRIPT_DIR="$2/scripts"
+      pause_backlog_hold() { return 1; }
+      fm_task_inbox_grace_secs() { printf 0; }
+      fm_obligation_observe() { :; }
+      watch_event_append() { printf "%s\n" "$3" >> "$STATE/wakes"; }
+      wake() { :; }
+      for i in 1 2; do
+        paused_until_resume test:fm-parked parked "paused [at=100]: until 2000-01-01T00:00Z" || exit 1
+        if [ "$i" = 1 ] && [ -e "$STATE/wakes" ]; then exit 2; fi
+      done
+    ' _ "$ROOT" "$dir" || fail 'resume retries did not complete'
+  [ "$(wc -l < "$state/wakes")" -eq 1 ] || fail 'second retry did not wake exactly once'
+  grep -Fq 'specific launch refusal' "$state/wakes" || fail 'wake omitted the concrete failure'
+  pass 'two failed resume retries wake the primary with the cause'
+}
+
+test_completed_job_is_not_starved_by_a_later_wake() {
+  local dir state started FM_HOME FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE
+  started=$(date +%s)
+  dir=$(bg_job_paused_case bg-job-later-wake \
+    "paused [at=$started]: [wait-job=build] until $(iso_utc_at "$(( started + 600 ))"): wait for build")
+  state="$dir/state"
+  export FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" FM_CONFIG_OVERRIDE="$dir/config"
+  mkdir -p "$state/parked.jobs"
+  printf '{"state":"done","exit_code":0}\n' > "$state/parked.jobs/build.json"
+  printf 'check: operational alarm\n' > "$state/budget-operational-progress.budget-alarm"
+  parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" test:fm-parked exit \
+    || fail "the operational alarm was not surfaced"
+  [ -f "$state/parked.inbox/001.msg" ] || fail "later wake starved the completed job notice"
+  grep -Fq 'operational alarm' "$dir/watch.out" || fail "the operational alarm was lost"
+  pass "a completed job is rechecked before a later actionable wake"
+}
+
+test_completed_job_is_not_starved_by_an_early_signal() {
+  local dir state started FM_HOME FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE
+  started=$(date +%s)
+  dir=$(bg_job_paused_case bg-job-early-signal \
+    "paused [at=$started]: [wait-job=build] until $(iso_utc_at "$(( started + 600 ))"): wait for build")
+  state="$dir/state"
+  export FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" FM_CONFIG_OVERRIDE="$dir/config"
+  mkdir -p "$state/parked.jobs"
+  printf '{"state":"done","exit_code":0}\n' > "$state/parked.jobs/build.json"
+  printf 'needs-decision: urgent question\n' > "$state/urgent.status"
+  parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" test:fm-parked exit \
+    || fail "the urgent signal was not surfaced"
+  [ -f "$state/parked.inbox/001.msg" ] || fail "early signal starved the completed job notice"
+  grep -Fq 'urgent.status' "$dir/watch.out" || fail "the urgent signal was lost"
+  pass "a completed job is rechecked before an early actionable signal"
+}
+
 test_paused_bg_job_until_timeout_resumes_after_the_job_ends() {
   local dir state started rec FM_HOME FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE
   started=$(date +%s)
@@ -5209,6 +5274,9 @@ test_afk_one_shot_never_hands_off_captain_held_under_away_record
 test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_bg_job_without_reference_is_rechecked_once
 test_paused_bg_job_until_timeout_resumes_after_the_job_ends
+test_completed_job_is_not_starved_by_a_later_wake
+test_completed_job_is_not_starved_by_an_early_signal
+test_parked_resume_failure_wakes_after_two_retries
 
 # The recorded Claude background-task exit picker. The footer is the last
 # non-blank row, which is what fm_composer_blocking_dialog requires.
