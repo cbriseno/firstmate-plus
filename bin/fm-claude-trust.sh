@@ -13,6 +13,7 @@
 #        fm-claude-trust.sh --host-task <scratch> <task-data-dir>
 #          Trusts only the real, non-repository task-data-dir/work directory.
 #        fm-claude-trust.sh --lab-home <home>
+#        fm-claude-trust.sh --overseer-dir <dir> <home>
 #   <worktree>  the isolated task worktree this spawn launches into
 #   <project>   the primary checkout that worktree belongs to
 #   <home>      the seeded secondmate home this spawn launches into
@@ -178,6 +179,7 @@ usage() {
   echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
   echo "       fm-claude-trust.sh --host-task <scratch> <task-data-dir>" >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
+  echo "       fm-claude-trust.sh --overseer-dir <dir> <home>" >&2
   exit 2
 }
 
@@ -185,6 +187,15 @@ usage() {
 # names what the argument was expected to be so every shared refusal below reads
 # correctly in both modes.
 case "${1:-}" in
+  --overseer-dir)
+    [ "$#" -eq 3 ] || usage
+    MODE=overseer-dir
+    TARGET_ARG=$2
+    OVERSEER_HOME=$3
+    SUB_ID=
+    PROJ_ARG=
+    SCOPE_NOUN="overseer directory"
+    ;;
   --host-task)
     [ "$#" -eq 3 ] || usage
     MODE=host-task
@@ -333,6 +344,13 @@ elif [ "$MODE" = host-task ]; then
   [ "$TARGET_REAL" = "$HOST_DATA_REAL/work" ] && [ ! -e "$TARGET_REAL/.git" ] \
     && [ -f "$HOST_DATA_REAL/host-paths" ] && [ -f "$HOST_DATA_REAL/brief.md" ] \
     || refuse 'host scratch must be the task data work directory with its brief and path manifest'
+elif [ "$MODE" = overseer-dir ]; then
+  OVERSEER_HOME=$(real_dir "$OVERSEER_HOME") || refuse 'overseen home is missing'
+  [ -f "$OVERSEER_HOME/SUPERVISOR.md" ] || refuse 'overseen home is not a Firstmate home'
+  [ -f "$TARGET_REAL/firstmate-home" ] && [ ! -L "$TARGET_REAL/firstmate-home" ] || refuse 'overseer directory has no home binding'
+  [ "$(cat "$TARGET_REAL/firstmate-home")" = "$OVERSEER_HOME" ] || refuse 'overseer directory belongs to another home'
+  OVERSEER_CONTRACT=$(real_file "$(dirname -- "$0")/../overseer/AGENTS.md") || refuse 'overseer contract is missing'
+  [ -L "$TARGET_REAL/CLAUDE.md" ] && [ "$(real_file "$TARGET_REAL/CLAUDE.md")" = "$OVERSEER_CONTRACT" ] || refuse 'overseer loader is not the contract'
 elif [ "$MODE" = lab-home ]; then
   LAB_MARKER="$TARGET_REAL/$FM_GATE_LAB_MARKER"
   [ ! -L "$LAB_MARKER" ] || refuse "'$LAB_MARKER' is a symlink; a lab home carries the marker as a regular file"

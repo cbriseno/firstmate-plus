@@ -145,6 +145,20 @@ test_claude_imports_of_the_operators_claude_dir_are_allowed() {
 enter:Yes, allow external imports" "$(cat "$log")" "the operator's own import was not allowed"
 }
 
+test_codex_hooks_of_prepared_overseer_are_trusted() {
+  local home="$TMP_ROOT/overseer-home" dir="$TMP_ROOT/overseer-dir" log="$TMP_ROOT/overseer-log" out
+  mkdir -p "$home"
+  : > "$home/SUPERVISOR.md"
+  FM_HOME="$home" bash "$ROOT/bin/fm-overseer.sh" setup "$dir" >/dev/null || fail 'overseer setup failed'
+  out=$(FM_HOME="$home" run_case overseer "$dir" "$log" '›' "${HOOKS_HEAD[@]}" -- "${HOOKS_ROWS[@]}")
+  assert_contains "$(cat "$log")" 'enter:2. Trust all and continue' 'prepared overseer hook was not trusted'
+  printf '{"hooks":{}}\n' > "$dir/.codex/hooks.json"
+  out=$(FM_HOME="$home" run_case overseer-modified "$dir" "$log" '›' "${HOOKS_HEAD[@]}" -- "${HOOKS_ROWS[@]}")
+  assert_equals '' "$(cat "$log")" 'modified hooks received trust'
+  assert_contains "$out" 'left for the operator' 'modified hooks were not refused'
+  pass 'only the prepared overseer hook receives Codex trust'
+}
+
 test_claude_imports_outside_are_left() {
   local log="$TMP_ROOT/log7" out
   out=$(CASE_HARNESS=claude HOME="$TMP_ROOT/home" run_case impout "$LAUNCH" "$log" '❯' \
@@ -188,6 +202,7 @@ test_codex_folder_elsewhere_is_left
 test_codex_hooks_are_trusted_with_down_then_enter
 test_codex_hooks_of_a_foreign_project_are_left
 test_codex_hooks_of_a_firstmate_checkout_are_trusted
+test_codex_hooks_of_prepared_overseer_are_trusted
 test_claude_imports_of_the_operators_claude_dir_are_allowed
 test_claude_imports_outside_are_left
 test_bypass_warning_is_not_answered

@@ -60,6 +60,50 @@ Resolve missing prerequisites through the administrator before starting a superv
 
 Existing installations: see [upgrade actions](UPGRADING.md) for migrations and activation steps offered after updating.
 
+### Optional overseer
+
+The overseer is a separate agent session that watches the primary and directs the primary or a worker to act when it finds unhandled work.
+It is off until configured.
+After updating an existing installation, choose an absolute directory outside every Firstmate checkout and create `config/overseer` in that installation:
+
+```text
+enabled=on
+harness=codex
+directory=/absolute/path/to/overseer
+```
+
+Use `claude` instead of `codex` for Claude Code, and optionally add `model=...` and `effort=...` for that harness.
+The CLI's normal permission mode applies unless `permission=auto` or `permission=bypass` is explicitly configured; bypass grants the agent unrestricted tool access.
+When the CLI prompts, approve the supervisor's access to the primary's processes and terminal so it can verify liveness and deliver nudges.
+From the installation root, in the same terminal backend as the primary, run:
+
+```sh
+bash bin/fm-overseer.sh doctor
+bash bin/fm-overseer.sh start
+bash bin/fm-overseer.sh status
+```
+
+After the first agent turn ends, status should show a live session and an armed watch.
+To speak with the overseer, open the tmux window named by `status` or the Herdr tab labeled `fm-overseer-` containing the reported pane.
+Ask it to explain what is delaying this installation and to follow up on unattended work.
+If status reports an unconfirmed event, inspect that session before retrying; ask the overseer to handle its pending event if the message did not arrive.
+An enabled overseer is also started when the primary starts; the result is recorded in `state/overseer-start.log`.
+Run `bash bin/fm-overseer.sh stop` to close the session, and set `enabled=off` to disable future automatic starts.
+The directory must not contain an existing `CLAUDE.md`, `AGENTS.md`, or home binding from another installation; setup refuses to overwrite them.
+
+The doctor shows local capacity, behavior budgets, test queues, task waits, and recent diagnostic events.
+Use its leads to investigate slow wakes and resource pressure, and collect another sample after normal activity if a measure is unmeasured.
+Correlate machine-wide samples with the affected home's activity before assigning a cause.
+
+The overseer records each intervention as a defect and asks the primary to track a root cause when it recurs.
+From the installation root, export the anonymous intervention report with:
+
+```sh
+FM_HOME="$PWD" bash bin/fm-overseer.sh intervention export overseer-feedback.zip
+```
+
+Review the text in the ZIP for private details before sharing it.
+
 ## Required versus optional tools
 
 Run `bash bin/fm-doctor.sh --tools` from the checkout for a read-only inventory of detected tools, their known minimums, factory availability, and affected capabilities.

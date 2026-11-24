@@ -714,6 +714,27 @@ hash_file_for_test() {
 
 # --- context digest: absent vs empty vs present -----------------------------
 
+test_overseer_start_on_locked_session() {
+  local rec root home fakebin out i
+  rec=$(new_world overseer-start)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+  make_fake_ps_claude "$fakebin"
+  printf 'enabled=off\n' > "$home/config/overseer"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'OVERSEER: starting if enabled' 'locked startup did not invoke the configured overseer'
+  for i in $(seq 1 100); do
+    [ -s "$home/state/overseer-start.log" ] && break
+    sleep 0.1
+  done
+  assert_contains "$(cat "$home/state/overseer-start.log")" 'overseer is disabled' 'startup did not honor the opt-out'
+  [ ! -e "$home/state/overseer/session" ] || fail 'disabled startup created a session'
+  pass 'locked startup invokes the overseer and honors its opt-out'
+}
+
 test_fleet_ledger_enabled_on_locked_start() {
   local rec root home fakebin out
   rec=$(new_world fleet-ledger-default)
@@ -2740,6 +2761,7 @@ case "${FM_SESSION_START_CASE:-}" in
 esac
 
 session_cases=(
+  test_overseer_start_on_locked_session
   test_fleet_ledger_enabled_on_locked_start
   test_context_digest_absent_empty_present
   test_lock_refusal_read_only_path

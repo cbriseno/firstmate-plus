@@ -783,6 +783,11 @@ FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-role.sh" report 
 
 if [ "$READ_ONLY" -eq 0 ]; then
   if [ "$REEMIT" -eq 0 ]; then
+    if [ -f "$CONFIG/overseer" ]; then
+      FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" \
+        "$SCRIPT_DIR/fm-overseer.sh" start >"$STATE/overseer-start.log" 2>&1 &
+      printf 'OVERSEER: starting if enabled; see state/overseer-start.log for the result.\n'
+    fi
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
     # Enable event publication before any startup producer or deferred work.
     # Presence remains the producer contract; preserve an existing flag.

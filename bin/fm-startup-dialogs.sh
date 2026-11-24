@@ -108,7 +108,13 @@ refusal() {  # <name> <screen>
   codex-hooks)
     if { [ -e "$LAUNCH_DIR/.codex/hooks.json" ] || [ -e "$LAUNCH_DIR/.codex/config.toml" ]; } \
       && [ ! -e "$LAUNCH_DIR/bin/fm-turnend-guard.sh" ]; then
-      echo "$LAUNCH_DIR carries its own Codex hooks and is not a Firstmate checkout"
+      if [ -e "$LAUNCH_DIR/.codex/config.toml" ] || [ -L "$LAUNCH_DIR/.codex/hooks.json" ] ||
+        [ ! -L "$LAUNCH_DIR/AGENTS.md" ] ||
+        [ "$(readlink "$LAUNCH_DIR/AGENTS.md")" != "$FM_ROOT/overseer/AGENTS.md" ] ||
+        [ "$(cat "$LAUNCH_DIR/firstmate-home" 2>/dev/null)" != "$FM_HOME" ] ||
+        [ "$(cat "$LAUNCH_DIR/.codex/hooks.json" 2>/dev/null)" != "$(bash "$SCRIPT_DIR/fm-overseer.sh" hook)" ]; then
+        echo "$LAUNCH_DIR carries its own Codex hooks and is not a Firstmate checkout or prepared overseer"
+      fi
     fi
     ;;
   claude-imports)

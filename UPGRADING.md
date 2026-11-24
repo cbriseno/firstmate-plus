@@ -20,6 +20,7 @@ The command's header and help own detection, per-home records and application.
    If the native rule file action runs, restart the primary again as that entry directs.
 
 On a managed Mac, the [read-only tool inventory](README.md#required-versus-optional-tools) can check the tools already available to the updated installation.
+To enable the optional overseer after updating, follow the [overseer setup and diagnostic instructions](README.md#optional-overseer).
 
 ## Client instructions for the next package
 
