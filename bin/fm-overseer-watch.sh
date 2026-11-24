@@ -7,6 +7,8 @@
 # replayed until the caller confirms delivery with --ack and the same id.
 # Checks pending wakes, open decisions, failures, a missing primary, capacity,
 # and unhandled review results. Polling itself never emits a timer-only wake.
+# Each poll also runs fm-overseer.sh place, which keeps the overseer's pane
+# beside the primary's.
 # FM_OVERSEER_POLL sets the polling interval in seconds (default 30), and
 # FM_OVERSEER_WAIT sets the attention delay in seconds (default 600).
 set -u
@@ -272,5 +274,9 @@ while :; do
   scan_primary && exit 0
   scan_capacity && exit 0
   scan_reviews && exit 0
+  # Keep the overseer beside the primary after either side relays; no model wake.
+  bash "$script_dir/fm-overseer.sh" place >/dev/null 2>&1 || true
+  # Deliver notices held during quiet hours once the window ends; no model wake.
+  [ ! -e "${FM_STATE_OVERRIDE:-$FM_HOME/state}/notification-held.jsonl" ] || python3 "$script_dir/fm-notify.py" --home "$FM_HOME" --flush >/dev/null 2>&1 || true
   sleep "$poll_seconds"
 done

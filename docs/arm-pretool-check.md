@@ -1,5 +1,7 @@
 # Watcher arm PreToolUse seatbelt
 
+Claude and Codex reach this seatbelt through the single review in [`pretool-check.md`](pretool-check.md), which skips it for an action that cannot touch what it protects; this document still owns its decisions.
+
 This document is the authoritative human-readable contract for the watcher arm PreToolUse seatbelt.
 `bin/fm-arm-command-policy.mjs` is the single semantic owner.
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.

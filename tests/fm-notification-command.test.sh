@@ -55,6 +55,37 @@ with tempfile.TemporaryDirectory() as tmp:
     assert notice('--kind','approval','--task','t1')[0][1]=='Needs your approval: Mi tarea'
     config.write_text(json.dumps(['false']))
     assert notice('--kind','review','--task','t1') is None  # a failed delivery never fails its caller
+    # Quiet hours hold notices, then deliver one digest; the overseer alert and published notice use the same path.
+    sink=home/'sink.log'; consumer2=home/'consumer2.py'
+    consumer2.write_text('import sys; open(sys.argv[1],"a").write(sys.argv[2]+"|"+sys.argv[3]+"\\n")')
+    config.write_text(json.dumps([sys.executable,str(consumer2),str(sink)]))
+    (home/'config/notification-quiet-hours').write_text('23:00-07:00\n')
+    def at(clock,*args,tool='fm-notify.py'):
+        return subprocess.run([sys.executable,str(root/'bin'/tool),'--home',str(home),*args],env=dict(os.environ,FM_NOTIFY_NOW=clock,FM_HOME=str(home),FM_LANGUAGE='en'),capture_output=True)
+    assert at('23:30','--event','overseer-alert','--text','one').returncode==0
+    assert at('02:00','--event','captain-review','--text','two').returncode==0
+    assert at('03:00','--flush').returncode==0 and not sink.exists()
+    assert at('08:00','--flush').returncode==0
+    assert sink.read_text()=='quiet-digest|2 held during quiet hours: one | two\n'
+    assert at('09:00','--flush').returncode==0 and sink.read_text().count('\n')==1
+    sink.unlink()
+    # A single held notice arrives whole under its own event, even at the 240-character limit.
+    full='x'*236+' end'
+    assert at('23:30','--event','overseer-alert','--text',full).returncode==0
+    assert at('08:00','--flush').returncode==0 and sink.read_text()=='overseer-alert|'+full+'\n'
+    sink.unlink()
+    # The digest prefix follows the installation language.
+    assert at('23:30','--event','overseer-alert','--text','uno').returncode==0
+    assert at('23:40','--event','overseer-alert','--text','dos').returncode==0
+    spanish=subprocess.run([sys.executable,str(root/'bin/fm-notify.py'),'--home',str(home),'--flush'],env=dict(os.environ,FM_NOTIFY_NOW='08:00',FM_HOME=str(home),FM_LANGUAGE='es-MX'),capture_output=True)
+    assert spanish.returncode==0 and sink.read_text()=='quiet-digest|2 avisos retenidos en horario de silencio: uno | dos\n', sink.read_text()
+    sink.unlink()
+    assert at('12:00','--event','overseer-alert','--text','now').returncode==0 and sink.read_text()=='overseer-alert|now\n'
+    sink.unlink()
+    assert at('12:00','--kind','published','--title','repo refs/heads/main',tool='fm-captain-notice.py').returncode==0
+    assert sink.read_text()=='captain-published|Published: repo refs/heads/main\n'
+    overseer=subprocess.run(['bash',str(root/'bin/fm-overseer.sh'),'alert','careful'],env=dict(os.environ,FM_NOTIFY_NOW='23:30',FM_HOME=str(home)),capture_output=True)
+    assert overseer.returncode==0 and 'careful' in (home/'state/notification-held.jsonl').read_text()
 print('ok - disabled notifications, literal argv, failures, timeout, installation language, link and captain notices')
 PY
 

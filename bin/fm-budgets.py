@@ -446,6 +446,32 @@ def check(now):
     hist_path = STATE / 'budgets-history.jsonl'
     rows = history(hist_path)
     table, counters = compute(now, cache, rows)
+    if table['home_summary_age_s']['exceeded']:
+        # Re-read through the normal collector after allowing its bounded
+        # refresh to finish. Keep the old sample when no newer read succeeds.
+        env = os.environ.copy()
+        timeout = env.get('FM_HOME_SUMMARY_TIMEOUT', '60')
+        timeout = int(timeout) if timeout.isdigit() and int(timeout) > 0 else 60
+        env['FM_SNAPSHOT_BUDGET'] = str(timeout + 30)
+        env['FM_SNAPSHOT_SECONDMATES'] = '0'
+        env.setdefault('FM_SNAPSHOT_REGISTRY_TIMEOUT', '30')
+        try:
+            result = subprocess.run(
+                ['bash', '-c', '. "$1"; shift; fm_run_timed "$@"', 'budget-recheck',
+                 str(ROOT / 'bin/fm-timeout-lib.sh'), str(timeout * 2 + 60),
+                 str(ROOT / 'bin/fm-fleet-snapshot.sh'), '--json'],
+                env=env, capture_output=True, text=True)
+            current = json.loads(result.stdout)['secondmate_current']
+            records = current['records']
+            if (result.returncode == 0 and current['registry']['complete'] and not current['truncated']
+                    and records and all(r['provenance']['selected'] == 'structured-home'
+                                        and r['provenance']['summary_source'] in ('local-ledger', 'remote-ledger')
+                                        and isinstance(r['freshness']['age_seconds'], int) for r in records)):
+                row = table['home_summary_age_s']
+                row['value'] = max(r['freshness']['age_seconds'] for r in records)
+                row['exceeded'] = row['value'] > row['limit']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     delivery, slots = capture_operations(now)
     episodes = cache.setdefault('episodes', {})
     for key, row in table.items():

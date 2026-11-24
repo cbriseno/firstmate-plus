@@ -6210,6 +6210,25 @@ test_preserving_close_saves_and_records_branch() {
   pass "preserving ship/scout close saves pending files and retains unlanded branch in backlog"
 }
 
+test_preserving_host_keeps_scratch_and_pending_result() {
+  local case_dir rc
+  case_dir=$(make_case preserve-host)
+  mkdir -p "$case_dir/data/task-x1/work"
+  write_meta "$case_dir" '' host "$case_dir/data/task-x1/work"
+  seed_backlog_in_flight "$case_dir" host
+  printf 'unfinished result\n' > "$case_dir/data/task-x1/work/result.txt"
+  rc=0
+  run_teardown "$case_dir" --preserve > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "preserving host: $(cat "$case_dir/stderr")"
+  assert_grep 'unfinished result' "$case_dir/data/task-x1/work/result.txt" "host result was lost"
+  assert_grep 'preserved-path:' "$case_dir/data/backlog.md" "host result location was not recorded"
+  [ "$(backlog_row_state "$case_dir")" = queued ] || fail "host was declared delivered"
+  assert_contains "$(tasks-axi show task-x1 --file "$case_dir/data/backlog.md" --full)" \
+    'hold_kind: external' "preserved host work must remain held"
+  assert_absent "$case_dir/state/task-x1.meta" "host record was not retired"
+  pass "preserving host retains its scratch and pending backlog"
+}
+
 test_preserving_close_skips_reassigned_pool_slot() {
   local case_dir wt slot
   case_dir=$(make_case preserve-reassigned-slot)
@@ -6399,3 +6418,5 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+
+test_preserving_host_keeps_scratch_and_pending_result

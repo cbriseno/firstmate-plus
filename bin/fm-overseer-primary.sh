@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Resolve the live primary from its session lock, then send an instruction.
 # Usage: FM_HOME=<home> bash bin/fm-overseer-primary.sh <text>
+#        FM_HOME=<home> bash bin/fm-overseer-primary.sh --locate [PID]
 #        bash bin/fm-overseer-primary.sh --help
+# --locate prints "<backend> <target>" for the endpoint whose shell is an
+# ancestor of PID (default: the primary's lock owner) and sends nothing.
 # The target is re-resolved on every call so a primary relay is followed.
+# When typing fails (for example the primary's input holds unsent text), the
+# instruction is queued as a check wake for the primary instead, so its normal
+# wake delivery hands it over; the command then prints QUEUED and exits 0.
 set -u
 if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
   sed -n '2,/^set -u/p' "$0" | sed '$d;s/^# \{0,1\}//'
@@ -11,14 +17,24 @@ fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 FM_HOME=${FM_HOME:-${script_dir%/bin}}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
-[ "$#" -gt 0 ] && [ -n "$*" ] || { echo 'usage: fm-overseer-primary.sh <text>' >&2; exit 2; }
+locate='' anchor=''
+if [ "${1:-}" = --locate ]; then
+  locate=1 anchor=${2:-}
+  case "$anchor" in *[!0-9]*) echo 'the process id must be a number' >&2; exit 2 ;; esac
+else
+  [ "$#" -gt 0 ] && [ -n "$*" ] || { echo 'usage: fm-overseer-primary.sh <text>' >&2; exit 2; }
+fi
 # shellcheck source=bin/fm-backend.sh
 . "$script_dir/fm-backend.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$script_dir/fm-session-lock-lib.sh"
-fm_session_lock_inspect "$STATE"
-[ "$FM_LOCK_INSPECT_STATE" = held ] || { echo 'primary session lock is not held by a live harness' >&2; exit 1; }
-lock_pid=$FM_LOCK_INSPECT_PID
+if [ -n "$anchor" ]; then
+  lock_pid=$anchor
+else
+  fm_session_lock_inspect "$STATE"
+  [ "$FM_LOCK_INSPECT_STATE" = held ] || { echo 'primary session lock is not held by a live harness' >&2; exit 1; }
+  lock_pid=$FM_LOCK_INSPECT_PID
+fi
 backend=$(fm_backend_name)
 fm_backend_source "$backend" || exit 1
 # A pane's shell must be an ancestor of the locked harness process.
@@ -64,8 +80,17 @@ done <<EOT
 $candidates
 EOT
 [ -n "$target" ] || { echo 'primary endpoint not found from session lock' >&2; exit 1; }
+if [ -n "$locate" ]; then
+  case "$backend" in tmux) target=$target_id ;; esac
+  printf '%s %s\n' "$backend" "$target"
+  exit 0
+fi
 fm_session_lock_inspect "$STATE"
 [ "$FM_LOCK_INSPECT_STATE" = held ] && [ "$FM_LOCK_INSPECT_PID" = "$lock_pid" ] || {
   echo 'primary session changed before delivery; retry with the current session' >&2; exit 1;
 }
-FM_BACKEND="$backend" FM_HOME="$FM_HOME" bash "$script_dir/fm-send.sh" "$target" "$*"
+FM_BACKEND="$backend" FM_HOME="$FM_HOME" bash "$script_dir/fm-send.sh" "$target" "$*" && exit 0
+# shellcheck source=bin/fm-wake-lib.sh
+. "$script_dir/fm-wake-lib.sh"
+fm_wake_append check "overseer-$(date +%s)-$$" "overseer: $*" || { echo 'could not queue the instruction for the primary' >&2; exit 1; }
+echo 'QUEUED: typing to the primary failed; the instruction waits in its wake queue'

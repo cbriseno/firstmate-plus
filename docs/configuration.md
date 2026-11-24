@@ -1310,6 +1310,7 @@ This section is the single owner of the canonical schema and its per-field seman
 
 ```json
 {
+  "diagnosis_scope": { "bounded": "<category>", "long": "<category>", "ambiguous": "<category>" },
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
@@ -1340,9 +1341,12 @@ This section is the single owner of the canonical schema and its per-field seman
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
 | Rule `category` | Optional unique lowercase letters, digits, and hyphens; enabling any category requires worker briefs to declare the matching rule, or `default` when no rule matches. |
+| `diagnosis_scope` | Optional object mapping each of `bounded`, `long`, and `ambiguous` to a configured category. |
 | Rule `reason_required` | Optional boolean; when true the brief must include a nonempty dispatch rationale. |
 
 When categories are enabled, the resolved profile must match the declared category rule, including any effort specified by that profile.
+When `diagnosis_scope` is configured alongside categorized rules, each fresh worker brief records the assessed scope, and diagnostic scopes must match the mapped category; use `not-diagnostic` for other work.
+Matrices without the mapping keep their existing behavior and emit a warning at launch; add the mapping using the installation's own category names to enable validation.
 Pass the category and required rationale when scaffolding; `fm-brief.sh --help` owns the flags.
 `fm-spawn.sh` refuses missing or mismatched categories; its help owns the one-invocation bypass.
 

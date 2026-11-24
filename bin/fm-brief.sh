@@ -68,13 +68,16 @@
 #   required for ship, scout, and host scaffolds; reason_required rules also
 #   require a rationale. Existing briefs without a category need the documented
 #   fm-spawn override or a recorded category before launch.
-# --diagnosis-scope <bounded|long|ambiguous> selects a configured category
-#   from the scope assessed at intake: standard for bounded, hard otherwise.
-#   Use it instead of --category for diagnostics using those categories.
+# --diagnosis-scope <bounded|long|ambiguous|not-diagnostic> records the
+#   assessment. A configured diagnosis_scope map selects diagnostic categories;
+#   not-diagnostic requires --category. Older matrices retain the original
+#   standard/hard mapping. An explicit --category is checked at launch.
 # --dispatch-effort <level> records the selected effort for automatic dispatch
 #   when the configured profile does not already fix it.
 # --dispatch-harness <name> and --dispatch-model <name> record the other axes
 #   when no configured profile supplies them.
+#   A ship brief whose category has one profile requires --dispatch-model and
+#   --dispatch-effort for whichever axis that profile leaves open.
 # --base-branch <branch> starts the task from origin's <branch> instead of the
 # repository default, for work that belongs on a named integration, feature, or
 # release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
@@ -358,13 +361,23 @@ done
 
 # Resolve a diagnosis from its declared scope, before validating the category.
 if [ "$DIAGNOSIS_SCOPE_SET" = 1 ]; then
-  [ "$KIND" != secondmate ] && [ -z "$CATEGORY" ] && [ -f "$CONFIG/crew-dispatch.json" ] || {
-    echo 'error: --diagnosis-scope requires a worker dispatch matrix and replaces --category' >&2; exit 1
+  [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-dispatch.json" ] || {
+    echo 'error: --diagnosis-scope requires a worker dispatch matrix' >&2; exit 1
   }
+  if [ -n "$CATEGORY" ] && ! jq -e 'has("diagnosis_scope")' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+    echo 'error: --diagnosis-scope replaces --category without a diagnosis_scope mapping' >&2; exit 1
+  fi
   case "$DIAGNOSIS_SCOPE" in
-    bounded) CATEGORY=standard ;;
-    long|ambiguous) CATEGORY=hard ;;
-    *) echo 'error: --diagnosis-scope requires bounded, long, or ambiguous' >&2; exit 1 ;;
+    bounded|long|ambiguous)
+      if [ -z "$CATEGORY" ]; then
+        if jq -e 'has("diagnosis_scope")' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+          CATEGORY=$(jq -er --arg scope "$DIAGNOSIS_SCOPE" '.diagnosis_scope[$scope] | select(type == "string" and length > 0)' "$CONFIG/crew-dispatch.json") || { echo 'error: invalid diagnosis_scope mapping' >&2; exit 1; }
+        else
+          case "$DIAGNOSIS_SCOPE" in bounded) CATEGORY=standard ;; *) CATEGORY=hard ;; esac
+        fi
+      fi ;;
+    not-diagnostic) [ -n "$CATEGORY" ] || { echo 'error: not-diagnostic requires --category' >&2; exit 1; } ;;
+    *) echo 'error: --diagnosis-scope requires bounded, long, ambiguous, or not-diagnostic' >&2; exit 1 ;;
   esac
 fi
 
@@ -390,6 +403,16 @@ else
         (($rules[0].reason_required // false) != true or ($rationale | test("[^[:space:]]")))
       ' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
         echo 'error: choose a configured --category and supply --rationale when required' >&2; exit 1
+      fi
+      # Automatic dispatch launches a ship from its brief alone, so the brief
+      # records each axis the category's single profile leaves to the task.
+      if [ "$KIND" = ship ]; then
+        open_axes=$(jq -r --arg category "$CATEGORY" '
+          (if $category == "default" and has("default") then .default else [.rules[] | select(.category == $category)][0].use end)
+          | if type == "object" then [["model", "effort"][] as $a | select((.[$a] // "") == "") | $a] | join(" ") else "" end
+        ' "$CONFIG/crew-dispatch.json")
+        case " $open_axes " in *" model "*) [ -n "$DISPATCH_MODEL" ] && [ "$DISPATCH_MODEL" != default ] || { echo "error: dispatch category '$CATEGORY' leaves the model to the task; record the selected one with --dispatch-model <name>" >&2; exit 1; } ;; esac
+        case " $open_axes " in *" effort "*) [ -n "$DISPATCH_EFFORT" ] || { echo "error: dispatch category '$CATEGORY' leaves the effort to the task; record the selected one with --dispatch-effort <low|medium|high|xhigh|max>" >&2; exit 1; } ;; esac
       fi
     fi
   fi
@@ -783,6 +806,8 @@ if [ -n "$CATEGORY" ]; then
   TASK_SECTION="$TASK_SECTION
 Dispatch category: $CATEGORY"
 fi
+if [ "$DIAGNOSIS_SCOPE_SET" = 1 ]; then TASK_SECTION="$TASK_SECTION
+Dispatch diagnosis scope: $DIAGNOSIS_SCOPE"; fi
 if [ -n "$RATIONALE" ]; then TASK_SECTION="$TASK_SECTION
 Dispatch rationale: $RATIONALE"; fi
 if [ -n "$DISPATCH_HARNESS" ]; then TASK_SECTION="$TASK_SECTION

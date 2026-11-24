@@ -122,21 +122,9 @@ fi
 # form the classifier decodes REQUIRES extending it here in the same change, or
 # the prefilter stops being a strict superset. Deliberate deeper obfuscation is
 # out of scope by the same agent-mistake threat model the policy uses.
-PREFILTER=$CMD
-PREFILTER=${PREFILTER//\\/}
-PREFILTER=${PREFILTER//\"/}
-PREFILTER=${PREFILTER//\'/}
-PREFILTER=${PREFILTER//$'\n'/}
-PREFILTER=${PREFILTER//$'\r'/}
-case "$CMD" in
-  *"\$'"*|*'$"'*) ;;
-  *)
-    case "$PREFILTER" in
-      *cd*|*pushd*|*popd*) ;;
-      *) exit 0 ;;
-    esac
-    ;;
-esac
+# shellcheck source=bin/fm-pretool-prefilter-lib.sh
+. "${BASH_SOURCE[0]%/*}/fm-pretool-prefilter-lib.sh"
+fm_prefilter_cd_may_match "$CMD" || exit 0
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)} || exit 0

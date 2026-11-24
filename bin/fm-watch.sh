@@ -2841,7 +2841,12 @@ scan_signals() {
   # home-shape-aware exclusion and its precedent live in
   # status_scan_parent_channel_exclude (fm-classify-lib.sh).
   exclude=$(status_scan_parent_channel_exclude "$STATE")
-  for f in "$STATE"/*.status "$STATE"/*.turn-ended; do
+  if [ "${1:-}" = turns ]; then
+    set -- "$STATE"/*.turn-ended
+  else
+    set -- "$STATE"/*.status "$STATE"/*.turn-ended
+  fi
+  for f in "$@"; do
     [ "$f" = "$exclude" ] && continue
     if [ ! -e "$f" ]; then
       case "$f" in *.status) [ -L "$f" ] || continue ;; *) continue ;; esac
@@ -3666,9 +3671,16 @@ refresh_spawn_deferral_cause() {  # <cause> <marker>...
   done
 }
 
+# The replayed launch runs beside the watcher, never inside its poll cycle:
+# under load fm-spawn.sh can take minutes, and the liveness beacon is touched
+# once per cycle. One replay at a time keeps launches serial, as before. The
+# replay leaves its outcome in a file that collect_spawn_retry_results turns
+# into the wake on a later cycle, so the watcher stays the one that wakes.
 retry_deferred_spawn() {  # <task-id> <task-brief>
-  local marker="$STATE/$1.spawn-deferred" id=$1 project capacity_config project_lock reason arg out rc
+  local marker="$STATE/$1.spawn-deferred" id=$1 project capacity_config project_lock reason arg out rpid
   local -a args
+  rpid=$(cat "$STATE/.spawn-retry.pid" 2>/dev/null || true)
+  [ -z "$rpid" ] || ! kill -0 "$rpid" 2>/dev/null || return 0
   if ! out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
     bash "$SCRIPT_DIR/fm-capacity.sh" --admit-notice --task-brief "$2" 2>&1 >/dev/null); then
     reason=$(printf '%s\n' "$out" | sed -n 's/^deferred: .* does not admit another lane: //p; s/^fm-capacity: config\/lane-capacity: /invalid lane capacity: /p' | head -n 1)
@@ -3689,21 +3701,40 @@ retry_deferred_spawn() {  # <task-id> <task-brief>
   rm -f -- "$marker" "$marker.reason" || return 1
   if [ "${#args[@]}" -eq 0 ]; then
     reason="check: capacity available: retry deferred task $id"
-  else
+    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
+    [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
+    printf '%s\n' "$reason"
+    return 0
+  fi
+  (
     rc=0
     out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
       "$SCRIPT_DIR/fm-spawn.sh" "${args[@]}" 2>&1 </dev/null) || rc=$?
-    [ "$rc" -ne "$FM_PROJECT_CAPACITY_DEFER_EXIT" ] || return 0
+    [ "$rc" -ne "$FM_PROJECT_CAPACITY_DEFER_EXIT" ] || exit 0
     if [ "$rc" -eq 0 ]; then
       reason="check: capacity available: launched deferred task $id with its original dispatch"
     else
       reason="check: capacity available: automatic launch of deferred task $id failed (exit $rc): $(printf '%s\n' "$out" | tail -n 1 | cut -c1-300); dispatch it manually"
     fi
-  fi
-  fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
-  [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-    "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
-  printf '%s\n' "$reason"
+    printf '%s\n' "$reason" > "$STATE/.spawn-retry-tmp-$id" && mv -f -- "$STATE/.spawn-retry-tmp-$id" "$STATE/.spawn-retry-result-$id"
+  ) </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$STATE/.spawn-retry.pid" || return 1
+}
+
+# Turn each finished replay's outcome into its wake, from the watcher's own cycle.
+collect_spawn_retry_results() {
+  local result id reason
+  for result in "$STATE"/.spawn-retry-result-*; do
+    [ -f "$result" ] || continue
+    id=${result##*/.spawn-retry-result-}
+    reason=$(cat "$result") || continue
+    fm_wake_append check "spawn-deferred-$id" "$reason" || return 1
+    [ ! -e "$CONFIG/fleet-ledger" ] || printf '%s\n' '{}' | FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$id" >/dev/null 2>&1 || true
+    rm -f -- "$result" || return 1
+    fm_obligation_wake "$reason"
+  done
 }
 
 # A validation in progress has no branch-ready result to hand off. Reuse the
@@ -3741,7 +3772,8 @@ ready_local_result() {
 # fresh dispatches in the same order, leaving admission to fm-spawn.sh.
 ready_work_tick() {
   local now capacity free=0 rows marker reason launched failed left id task_state rc out stop=0 fmark result cause
-  local data="${FM_DATA_OVERRIDE:-$FM_HOME/data}" previous next obligation pending key observed_results='' old_result prior
+  local data="${FM_DATA_OVERRIDE:-$FM_HOME/data}" previous next obligation pending='' pending_read=0 key observed_results='' old_result prior
+  collect_spawn_retry_results || return 1
   now=$(date +%s)
   if [ "$((now - ${READY_WORK_PROBED_AT:-0}))" -lt 30 ]; then
     # A deferred launch must observe recovered capacity on every watcher poll.
@@ -3776,8 +3808,10 @@ ready_work_tick() {
     [[ $'\n'"$previous"$'\n' == *$'\n'"$obligation"$'\n'* ]] && continue
     # If the previous watcher stopped after queueing but before writing the
     # marker, the pending wake already owns this continuation.
-    if [ -z "${pending+x}" ]; then
+    # Bash 3.2 counts a bare `local pending` as set, so a flag, not ${pending+x}, says it was read.
+    if [ "$pending_read" -eq 0 ]; then
       pending=$(fm_wake_queued_keys check) || return 1
+      pending_read=1
     fi
     key="ready-work:primary:$obligation"
     [[ $'\n'"$pending"$'\n' == *$'\n'"$key"$'\n'* ]] && continue
@@ -4458,6 +4492,134 @@ resurface_after_downtime() {
   WATCHER_RECOVERY_PENDING=0
 }
 
+process_signals() {
+  # On the first changed signal, linger one grace period and re-scan before
+  # classifying: a crewmate's final status write and the same turn's turn-end
+  # hook land seconds apart, and reporting them as separate actionable wakes
+  # costs a full firstmate turn each. The re-scan also picks up a newer
+  # signature for an already-pending file (last write wins below).
+  pending=$(scan_signals "${1:-}")
+  if [ -n "$pending" ]; then
+    signal_grace_wait "$pending"
+    pending=$(printf '%s\n%s' "$pending" "$(scan_signals "${1:-}")")
+    # The final coalesced signal set is the watcher-carried status-change
+    # trigger for this home's published summary. Start it before either
+    # surfacing or absorbing the signal, but never wait on it: see
+    # home_summary_refresh_detached for why publication stays off the beacon's
+    # path. Publication failure stays side-band.
+    home_summary_refresh_detached
+    files=""
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+    done <<EOF
+$pending
+EOF
+    reason="signal:$files"
+    # Classified status requests/results and undeclared messages enter the
+    # action queue. Routine progress and other turn ends remain informational.
+    FM_SIGNAL_SURFACE_ENDPOINTS=''
+    FM_SIGNAL_NEEDS_DECISION_FILES=''
+    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
+    signal_files_actionable $files
+    signal_actionable=$?
+    # A decision-owned file's queued row payload is marked "needs-decision:"
+    # instead of the ordinary "signal:" below (other files in the same batch
+    # keep the ordinary payload). The wake reason line itself, and every
+    # harness-arm consumer that pattern-matches it, stays byte-identical -
+    # only the per-row payload changes. Two readers branch on that payload:
+    # docs/supervision-branch.md's Pi-only branch dispatcher, to keep a
+    # decision-owned row off the supervision branch (fm-branch-dispatch.ts,
+    # fm-primary-pi-watch.ts), and the away daemon, whose handle_durable_wakes
+    # passes it to handle_wake (see the comment above handle_wake in
+    # bin/fm-supervise-daemon.sh).
+    # shellcheck disable=SC2086  # same space-separated status-path list
+    if [ "$signal_actionable" -eq 0 ]; then
+      queued_signal_files=''
+      message_reason=''
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        case " $FM_SIGNAL_ACTIONABLE_FILES " in
+          *" $f "*) ;;
+          *) watch_info_record signal "$f"; continue ;;
+        esac
+        case " $queued_signal_files " in *" $f "*) continue ;; esac
+        queued_signal_files="$queued_signal_files $f"
+        file_reason="$reason"
+        case "$f" in
+          *.turn-ended)
+            excerpt=$(worker_undeclared_message "$f") || continue
+            excerpt=$(printf '%s\n' "$excerpt" | python3 "$SCRIPT_DIR/fm-redact-log.py") || continue
+            task=${f##*/}; task=${task%.turn-ended}
+            file_reason="check: worker $task stopped without declared status; last message: $excerpt"
+            progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
+            [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
+            watch_event_append check "worker-message:$task" "$file_reason" || exit 1
+            message_reason='check: worker completed a message without declared status; inspect the queued message'
+            continue ;;
+        esac
+        progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
+        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+        case " $FM_SIGNAL_ERROR_FILES " in *" $f "*) file_reason="needs-decision: status-error: $f" ;; esac
+        [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
+        watch_event_append signal "$(basename "$f")" "$file_reason" || exit 1
+      done <<EOF
+$pending
+EOF
+      # The wake signature advances for every file in this batch, including one
+      # whose span could not be classified: it has now been reported, and this is
+      # what bounds an unreadable log to one report per distinct file state. Only
+      # a SUCCESSFULLY classified log commits a classification position below, so
+      # an unreadable log's content is still classified once it becomes readable.
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        case "$f" in
+          *.status)
+            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+            mark_surface_reported "$f" "$sig" || true
+            ;;
+          *) printf '%s' "$sig" > "$sf" ;;
+        esac
+      done <<EOF
+$pending
+EOF
+      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+        [ -n "$f" ] || continue
+        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
+      done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
+EOF
+      wake "${message_reason:-$reason}"
+    else
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        case "$f" in *.status) ;; *) printf '%s' "$sig" > "$sf" ;; esac
+      done <<EOF
+$pending
+EOF
+      signal_commit_error=0
+      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+        [ -n "$f" ] || continue
+        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
+          || signal_commit_error=1
+      done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
+EOF
+      if [ "$signal_commit_error" -ne 0 ]; then
+        while IFS=$(printf '\t') read -r sf sig f; do
+          [ -n "$sf" ] || continue
+          watch_event_append check status-bookkeeping "check: status bookkeeping failed: $f" || exit 1
+        done <<EOF
+$pending
+EOF
+        wake "check: status bookkeeping failed"
+      fi
+      watch_info_record signal "$reason"
+    fi
+  fi
+
+}
+
 while :; do
   watcher_require_home
 
@@ -4505,6 +4667,8 @@ while :; do
     resurface_after_downtime
   fi
   worker_wait_signal_tick
+  # Inspect turn-end markers before unrelated scanners can delay their wake.
+  process_signals turns
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation
   # was created, so quiet cycles never wake firstmate or consume model tokens.
@@ -4822,130 +4986,7 @@ EOF
     fi
   fi
 
-  # On the first changed signal, linger one grace period and re-scan before
-  # classifying: a crewmate's final status write and the same turn's turn-end
-  # hook land seconds apart, and reporting them as separate actionable wakes
-  # costs a full firstmate turn each. The re-scan also picks up a newer
-  # signature for an already-pending file (last write wins below).
-  pending=$(scan_signals)
-  if [ -n "$pending" ]; then
-    signal_grace_wait "$pending"
-    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
-    # The final coalesced signal set is the watcher-carried status-change
-    # trigger for this home's published summary. Start it before either
-    # surfacing or absorbing the signal, but never wait on it: see
-    # home_summary_refresh_detached for why publication stays off the beacon's
-    # path. Publication failure stays side-band.
-    home_summary_refresh_detached
-    files=""
-    while IFS=$(printf '\t') read -r sf sig f; do
-      [ -n "$sf" ] || continue
-      case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
-    done <<EOF
-$pending
-EOF
-    reason="signal:$files"
-    # Classified status requests/results and undeclared messages enter the
-    # action queue. Routine progress and other turn ends remain informational.
-    FM_SIGNAL_SURFACE_ENDPOINTS=''
-    FM_SIGNAL_NEEDS_DECISION_FILES=''
-    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
-    signal_files_actionable $files
-    signal_actionable=$?
-    # A decision-owned file's queued row payload is marked "needs-decision:"
-    # instead of the ordinary "signal:" below (other files in the same batch
-    # keep the ordinary payload). The wake reason line itself, and every
-    # harness-arm consumer that pattern-matches it, stays byte-identical -
-    # only the per-row payload changes. Two readers branch on that payload:
-    # docs/supervision-branch.md's Pi-only branch dispatcher, to keep a
-    # decision-owned row off the supervision branch (fm-branch-dispatch.ts,
-    # fm-primary-pi-watch.ts), and the away daemon, whose handle_durable_wakes
-    # passes it to handle_wake (see the comment above handle_wake in
-    # bin/fm-supervise-daemon.sh).
-    # shellcheck disable=SC2086  # same space-separated status-path list
-    if [ "$signal_actionable" -eq 0 ]; then
-      queued_signal_files=''
-      message_reason=''
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        case " $FM_SIGNAL_ACTIONABLE_FILES " in
-          *" $f "*) ;;
-          *) watch_info_record signal "$f"; continue ;;
-        esac
-        case " $queued_signal_files " in *" $f "*) continue ;; esac
-        queued_signal_files="$queued_signal_files $f"
-        file_reason="$reason"
-        case "$f" in
-          *.turn-ended)
-            excerpt=$(worker_undeclared_message "$f") || continue
-            excerpt=$(printf '%s\n' "$excerpt" | python3 "$SCRIPT_DIR/fm-redact-log.py") || continue
-            task=${f##*/}; task=${task%.turn-ended}
-            file_reason="check: worker $task stopped without declared status; last message: $excerpt"
-            progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
-            [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
-            watch_event_append check "worker-message:$task" "$file_reason" || exit 1
-            message_reason='check: worker completed a message without declared status; inspect the queued message'
-            continue ;;
-        esac
-        progress_pending=$(cat "$STATE/.progress-reconciliation" 2>/dev/null || true)
-        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
-        case " $FM_SIGNAL_ERROR_FILES " in *" $f "*) file_reason="needs-decision: status-error: $f" ;; esac
-        [ -z "$progress_pending" ] || file_reason="$file_reason; progress reconciliation: $progress_pending"
-        watch_event_append signal "$(basename "$f")" "$file_reason" || exit 1
-      done <<EOF
-$pending
-EOF
-      # The wake signature advances for every file in this batch, including one
-      # whose span could not be classified: it has now been reported, and this is
-      # what bounds an unreadable log to one report per distinct file state. Only
-      # a SUCCESSFULLY classified log commits a classification position below, so
-      # an unreadable log's content is still classified once it becomes readable.
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        case "$f" in
-          *.status)
-            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
-            mark_surface_reported "$f" "$sig" || true
-            ;;
-          *) printf '%s' "$sig" > "$sf" ;;
-        esac
-      done <<EOF
-$pending
-EOF
-      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
-        [ -n "$f" ] || continue
-        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
-      done <<EOF
-$FM_SIGNAL_SURFACE_ENDPOINTS
-EOF
-      wake "${message_reason:-$reason}"
-    else
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        case "$f" in *.status) ;; *) printf '%s' "$sig" > "$sf" ;; esac
-      done <<EOF
-$pending
-EOF
-      signal_commit_error=0
-      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
-        [ -n "$f" ] || continue
-        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
-          || signal_commit_error=1
-      done <<EOF
-$FM_SIGNAL_SURFACE_ENDPOINTS
-EOF
-      if [ "$signal_commit_error" -ne 0 ]; then
-        while IFS=$(printf '\t') read -r sf sig f; do
-          [ -n "$sf" ] || continue
-          watch_event_append check status-bookkeeping "check: status bookkeeping failed: $f" || exit 1
-        done <<EOF
-$pending
-EOF
-        wake "check: status bookkeeping failed"
-      fi
-      watch_info_record signal "$reason"
-    fi
-  fi
+  process_signals
 
   # Pending results and status events carry their own durable wake. Fall back
   # to the generic downtime reason only after those owners have classified them.

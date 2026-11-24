@@ -6,6 +6,9 @@
 #   Dispatch rationale: <reason> line. The resolved harness, model and any
 #   declared effort must match that rule. An omitted effort comes from the
 #   matching profile or the brief's Dispatch effort; otherwise launch refuses.
+#   When the matrix declares diagnosis_scope, the brief also records Dispatch
+#   diagnosis scope: bounded|long|ambiguous|not-diagnostic; diagnostic scopes
+#   must match the configured category. An older matrix emits a warning.
 #   FM_MODEL_CATEGORY_OVERRIDE=1 skips this check.
 # Fresh worker launches also require explicit supported model and effort when
 # no categorized profile selected them; the same override skips this check.
@@ -2020,6 +2023,20 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-disp
   if [ "$category_enabled" = true ]; then
     category=$(sed -n 's/^Dispatch category: //p' "$BRIEF" 2>/dev/null)
     rationale=$(sed -n 's/^Dispatch rationale: //p' "$BRIEF" 2>/dev/null)
+    if jq -e 'has("diagnosis_scope")' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+      diagnosis_scope=$(sed -n 's/^Dispatch diagnosis scope: //p' "$BRIEF" 2>/dev/null)
+      if ! jq -e --arg scope "$diagnosis_scope" --arg category "$category" '
+        . as $config |
+        ([.rules[]?.category] + (if has("default") then ["default"] else [] end)) as $categories |
+        ($config.diagnosis_scope | type == "object") and
+        (["bounded", "long", "ambiguous"] | all(.[]; . as $s |
+          $config.diagnosis_scope[$s] as $c | ($c | type == "string") and ($categories | index($c) != null))) and
+        ($scope == "not-diagnostic" or
+          ((["bounded", "long", "ambiguous"] | index($scope)) != null and $config.diagnosis_scope[$scope] == $category))
+      ' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+        echo 'error: invalid diagnosis_scope mapping or scope/category mismatch; record bounded, long, ambiguous, or not-diagnostic; skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1
+      fi
+    fi
     if ! jq -e --arg category "$category" --arg harness "$HARNESS" --arg model "$MODEL" --arg effort "$EFFORT" --arg rationale "$rationale" '
       (if $category == "default" and has("default") then [{use: .default}] else [.rules[] | select(.category == $category)] end) as $rules |
       ($category | test("^[a-z0-9-]+$")) and ($rules | length == 1) and
@@ -2031,6 +2048,13 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -f "$CONFIG/crew-disp
       echo 'error: dispatch category, rationale or profile mismatch; correct the brief/profile or skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2
       exit 1
     fi
+    if ! jq -e 'has("diagnosis_scope")' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+      echo 'warning: dispatch matrix has no diagnosis_scope mapping; diagnostic categories are not validated' >&2
+    fi
+  elif jq -e 'has("diagnosis_scope")' "$CONFIG/crew-dispatch.json" >/dev/null 2>&1; then
+    echo 'error: diagnosis_scope requires categorized rules; skip with FM_MODEL_CATEGORY_OVERRIDE=1' >&2; exit 1
+  else
+    echo 'warning: dispatch matrix has no diagnosis_scope mapping; diagnostic categories are not validated' >&2
   fi
 fi
 # Without categories the caller still selects difficulty and both axes.
@@ -2135,7 +2159,7 @@ spawn_reserve_slot() { # <worktree> <task-id> [fresh]
 }
 
 spawn_reserve_existing_slots() {
-  local state meta id worktree other_state other field other_worktree
+  local state meta id worktree other_state other field other_worktree owner_home
   fm_local_firstmate_state_dirs "$STATE" || {
     echo "error: cannot inspect existing task copies: $FM_LOCAL_FIRSTMATE_ERROR" >&2
     return 1
@@ -2158,10 +2182,12 @@ spawn_reserve_existing_slots() {
         continue
       fi
       worktree=$(CDPATH='' cd -- "$worktree" && pwd -P) || return 1
-      fm_treehouse_slot_owner_state "$worktree" "$id"
+      owner_home=${state%/state}
+      [ "$state" != "$STATE" ] && [ ! "$state" -ef "$STATE" ] || owner_home=$FM_HOME
+      fm_treehouse_slot_owner_state "$worktree" "$id" "$owner_home"
       case "$FM_TREEHOUSE_SLOT_OWNER" in
         other) continue ;; # A newer owner already holds this stale record's copy.
-        unsafe) echo "error: cannot read the owner of $worktree" >&2; return 1 ;;
+        unsafe) echo "error: cannot prove the owner and home of $worktree" >&2; return 1 ;;
         absent)
           for other_state in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
             for other in "$other_state"/*.meta; do

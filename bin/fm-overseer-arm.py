@@ -166,6 +166,36 @@ def arm(quiet=False):
             os.close(write_fd)
 
 
+def adopt_own_session():
+    """Record the endpoint this turn ends in when it differs from the record.
+
+    A relay successor or a pane that moved has a new endpoint; the newest
+    overseer turn owns the record so events reach the live session.
+    """
+    if (STATE / 'stopping').exists():
+        return
+    try:
+        connection = json.loads((STATE / 'session-env.json').read_text(encoding='utf-8'))
+        current = (STATE / 'session').read_text(encoding='utf-8').split()
+    except (OSError, ValueError):
+        return
+    if not isinstance(connection, dict) or len(current) != 2:
+        return
+    env = dict(os.environ)
+    env.update({key: value for key, value in connection.items() if key in CONNECTION_KEYS and isinstance(value, str)})
+    try:
+        found = subprocess.run(['bash', str(ROOT / 'bin/fm-overseer-primary.sh'), '--locate', str(os.getpid())],
+                               env=env, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    endpoint = found.stdout.split()
+    if found.returncode or len(endpoint) != 2 or endpoint == current or endpoint[0] != current[0]:
+        return
+    temporary = STATE / 'session.tmp'
+    temporary.write_text(' '.join(endpoint) + '\n', encoding='utf-8')
+    os.replace(temporary, STATE / 'session')
+
+
 def stop():
     lock = lock_file()
     try:
@@ -236,13 +266,17 @@ if __name__ == '__main__':
         except OSError:
             print('Could not clear the resolved delivery state.', file=sys.stderr)
             sys.exit(2)
+        adopt_own_session()
         if arm(quiet=True):
             print('Overseer watch could not be armed; inspect the installation before ending this turn.', file=sys.stderr)
             sys.exit(2)
         sys.exit(0)
+    if len(sys.argv) == 2 and sys.argv[1] == 'adopt':
+        adopt_own_session()
+        sys.exit(arm(quiet=True))
     if len(sys.argv) == 2 and sys.argv[1] == 'status':
         status()
         sys.exit(0)
     if len(sys.argv) == 3 and sys.argv[1] == 'run':
         sys.exit(run(int(sys.argv[2])))
-    sys.exit('usage: fm-overseer-arm.py arm|stop')
+    sys.exit('usage: fm-overseer-arm.py arm|stop|adopt')

@@ -1855,6 +1855,14 @@ JSON
   out=$(FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" diagnosis-conflict --host \
     --path "$TMP_ROOT/target" --diagnosis-scope ambiguous --category standard 2>&1); rc=$?
   expect_code 1 "$rc" "conflicting classification inputs (got: $out)"
+  cat > "$home/config/crew-dispatch.json" <<'JSON'
+{"diagnosis_scope":{"bounded":"routine","long":"complex","ambiguous":"complex"},"rules":[{"category":"routine","use":{"harness":"codex"}},{"category":"complex","use":{"harness":"codex"}}]}
+JSON
+  out=$(FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" diagnosis-custom --host \
+    --path "$TMP_ROOT/target" --diagnosis-scope ambiguous 2>&1); rc=$?
+  expect_code 0 "$rc" "custom mapped scope (got: $out)"
+  assert_grep 'Dispatch category: complex' "$home/data/diagnosis-custom/brief.md" 'mapped category missing'
+  assert_grep 'Dispatch diagnosis scope: ambiguous' "$home/data/diagnosis-custom/brief.md" 'scope missing'
   pass "diagnostic scope selects the configured category before launch"
 }
 

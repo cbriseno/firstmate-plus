@@ -147,21 +147,9 @@ fi
 # delegates to the classifier - the single owner of every decision. Any deeper
 # decode-required obfuscation stays the classifier's and the post-arm liveness
 # guards' responsibility.
-PREFILTER=$CMD
-PREFILTER=${PREFILTER//\\/}
-PREFILTER=${PREFILTER//\"/}
-PREFILTER=${PREFILTER//\'/}
-PREFILTER=${PREFILTER//$'\n'/}
-PREFILTER=${PREFILTER//$'\r'/}
-case "$CMD" in
-  *"\$'"*|*'$"'*) ;;
-  *)
-    case "$PREFILTER" in
-      *fm-watch*) ;;
-      *) exit 0 ;;
-    esac
-    ;;
-esac
+# shellcheck source=bin/fm-pretool-prefilter-lib.sh
+. "${BASH_SOURCE[0]%/*}/fm-pretool-prefilter-lib.sh"
+fm_prefilter_arm_may_match "$CMD" || exit 0
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P) || exit 0

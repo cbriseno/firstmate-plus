@@ -43,6 +43,15 @@
 #   fm-test-run.sh --list-lanes
 #   fm-test-run.sh --check-coverage
 #
+# Cancelling (the only sanctioned way to stop a run):
+#   fm-test-run.sh --cancel
+#   Stops the runs started from THIS copy of the repository, and no others.
+#   Every executing run registers itself in the lock directory under its own
+#   PID and physical checkout root; --cancel sends TERM only to registered
+#   runners whose root equals this copy's, and their cleanup stops their suites.
+#   Never stop a run with pkill/pgrep by pattern: a pattern matches other
+#   copies' runs, which this command cannot reach.
+#
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
 #
@@ -197,6 +206,7 @@ LIST_SCHEDULED=0
 LIST_FAMILIES=0
 LIST_CONCURRENT_SAFE_FAMILIES=0
 LIST_LANES=0
+CANCEL=0
 CHECK_COVERAGE=0
 AGGREGATE_OUT=
 FAMILY=
@@ -325,7 +335,7 @@ family_for_basename() {
     fm-calm-claude-mod.test.sh|\
     fm-harness-adapter-references.test.sh|fm-project-mode.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
-    fm-host-task.test.sh|fm-primary-write-pretool-check.test.sh|fm-subagent-pretool-check.test.sh|\
+    fm-host-task.test.sh|fm-pretool-check.test.sh|fm-primary-write-pretool-check.test.sh|fm-subagent-pretool-check.test.sh|\
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
     fm-timeout-lib.test.sh|\
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
@@ -436,7 +446,7 @@ family_for_basename() {
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|fm-deck-clarity.test.sh|\
-    fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
+    fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh|fm-home-summary-budget.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
@@ -1464,8 +1474,8 @@ families_for_changed_path() {
       printf '%s\n' watcher-wake-lock
       printf '%s\n' __script__:fm-pause-job-watch.test.sh
       ;;
-    bin/fm-pause-job.py)
-      printf '%s\n' __script__:fm-pause-job.test.sh __script__:fm-pause-job-watch.test.sh
+    bin/fm-pause-job.py|bin/fm-task-status.sh|bin/fm-worker-processes.py)
+      printf '%s\n' __script__:fm-pause-job.test.sh __script__:fm-pause-job-watch.test.sh __script__:fm-wait-pid-own.test.sh
       ;;
     bin/fm-afk*)
       printf '%s\n' afk
@@ -1683,7 +1693,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-progress-reporting.test.sh __script__:fm-progress-holds.test.sh __script__:fm-notification-command.test.sh
       ;;
     bin/fm_integration.py|bin/fm_test_slots.py|bin/fm-budgets.py)
-      printf '%s\n' __script__:fm-budgets.test.sh __script__:fm-test-run.test.sh
+      printf '%s\n' __script__:fm-budgets.test.sh __script__:fm-home-summary-budget.test.sh __script__:fm-test-run.test.sh
       ;;
     bin/fm-notify.py|locales/*)
       printf '%s\n' __script__:fm-notification-command.test.sh
@@ -1961,6 +1971,10 @@ while [ "$#" -gt 0 ]; do
       MODE="proven-isolated"
       shift
       ;;
+    --cancel)
+      CANCEL=1
+      shift
+      ;;
     --changed)
       [ -z "$MODE" ] || die "only one selection mode is allowed"
       MODE=changed
@@ -2103,6 +2117,30 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+# Registry of live runners: one file per run in the lock directory, holding the
+# runner's physical checkout root. --cancel reads it; nothing else does.
+RUN_REGISTRY_DIR=${FM_TEST_LOCK_DIR:-/tmp}
+RUN_ROOT=$(pwd -P)
+
+if [ "$CANCEL" -eq 1 ]; then
+  [ -z "$MODE" ] || die "--cancel cannot be combined with --$MODE"
+  cancelled=0
+  for reg in "$RUN_REGISTRY_DIR"/firstmate-testrun-"$(id -u)"-*.root; do
+    [ -f "$reg" ] || continue
+    [ "$(cat "$reg" 2>/dev/null)" = "$RUN_ROOT" ] || continue
+    reg_pid=${reg##*-}
+    reg_pid=${reg_pid%.root}
+    case "$reg_pid" in '' | *[!0-9]*) continue ;; esac
+    if ! kill -0 "$reg_pid" 2>/dev/null; then
+      rm -f "$reg"
+      continue
+    fi
+    kill -s TERM "$reg_pid" 2>/dev/null && cancelled=$((cancelled + 1))
+  done
+  echo "fm-test-run: cancelled $cancelled run(s) of this copy ($RUN_ROOT)"
+  exit 0
+fi
 
 if [ "$LIST_FAMILIES" -eq 1 ]; then
   list_known_families
@@ -2585,11 +2623,14 @@ stop_live_suites() {
 # shellcheck disable=SC2329
 cleanup_run() {
   stop_live_suites
+  rm -f "$RUN_REGISTRY_FILE"
   # A timed-out test can leave its fixture directories read-only.
   find "$RUN_TMP" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   rm -rf "$RUN_TMP"
 }
 
+RUN_REGISTRY_FILE="$RUN_REGISTRY_DIR/firstmate-testrun-$(id -u)-$$.root"
+printf '%s\n' "$RUN_ROOT" >"$RUN_REGISTRY_FILE" 2>/dev/null || true
 trap cleanup_run EXIT
 
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"

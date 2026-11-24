@@ -357,6 +357,11 @@ fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
 # names the primary at that point) - see fm-spawn.sh's herdr case arm.
 fm_backend_herdr_workspace_label() {
   local marker="$FM_HOME/$FM_BACKEND_HERDR_SECONDMATE_MARKER" id
+  # A caller that owns a workspace of its own (the overseer) names it here.
+  if [ -n "${FM_BACKEND_HERDR_WORKSPACE_LABEL:-}" ]; then
+    printf '%s' "$FM_BACKEND_HERDR_WORKSPACE_LABEL"
+    return 0
+  fi
   if [ -f "$marker" ]; then
     id=$(tr -d '[:space:]' < "$marker" 2>/dev/null)
     if [ -n "$id" ]; then

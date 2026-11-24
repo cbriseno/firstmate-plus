@@ -126,20 +126,10 @@ esac
 # delegates outright because the classifier decodes those. The stem list is
 # COUPLED to the command classes in bin/fm-primary-write-policy.mjs: adding a
 # command there REQUIRES adding its name here in the same change.
+# shellcheck source=bin/fm-pretool-prefilter-lib.sh
+. "$SCRIPT_DIR/fm-pretool-prefilter-lib.sh"
 if [ "$TOOL" = "Bash" ]; then
-  case "$CMD" in
-    *"\$'"*|*'$"'*|*'>'*) ;;
-    *)
-      PREFILTER=$CMD
-      PREFILTER=${PREFILTER//\\/}
-      PREFILTER=${PREFILTER//\"/}
-      PREFILTER=${PREFILTER//\'/}
-      PREFILTER=${PREFILTER//$'\n'/ }
-      PREFILTER=${PREFILTER//$'\r'/ }
-      STEMS='sudo|doas|su|pkexec|cat|head|tail|less|more|awk|grep|rg|bat|base64|strings|tee|cp|mv|install|ln|rsync|rm|rmdir|unlink|shred|touch|mkdir|truncate|chmod|chown|chgrp|sed|dd|curl|wget|git|apply_patch|eval|xargs|find|bash|sh|zsh|dash|ksh|python[0-9.]*|node|nodejs|bun|deno|perl|ruby'
-      [[ " $PREFILTER " =~ (^|[^A-Za-z0-9_.-])($STEMS)([^A-Za-z0-9_-]|$) ]] || exit 0
-      ;;
-  esac
+  fm_prefilter_write_may_match "$CMD" || exit 0
 fi
 
 # The single deliberate escape hatch, unforgeable in-session for the same

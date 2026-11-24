@@ -60,6 +60,16 @@ if threshold=$(FM_CLASSIFY_PAUSED_VERB=paused status_paused_load1 "$VERB: $NOTE"
     *) echo 'error: cannot compare the load wait with admission; repair capacity configuration or choose another exit condition' >&2; exit 2 ;;
   esac
 fi
+if [ "$VERB" = paused ]; then
+  # A wait must name a process of this task's own copy, never another copy's.
+  for pid in $(printf '%s' "$NOTE" | grep -Eo '\[wait-pid=[1-9][0-9]*\]' | grep -Eo '[0-9]+' || true); do
+    # A process already gone has no owner to confuse; the watcher wakes the worker for it.
+    kill -0 "$pid" 2>/dev/null || continue
+    own_rc=0
+    python3 "$SCRIPT_DIR/fm-worker-processes.py" owns "$STATE/$ID.meta" "$pid" || own_rc=$?
+    [ "$own_rc" != 1 ] || { echo "error: [wait-pid=$pid] is not a process of this task's own copy; start your own run and declare its PID (echo \$! after launching it in the background)" >&2; exit 2; }
+  done
+fi
 FILE="$STATE/$ID.status"
 printf '%s [at=%s]: %s\n' "$VERB" "$(date +%s)" "$NOTE" >> "$FILE"
 CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}

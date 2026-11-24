@@ -146,6 +146,8 @@
   "Needs your answer": "Falta tu respuesta",
   "Needs your approval": "Falta tu aprobación",
   "Needs you to act": "Falta que hagas algo",
+  "Published": "Publicado",
+  "held during quiet hours": "avisos retenidos en horario de silencio",
   "Ready for your review": "Listo para tu revisión",
   "Review board waiting for you": "Tablero de revisión esperándote",
   "{count} items wait for you. Newest: {names}": "Te esperan {count} pendientes de revisión o respuesta. Los más recientes: {names}"

@@ -1541,8 +1541,8 @@ collect_one() {  # <manifest-row>
     case "$generated:$now" in
       *[!0-9:]*|:*) ;;
       *) if [ "$((now - generated))" -gt 900 ]; then
-           if "$script_dir/fm-on.sh" "$id" fm-home-summary-refresh.sh >/dev/null 2>&1 \
-             && bounded_collect "$out_dir/$slot.refreshed" "$out_dir/$slot.refresh.err" \
+           "$script_dir/fm-on.sh" "$id" fm-home-summary-refresh.sh >/dev/null 2>&1 || true
+           if bounded_collect "$out_dir/$slot.refreshed" "$out_dir/$slot.refresh.err" \
                "$script_dir/fm-on.sh" "$id" fm-remote-file.sh get state/home-summary.json "$max_bytes" \
              && valid_summary "$out_dir/$slot.refreshed" "$home"; then
              mv -f -- "$out_dir/$slot.refreshed" "$fetch"
@@ -1945,12 +1945,11 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
       elif summary_file_read "$home/state/home-summary.json" "$home" "$summary_file"; then
         summary_source='local-ledger'
         if [ "$(snapshot_summary_age "$summary_file")" -gt 900 ]; then
-          if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+          FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
             FM_CONFIG_OVERRIDE="$home/config" FM_PROJECTS_OVERRIDE="$home/projects" \
-            "$SCRIPT_DIR/fm-home-summary-refresh.sh" >/dev/null 2>&1; then
-            if summary_file_read "$home/state/home-summary.json" "$home" "$summary_file.refreshed"; then
-              mv -f -- "$summary_file.refreshed" "$summary_file"
-            fi
+            "$SCRIPT_DIR/fm-home-summary-refresh.sh" >/dev/null 2>&1 || true
+          if summary_file_read "$home/state/home-summary.json" "$home" "$summary_file.refreshed"; then
+            mv -f -- "$summary_file.refreshed" "$summary_file"
           fi
         fi
       elif summary_file_oversized "$home/state/home-summary.json"; then

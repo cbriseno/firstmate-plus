@@ -296,7 +296,8 @@ fm_pr_url_parse() {
 fm_pr_head_valid() {
   local head=${1-}
   local LC_ALL=C
-  [[ "$head" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]
+  local pattern='^([0-9a-f]{40}|[0-9a-f]{64})$'
+  [[ "$head" =~ $pattern ]]
 }
 
 # Resolve the PR number for a task copy's branch via gh-axi, run inside that

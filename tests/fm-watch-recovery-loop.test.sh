@@ -410,9 +410,45 @@ test_queued_check_row_resurfaces_before_scanners() {
   pass "a check row queued before arming is delivered before the poll scanners"
 }
 
+# A completed worker turn must not wait behind an unrelated slow scan.
+test_worker_turn_precedes_slow_scan() {
+  local dir home state fakebin codebin child gen i out
+  dir=$(make_case turn-before-scan); home="$dir/home"; state="$dir/state"
+  fakebin="$dir/fakebin"; codebin="$dir/code/bin"; out="$dir/watch.out"
+  mkdir -p "$home/data" "$dir/code"
+  cp -R "$ROOT/bin" "$codebin"
+  printf '#!/usr/bin/env bash\nsleep 300\n' > "$codebin/fm-inactive-reconcile.sh"
+  chmod +x "$codebin/fm-inactive-reconcile.sh"
+  printf 'window=test:fm-task\nkind=ship\nharness=claude\nbackend=tmux\nsessions_file=%s\n' "$dir/sessions.jsonl" > "$state/task.meta"
+  printf '{"status":"active","session":"%s"}\n' "$dir/session.jsonl" > "$dir/sessions.jsonl"
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"La investigación quedó incompleta."}]}}' > "$dir/session.jsonl"
+  printf 'resolved: terminó el cálculo\n' > "$state/task.status"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" task)
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" task idle --gen "$gen" --source claude-hook --event stop
+  : > "$state/task.turn-ended"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: idle · source: pane' FM_FAKE_TMUX_WINDOW=test:fm-task FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 \
+    "$codebin/fm-watch.sh" > "$out" 2>&1 &
+  child=$!
+  i=0
+  while [ "$i" -lt 600 ] && kill -0 "$child" 2>/dev/null; do sleep 0.1; i=$((i+1)); done
+  if kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    pkill -f "$codebin/fm-inactive-reconcile.sh" 2>/dev/null || true
+    fail "worker turn waited behind an unrelated scan: $(cat "$out")"
+  fi
+  wait "$child" 2>/dev/null || true
+  grep -F 'worker completed a message without declared status' "$out" >/dev/null \
+    || fail "worker turn did not wake the primary: $(cat "$out")"
+  pass 'a completed undeclared worker turn precedes slow scans'
+}
+
 test_upgraded_queue_batches_due_obligations
 test_ready_work_wakes_once
 test_ready_result_reminded_until_integrated
 test_handling_successor_does_not_go_blind
 test_handling_successor_resurfaces_a_row_appended_during_startup
 test_queued_check_row_resurfaces_before_scanners
+test_worker_turn_precedes_slow_scan

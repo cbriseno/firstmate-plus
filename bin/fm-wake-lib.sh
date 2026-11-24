@@ -1672,10 +1672,10 @@ fm_treehouse_slot_owner_claim() {  # <worktree> <task-id> <home>
 #   absent - no claim: the slot was taken before claims existed, or returned since
 #   unsafe - a claim file exists but cannot be read as a claim
 # FM_TREEHOUSE_SLOT_OWNER_ID and FM_TREEHOUSE_SLOT_OWNER_HOME carry the recorded
-# claimant as evidence. The home is reported, never matched: a home that moved
-# must not turn a task's own slot into a refusal.
-fm_treehouse_slot_owner_state() {  # <worktree> <task-id>
-  local worktree=$1 id=$2 marker line owner_id='' owner_home=''
+# claimant as evidence. A matching task id needs the same home as well; if
+# the home cannot be identified, ownership is ambiguous and must be retained.
+fm_treehouse_slot_owner_state() {  # <worktree> <task-id> [home]
+  local worktree=$1 id=$2 expected_home=${3:-${FM_HOME:-}} marker line owner_id='' owner_home=''
   FM_TREEHOUSE_SLOT_OWNER=unsafe
   FM_TREEHOUSE_SLOT_OWNER_ID=
   FM_TREEHOUSE_SLOT_OWNER_HOME=
@@ -1697,6 +1697,8 @@ fm_treehouse_slot_owner_state() {  # <worktree> <task-id>
   # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
   FM_TREEHOUSE_SLOT_OWNER_HOME=$owner_home
   if [ "$owner_id" = "$id" ]; then
+    [ -n "$owner_home" ] && [ -n "$expected_home" ] || return 0
+    [ "$owner_home" = "$expected_home" ] || [ "$owner_home" -ef "$expected_home" ] || return 0
     FM_TREEHOUSE_SLOT_OWNER=mine
   else
     FM_TREEHOUSE_SLOT_OWNER=other
@@ -1706,9 +1708,9 @@ fm_treehouse_slot_owner_state() {  # <worktree> <task-id>
 # Drop a task's own claim once its slot is back in the pool. Never removes
 # another task's claim, so a misdirected release cannot strip the evidence that
 # protects the slot's real owner.
-fm_treehouse_slot_owner_release() {  # <worktree> <task-id>
-  local worktree=$1 id=$2 marker
-  fm_treehouse_slot_owner_state "$worktree" "$id"
+fm_treehouse_slot_owner_release() {  # <worktree> <task-id> [home]
+  local worktree=$1 id=$2 home=${3:-${FM_HOME:-}} marker
+  fm_treehouse_slot_owner_state "$worktree" "$id" "$home"
   [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] || return 0
   marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 0
   rm -f "$marker" 2>/dev/null || true

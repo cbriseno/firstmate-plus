@@ -233,6 +233,7 @@
 #   that commit in the shared project, then close the endpoint and return its
 #   copy without deleting the branch. Keep its original backlog row visible and
 #   held until work resumes; optional --residual says what remains on that row.
+#   For host tasks, retain the validated scratch directory instead of a branch.
 #   This saves work, it does not declare delivery or installation. It cannot
 #   combine with --force or --repair-missing-record.
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
@@ -1374,8 +1375,8 @@ CLEANUP_RECOVERY=$TEARDOWN_CLEANUP_RECOVERY
 KIND=$TEARDOWN_META_KIND
 INSTALLATION=$(fm_meta_get "$META" installation_audit)
 [ "$INSTALLATION" = 1 ] || INSTALLATION=0
-if [ "$PRESERVE" = 1 ] && { [ "$KIND" = secondmate ] || [ "$KIND" = host ] || [ "$INSTALLATION" = 1 ]; }; then
-  echo "error: --preserve requires a ship or scout task with a task branch" >&2
+if [ "$PRESERVE" = 1 ] && { [ "$KIND" = secondmate ] || [ "$INSTALLATION" = 1 ]; }; then
+  echo "error: --preserve requires a ship, scout, or host task" >&2
   exit 2
 fi
 if [ "$KIND" = secondmate ] && [ "$RESIDUAL_GIVEN" = 1 ]; then
@@ -1897,6 +1898,7 @@ backlog_done_args() {
   BACKLOG_DONE_ARGS=()
   if [ "$PRESERVE" = 1 ]; then
     local note="preserved-branch:$PRESERVED_BRANCH"
+    [ "$KIND" != host ] || note="preserved-path:$DATA/$ID/work"
     [ "$RESIDUAL_GIVEN" != 1 ] || note="$note; remaining: $RESIDUAL"
     BACKLOG_DONE_ARGS=(--note "$note")
     return 0
@@ -1994,7 +1996,11 @@ backlog_refresh_reminder() {
     backlog_display="${DATA%/}/backlog.md"
   fi
   if [ "$PRESERVE" = 1 ]; then
-    printf 'Preserved branch: %s in %s. Work remains unlanded.\n' "$PRESERVED_BRANCH" "$PROJ"
+    if [ "$KIND" = host ]; then
+      printf 'Preserved host result: %s. Work remains unfinished.\n' "$WT"
+    else
+      printf 'Preserved branch: %s in %s. Work remains unlanded.\n' "$PRESERVED_BRANCH" "$PROJ"
+    fi
     if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ] && [ "$TEARDOWN_CAPTAIN_OPEN_STATUS" = 0 ]; then
       printf 'Backlog: %s remains open under its captain hold.\n' "$ID"
     elif [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
@@ -2387,6 +2393,7 @@ validate_worktree_teardown_safety() {
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   if [ "$PRESERVE" = 1 ]; then
+    [ "$KIND" != host ] || return 0
     verify_preserved_worktree
     return $?
   fi
@@ -2581,14 +2588,14 @@ collect_local_firstmate_states() {
 }
 
 require_exclusive_worktree_slot_record() {
-  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
+  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4 owner_home=${5:-$FM_HOME}
   local slot state_dir other other_id field other_path other_slot
   slot=$(canonical_existing_dir "$worktree") || return 0
   # A slot whose owner claim names another task was reassigned, so this record's
   # teardown is records-only and touches nothing under it; another record naming
   # the slot is then no hazard, and refusing would strand this stale record and
   # block the claimant's own teardown behind it.
-  fm_treehouse_slot_owner_state "$slot" "$record_id"
+  fm_treehouse_slot_owner_state "$slot" "$record_id" "$owner_home"
   [ "$FM_TREEHOUSE_SLOT_OWNER" != other ] || return 0
   collect_local_firstmate_states "$record_state" || return 1
   for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
@@ -2644,9 +2651,9 @@ require_exclusive_task_worktree_slot() {
 # would strand every task in flight across the change for no evidence at all.
 # Those keep exactly the record-scan protection they had before.
 TEARDOWN_SLOT_REASSIGNED_RC=3
-require_owned_worktree_slot_record() {  # <task-id> <worktree>
-  local record_id=$1 worktree=$2 marker
-  fm_treehouse_slot_owner_state "$worktree" "$record_id"
+require_owned_worktree_slot_record() {  # <task-id> <worktree> [home]
+  local record_id=$1 worktree=$2 owner_home=${3:-$FM_HOME} marker
+  fm_treehouse_slot_owner_state "$worktree" "$record_id" "$owner_home"
   case "$FM_TREEHOUSE_SLOT_OWNER" in
     mine|absent) return 0 ;;
     other)
@@ -2655,7 +2662,7 @@ require_owned_worktree_slot_record() {  # <task-id> <worktree>
       ;;
   esac
   marker=$(fm_treehouse_slot_owner_marker "$worktree" 2>/dev/null) || marker="beside $worktree"
-  echo "REFUSED: task $record_id's recorded worktree $worktree carries a slot-owner claim that cannot be read, so the slot cannot be proved to still be this task's; nothing was changed - not even with --force." >&2
+  echo "REFUSED: task $record_id's recorded worktree $worktree carries a slot-owner claim that is unreadable or does not identify this task and home, so ownership cannot be proved; nothing was changed - not even with --force." >&2
   echo "Inspect or repair the claim file at $marker (task= and home= lines), then re-run teardown." >&2
   return 1
 }
@@ -3211,9 +3218,9 @@ preflight_descendant_treehouse_slots() {
       continue
     fi
     fm_backend_validate_task_endpoint "$meta" "$task_id" || return 1
-    require_exclusive_worktree_slot_record "$meta" "$task_id" "$state" "$worktree" || return 1
+    require_exclusive_worktree_slot_record "$meta" "$task_id" "$state" "$worktree" "${state%/state}" || return 1
     owner_rc=0
-    require_owned_worktree_slot_record "$task_id" "$worktree" || owner_rc=$?
+    require_owned_worktree_slot_record "$task_id" "$worktree" "${state%/state}" || owner_rc=$?
     case "$owner_rc" in
       0|"$TEARDOWN_SLOT_REASSIGNED_RC") ;;
       *) return 1 ;;
@@ -3464,12 +3471,12 @@ cleanup_firstmate_home_children() {
       # already named the reassignment on stderr under the same lock.
       child_owner_rc=0
       if fm_treehouse_pool_slot "$child_proj" "$child_wt"; then
-        require_owned_worktree_slot_record "$child_id" "$child_wt" 2>/dev/null || child_owner_rc=$?
+        require_owned_worktree_slot_record "$child_id" "$child_wt" "$home" 2>/dev/null || child_owner_rc=$?
       fi
       if [ "$child_owner_rc" -eq "$TEARDOWN_SLOT_REASSIGNED_RC" ]; then
         :
       elif [ "$child_owner_rc" -ne 0 ]; then
-        require_owned_worktree_slot_record "$child_id" "$child_wt" || return 1
+        require_owned_worktree_slot_record "$child_id" "$child_wt" "$home" || return 1
       else
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
         if [ "$child_kind" = scout ]; then
@@ -3484,7 +3491,7 @@ cleanup_firstmate_home_children() {
           fm_treehouse_pool_slot "$child_proj" "$child_wt" && child_pool_slot=1
           if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
             [ "$child_pool_slot" = 0 ] || teardown_note_dirty_return "$child_wt"
-            fm_treehouse_slot_owner_release "$child_wt" "$child_id"
+            fm_treehouse_slot_owner_release "$child_wt" "$child_id" "$home"
           else
             child_return_rc=$?
             if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
@@ -3672,7 +3679,7 @@ if [ -n "$X_REQUEST" ]; then
   echo "warning: task $ID still carries an unreconciled Relay request link ($X_REQUEST) on its task record." >&2
 fi
 
-if [ "$PRESERVE" = 1 ]; then
+if [ "$PRESERVE" = 1 ] && [ "$KIND" != host ]; then
   if teardown_owns_worktree; then
     preserve_task_worktree || exit 1
   else
@@ -3847,7 +3854,7 @@ fi
 fm_diag_stage_next worktree
 
 # Preserve saved and forced-close branches; ordinary landed cleanup drops its branch.
-if [ "$PRESERVE" = 1 ] && teardown_owns_worktree; then
+if [ "$PRESERVE" = 1 ] && [ "$KIND" != host ] && teardown_owns_worktree; then
   verify_preserved_worktree || exit 1
 fi
 if [ "$KEEP_RUNNING" = 1 ]; then
@@ -3864,7 +3871,11 @@ elif [ "$INSTALLATION" = 1 ]; then
   printf 'Scout backup: %s\n' "$WT"
 elif [ "$KIND" = host ]; then
   fm_host_scratch_valid "$WT" || { echo 'REFUSED: host scratch changed before cleanup' >&2; exit 1; }
-  rm -rf -- "$WT"
+  if [ "$PRESERVE" = 1 ]; then
+    printf 'Preserved host result: %s\n' "$WT"
+  else
+    rm -rf -- "$WT"
+  fi
 elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
   :
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then

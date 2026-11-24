@@ -714,7 +714,7 @@ fm_backlog_row_artifact_supported() {
 # fields; only bin/fm-captain-hold.sh answer resolves the call.
 fm_backlog_retain() {  # <data-dir> <id> [flag...]
   local data authorized_data=$1 id=$2 out command_status previous_arg=''
-  local arg deliverable='' line body new_body tmp preserved_work=0 preserved_branch remaining hold_reason
+  local arg deliverable='' line body new_body tmp preserved_work=0 preserved_branch remaining hold_reason preserved_label
   local -a row_args=()
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
@@ -740,7 +740,7 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
         ;;
       --note)
         deliverable="${deliverable:+$deliverable; }$arg"
-        case "$arg" in preserved-branch:*) preserved_work=1 ;; esac
+        case "$arg" in preserved-branch:*|preserved-path:*) preserved_work=1 ;; esac
         ;;
     esac
     previous_arg=$arg
@@ -777,7 +777,7 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
       return 1
     }
     case "$deliverable" in
-      preserved-branch:*) line="Preserved work: $deliverable" ;;
+      preserved-branch:*|preserved-path:*) line="Preserved work: $deliverable" ;;
       *) line="Deliverable of the finished work: $deliverable" ;;
     esac
     case $'\n'"$body"$'\n' in
@@ -809,14 +809,17 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
     fm_backlog_row_probe "$data" "$id" || return 1
     case "$FM_BACKLOG_ROW_HOLD_KIND" in
       ''|external)
+        preserved_label=branch
+        case "$deliverable" in preserved-path:*) preserved_label=path ;; esac
         preserved_branch=${deliverable#preserved-branch:}
+        preserved_branch=${preserved_branch#preserved-path:}
         case "$preserved_branch" in
           *'; remaining:'*)
             remaining=${preserved_branch#*; remaining: }
             preserved_branch=${preserved_branch%%; remaining:*}
-            hold_reason="Preserved branch $preserved_branch; remaining: $remaining"
+            hold_reason="Preserved $preserved_label $preserved_branch; remaining: $remaining"
             ;;
-          *) hold_reason="Preserved branch $preserved_branch requires continued work" ;;
+          *) hold_reason="Preserved $preserved_label $preserved_branch requires continued work" ;;
         esac
         hold_reason=${hold_reason//(/\[}
         hold_reason=${hold_reason//)/\]}
@@ -1189,6 +1192,11 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
         --note)
           [ "${args[1]}" = "local%20main" ] || {
             [ "$mode" = retain ] && case "${args[1]}" in
+              preserved-path:*)
+                note_branch=${args[1]#preserved-path:}
+                case "$note_branch" in *'; remaining:'*) note_branch=${note_branch%%; remaining:*} ;; esac
+                [ "$note_branch" = "$data/$id/work" ]
+                ;;
               preserved-branch:*)
                 note_branch=${args[1]#preserved-branch:}
                 case "$note_branch" in *'; remaining:'*) note_branch=${note_branch%%; remaining:*} ;; esac

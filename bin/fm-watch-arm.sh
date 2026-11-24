@@ -237,6 +237,7 @@ cycle_signal_name() {
 cycle_log_append() {
   local exit_code=$1 signal=$2 reason=$3 successor=$4 ended_at beacon_age lock_after size tmp raw i
   [ "$cycle_active" -eq 1 ] || return 0
+  [ -d "$STATE" ] || return 0
   ended_at=$(date +%s)
   beacon_age=$(fm_path_age "$BEAT")
   lock_after=$(lock_snapshot)

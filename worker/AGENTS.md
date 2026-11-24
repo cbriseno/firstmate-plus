@@ -111,6 +111,8 @@ Lo hace el autor, no un revisor.
      that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
    If you genuinely need a second checkout, another slot, or the daemon touched, append
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
+   Other copies' processes are not yours either: never stop a process by pattern (`pkill`, `killall`, or `pgrep`/`ps | grep` output fed to `kill`), because a pattern also matches other copies' runs on this shared machine.
+   Stop only a process you started, by the exact PID you recorded; to stop your own test run use `bin/fm-test-run.sh --cancel`, which reaches only this copy's runs.
 8. Never start a shell command with `cd`, and never run a search whose path depends on the current directory.
    Use absolute paths, `git -C <abs>`, or a `( cd <abs> && ... )` subshell.
    Quote every variable in `rm` and other destructive commands (`rm -rf -- "$dir"`) and prefer literal paths or a `mktemp -d` directory for scratch data: an unquoted expansion triggers the harness's safety prompt and stalls you.

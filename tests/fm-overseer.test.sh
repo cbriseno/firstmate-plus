@@ -35,6 +35,7 @@ test_setup_writes_native_loaders() {
   [ "$(readlink "$dir/AGENTS.md")" = "$CONTRACT" ] || fail "AGENTS.md does not link to the contract"
   [ "$(cat "$dir/firstmate-home")" = "$real_home" ] || fail "firstmate-home does not name the home"
   [ -f "$dir/.codex/hooks.json" ] || fail 'setup did not install the Stop hook'
+  cmp -s "$dir/.codex/hooks.json" "$dir/.claude/settings.json" || fail 'setup did not give Claude the same Stop hook'
   cmp -s "$dir/CLAUDE.md" "$CONTRACT" || fail "Claude's loader does not resolve to the contract text"
   assert_contains "$out" "OVERSEER_READY:" "setup did not report readiness"
   pass "setup links both harness loaders to the contract and names the home"
@@ -42,6 +43,14 @@ test_setup_writes_native_loaders() {
   out=$(FM_HOME="$home" bash "$OVERSEER" setup "$dir" 2>&1) || fail "a second setup failed: $out"
   assert_not_contains "$out" "OVERSEER_SETUP:" "a second setup rewrote an entry that already matched"
   pass "setup is idempotent"
+
+  # A primary start passes explicit state/config paths: setup rewrites its own
+  # earlier hook instead of refusing to start the overseer.
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" bash "$OVERSEER" setup "$dir" 2>&1) ||
+    fail "setup refused the hook an earlier setup generated: $out"
+  assert_contains "$(cat "$dir/.codex/hooks.json")" "FM_STATE_OVERRIDE=$home/state" 'setup did not rewrite its own Codex hook'
+  cmp -s "$dir/.codex/hooks.json" "$dir/.claude/settings.json" || fail 'setup did not rewrite its own Claude hook'
+  pass "setup rewrites the Stop hook an earlier setup generated"
 }
 
 test_watch_arm_and_stop() (
@@ -286,6 +295,126 @@ PYTEST
   pass "interventions persist and export, and unsafe records are rejected"
 }
 
+# A code copy whose primary resolver is stubbed and whose Herdr is a logging fake.
+make_placement_lab() {  # <lab> <located-endpoint-or-empty>
+  local lab=$1 item
+  mkdir -p "$lab/bin" "$lab/fake"
+  for item in "$ROOT"/bin/*; do ln -s "$item" "$lab/bin/${item##*/}"; done
+  ln -s "$ROOT/overseer" "$lab/overseer"
+  rm -f "$lab/bin/fm-overseer-primary.sh"
+  if [ -n "$2" ]; then
+    printf '#!/usr/bin/env bash\n[ "$1" = --locate ] && echo %q\n' "$2" > "$lab/bin/fm-overseer-primary.sh"
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$lab/bin/fm-overseer-primary.sh"
+  fi
+  cat > "$lab/fake/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${0%/*}/log"
+case "$1 $2" in
+  'status --json') printf '{"client":{"protocol":999,"version":"t"},"server":{"running":true}}\n' ;;
+  'workspace list') printf '{"result":{"workspaces":[]}}\n' ;;
+  'pane split') printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' ;;
+  'pane get') printf '{"result":{"pane":{"pane_id":"%s","tab_id":"%s"}}}\n' "$3" "${3%%:*}:t1" ;;
+  'pane neighbor') printf '{"result":{"neighbor":{"pane_id":"w1:p1"%s}}}\n' "$(cat "${0%/*}/neighbor" 2>/dev/null)" ;;
+  'pane move') printf '{"result":{"move_result":{"pane":{"pane_id":"w1:p2"}}}}\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$lab/fake/claude"
+  chmod +x "$lab/fake/herdr" "$lab/fake/claude" "$lab/bin/fm-overseer-primary.sh"
+}
+
+test_start_beside_the_primary_on_herdr() {
+  local home dir lab out lang want
+  # With a live primary: split its pane to the right, whoever runs start.
+  lab="$TMP_ROOT/place-split" home="$TMP_ROOT/home-split" dir="$TMP_ROOT/outside/split"
+  make_home "$home"; make_placement_lab "$lab" 'herdr fake:w1:p1'
+  mkdir -p "$home/config" "$TMP_ROOT/user-split"
+  printf 'enabled=on\nharness=claude\ndirectory=%s\n' "$dir" > "$home/config/overseer"
+  out=$(env -u TMUX HOME="$TMP_ROOT/user-split" PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr HERDR_SESSION=fake \
+    HERDR_PANE_ID=w9:p1 bash "$lab/bin/fm-overseer.sh" start 2>&1) && fail "start succeeded against a fake Herdr: $out"
+  grep -q "^pane split w1:p1 --direction right --cwd .* --no-focus" "$lab/fake/log" || fail "start did not split the primary pane: $(cat "$lab/fake/log")"
+  [ "$(cat "$home/state/overseer/session")" = 'herdr fake:w1:p2' ] || fail 'start did not record the pane beside the primary'
+  # Without one: its own workspace labeled in the installation language, never the caller's.
+  for lang in es en; do
+    lab="$TMP_ROOT/place-own-$lang" home="$TMP_ROOT/home-own-$lang" dir="$TMP_ROOT/outside/own-$lang"
+    make_home "$home"; make_placement_lab "$lab" ''
+    mkdir -p "$home/config" "$TMP_ROOT/user-$lang"
+    printf '%s\n' "$lang" > "$home/config/language"
+    printf 'enabled=on\nharness=claude\ndirectory=%s\n' "$dir" > "$home/config/overseer"
+    out=$(env -u TMUX HOME="$TMP_ROOT/user-$lang" PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr HERDR_SESSION=fake \
+      HERDR_PANE_ID=w9:p1 bash "$lab/bin/fm-overseer.sh" start 2>&1) && fail "start succeeded against a fake Herdr: $out"
+    case $lang in es) want=supervisor ;; *) want=overseer ;; esac
+    grep -q "^workspace create --cwd .* --label $want " "$lab/fake/log" || fail "start did not create its own '$want' workspace: $(cat "$lab/fake/log")"
+  done
+  pass "start opens the overseer right of the primary pane, or in its own labeled workspace when no primary is found"
+}
+
+test_place_moves_the_overseer_beside_the_primary() {
+  local home lab out
+  lab="$TMP_ROOT/place-move" home="$TMP_ROOT/home-move"
+  make_home "$home"; make_placement_lab "$lab" 'herdr fake:w1:p1'
+  mkdir -p "$home/state/overseer"
+  printf 'herdr fake:w5:p3\n' > "$home/state/overseer/session"
+  out=$(PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr bash "$lab/bin/fm-overseer.sh" place 2>&1) || fail "place failed: $out"
+  grep -q '^pane move w5:p3 --tab w1:t1 --target-pane w1:p1 --split right --no-focus' "$lab/fake/log" || fail "place did not move the pane: $(cat "$lab/fake/log")"
+  [ "$(cat "$home/state/overseer/session")" = 'herdr fake:w1:p2' ] || fail 'place did not follow the moved pane id'
+  # Already right of the primary: nothing moves.
+  printf ',"neighbor_pane_id":"w1:p2"' > "$lab/fake/neighbor"
+  : > "$lab/fake/log"
+  out=$(PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr bash "$lab/bin/fm-overseer.sh" place 2>&1) || fail "place failed: $out"
+  if grep -q '^pane move' "$lab/fake/log"; then fail 'place moved a pane already beside the primary'; fi
+  pass 'place moves the overseer right of the primary in its tab and follows the new pane id'
+}
+
+test_relay_keeps_the_installation_watch() (
+  local lab home dir out pid
+  lab="$TMP_ROOT/relay-code" home="$TMP_ROOT/relay-home" dir="$TMP_ROOT/outside/relay"
+  make_home "$home"; make_placement_lab "$lab" 'herdr fake:w1:p7'
+  rm -f "$lab/bin/fm-overseer-arm.py" "$lab/bin/fm-overseer-watch.sh"
+  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
+  printf 'while :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s%%s %%s\\n" "${RELAY_WAIT_SECONDS:-}" "$HERDR_PANE_ID" "$*" >> "${0%%/*}/relay.log"\n' > "$lab/fake/relay"
+  chmod +x "$lab/fake/relay"
+  mkdir -p "$home/config"
+  printf 'enabled=on\nharness=claude\nmodel=m1\neffort=high\ndirectory=%s\n' "$dir" > "$home/config/overseer"
+  write_connection "$home"
+  printf 'herdr fake:w1:p2\n' > "$home/state/overseer/session"
+  printf 'state\n' > "$home/state/overseer/handoff.md"
+  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
+  # Outgoing: its real pane (not a stale HERDR_PANE_ID) and '-' for the watch.
+  out=$(HERDR_PANE_ID=w9:p3 FM_RELAY_LITE="$lab/fake/relay" FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" relay 2>&1) || fail "relay failed: $out"
+  [ "$(cat "$lab/fake/relay.log")" = "90w1:p7 --supervisor $dir claude m1 high $home/state/overseer/handoff.md -" ] ||
+    fail "relay did not hand over with the real pane and the installation watch: $(cat "$lab/fake/relay.log")"
+  # Successor: takes the session record and confirms with the one running watch.
+  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm >/dev/null || fail 'the installation watch did not arm'
+  pid=$(sed -n 1p "$home/state/overseer/watch.lock")
+  : > "$lab/fake/relay.log"
+  out=$(env -u HERDR_PANE_ID FM_RELAY_LITE="$lab/fake/relay" FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" relay-ready "$dir/state/relay-start.x" 2>&1) || fail "relay-ready failed: $out"
+  [ "$(cat "$home/state/overseer/session")" = 'herdr fake:w1:p7' ] || fail 'the successor did not take over the session record'
+  if [ "$(sed -n 1p "$home/state/overseer/watch.lock")" != "$pid" ] || ! kill -0 "$pid"; then
+    fail 'the relay replaced or stopped the installation watch'
+  fi
+  [ "$(cat "$lab/fake/relay.log")" = " --ready $dir $dir/state/relay-start.x $pid" ] ||
+    fail "relay-ready did not confirm with the running watch: $(cat "$lab/fake/relay.log")"
+  pass 'an overseer relay keeps the installation watch, uses the real pane, and points the watch at the successor'
+)
+
+test_guard_adopts_the_pane_its_turn_ends_in() (
+  local lab home
+  lab="$TMP_ROOT/adopt-code" home="$TMP_ROOT/adopt-home"
+  mkdir -p "$lab/bin" "$home/state"
+  write_connection "$home"
+  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
+  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
+  printf 'while :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
+  printf '#!/usr/bin/env bash\n[ "$1" = --locate ] && [ -n "$2" ] && echo "tmux %%9"\n' > "$lab/bin/fm-overseer-primary.sh"
+  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
+  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1 || fail 'guard did not arm'
+  [ "$(cat "$home/state/overseer/session")" = 'tmux %9' ] || fail 'a relay successor did not take over the session record'
+  pass 'the Stop guard records the endpoint its turn ends in, so a relay successor receives events'
+)
+
 test_status_before_start() {
   local home out
   home="$TMP_ROOT/home-status"
@@ -312,6 +441,14 @@ test_status_before_start() {
     fail 'status accepted invalid configuration'
   fi
   assert_contains "$out" 'enabled must be on or off' 'status must explain invalid configuration'
+  # The relay limit the extensions relay reads from this file is accepted here too.
+  printf 'enabled=off\nrelay_tokens=400000\n' > "$home/config/overseer"
+  out=$(FM_HOME="$home" bash "$OVERSEER" status 2>&1) || fail "status rejected relay_tokens: $out"
+  printf 'enabled=off\nrelay_tokens=many\n' > "$home/config/overseer"
+  if out=$(FM_HOME="$home" bash "$OVERSEER" status 2>&1); then
+    fail 'status accepted a relay limit that is not a whole number'
+  fi
+  assert_contains "$out" 'relay_tokens must be a whole number' 'status must explain an invalid relay limit'
   pass 'status reports an existing installation before start and rejects invalid configuration'
 }
 
@@ -364,13 +501,75 @@ PY
   pass 'workspace trust applies only to the overseer directory bound to this home'
 }
 
+test_adopt_hand_made_overseer() {
+  local home dir lab out archive pid
+  home="$TMP_ROOT/home-adopt"
+  dir="$TMP_ROOT/outside/hand-made"
+  make_home "$home"
+  mkdir -p "$dir"
+  printf 'my hand-made contract\n' >"$dir/CLAUDE.md"
+  printf 'my hand-made agents\n' >"$dir/AGENTS.md"
+  printf 'old handoff\n' >"$TMP_ROOT/traspaso.md"
+  sleep 60 & pid=$!
+  out=$(FM_HOME="$home" bash "$OVERSEER" adopt "$dir" --handoff "$TMP_ROOT/traspaso.md" --old-watch-pid "$pid" 2>&1) ||
+    { kill "$pid" 2>/dev/null; fail "adopt failed: $out"; }
+  archive=$(find "$home/state/overseer/adopted" -mindepth 1 -maxdepth 1 -type d | head -1)
+  [ "$(cat "$archive/CLAUDE.md")" = 'my hand-made contract' ] || fail 'the hand-made CLAUDE.md was not archived intact'
+  [ "$(cat "$archive/AGENTS.md")" = 'my hand-made agents' ] || fail 'the hand-made AGENTS.md was not archived intact'
+  cmp -s "$archive/handoff-traspaso.md" "$TMP_ROOT/traspaso.md" || fail 'the old handoff was not archived intact'
+  [ -f "$TMP_ROOT/traspaso.md" ] || fail 'adopt removed the original handoff'
+  [ "$(readlink "$dir/CLAUDE.md")" = "$CONTRACT" ] || fail 'adopt did not link the official contract'
+  grep -q "^directory=$(cd -P -- "$dir" && pwd -P)\$" "$home/config/overseer" || fail 'adopt did not write the configuration'
+  assert_contains "$out" 'OVERSEER_ADOPT_NOTE' 'adopt did not tell the primary about the old alert line'
+  assert_contains "$out" 'left running' 'adopt must not stop the old watch before the new one is confirmed'
+  kill -0 "$pid" 2>/dev/null || fail 'the old watch was stopped before the new overseer was confirmed'
+  out=$(FM_HOME="$home" bash "$OVERSEER" adopt "$dir" 2>&1) || fail "a repeated adopt failed: $out"
+  assert_not_contains "$out" 'archived' 'a repeated adopt archived again'
+
+  lab="$TMP_ROOT/adopt-lab"
+  mkdir -p "$lab/bin" "$lab/overseer"
+  cp "$OVERSEER" "$lab/bin/"
+  cp "$CONTRACT" "$lab/overseer/"
+  printf 'fm_backend_agent_state() { printf alive; }\n' >"$lab/bin/fm-backend.sh"
+  printf 'import sys\nprint("watch: armed")\n' >"$lab/bin/fm-overseer-arm.py"
+  mkdir -p "$home/state/overseer"
+  printf 'tmux x:y\n' >"$home/state/overseer/session"
+  dir="$TMP_ROOT/outside/hand-made-two"
+  mkdir -p "$dir"
+  printf 'second hand-made contract\n' >"$dir/CLAUDE.md"
+  out=$(FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" adopt "$dir" --old-watch-pid "$pid" 2>&1) ||
+    { kill "$pid" 2>/dev/null; fail "confirmed adopt failed: $out"; }
+  assert_contains "$out" "stopped the old watch $pid" 'adopt did not stop the old watch after confirmation'
+  wait "$pid" 2>/dev/null
+  pass 'adopt archives a hand-made overseer intact and stops the old watch only after the new one is confirmed'
+}
+
+test_adopt_restores_on_refusal() {
+  local home dir out
+  home="$TMP_ROOT/home-adopt-refuse"
+  dir="$TMP_ROOT/outside/adopt-refuse"
+  make_home "$home"
+  mkdir -p "$dir/.codex"
+  printf 'my contract\n' >"$dir/CLAUDE.md"
+  printf 'x = 1\n' >"$dir/.codex/config.toml"
+  if out=$(FM_HOME="$home" bash "$OVERSEER" adopt "$dir" 2>&1); then fail 'adopt accepted a directory that setup refuses'; fi
+  [ "$(cat "$dir/CLAUDE.md")" = 'my contract' ] || fail 'a refused adopt did not restore the hand-made contract'
+  pass 'a refused adopt restores the hand-made contract'
+}
+
 test_setup_writes_native_loaders
 test_setup_refuses_inside_a_firstmate_tree
 test_setup_refuses_foreign_entries
 test_setup_refuses_a_non_home
+test_adopt_hand_made_overseer
+test_adopt_restores_on_refusal
 
 test_interventions_record_and_export
 test_status_before_start
+test_start_beside_the_primary_on_herdr
+test_place_moves_the_overseer_beside_the_primary
+test_relay_keeps_the_installation_watch
+test_guard_adopts_the_pane_its_turn_ends_in
 test_doctor_uses_local_evidence
 test_overseer_trust_scope
 test_watch_arm_and_stop

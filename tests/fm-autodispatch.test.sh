@@ -37,7 +37,7 @@ J
     FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add "$id" "$id work" --repo demo >/dev/null 2>&1 || fail "fixture: add $id"
     mkdir -p "$home/data/$id"
     {
-      printf '# Task\n## Captain'"'"'s intent\nx\n'
+      printf '# Task\n## Captain'"'"'s intent\nx\n## Firstmate spec\ny\n'
       if [ "$id" = plain ]; then printf 'Dispatch category: standard\n'; continue; fi
       case "$id" in either) category=either ;; no-effort|chosen-effort) category=without-effort ;; chosen-model) category=without-model ;; *) category=standard ;; esac
       printf 'Dispatch category: %s\n' "$category"
@@ -75,6 +75,41 @@ test_autodispatch_resolves_the_spawn() {
   FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" good >/dev/null 2>&1 || fail 'brief-selected axes did not dispatch without a profile file'
   grep -Fx "good $dir/proj --mode local-only --yolo on --harness codex --model m2 --effort low" "$dir/spawn.log" >/dev/null || fail 'brief-selected axes did not reach automatic spawn'
   pass "autodispatch launches a briefed ship with its category profile and leaves the rest to the primary"
+}
+
+# The primary's own procedure: scaffold the brief, fill it, leave it queued.
+# The scaffold must record what the category leaves open, and the watcher's
+# dispatcher must wait until the task sections are written.
+test_scaffolded_ship_launches_itself() {
+  local dir=$TMP_ROOT/scaffold home id=scaffolded out rc
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"
+  jq '.rules += [{"when":"hard","category":"open-effort","use":{"harness":"claude","model":"m4"}}]' \
+    "$home/config/crew-dispatch.json" > "$home/config/crew-dispatch.next" && mv "$home/config/crew-dispatch.next" "$home/config/crew-dispatch.json"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add "$id" "$id work" --repo demo >/dev/null 2>&1 || fail "fixture: add $id"
+  rc=0; out=$(FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" demo --mode local-only --category open-effort 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a ship brief left the category's open effort unrecorded"
+  assert_contains "$out" '--dispatch-effort' "the scaffold refusal must name the missing option"
+  [ ! -e "$home/data/$id/brief.md" ] || fail "a refused scaffold left a brief behind"
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" "$id" demo --mode local-only --category open-effort --dispatch-effort high >/dev/null 2>&1 ||
+    fail "cannot scaffold the ship brief with its selected effort"
+  rc=0; out=$(FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" "$id" 2>&1) || rc=$?
+  [ "$rc" -eq 3 ] || fail "an unfilled scaffold must not launch (exit $rc)"
+  assert_contains "$out" 'brief is not written yet' "an unfilled scaffold needs its own reason: $out"
+  [ ! -s "$dir/spawn.log" ] || fail "an unfilled scaffold reached the spawn"
+  python3 - "$home/data/$id/brief.md" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('{TASK}', 'Fix the queue.').replace('{FIRSTMATE_SPEC}', 'Find the cause.').replace('{CAPTAIN_REQUIREMENTS}', '1. Fix the queue.'))
+PY
+  FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" "$id" >/dev/null 2>&1 || fail "the written brief was not launched automatically"
+  grep -Fx "$id $dir/proj --mode local-only --yolo on --harness claude --model m4 --effort high" "$dir/spawn.log" >/dev/null ||
+    fail "wrong automatic spawn: $(cat "$dir/spawn.log")"
+  : > "$home/data/good/brief.md"
+  rc=0; out=$(FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" good 2>&1) || rc=$?
+  [ "$rc" -eq 3 ] || fail "an empty brief must not launch (exit $rc)"
+  assert_contains "$out" 'brief is not written yet' "an empty brief must not be reported as a delivery problem: $out"
+  pass "a scaffolded ship records its open dispatch axes and launches itself once its brief is written"
 }
 
 test_watcher_launches_ready_work() {
@@ -223,6 +258,84 @@ SH
   pass 'watcher records the CPU class from the admission owner'
 )
 
+# A deferred launch that takes minutes under load must not stop the watcher's
+# liveness beacon, which the Stop hook reads as "the watcher is dead".
+test_deferred_spawn_keeps_the_beacon_alive() (
+  local dir=$TMP_ROOT/slow-spawn home="$TMP_ROOT/slow-spawn/home" state="$TMP_ROOT/slow-spawn/home/state" child i age
+  mkdir -p "$dir"
+  make_home "$dir" only-good
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
+  cat > "$dir/bin/fm-spawn.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/spawn.log"
+sleep 8
+touch "$dir/spawn.done"
+exit 0
+SH
+  printf '%s\n' "$dir/proj" > "$state/good.spawn-deferred"
+  printf '%s\0' good "$dir/proj" --mode local-only >> "$state/good.spawn-deferred"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
+    bash "$dir/bin/fm-watch.sh" > "$dir/watch.out" 2>&1 &
+  child=$!
+  for ((i=0; i<600; i++)); do
+    [ -s "$dir/spawn.log" ] && break
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  [ -s "$dir/spawn.log" ] || fail "the watcher never replayed the deferred launch: $(cat "$dir/watch.out")"
+  sleep 4
+  age=$(bash -c '. "$1"; fm_path_age "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$state/.last-watcher-beat")
+  [ ! -e "$dir/spawn.done" ] || fail "fixture: the slow launch ended before the beacon was read"
+  [ "$age" -le 3 ] || fail "the beacon went stale for ${age}s while the deferred launch ran"
+  for ((i=0; i<600; i++)); do
+    grep -Fq 'launched deferred task good' "$state/.wake-queue" 2>/dev/null && break
+    sleep 0.1
+  done
+  kill -TERM "$child" 2>/dev/null || true
+  wait_for_exit "$child" 100 || true
+  grep -Fq 'launched deferred task good' "$state/.wake-queue" || fail "the launch result never reached the wake queue: $(cat "$state/.wake-queue" "$dir/watch.out" 2>&1)"
+  [ "$(wc -l < "$dir/spawn.log")" -eq 1 ] || fail "the deferred launch ran more than once"
+  pass "a slow deferred launch runs beside the watcher without stopping its beacon"
+)
+
+test_diagnostic_scope_mapping() {
+  local dir="$TMP_ROOT/scope" home="$TMP_ROOT/scope/home" fakebin out rc
+  mkdir -p "$dir/target"
+  fm_test_spawn_home "$home" codex
+  fakebin=$(fm_test_make_spawn_fakebin "$dir/fake")
+  cat > "$home/config/crew-dispatch.json" <<'JSON'
+{"diagnosis_scope":{"bounded":"routine","long":"complex","ambiguous":"complex"},"rules":[{"category":"routine","use":{"harness":"codex","model":"balanced"}},{"category":"complex","use":{"harness":"codex","model":"strong"}}]}
+JSON
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" wrong --host --path "$dir/target" --category routine --dispatch-effort high >/dev/null || fail 'cannot scaffold unassessed task'
+  python3 - "$home/data/wrong/brief.md" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('{TASK}', 'Investigate ambiguous queue behavior.').replace('{FIRSTMATE_SPEC}', 'Find the cause.').replace('{CAPTAIN_REQUIREMENTS}', '1. Find the cause.'))
+PY
+  rc=0
+  out=$(FM_DIAGNOSTICS=0 FM_FAKE_LAUNCH_LOG="$dir/wrong.launch" fm_test_run_spawn "$home" "$home/data/wrong/work" "$fakebin" wrong --host --harness codex --model balanced --effort high 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'task without an assessment launched'
+  printf '\nDispatch diagnosis scope: ambiguous\n' >> "$home/data/wrong/brief.md"
+  rc=0
+  out=$(FM_DIAGNOSTICS=0 FM_FAKE_LAUNCH_LOG="$dir/wrong.launch" fm_test_run_spawn "$home" "$home/data/wrong/work" "$fakebin" wrong --host --harness codex --model balanced --effort high 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'ambiguous work launched with the routine category'
+  assert_contains "$out" 'scope/category mismatch' 'refusal omitted the mismatch'
+  [ ! -s "$dir/wrong.launch" ] || fail 'rejected worker reached the launcher'
+  python3 - "$home/data/wrong/brief.md" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); p.write_text(p.read_text().replace('Dispatch category: routine', 'Dispatch category: complex'))
+PY
+  rc=0
+  out=$(FM_DIAGNOSTICS=0 FM_FAKE_LAUNCH_LOG="$dir/right.launch" fm_test_run_spawn "$home" "$home/data/wrong/work" "$fakebin" wrong --host --harness codex --model strong --effort high 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "mapped complex dispatch failed: $out"
+  grep -Fxq 'model=strong' "$home/state/wrong.meta" || fail 'mapped profile was not launched'
+  pass 'configured diagnostic scopes reject a mismatched category before launch'
+}
+
 test_manual_profile_reaches_launch_and_record() {
   local dir="$TMP_ROOT/manual" home="$TMP_ROOT/manual/home" fakebin id category model effort reason out rc
   mkdir -p "$dir/target"
@@ -245,6 +358,7 @@ PY
     rc=0
     out=$(FM_DIAGNOSTICS=0 FM_FAKE_LAUNCH_LOG="$dir/$id.launch" fm_test_run_spawn "$home" "$home/data/$id/work" "$fakebin" "$id" --host --harness codex) || rc=$?
     [ "$rc" -eq 0 ] || fail "$id dispatch failed: $out"
+    assert_contains "$out" 'no diagnosis_scope mapping' 'legacy matrix did not warn'
     grep -Fxq "model=$model" "$home/state/$id.meta" || fail "$id model not recorded"
     grep -Fxq "effort=$effort" "$home/state/$id.meta" || fail "$id effort not recorded"
     grep -Fq "model_reasoning_effort=\"$effort\"" "$dir/$id.launch" || fail "$id effort missing from launch"
@@ -457,10 +571,14 @@ fi
 
 if [ "${FM_TEST_MATRIX_ONLY:-0}" = 1 ]; then
   test_autodispatch_resolves_the_spawn
+  test_scaffolded_ship_launches_itself
+  test_diagnostic_scope_mapping
   test_manual_profile_reaches_launch_and_record
   exit 0
 fi
 test_autodispatch_resolves_the_spawn
+test_scaffolded_ship_launches_itself
+test_diagnostic_scope_mapping
 test_manual_profile_reaches_launch_and_record
 test_treehouse_exhaustion_diagnosis
 test_retry_job_is_not_duplicated
@@ -469,4 +587,5 @@ test_watcher_retries_allocation_after_release || exit $?
 FM_TEST_STOP_WATCHER=1 test_watcher_retries_allocation_after_release || exit $?
 test_watcher_launches_ready_work
 test_watcher_classifies_cpu_deferral
+test_deferred_spawn_keeps_the_beacon_alive
 test_watcher_continues_without_lanes

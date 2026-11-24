@@ -142,6 +142,22 @@ def captain_request(owner, request):
         return False
 
 
+def declared_wait_until(home, task):
+    """Epoch a task's current `paused ... until <UTC time>` wait clears, or None."""
+    state = Path(os.environ.get('FM_STATE_OVERRIDE') or home / 'state')
+    status = state / (task + '.status')
+    if not status.is_file():
+        return None
+    script = ('. "$1/fm-classify-lib.sh"; '
+              'line=$(status_declared_wait_line "$2") && status_paused_until "$line"')
+    try:
+        out = subprocess.run(['bash', '-c', script, 'fm-integration', str(Path(__file__).parent), str(status)],
+                             capture_output=True, text=True, timeout=5)
+        return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def snapshot(home, now):
     from fm_work import Owner, Refusal
 
@@ -164,6 +180,10 @@ def snapshot(home, now):
         if row['state'] == 'done' or owner.progress_reporting_held(task):
             continue
         if any(block['open'] for block in owner.blockers(task, edges)):
+            continue
+        # A declared timed wait is the worker's own next opportunity: stay quiet
+        # until its time passes, then the overdue clock speaks again.
+        if (declared_wait_until(home, task) or 0) > now:
             continue
         request = owner.presentations[task]['presentation']['request']
         if request and not owner.presentations[task]['presentation']['closure']:

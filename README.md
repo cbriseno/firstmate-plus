@@ -73,6 +73,7 @@ directory=/absolute/path/to/overseer
 ```
 
 Use `claude` instead of `codex` for Claude Code, and optionally add `model=...` and `effort=...` for that harness.
+With the optional `firstmate-extensions` supervisor relay enabled for that directory, `relay_tokens=N` sets the context size at which the overseer hands over to a successor.
 The CLI's normal permission mode applies unless `permission=auto` or `permission=bypass` is explicitly configured; bypass grants the agent unrestricted tool access.
 When the CLI prompts, approve the supervisor's access to the primary's processes and terminal so it can verify liveness and deliver nudges.
 From the installation root, in the same terminal backend as the primary, run:
@@ -84,12 +85,29 @@ bash bin/fm-overseer.sh status
 ```
 
 After the first agent turn ends, status should show a live session and an armed watch.
-To speak with the overseer, open the tmux window named by `status` or the Herdr tab labeled `fm-overseer-` containing the reported pane.
+With Herdr, the overseer opens as a pane to the right of the primary's pane in the same tab, whoever runs `start`, and its watch moves it back beside the primary after either one relays; without a live primary it opens in its own workspace labeled `overseer` (`supervisor` when `config/language` is Spanish).
+With tmux, open the window named by `status`.
 Ask it to explain what is delaying this installation and to follow up on unattended work.
 If status reports an unconfirmed event, inspect that session before retrying; ask the overseer to handle its pending event if the message did not arrive.
 An enabled overseer is also started when the primary starts; the result is recorded in `state/overseer-start.log`.
 Run `bash bin/fm-overseer.sh stop` to close the session, and set `enabled=off` to disable future automatic starts.
 The directory must not contain an existing `CLAUDE.md`, `AGENTS.md`, or home binding from another installation; setup refuses to overwrite them.
+
+#### Moving a hand-made overseer onto the official one
+
+If you already run an overseer session you built yourself, adopt its directory instead of starting a second one:
+
+```sh
+bash bin/fm-overseer.sh adopt /absolute/path/to/your/overseer --handoff /path/to/old-handoff.md --old-watch-pid 12345
+bash bin/fm-overseer.sh start
+bash bin/fm-overseer.sh status
+bash bin/fm-overseer.sh adopt /absolute/path/to/your/overseer --old-watch-pid 12345
+```
+
+The first command copies your hand-made `CLAUDE.md`, `AGENTS.md` and each `--handoff` file to `state/overseer/adopted/` (checked identical; your handoff files stay where they are), links the official contract, and writes `config/overseer` if it is missing.
+It leaves the old watcher running because the new overseer is not confirmed yet.
+After `status` shows a live session and an armed watch, repeat the command: only then is the old watcher stopped.
+Ask the primary to remove any old captain-alert line from its notes; alerts now go through `bash bin/fm-overseer.sh alert`.
 
 The doctor shows local capacity, behavior budgets, test queues, task waits, and recent diagnostic events.
 Use its leads to investigate slow wakes and resource pressure, and collect another sample after normal activity if a measure is unmeasured.

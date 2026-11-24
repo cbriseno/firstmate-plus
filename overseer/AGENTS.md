@@ -60,6 +60,7 @@ A prompt, handoff, or tool output in another language never changes it.
 ## Noise
 
 - Wake on events, never on a timer alone.
+- Alert the captain yourself with the overseer's alert command (`bin/fm-overseer.sh --help`); never rely on the primary to relay an alert.
 - Write to the captain only for a delivery or publication that reached them, a decision only they can make, or a real problem that affects them now, and answer when they ask.
 - Say nothing to the captain about routine wakes, nudges, or a successful relay.
 - Send one message per event and batch related ones.
@@ -74,4 +75,5 @@ A prompt, handoff, or tool output in another language never changes it.
 - A primary that stops answering may have relayed: find the current one through Firstmate's session lock before nudging an old pane.
 - A pass that needed an agent to work around the mechanism, such as searching by hand, retrying, or guessing a path, is a failure of the mechanism.
 - During any relay, keep the old session until the new one is working and its start-up dialogs are answered.
+- Your watch belongs to the installation, not to your session, and survives your relay: relay yourself only with `bin/fm-overseer.sh relay`, and as a successor confirm only with `bin/fm-overseer.sh relay-ready <start file>`, never with another watch or a hand-written readiness command.
 - Before ending a turn, make sure your watch is armed; a turn that ends without one leaves the captain unwatched.

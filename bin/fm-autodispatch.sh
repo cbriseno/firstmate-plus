@@ -43,6 +43,12 @@ tasks() { FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CON
 
 [ -f "$BRIEF" ] || skip "no brief"
 [ ! -f "$STATE/$ID.meta" ] || skip "already launched"
+# A brief still being written is not ready work; fm-spawn.sh would refuse it.
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
+if fm_brief_task_placeholders_present "$BRIEF" || ! fm_brief_task_content_valid "$BRIEF"; then
+  skip "brief is not written yet; finish its task sections"
+fi
 
 MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
 [ -n "$MODE" ] || skip "brief has no ship delivery contract"
@@ -97,8 +103,8 @@ if [ -f "$CONFIG/crew-dispatch.json" ]; then
   IFS="|" read -r h m e <<< "$profile"
   [ -n "$m" ] || m=$(sed -n 's/^Dispatch model: //p' "$BRIEF" | head -n 1)
   [ -n "$e" ] || e=$(sed -n 's/^Dispatch effort: //p' "$BRIEF" | head -n 1)
-  case "$e" in low|medium|high|xhigh|max) ;; *) skip "dispatch category '$category' needs a recorded effort" ;; esac
-  [ -n "$m" ] && [ "$m" != default ] || skip "dispatch category '$category' needs a concrete model"
+  case "$e" in low|medium|high|xhigh|max) ;; *) skip "dispatch category '$category' needs a recorded effort; add a 'Dispatch effort: <level>' line to its brief" ;; esac
+  [ -n "$m" ] && [ "$m" != default ] || skip "dispatch category '$category' needs a concrete model; add a 'Dispatch model: <name>' line to its brief"
   args+=(--harness "$h")
   [ -z "$m" ] || args+=(--model "$m")
   [ -z "$e" ] || args+=(--effort "$e")

@@ -2,14 +2,16 @@
 """Tell the captain, through the optional notification command, that something waits on them.
 
 Usage:
-  fm-captain-notice.py --home HOME --kind question|approval|action|review|board (--task ID | --title TEXT)
+  fm-captain-notice.py --home HOME --kind question|approval|action|review|board|published (--task ID | --title TEXT)
                        [--title TEXT] [--detail TEXT] [--occurrence ID] [--link URL]
   fm-captain-notice.py --home HOME --kind reminder
 
 The owners of each waiting state call it at the transition that creates that state:
 bin/fm-captain-hold.sh when a new hold opens (question, approval, action),
 bin/fm_delivery.py when a result is newly declared outcome.review=needed (review),
-and bin/fm-procevent-lavish.sh when a board is first armed for a task (board).
+bin/fm-procevent-lavish.sh when a board is first armed for a task (board),
+and bin/fm-publication-gate.py after a push or forge publication it ran succeeds
+(published; --title only, no task).
 The watcher runs `--kind reminder` once a day; it reads the work snapshot's
 needs-you set, the same set the Deck shows, and sends one summary while it is not empty.
 The text uses the installation language (config/language, bin/fm_progress.py tr).
@@ -32,10 +34,10 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN))
 from fm_progress import tr  # noqa: E402
 
-KINDS = ('question', 'approval', 'action', 'review', 'board', 'reminder')
+KINDS = ('question', 'approval', 'action', 'review', 'board', 'published', 'reminder')
 PREFIX = {'question': 'Needs your answer', 'approval': 'Needs your approval',
           'action': 'Needs you to act', 'review': 'Ready for your review',
-          'board': 'Review board waiting for you'}
+          'board': 'Review board waiting for you', 'published': 'Published'}
 
 
 def one_line(text, limit):
@@ -107,7 +109,7 @@ def main():
             if text is None:
                 return 0
         else:
-            if not args.task and not (args.kind == 'board' and args.title):
+            if not args.task and not (args.kind in ('board', 'published') and args.title):
                 parser.error('--task is required for ' + args.kind + ' (a board without a task needs --title)')
             title = args.title or declared_title(home, args.task)
             text = tr(PREFIX[args.kind]) + ': ' + one_line(title, 120)

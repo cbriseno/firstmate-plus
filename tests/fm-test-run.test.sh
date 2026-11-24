@@ -268,6 +268,50 @@ SH
   pass "an interrupted run stops its live suites before removing their TMPDIR"
 }
 
+test_cancel_stops_only_the_runs_of_its_own_copy() {
+  local a b locks i r sa sb
+  a=$(fm_test_tmproot fm-cancel-a)
+  b=$(fm_test_tmproot fm-cancel-b)
+  locks=$(fm_test_tmproot fm-cancel-locks)
+  for r in "$a" "$b"; do
+    init_changed_fixture_repo "$r"
+    cp "$ROOT/bin/fm-timeout-lib.sh" "$r/bin/"
+    mkdir -p "$r/tmp"
+    cat > "$r/tests/fm-secondmate-safety.test.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\\n' "\$\$" > "$r/suite.pid"
+i=0
+while [ "\$i" -lt 300 ]; do sleep 0.1; i=\$((i + 1)); done
+SH
+    chmod +x "$r/tests/fm-secondmate-safety.test.sh"
+    TMPDIR="$r/tmp" FM_TEST_LOCK_DIR="$locks" FM_LIVE=0 "$r/bin/fm-test-run.sh" \
+      --per-script-timeout-secs 60 tests/fm-secondmate-safety.test.sh >"$r/runner.log" 2>&1 &
+  done
+  for r in "$a" "$b"; do
+    i=0
+    while [ "$i" -lt 100 ] && [ ! -s "$r/suite.pid" ]; do sleep 0.1; i=$((i + 1)); done
+    [ -s "$r/suite.pid" ] || fail "fixture suite never started in $r: $(cat "$r/runner.log")"
+  done
+  sa=$(cat "$a/suite.pid")
+  sb=$(cat "$b/suite.pid")
+  FM_TEST_LOCK_DIR="$locks" "$a/bin/fm-test-run.sh" --cancel >"$a/cancel.log" 2>&1 ||
+    fail "--cancel failed: $(cat "$a/cancel.log")"
+  i=0
+  while [ "$i" -lt 50 ] && kill -0 "$sa" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$sa" 2>/dev/null; then
+    kill -s KILL "$sa" "$sb" 2>/dev/null
+    fail "--cancel left its own copy's suite running"
+  fi
+  if ! kill -0 "$sb" 2>/dev/null; then
+    fail "--cancel stopped another copy's suite"
+  fi
+  FM_TEST_LOCK_DIR="$locks" "$b/bin/fm-test-run.sh" --cancel >/dev/null 2>&1
+  i=0
+  while [ "$i" -lt 50 ] && kill -0 "$sb" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  kill -s KILL "$sb" 2>/dev/null
+  pass "--cancel stops only the runs of its own copy"
+}
+
 # Build a repository with a primary checkout and one linked worktree, each
 # holding a runnable copy of the runner and a probe suite that records the fact
 # that it ran. Untracked copies are enough: the runner resolves its root from
@@ -2411,6 +2455,7 @@ test_single_script_selection
 test_numbered_parts_follow_their_base_suite
 test_runner_removes_readonly_worker_roots
 test_interrupted_run_stops_live_suites_before_removing_their_tmpdir
+test_cancel_stops_only_the_runs_of_its_own_copy
 test_changed_file_selection_is_conservative
 fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then

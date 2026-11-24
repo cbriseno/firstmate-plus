@@ -583,7 +583,7 @@ test_sole_slot_record_still_tears_down() {
   fm_write_meta "$dir/home/state/neighbour.meta" \
     "window=firstmate:fm-neighbour" "endpoint_task_id=neighbour" \
     "worktree=$dir/other-worktree" "project=$dir/project" "kind=scout"
-  ( cd "$dir/other-worktree" && exec sleep 30 ) &
+  ( cd "$dir/other-worktree" && exec sleep 3600 ) &
   worker=$!
 
   run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
@@ -897,7 +897,7 @@ test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
   # Staged in this shell, not a command substitution: a background child of a
   # $(...) subshell does not outlive it, and the point of this worker is to be
   # alive in the slot while teardown runs.
-  ( cd "$dir/worktree" && exec sleep 30 ) &
+  ( cd "$dir/worktree" && exec sleep 3600 ) &
   worker=$!
 
   set +e
@@ -928,7 +928,7 @@ test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
     "window=firstmate:fm-$id" "endpoint_task_id=$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
   claim_pool_slot "$dir" "$other" "$dir/other-home"
-  ( cd "$dir/worktree" && exec sleep 30 ) &
+  ( cd "$dir/worktree" && exec sleep 3600 ) &
   worker=$!
 
   set +e
@@ -1382,6 +1382,26 @@ test_live_lavish_board_refuses_teardown_before_mutation() {
   pass "fm-teardown: a live Lavish board refuses teardown before any change, until the skip"
 }
 
+test_same_id_claim_in_another_home_is_not_ours() {
+  local dir id=shared-task rc
+  dir=$(make_case same-id-other-home)
+  mark_case_as_treehouse_pool "$dir"
+  mkdir -p "$dir/other-home"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  claim_pool_slot "$dir" "$id" "$dir/other-home"
+  rc=0
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "same task name from another home must not prove ownership"
+  assert_present "$dir/worktree/sentinel" "another home's work was modified"
+  assert_present "$dir/home/state/$id.meta" "ambiguous task record was removed"
+  assert_present "$dir/pool/1/.fm-slot-owner" "another home's claim was removed"
+  assert_contains "$(cat "$dir/stderr")" "claim" "refusal must explain the ambiguous claim"
+  pass "same task id in another home is not proof of ownership"
+}
+
+test_same_id_claim_in_another_home_is_not_ours
 test_live_lavish_board_refuses_teardown_before_mutation
 test_invalid_endpoint_records_refuse_before_mutation
 test_control_lock_contention_refuses_before_mutation

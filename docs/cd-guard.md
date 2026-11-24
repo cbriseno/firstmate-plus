@@ -1,5 +1,7 @@
 # cd-guard PreToolUse seatbelt
 
+Claude and Codex reach this seatbelt through the single review in [`pretool-check.md`](pretool-check.md), which skips it for an action that cannot touch what it protects; this document still owns its decisions.
+
 This document is the authoritative human-readable contract for the cd-guard PreToolUse seatbelt.
 `bin/fm-cd-command-policy.mjs` is the single decision owner.
 `bin/fm-cd-pretool-check.sh` is the stable harness transport, primary-checkout scope, and output renderer.

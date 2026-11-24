@@ -171,6 +171,28 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   echo "rebased $BRANCH onto $DEFAULT in a separate copy"
 fi
 
+# Bring every copy that has <branch> checked out from <old> to <new> after the
+# ref moved, keeping local edits (two-way read-tree). A copy it cannot carry
+# is reported, never forced; the landing itself is unaffected.
+follow_checked_out_copies() {
+  local branch=$1 old=$2 new=$3 line wt='' found=''
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt=${line#worktree } ;;
+      "branch refs/heads/$branch") found=$wt ;;
+      "") [ -z "$found" ] || follow_one_copy "$found" "$old" "$new"; found=; wt= ;;
+    esac
+  done <<EOF
+$(git -C "$PROJ" worktree list --porcelain)
+EOF
+  # The substitution drops the final blank line, so close the last record here.
+  [ -z "$found" ] || follow_one_copy "$found" "$old" "$new"
+}
+follow_one_copy() {
+  [ -d "$1" ] || return 0
+  git -C "$1" read-tree -m -u "$2" "$3" >/dev/null 2>&1 \
+    || echo "warning: $BRANCH landed, but its copy at $1 could not follow it; reset that copy to $BRANCH before closing it" >&2
+}
 # Captain rule 37: no commit whose whole message (subject or body) carries the
 # word WIP, in any case, and no worker-close preservation commit, enters main.
 wip=
@@ -203,10 +225,16 @@ case "$hold_status" in
 esac
 merge_status=0
 if [ -n "$REBASED" ]; then
-  git -C "$PROJ" update-ref "refs/heads/$BRANCH" "$REBASED" "$(git -C "$PROJ" rev-parse "$BRANCH")" || {
+  OLD_TIP=$(git -C "$PROJ" rev-parse "$BRANCH")
+  git -C "$PROJ" update-ref "refs/heads/$BRANCH" "$REBASED" "$OLD_TIP" || {
     echo "error: $BRANCH moved while rebasing; nothing landed" >&2
     exit 1
   }
+  # Moving a ref does not move the index or files of a copy that has it
+  # checked out: the worker's copy would show the new commits as reverted
+  # changes and refuse to close. Carry that copy to the new tip with a
+  # two-way merge, which keeps the worker's own uncommitted edits.
+  follow_checked_out_copies "$BRANCH" "$OLD_TIP" "$REBASED"
 fi
 # Attach the owner and request to the actual ref change. A failed merge or one
 # already up to date contributes no movement. Preserve landing if attribution

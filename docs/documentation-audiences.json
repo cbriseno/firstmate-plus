@@ -498,6 +498,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/overseer-adoption.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/platforms.md",
       "audience": "operator-current"
     },

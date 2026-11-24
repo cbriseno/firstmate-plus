@@ -31,7 +31,7 @@ Retain delivery gate facts with `presentation <id> --reconcile` and settle any p
 Run `bin/fm-teardown.sh` with a command timeout of at least 10 minutes: cleanup can take longer than the harness's default two-minute command limit on a loaded host. A run cut off by that limit left its pending-close record, so rerun the same command once; it is neither a refusal nor a captain-facing failure.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
-Use `--preserve` only for a ship or scout with an attached task branch; a host or detached scout uses ordinary teardown.
+Use `--preserve` for a ship or scout with an attached task branch, or a host whose scratch result must remain; a detached scout uses ordinary teardown.
 Complete the applicable verification and installation within the same task before closing it.
 When something must stay alive to protect landed work, close with `bin/fm-teardown.sh <id> --residual "<what is left, in the captain's language>"`; add `--keep-running` only when cleanup itself would destroy what must be kept, because it leaves the task's endpoint and local copy untouched and names them in that item (the script header owns both flags).
 Recheck a residual item whenever its condition can have changed, close it with `bin/fm-tasks-axi.sh done <id>-residual` once it is settled, and ask the captain before closing anything it kept running, since it was kept for them.

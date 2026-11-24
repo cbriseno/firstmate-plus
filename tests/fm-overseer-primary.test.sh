@@ -54,8 +54,16 @@ printf '%s\n' "$pid2" > "$FM_HOME/state/.lock"
 bash "$T/bin/fm-overseer-primary.sh" 'resume after relay' || fail 'successor was not reached'
 [ "$(cat "$FM_TEST_CAPTURE")" = 'session:1.0 resume after relay' ] || fail 'relay still targeted the old primary'
 FM_BACKEND=herdr HERDR_SESSION=lab bash "$T/bin/fm-overseer-primary.sh" 'follow through' || fail 'Herdr successor was not reached'
+[ "$(FM_BACKEND=herdr HERDR_SESSION=lab bash "$T/bin/fm-overseer-primary.sh" --locate)" = 'herdr lab:p2' ] || fail 'locate did not print the primary endpoint'
+[ "$(FM_BACKEND=herdr HERDR_SESSION=lab bash "$T/bin/fm-overseer-primary.sh" --locate "$pid1")" = 'herdr lab:p1' ] || fail 'locate did not resolve the endpoint of a given process'
 [ "$(cat "$FM_TEST_CAPTURE")" = 'lab:p2 follow through' ] || fail 'Herdr selected the wrong primary'
 printf '999999999\n' > "$FM_HOME/state/.lock"
 if bash "$T/bin/fm-overseer-primary.sh" 'must not send' >/dev/null 2>&1; then fail 'dead lock was accepted'; fi
 [ "$(cat "$FM_TEST_CAPTURE")" = 'lab:p2 follow through' ] || fail 'message was sent to an unverified target'
+# A typed send that fails (input holding unsent text) leaves the instruction queued for the primary.
+printf '%s\n' "$pid1" > "$FM_HOME/state/.lock"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/fm-send.sh"
+out=$(bash "$T/bin/fm-overseer-primary.sh" 'answer the blocked worker') || fail 'failed send was not queued'
+case "$out" in QUEUED:*) ;; *) fail "queued send did not say so: $out" ;; esac
+grep -q "$(printf '\tcheck\toverseer-')[0-9]*-[0-9]*$(printf '\t')overseer: answer the blocked worker\$" "$FM_HOME/state/.wake-queue" || fail 'instruction missing from the primary wake queue'
 pass 'resolves each live lock owner on both backends with a macOS-shaped process fixture and refuses a dead owner'

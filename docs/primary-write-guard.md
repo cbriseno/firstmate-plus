@@ -1,5 +1,7 @@
 # Primary write guard
 
+Claude and Codex reach this seatbelt through the single review in [`pretool-check.md`](pretool-check.md), which skips it for an action that cannot touch what it protects; this document still owns its decisions.
+
 This document is the authoritative human-readable contract for the guard for primary direct operations and host tasks.
 `bin/fm-primary-write-policy.mjs` is the single decision owner for each write target.
 `bin/fm-primary-write-pretool-check.sh` is the harness transport: it owns primary-home scope, the allowed-path set, the escape hatch, and harness rendering.

@@ -166,6 +166,18 @@ PY
   jq -e '.integration.overdue[0].request == "captain-request"' "$state/budgets.json" >/dev/null \
     || fail "waking the owner settled a request whose branch did not move"
 
+  # A declared timed wait silences the alarm until its time, then it speaks again.
+  printf 'paused [at=%s]: real measurement until %s\n' "$epoch" "$(date -u -d "@$((epoch + 3600))" +%Y-%m-%dT%H:%MZ)" > "$state/captain-request.status"
+  python3 "$BUDGETS" check >/dev/null || fail "recheck during the declared wait"
+  jq -e '.integration.overdue == []' "$state/budgets.json" >/dev/null \
+    || fail "an overdue alarm ignored the declared wait: $(cat "$state/budgets.json")"
+  assert_absent "$alarm"
+  printf 'paused [at=%s]: real measurement until %s\n' "$epoch" "$(date -u -d "@$((epoch - 120))" +%Y-%m-%dT%H:%MZ)" > "$state/captain-request.status"
+  python3 "$BUDGETS" check >/dev/null || fail "recheck after the declared wait expired"
+  jq -e '.integration.overdue[0].request == "captain-request"' "$state/budgets.json" >/dev/null \
+    || fail "an expired wait without progress must alarm again"
+  rm -f "$state/captain-request.status"
+
   # The already-authorized local landing still uses its normal guard. Its
   # current reflog time is distinct from the old author/commit timestamps.
   git -C "$repo" branch -f fm/captain-request main

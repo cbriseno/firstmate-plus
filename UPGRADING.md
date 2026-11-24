@@ -21,6 +21,7 @@ The command's header and help own detection, per-home records and application.
 
 On a managed Mac, the [read-only tool inventory](README.md#required-versus-optional-tools) can check the tools already available to the updated installation.
 To enable the optional overseer after updating, follow the [overseer setup and diagnostic instructions](README.md#optional-overseer).
+If an installation already runs a hand-made overseer, move it with `fm-overseer.sh adopt` as described in [the same section](README.md#optional-overseer); nothing is adopted automatically.
 
 ## Client instructions for the next package
 

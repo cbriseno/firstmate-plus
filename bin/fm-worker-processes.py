@@ -7,6 +7,7 @@ Usage: python3 fm-worker-processes.py run SCOPE SHELL-COMMAND [HOME CONFIG]
        python3 fm-worker-processes.py footprint STATE
        python3 fm-worker-processes.py park-safe STATE/TASK.meta
        python3 fm-worker-processes.py park-gone STATE/TASK.meta
+       python3 fm-worker-processes.py owns STATE/TASK.meta PID
 
 Spawn records process_scope=STATE/TASK:spawn_gen and runs this wrapper with
 FM_WORKER_PROCESS_SCOPE set to that value, after environment filtering.
@@ -35,6 +36,8 @@ the lane's whole process tree, read through the same per-platform ownership
 adapter. bin/fm-capacity.sh owns how admission uses it.
 park-safe returns 0 for a verified idle process tree, 1 for extra work, and
 2 when the scope or platform cannot establish that fact.
+owns returns 0 when PID is inside the task's own process scope, 1 when it is
+alive elsewhere (another copy's run), 2 when ownership cannot be established.
 """
 
 import ctypes
@@ -301,7 +304,22 @@ def park_safe(path, gone=False):
         return 2
 
 
+def owns(path, pid):
+    """Tell whether PID belongs to the task's own process scope."""
+    try:
+        path = Path(path)
+        meta = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
+        scope = meta['process_scope']
+        if scope != f"{path.parent.resolve()}/{path.stem}:{meta['spawn_gen']}":
+            return 2
+        return 0 if int(pid) in owned(scope) else 1
+    except (OSError, KeyError, ValueError, RuntimeError):
+        return 2
+
+
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == 'owns':
+        return owns(sys.argv[2], sys.argv[3])
     if len(sys.argv) == 3 and sys.argv[1] == 'park-safe':
         return park_safe(sys.argv[2])
     if len(sys.argv) == 3 and sys.argv[1] == 'park-gone':

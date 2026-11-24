@@ -405,7 +405,7 @@ test_tracked_claude_registration() {
   local tool cmd rc payload count=0
   for tool in Bash Edit MultiEdit Write NotebookEdit; do
     cmd=$(jq -r --arg t "$tool" '[.hooks.PreToolUse[] | select(.matcher as $m | $t | test($m)) | .hooks[].command
-      | select(contains("fm-primary-write-pretool-check.sh"))] | first // empty' "$ROOT/.claude/settings.json")
+      | select(contains("fm-pretool-check.sh"))] | first // empty' "$ROOT/.claude/settings.json")
     [ -n "$cmd" ] || fail "tracked Claude settings must route $tool to the primary write guard"
     case "$tool" in
       Bash) payload=$(jq -cn --arg cwd "$PRIMARY" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:"echo x >> ~/.bashrc"}}') ;;
@@ -419,7 +419,7 @@ test_tracked_claude_registration() {
   done
   for tool in Grep Glob; do
     cmd=$(jq -r --arg t "$tool" '[.hooks.PreToolUse[] | select(.matcher as $m | $t | test($m)) | .hooks[].command
-      | select(contains("fm-primary-write-pretool-check.sh"))] | first // empty' "$ROOT/.claude/settings.json")
+      | select(contains("fm-pretool-check.sh"))] | first // empty' "$ROOT/.claude/settings.json")
     [ -z "$cmd" ] || fail "read-only Claude tool $tool must not reach the primary write guard"
   done
   [ "$count" -eq 5 ] || fail "expected five guarded Claude tools, got $count"
@@ -433,7 +433,7 @@ test_tracked_codex_registration() {
   cp "$ROOT/.codex/hooks.json" "$codex_home/.codex/hooks.json"
   for tool in Bash apply_patch; do
     cmd=$(jq -r --arg t "$tool" '[.hooks.PreToolUse[] | select(.matcher as $m | $t | test($m)) | .hooks[].command
-      | select(contains("fm-primary-write-pretool-check.sh"))] | first // empty' "$ROOT/.codex/hooks.json")
+      | select(contains("fm-pretool-check.sh"))] | first // empty' "$ROOT/.codex/hooks.json")
     [ -n "$cmd" ] || fail "tracked Codex hooks must route $tool to the primary write guard"
     if [ "$tool" = Bash ]; then
       payload=$(jq -cn --arg cwd "$codex_home" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:"echo x >> ~/.bashrc"}}')

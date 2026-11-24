@@ -54,6 +54,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-session-lock-lib.sh` | Shared session-lock ownership from harness ancestry, a trusted Claude session id, or on Windows/Git Bash a published harness pid, for fm-lock.sh and the Claude Stop auto-arm, plus the read-only lock inspection behind `fm-lock.sh status` and `fm-inbox.sh ready` |
 | `fm-claude-stop-autoarm.sh` | Claude Stop `asyncRewake` hook owning tokenless watcher continuity with single-flight exit-2 rewake (docs/watcher-continuity.md) |
 | `fm-turnend-guard.sh`    | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md) |
+| `fm-pretool-check.sh` | The one PreToolUse hook for Claude and Codex that runs the arm, cd and primary-write seatbelts only when an action can touch what they protect (docs/pretool-check.md) |
+| `fm-pretool-prefilter-lib.sh` | Shared strict-superset prefilters for the three PreToolUse seatbelts (docs/pretool-check.md) |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |

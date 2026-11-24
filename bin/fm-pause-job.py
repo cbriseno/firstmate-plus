@@ -45,6 +45,13 @@ for name in names:
     except (OSError, ValueError, TypeError):
         sys.exit(0)
 for pid in pids:
+    # A process that is gone ended its work, whoever owned it: it is outside
+    # every scope once it exits, so ownership is asked only of a live one.
     if not live(pid):
         sys.exit(0)
+    # A live process outside this task's own scope cannot show its work ended.
+    owner = subprocess.run([sys.executable, str(Path(__file__).with_name('fm-worker-processes.py')),
+                            'owns', str(Path(state) / (task + '.meta')), pid], check=False).returncode
+    if owner == 1:
+        sys.exit(2)
 sys.exit(1)

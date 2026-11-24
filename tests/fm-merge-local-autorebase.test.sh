@@ -77,6 +77,34 @@ test_published_branch_is_not_rewritten() {
   pass "fm-merge-local: a branch already on a remote is never rewritten"
 }
 
+test_worker_copy_stays_clean_after_rebase_landing() {
+  make_case copy other ship
+  local wt="$TMP_ROOT/copy/worker"
+  git -C "$PROJ" worktree add -q "$wt" "fm/$ID" || fail "could not create the worker copy"
+  printf 'scratch\n' > "$wt/untracked-note"
+  land
+  [ "$STATUS" -eq 0 ] || fail "a behind branch did not land: $OUT"
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$(git -C "$PROJ" rev-parse main)" ] || fail "worker copy is not at the landed head"
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=no)" ] || fail "worker copy shows the landed commits as changes: $(git -C "$wt" status --porcelain)"
+  [ -f "$wt/other" ] || fail "worker copy lacks main's new files"
+  [ -f "$wt/untracked-note" ] || fail "worker copy lost its own untracked file"
+  pass "fm-merge-local: the worker copy follows the rebased branch and stays clean"
+}
+
+test_worker_copy_keeps_its_own_edits_after_rebase_landing() {
+  make_case copyedit other ship
+  local wt="$TMP_ROOT/copyedit/worker"
+  git -C "$PROJ" worktree add -q "$wt" "fm/$ID" || fail "could not create the worker copy"
+  printf 'edited\n' > "$wt/ship"
+  land
+  [ "$STATUS" -eq 0 ] || fail "a behind branch did not land: $OUT"
+  [ "$(cat "$wt/ship")" = edited ] || fail "worker copy lost its uncommitted edit"
+  [ "$(git -C "$wt" status --porcelain --untracked-files=no)" = " M ship" ] || fail "worker copy shows more than its own edit: $(git -C "$wt" status --porcelain)"
+  pass "fm-merge-local: a worker copy with its own uncommitted edit keeps only that edit"
+}
+
 test_clean_rebase_lands_without_publication_batch
+test_worker_copy_stays_clean_after_rebase_landing
+test_worker_copy_keeps_its_own_edits_after_rebase_landing
 test_conflict_refuses_with_exact_cause_and_changes_nothing
 test_published_branch_is_not_rewritten
