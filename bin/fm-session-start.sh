@@ -27,7 +27,7 @@
 # was bootstrap-then-lock):
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
-#                       mutating step runs.
+#                       mutating step runs, then start watcher continuity.
 #   1b. home role    - the resolved firstmate-repository role line
 #                      (bin/fm-role.sh report), purely local, no network.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
@@ -64,9 +64,7 @@
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
 #                       data/captain-shared.md, data/learnings.md: read-only,
 #                       always safe, always runs.
-#   9. closing reminder - prints the context-specific watcher next step; this
-#                       script points back to the emitted harness supervision
-#                       block and deliberately never arms the watcher itself.
+#   9. closing reminder - points to the harness's wake-delivery instructions.
 #
 # Those ten names are also the runtime-bound stage list below, so a truncated
 # startup can name exactly which of them never ran - and the parent banners
@@ -770,6 +768,9 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '●  otherwise mutate fleet state from this session.\n'
     printf '%s\n' "$BAR"
   }
+elif ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-watch-arm.sh" --start-continuity; then
+  printf 'WATCHER CONTINUITY: startup could not launch the session-owned arm.\n'
 fi
 
 # --- 1b. home role -------------------------------------------------------
@@ -1120,13 +1121,11 @@ elif [ -f "$CONFIG/x-mode.env" ]; then
   cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
 X mode is active, so the emitted block's cadence instruction applies.
-This script never starts supervision itself.
 
 EOF
 else
 cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
-This script never starts supervision itself.
 
 EOF
 fi

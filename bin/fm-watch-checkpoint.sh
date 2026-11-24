@@ -191,12 +191,20 @@ export FM_WATCH_CHECKPOINT_DEADLINE
 
 set +e
 # Interrupt the checkpoint's active check group so the watcher's native EXIT cleanup can release its lock; ordinary watcher shutdown still uses TERM.
-run_bounded "$SECONDS_ARG" INT 5 "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+continuity_owner=
+if read -r continuity_owner 2>/dev/null < "$STATE/.watch-continuity.lock/pid" \
+  && kill -0 "$continuity_owner" 2>/dev/null; then
+  # Attach to the session's watcher. Ending the checkpoint only retires this
+  # observer; a watcher owned by the session continues to cover the home.
+  run_bounded "$SECONDS_ARG" INT 5 "$SCRIPT_DIR/fm-watch-arm.sh" >"$OUT" 2>"$ERR"
+else
+  run_bounded "$SECONDS_ARG" INT 5 "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+fi
 RC=$?
 set -e
 
 if grep -E '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" >/dev/null 2>&1; then
-  cat "$OUT"
+  grep -Ev '^watcher: (started|attached) ' "$OUT"
   [ ! -s "$ERR" ] || cat "$ERR" >&2
   exit 0
 fi

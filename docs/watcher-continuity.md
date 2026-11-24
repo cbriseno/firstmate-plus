@@ -3,8 +3,10 @@
 This document explains how Firstmate keeps the watcher re-armed after a wake, how wakes are ordered and acknowledged, and which tests and live evidence cover that contract.
 Read it when debugging a supervision gap or changing a harness's re-arm path.
 
-The watcher remains intentionally one-shot: one actionable reason closes one watcher cycle.
-Must-work continuity now lives above that process boundary instead of depending on the model remembering a re-arm step.
+One actionable reason closes one watcher cycle.
+Once session startup acquires the home lock, it starts a session-bound arm loop before the other startup work.
+The loop keeps the watcher running across closes and yields to the away daemon while that posture is active.
+Harness adapters remain responsible for delivering wakes, including by attaching to a cycle started by the session.
 In this document, an arm is one run of `bin/fm-watch-arm.sh`, which starts a watcher cycle or attaches to one and returns the cycle's reason.
 
 | Topic | Section |
@@ -44,7 +46,8 @@ The [auto-arm header](../bin/fm-claude-stop-autoarm.sh) owns eligibility for the
 
 A turn that ends on an API error, such as a rate limit, overload, authentication or billing failure, fires Claude's `StopFailure` instead of `Stop`.
 Claude ignores that event's exit code and output and gives it no decision control, so no hook can re-arm or rewake from it, and Firstmate registers none for the primary.
-After such a turn the pane shows the API error and stays idle: no new Stop-owned cycle starts, a still-running watcher or handling successor can only record wakes, and the durable queue holds them until a later prompt's turn ends with an ordinary `Stop`.
+After such a turn the pane shows the API error and stays idle.
+The session's arm loop continues recording wakes, and the durable queue keeps them available for the next handling turn.
 
 ### Claude session-lock ownership
 
@@ -317,7 +320,7 @@ Branch acknowledgement retiring the check-row receipts of exactly its granted se
 
 ## Arm-layer cycle contract
 
-`bin/fm-watch-arm.sh` never returns a clean empty success.
+A single watcher arm reports an actionable close or a typed failure.
 
 ### How an arm resolves a close
 
@@ -326,8 +329,8 @@ Branch acknowledgement retiring the check-row receipts of exactly its granted se
 | Actionable output | Returns that reason normally. |
 | Zero/empty | Rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or resolves the close against the watcher's bounded terminal-delivery ledger. |
 
-An attached arm follows verified identity-matched successors and resolves the same way when that chain ends without one.
-It does this because it holds no handle on the watcher's stdout and cannot read the reason line itself.
+An attached arm resolves the closed cycle against the delivery ledger even if a healthy successor already holds the lock.
+An attached arm follows a verified successor when the preceding cycle delivered no reason.
 
 ### Terminal-delivery ledger
 

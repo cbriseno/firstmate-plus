@@ -182,7 +182,7 @@ if fm_hook_payload_is_foreign_host "$PAYLOAD"; then
   exit 0
 fi
 
-# Review each primary final once: indirect questions have no reliable syntax.
+# Review explicit questions once; ordinary final answers need no continuation.
 # Turn state is cleared at the next user prompt, not at an intermediate Stop.
 case "$PAYLOAD" in
   *'"last_assistant_message"'*|*'"last-assistant-message"'*) has_primary_final=1 ;;
@@ -196,10 +196,10 @@ if [ "$has_primary_final" = 1 ] && fm_primary_scope_matches "$FM_ROOT" "$STATE";
     owner=$(cat "$STATE/.lock" 2>/dev/null || true)
     held=$(cat "$STATE/.captain-hold-turn" 2>/dev/null || true)
     blocked=$(cat "$STATE/.captain-question-block" 2>/dev/null || true)
-    final=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // .["last-assistant-message"] // empty' 2>/dev/null || true)
-    if [ -n "$final" ] && [ -n "$owner" ] && [ "$held" != "$owner" ] && [ "$blocked" != "$owner" ]; then
+    question=$(printf '%s' "$PAYLOAD" | jq -r '(.last_assistant_message // .["last-assistant-message"] // "") | test("\\?\\s*$"; "m")' 2>/dev/null || true)
+    if [ "$question" = true ] && [ -n "$owner" ] && [ "$held" != "$owner" ] && [ "$blocked" != "$owner" ]; then
       printf '%s\n' "$owner" > "$STATE/.captain-question-block"
-      echo 'Si tu respuesta pide una decisión, usa fm-captain-hold.sh hold para consultar las autorizaciones o decide y repórtalo. Si no pide una decisión, termina normalmente.' >&2
+      echo 'If your response asks the captain for a decision, use fm-captain-hold.sh hold to check authorization or decide and report it. Otherwise, finish normally.' >&2
       exit 2
     fi
   fi

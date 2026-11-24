@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Firstmate watcher.
 # Usage: FM_HOME=<home> [FM_STATE_OVERRIDE=<state>] bash bin/fm-watch.sh
+# Internal --refresh-usage runs a bounded, single-owner usage update off the poll path.
 # The poll loop and native transition path share one delivery gate: wake the
 # primary only while a durable event still requires action from that actor.
 # Blockers, failures, captured messages, actual endpoint or delivery failures,
@@ -36,6 +37,20 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 mkdir -p "$STATE"
+if [ "${1:-}" = --refresh-usage ]; then
+  # shellcheck source=/dev/null # Canonical lint root, already reached by the poll.
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  usage_lock="$STATE/.watch-usage-refresh.lock"
+  fm_lock_try_acquire "$usage_lock" || exit 0
+  trap 'fm_lock_release "$usage_lock"' EXIT
+  trap 'exit 143' TERM
+  for usage_meta in "$STATE"/*.meta; do
+    [ -f "$usage_meta" ] || continue
+    usage_task=${usage_meta##*/}
+    python3 "$SCRIPT_DIR/fm_task_usage.py" refresh "${FM_DATA_OVERRIDE:-$FM_HOME/data}/${usage_task%.meta}" || true
+  done
+  exit 0
+fi
 # A home that never existed (a state-only test fixture) is not a home that
 # disappeared, so the per-poll home-gone exit below applies only when it did.
 WATCH_HOME_EXISTED=0
@@ -4098,6 +4113,10 @@ evict_stalled_holder() {
 EVICTED_PID=
 EVICTED_BEAT_AGE=
 BEAT="$STATE/.last-watcher-beat"
+# A checkpoint can end while the watcher is still opening its recovery state.
+# Release early claims on that path before the full-cycle cleanup takes over.
+trap 'fm_lock_release "$WATCH_LOCK"' EXIT
+watcher_stop_signals
 while ! fm_lock_try_acquire "$WATCH_LOCK"; do
   if [ -n "${FM_LOCK_HELD_PID:-}" ]; then
     if [ -e "$BEAT" ]; then
@@ -4135,11 +4154,13 @@ fi
 if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
   && [ "${FM_WATCH_FOREGROUND_CHECKPOINT:-0}" != 1 ]; then
   if ! fm_recovery_marker_reopen_announced "$WATCHER_DOWNTIME_MARKER"; then
+    trap - EXIT
     echo "watcher: recovery state could not be reopened safely; retaining stale lock evidence" >&2
     exit 1
   fi
 fi
 if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
+  trap - EXIT
   echo "watcher: recovery state could not be consumed safely; retaining stale lock evidence" >&2
   exit 1
 fi
@@ -4270,7 +4291,6 @@ watcher_cleanup() {
   return "$cleanup_status"
 }
 trap watcher_cleanup EXIT
-watcher_stop_signals
 # This watcher's own pid, as recorded in the lock by fm_lock_claim (which writes
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
@@ -4614,10 +4634,12 @@ while :; do
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
-    # Refresh live usage outside work snapshot; the reader skips unchanged sizes.
+    # Usage is eventual reporting. An expensive transcript read must not hold
+    # the beacon or delay classification of worker signals.
     for usage_meta in "$STATE"/*.meta; do
       [ -f "$usage_meta" ] || continue
-      python3 "$SCRIPT_DIR/fm_task_usage.py" refresh "${FM_DATA_OVERRIDE:-$FM_HOME/data}/$(basename "$usage_meta" .meta)" || triage_log "usage refresh failed: $usage_meta"
+      fm_run_timed 120 "$WATCH_PATH" --refresh-usage </dev/null >/dev/null 2>&1 &
+      break
     done
     # Progress obligations use the slow mechanical cadence and are carried with
     # the next captain-relevant status wake, without creating a separate turn.

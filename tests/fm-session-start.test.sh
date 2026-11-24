@@ -2736,6 +2736,95 @@ SH
 ) || fail 'startup Lavish recovery'
 }
 
+test_watcher_continues_without_primary_turns() {
+(
+  local world root home fakebin state keeper='' observer='' first second i
+  world=$(new_world watcher-continuity)
+  IFS='|' read -r root home fakebin <<< "$world"
+  state="$home/state"
+  trap '
+    touch "$home/usage-release"
+    [ -z "$observer" ] || kill -TERM "$observer" 2>/dev/null || true
+    [ -n "$keeper" ] || read -r keeper 2>/dev/null < "$state/.watch-continuity.lock/pid" || true
+    [ -z "$keeper" ] || kill -TERM "$keeper" 2>/dev/null || true
+  ' EXIT
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  mv "$fakebin/ps" "$fakebin/ps-harness"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'comm='*|*'args='*|*'ppid='*) exec "${0%/*}/ps-harness" "$@" ;;
+  *) exec /bin/ps "$@" ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  export FM_POLL=1 FM_CHECK_INTERVAL=30 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=1
+  export FM_BUDGETS=0
+  export FM_PROC_ROOT_OVERRIDE="$home/no-proc"
+  # Freeze the first side-band refresh while the watcher still has to deliver.
+  cat > "$fakebin/python3" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  */fm_task_usage.py)
+    if [ "$2" = refresh ]; then
+      touch "$FM_HOME/usage-started"
+      while [ ! -e "$FM_HOME/usage-release" ]; do sleep 0.1; done
+      exit 0
+    fi ;;
+esac
+exec "$FM_TEST_WATCHER_PYTHON" "$@"
+SH
+  chmod +x "$fakebin/python3"
+  export FM_TEST_WATCHER_PYTHON
+  FM_TEST_WATCHER_PYTHON=$(command -v python3)
+  touch "$state/task.meta"
+  LAVISH_AXI_STATE_DIR="$home/lavish" \
+    run_named_harness_session_start claude "$home" "$root" "$fakebin:$BASE_PATH" > "$home/startup.out" \
+    || fail "session start failed"
+  i=0
+  until [ -e "$home/usage-started" ] && [ -s "$state/.watch.lock/pid" ]; do
+    [ "$i" -lt 200 ] || fail "startup did not launch a watcher and usage refresh"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  read -r first < "$state/.watch.lock/pid" || fail "startup watcher vanished before its first wake"
+  read -r keeper < "$state/.watch-continuity.lock/pid" || fail "startup has no continuity owner"
+  mkdir "$home/checkpoint-tmp"
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_ARM_ATTACH_POLL=2 TMPDIR="$home/checkpoint-tmp" \
+    LAVISH_AXI_STATE_DIR="$home/lavish" \
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 50 > "$home/checkpoint.out" 2>&1 &
+  observer=$!
+  i=0
+  until grep -q "^watcher: attached pid=$first " "$home/checkpoint-tmp"/fm-watch-checkpoint.out.* 2>/dev/null; do
+    [ "$i" -lt 200 ] || fail "foreground checkpoint did not attach to the startup watcher"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  append_wake "$state" check continuity-test 'check: watcher continuity regression' || fail "could not queue wake"
+  i=0
+  until [ -s "$state/.watch.lock/pid" ] && read -r second < "$state/.watch.lock/pid" \
+    && [ "$second" != "$first" ] \
+    && grep -q "watcher_pid=$first.*reason=.*successor=started:$second" "$state/.watch-cycle-exits.log"; do
+    [ "$i" -lt 240 ] || fail "startup watcher did not re-arm while the usage refresh was blocked"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  touch "$home/usage-release"
+  wait "$observer" || fail "foreground checkpoint missed the close of an attached watcher"
+  observer=
+  grep -q '^check: rearm-resurface$' "$home/checkpoint.out" || fail "checkpoint lost the durable wake"
+  append_wake "$state" check another-continuity-test 'check: another watcher event' || fail "could not queue second wake"
+  i=0
+  until grep -q "watcher_pid=$second.*reason=.*successor=started:" "$state/.watch-cycle-exits.log"; do
+    [ "$i" -lt 240 ] || fail "successor did not re-arm after a second wake without a primary turn"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  pass "session startup arms first and successive closes re-arm even when usage reporting is blocked"
+) || fail "watcher continuity during startup"
+}
+
 case "${FM_SESSION_START_CASE:-}" in
   pending-board) test_pending_board_results_reach_successor_digest; exit 0 ;;
   startup-lavish) test_startup_recovers_unregistered_lavish_board; exit $? ;;
@@ -2763,6 +2852,7 @@ esac
 session_cases=(
   test_overseer_start_on_locked_session
   test_fleet_ledger_enabled_on_locked_start
+  test_watcher_continues_without_primary_turns
   test_context_digest_absent_empty_present
   test_lock_refusal_read_only_path
   test_lock_write_failure_read_only_path

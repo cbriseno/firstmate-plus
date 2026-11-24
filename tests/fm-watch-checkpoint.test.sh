@@ -41,6 +41,44 @@ test_quiet_checkpoint_exits_124_cleanly() {
   pass "quiet checkpoint exits 124 with a clean checkpoint line and no live lock"
 }
 
+test_checkpoint_during_recovery_releases_its_startup_lock() {
+  (
+    local home owner checkpoint i status=0
+    home=$(make_home interrupted-recovery)
+    export FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999
+    (
+      # shellcheck source=/dev/null # The wake-lock owner has its own lint root.
+      . "$ROOT/bin/fm-wake-lib.sh"
+      fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+      trap 'fm_lock_release "$FM_WAKE_QUEUE_LOCK"' EXIT
+      trap 'exit 0' TERM
+      touch "$home/queue-locked"
+      while :; do sleep 0.1; done
+    ) &
+    owner=$!
+    trap 'kill -TERM "$owner" 2>/dev/null || true; wait "$owner" 2>/dev/null || true' EXIT
+    i=0
+    until [ -f "$home/queue-locked" ]; do
+      [ "$i" -lt 120 ] || fail "fixture did not hold the wake queue lock"
+      sleep 0.1
+      i=$((i + 1))
+    done
+    "$CHECKPOINT" --seconds 10 > "$home/out" 2>&1 &
+    checkpoint=$!
+    i=0
+    until [ -s "$home/state/.watch.lock/pid" ]; do
+      [ "$i" -lt 120 ] || fail "checkpoint never acquired its startup lock"
+      sleep 0.1
+      i=$((i + 1))
+    done
+    assert_absent "$home/state/.last-watcher-beat" "fixture did not stop watcher in initial recovery"
+    wait "$checkpoint" || status=$?
+    expect_code 124 "$status" "checkpoint expired while initializing recovery"
+    assert_absent "$home/state/.watch.lock/pid" "checkpoint leaked its startup watcher lock"
+  ) || fail "checkpoint interrupted during startup recovery"
+  pass "checkpoint releases its watcher lock when interrupted during startup recovery"
+}
+
 test_perl_timeout_fallback_honors_cleanup_bound_before_escalating() {
   local home fallback_bin tool tool_path status watcher_pid
   home=$(make_home perl-fallback)
@@ -137,8 +175,9 @@ test_never_announced_recovery_without_eligible_row_stays_quiet() {
   printf 'pending:downtime:unreported.1.aaa\n' > "$home/state/.watcher-down"
 
   status=0
+  # This case tests recovery state after initialization, not startup speed.
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
-    "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
+    "$CHECKPOINT" --seconds 8 >"$out" 2>"$err" || status=$?
 
   expect_code 124 "$status" "recovery without an eligible row checkpoint exit"
   assert_not_contains "$(cat "$out")" 'check: rearm-resurface' \
@@ -509,6 +548,7 @@ test_supervision_loop_lands_each_delivery_on_one_wake() {
 }
 
 test_quiet_checkpoint_exits_124_cleanly
+test_checkpoint_during_recovery_releases_its_startup_lock
 test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
 test_announced_recovery_is_not_reannounced_by_next_checkpoint
 test_never_announced_recovery_without_eligible_row_stays_quiet

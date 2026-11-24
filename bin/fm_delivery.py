@@ -920,7 +920,7 @@ def read_captain_answer(home, task):
     return dict(task_id=task_id, origin=origin[1] if origin else None, occurrence=occurrence,
                 digest=record[1], mode=record[2], value=value[1] if value else None,
                 text=text, attachments=[dict(path=p, name=Path(p).name.split("-", 1)[-1]) for p in attachments],
-                correction=text.startswith("Corrección de respuesta ("), recorded=True, application=application, source='captain-hold.canonical-resolution')
+                correction=text.startswith(("Corrección de respuesta (", "Answer correction (")), recorded=True, application=application, source='captain-hold.canonical-resolution')
 
 
 CALL_BOUNDS = dict(question=160, label=40, detail=120, context=200, link=500, instruction=200)

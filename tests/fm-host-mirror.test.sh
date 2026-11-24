@@ -117,7 +117,7 @@ SH
   REAL_PS=$(command -v ps) PATH="$fake:$PATH" FM_DIAGNOSTICS=0 as_session "$home" '
     export FM_ROOT_OVERRIDE="$PRIMARY_ROOT"
     guard="$PRIMARY_ROOT/bin/fm-turnend-guard.sh"
-    printf "%s" "{\"hook_event_name\":\"Stop\",\"session_id\":\"session\",\"last_assistant_message\":\"Final\"}" |
+    printf "%s" "{\"hook_event_name\":\"Stop\",\"session_id\":\"session\",\"last_assistant_message\":\"Continue?\"}" |
       "$guard" --claude 2> "$FM_HOME/guard.err"
     [ "$?" -eq 2 ] && [ -s "$FM_HOME/state/.captain-question-block" ]' \
     || fail "the first Stop must still block for the captain-question review"

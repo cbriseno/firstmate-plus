@@ -5238,7 +5238,7 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
     > "$home/missing-category.out" 2> "$home/missing-category.err" || rc=$?
   assert_equals 1 "$rc" "hold accepted a missing category"
   assert_grep '--category is required' "$home/missing-category.err" "the missing-category refusal did not explain the requirement"
-  assert_grep 'hazlo y repórtalo' "$home/missing-category.err" "the missing category refusal omitted the instruction"
+  assert_grep 'act and report' "$home/missing-category.err" "the missing category refusal omitted the instruction"
   assert_no_grep sample-bare-call "$home/data/backlog.md" "a missing category still created its task"
 
   rc=0
@@ -5246,7 +5246,7 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
     --repo sample --action fixture --category integration --challenge fixture --question "Which route?" --option north=North --option south=South \
     > "$home/category.out" 2> "$home/category.err" || rc=$?
   assert_equals 1 "$rc" "hold accepted a category outside the closed list"
-  assert_grep 'hazlo y repórtalo' "$home/category.err" "the unsupported category refusal omitted the instruction"
+  assert_grep 'act and report' "$home/category.err" "the unsupported category refusal omitted the instruction"
   assert_no_grep sample-bare-call "$home/data/backlog.md" "an unsupported category still created its task"
 
   local category
@@ -6503,7 +6503,7 @@ test_standing_grants() {
   run_captain "$home" answer grant-call --decision-file "$answer" --standing >/dev/null || fail 'standing answer failed'
   out=$(run_captain "$home" hold second --action 'remove clean idle copy' --reason 'decide' \
     --category product-design 2>&1) && fail 'covered action opened a hold'
-  case "$out" in *'Sí, siempre.'*'hazlo y repórtalo'*) ;; *) fail "grant refusal missing: $out" ;; esac
+  case "$out" in *'Sí, siempre.'*'act and report'*) ;; *) fail "grant refusal missing: $out" ;; esac
   out=$(run_captain "$home" hold exception --action 'remove clean idle copy' --override-grant 'this copy has a distinct limit' \
     --category product-design --challenge fixture --reason decide --title Exception --question 'Proceed?' \
     --option yes=Yes --option no=No 2>&1) || fail "grant override failed: $out"
@@ -6513,7 +6513,7 @@ test_standing_grants() {
   tasks_in "$home" add scoped-task 'Scoped task' --repo sample >/dev/null || fail 'scoped task setup failed'
   out=$(run_captain "$home" hold scoped-task --action 'scoped action' --reason decide --category product-design 2>&1) \
     && fail 'scope was not resolved from the existing task'
-  case "$out" in *'hazlo y repórtalo'*) ;; *) fail "scope refusal missing: $out" ;; esac
+  case "$out" in *'act and report'*) ;; *) fail "scope refusal missing: $out" ;; esac
   run_captain "$home" hold legacy --action 'older action' --category product-design --challenge fixture \
     --reason decide --title Legacy --question 'Proceed?' --option yes=Yes --option no=No >/dev/null || fail 'legacy fixture hold failed'
   python3 - "$home/data/legacy/captain-call.json" <<'PYLEGACY'
@@ -6549,6 +6549,12 @@ test_question_guard() {
   # shellcheck disable=SC2016 # Variables belong to the fake harness shell.
   FM_HOME="$home" FM_ROOT_OVERRIDE="$home" TEST_CODE="$ROOT" "$home/fake-claude" -c '
     printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+    payload="{\"last_assistant_message\":\"The work is complete.\",\"stop_hook_active\":false}"
+    printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
+    [ "$?" = 0 ] || exit 25
+    payload="{\"last_assistant_message\":\"See https://example.test/?view=details\",\"stop_hook_active\":false}"
+    printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
+    [ "$?" = 0 ] || exit 27
     payload="{\"last_assistant_message\":\"¿Seguimos?\",\"stop_hook_active\":false}"
     printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
     [ "$?" = 2 ] || exit 11
@@ -6562,6 +6568,9 @@ test_question_guard() {
     [ "$?" = 0 ] || exit 23
     bash "$TEST_CODE/bin/fm-question-turn-reset.sh" >/dev/null || exit 20
     payload="{\"last_assistant_message\":\"Dime si debo continuar.\",\"stop_hook_active\":false}"
+    printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
+    [ "$?" = 0 ] || exit 26
+    payload="{\"last_assistant_message\":\"Should I continue?\",\"stop_hook_active\":false}"
     printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
     [ "$?" = 2 ] || exit 21
     printf "%s" "$payload" | bash "$TEST_CODE/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1

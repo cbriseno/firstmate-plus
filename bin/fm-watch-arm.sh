@@ -60,6 +60,10 @@
 # state/.watch-triage.log remains exclusively the watcher's absorbed-wake debug
 # log and is never written here.
 #
+# --start-continuity: after session-lock acquisition, start the detached,
+# session-bound owner of coverage between harness turns. It runs ordinary
+# arm cycles. Harness owners still receive a cycle's durable close by attaching.
+#
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and own a fresh cycle, or attach if a verified live peer
 # wins the singleton while the duplicate child stands down. It
@@ -174,6 +178,7 @@ CYCLE_LOG_LOCK="$STATE/.watch-cycle-exits.lock"
 CYCLE_LOG_MAX_BYTES=${FM_WATCH_CYCLE_LOG_MAX_BYTES:-262144}
 CYCLE_LOG_KEEP_LINES=${FM_WATCH_CYCLE_LOG_KEEP_LINES:-1000}
 ARM_PID=${BASHPID:-$$}
+CONTINUITY_LOCK="$STATE/.watch-continuity.lock"
 case "$CYCLE_LOG_MAX_BYTES" in ''|*[!0-9]*|0) CYCLE_LOG_MAX_BYTES=262144 ;; esac
 case "$CYCLE_LOG_KEEP_LINES" in ''|*[!0-9]*|0) CYCLE_LOG_KEEP_LINES=1000 ;; esac
 
@@ -281,7 +286,7 @@ cycle_log_append() {
 # extra synthetic lifecycle row. A taking-over arm names itself instead, so its
 # record of the cycle it took over names the cycle it started.
 cycle_mark_predecessor_successor() {
-  local successor=$1 predecessor=${2:-${FM_WATCH_PREDECESSOR_ARM_PID:-}} i tmp
+  local successor=$1 predecessor=${2:-${FM_WATCH_PREDECESSOR_ARM_PID:-${FM_WATCH_CONTINUITY_PREDECESSOR:-}}} i tmp
   case "$predecessor" in
     ''|*[!0-9]*) return 0 ;;
   esac
@@ -458,6 +463,13 @@ attach_and_wait() {
     fi
     if healthy_watcher; then
       if [ "$HEALTHY_PID" != "$attached_pid" ] || [ "$HEALTHY_IDENTITY" != "$cycle_watcher_identity" ]; then
+        # A successor can win the lock before this poll. The preceding
+        # delivery still belongs to the owner that was waiting on it.
+        if cycle_delivered_reason; then
+          cycle_log_append unknown unknown attached-delivered-wake "attached:$HEALTHY_PID"
+          printf '%s\n' "$DELIVERED_REASON"
+          return 0
+        fi
         cycle_log_append unknown unknown lock-replaced "attached:$HEALTHY_PID"
         attached_pid=$HEALTHY_PID
         cycle_begin "$attached_pid" attached "$HEALTHY_IDENTITY"
@@ -476,6 +488,11 @@ attach_and_wait() {
       echo "watcher: FAILED - attached watcher pid=$attached_pid stalled (beacon ${age}s at or past hard bound ${STALL_BOUND}s)"
       return 1
     fi
+    if cycle_delivered_reason; then
+      cycle_log_append unknown unknown attached-delivered-wake none
+      printf '%s\n' "$DELIVERED_REASON"
+      return 0
+    fi
     if wait_for_healthy_successor; then
       cycle_log_append unknown unknown attached-cycle-ended "attached:$HEALTHY_PID"
       attached_pid=$HEALTHY_PID
@@ -493,6 +510,67 @@ attach_and_wait() {
     fi
     cycle_log_append unknown unknown attached-cycle-ended none
     return 1
+  done
+}
+
+start_continuity() {
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+  local owner identity current monitor_was_on=0
+  fm_session_lock_owned_by_self "$STATE" || return 1
+  read -r owner < "$STATE/.lock" || return 1
+  identity=$(fm_pid_identity "$owner") || return 1
+  if read -r current 2>/dev/null < "$CONTINUITY_LOCK/session-identity" \
+    && [ "$current" = "$identity" ] \
+    && read -r current 2>/dev/null < "$CONTINUITY_LOCK/pid" && fm_pid_alive "$current"; then
+    return 0
+  fi
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
+  nohup "$ARM_SCRIPT" --maintain "$owner" "$identity" >/dev/null 2>&1 </dev/null &
+  [ "$monitor_was_on" -eq 1 ] || set +m
+}
+
+maintain_continuity() {
+  local owner=$1 identity=$2 current recheck keeper_arm='' predecessor='' handling_predecessor='' rc=0
+  fm_lock_acquire_wait_max "$CONTINUITY_LOCK" "$CONFIRM_TIMEOUT" || return 1
+  trap 'fm_lock_release "$CONTINUITY_LOCK"' EXIT
+  trap 'if [ -n "$keeper_arm" ]; then kill -TERM "$keeper_arm" 2>/dev/null; wait "$keeper_arm" 2>/dev/null; fi; exit 0' HUP INT TERM
+  printf '%s\n' "$identity" > "$CONTINUITY_LOCK/session-identity" || return 1
+  while ! arm_ground_missing_now && read -r current < "$STATE/.lock" \
+    && [ "$current" = "$owner" ] && [ "$(fm_pid_identity "$owner")" = "$identity" ]; do
+    if [ -e "$STATE/.afk" ]; then
+      sleep 1
+      continue
+    fi
+    # Keep an announced recovery episode stable while the wake is in flight.
+    # The arm still links this cycle to its verified predecessor in the ledger.
+    FM_WATCH_PREDECESSOR_ARM_PID="$handling_predecessor" FM_WATCH_CONTINUITY_PREDECESSOR="$predecessor" \
+      "$ARM_SCRIPT" &
+    keeper_arm=$!
+    recheck=$((SECONDS + 15))
+    while kill -0 "$keeper_arm" 2>/dev/null; do
+      if [ -e "$STATE/.afk" ] || ! kill -0 "$owner" 2>/dev/null \
+        || ! read -r current < "$STATE/.lock" || [ "$current" != "$owner" ]; then
+        kill -TERM "$keeper_arm" 2>/dev/null || true
+        break
+      fi
+      if [ "$SECONDS" -ge "$recheck" ]; then
+        if [ "$(fm_pid_identity "$owner")" != "$identity" ]; then
+          kill -TERM "$keeper_arm" 2>/dev/null || true
+          break
+        fi
+        recheck=$((SECONDS + 15))
+      fi
+      sleep 1
+    done
+    rc=0
+    wait "$keeper_arm" || rc=$?
+    predecessor=$keeper_arm
+    keeper_arm=
+    # Let shutdown and failed starts settle. Actionable closes re-arm directly.
+    handling_predecessor=
+    if [ "$rc" -eq 0 ]; then handling_predecessor=$predecessor; else sleep 1; fi
   done
 }
 
@@ -546,6 +624,11 @@ handling_watcher_pid=
 take_over_arm_pid=
 case "${1:-}" in
   ''|arm|--arm) mode=arm ;;
+  --start-continuity) start_continuity; exit $? ;;
+  --maintain)
+    [ "$#" -eq 3 ] || exit 2
+    maintain_continuity "$2" "$3"
+    exit $? ;;
   --restart) mode=restart ;;
   --stop) mode=stop ;;
   --take-over)
@@ -563,7 +646,7 @@ case "${1:-}" in
     case "$handling_watcher_pid" in ''|*[!0-9]*) echo "watcher: invalid successor watcher pid" >&2; exit 2 ;; esac
     [ "$#" -eq 4 ] || { echo "watcher: unexpected handling delivery arguments" >&2; exit 2; }
     ;;
-  *) echo "usage: $(basename "$0") [--restart | --stop | --take-over ARM_PID | --handling-delivered GENERATION --watcher-pid PID]" >&2; exit 2 ;;
+  *) echo "usage: $(basename "$0") [--start-continuity | --restart | --stop | --take-over ARM_PID | --handling-delivered GENERATION --watcher-pid PID]" >&2; exit 2 ;;
 esac
 
 if [ "$mode" = handling-delivered ]; then

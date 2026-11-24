@@ -1171,7 +1171,7 @@ EOF
 refuse_category() {
   printf 'fm-captain-hold: %s\n' "$1" >&2
   printf '%s\n' 'Allowed --category values (SUPERVISOR.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
-  printf '%s\n' 'Solo pregunta al capitán por su gusto o visión de producto, acciones destructivas o irreversibles sin respaldo, pagos o compras reales, credenciales/seguridad, o un dato que solo el capitán tiene. Para cualquier otra cosa, hazlo y repórtalo.' >&2
+  printf '%s\n' 'Ask the captain only about product preferences or vision, destructive or irreversible actions without a backup, real payments or purchases, credentials or security, or information only the captain has. Otherwise, act and report.' >&2
   exit 1
 }
 
@@ -1522,7 +1522,7 @@ command_hold() {
   [ "$grant_rc" -le 1 ] || fail 'cannot read standing grants'
   if [ "$grant_rc" = 0 ]; then
     if [ -z "$grant_override" ]; then
-      fail "standing grant: $grant_match; hazlo y repórtalo"
+      fail "standing grant: $grant_match; act and report"
     fi
     printf 'standing grant: %s; override: %s\n' "$grant_match" "$grant_override" >&2
   fi
@@ -1797,7 +1797,7 @@ record_standing_grant() {
 command_answer() {
   local id=${1:-} decision_file='' release=0 release_in_flight=0 show state hold_kind body outcome recorded_mode occurrence
   local standing=0 standing_limits='' standing_action='' grant_action='' grant_scope='' call_path
-  local expected='' call_kind completing=${ACTION_COMPLETION:-0} correcting=${ANSWER_CORRECTION:-0}
+  local expected='' call_kind legacy_digest completing=${ACTION_COMPLETION:-0} correcting=${ANSWER_CORRECTION:-0}
   local -a attach_files=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1846,9 +1846,11 @@ command_answer() {
     [ "$state" = "done" ] || { [ "$recorded_mode" = released ] && [ "$hold_kind" != captain ]; } \
       || fail 'answer the current open question before correcting a previous answer'
     attach_answer_files "$id" "${attach_files[@]+"${attach_files[@]}"}"
-    DECISION_TEXT=$(printf 'Corrección de respuesta (no deshace lo ya aplicado):\n%s' "$DECISION_TEXT")
+    legacy_digest=$(sha256_text "$(printf 'Corrección de respuesta (no deshace lo ya aplicado):\n%s' "$DECISION_TEXT")")
+    DECISION_TEXT=$(printf 'Answer correction (does not undo what was already applied):\n%s' "$DECISION_TEXT")
     DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
-    if [ "$(recorded_decision_digest "$body")" = "$DECISION_DIGEST" ]; then
+    if [ "$(recorded_decision_digest "$body")" = "$DECISION_DIGEST" ] \
+      || [ "$(recorded_decision_digest "$body")" = "$legacy_digest" ]; then
       wake_answer_owner "$id" "$(resolution_record_count "$body")"
       printf 'corrected: %s\n' "$id"
       return 0
