@@ -15,13 +15,31 @@ The command's header and help own detection, per-home records and application.
    ```
 
    If Git reports a divergence, preserve your local changes and resolve it before proceeding.
-3. Start the primary again using your usual launch command, in the same home, to load the updated instructions and hooks.
-4. Review any upgrade actions offered at startup and the standing-grants notice below if it appears.
+3. From the same checkout, run the read-only doctor using the existing home's configuration:
+
+   ```sh
+   FM_HOME="${FM_HOME:-$PWD}" bash bin/fm-doctor.sh
+   ```
+
+   If your operational home is separate from the checkout and `FM_HOME` is unset, use its absolute path for `FM_HOME`.
+   On a managed Mac, run `bash bin/fm-doctor.sh --tools` for the tool inventory, including which tools are required and which features need an optional tool.
+4. Start the primary again using your usual launch command, in the same home, to load the updated instructions and hooks.
+5. Review any upgrade actions offered at startup and the standing-grants notice below if it appears.
    If the native rule file action runs, restart the primary again as that entry directs.
 
-On a managed Mac, the [read-only tool inventory](README.md#required-versus-optional-tools) can check the tools already available to the updated installation.
-The `official-overseer` entry below offers the optional overseer once to each installation that has no `config/overseer`, including a hand-made overseer to adopt; see the [overseer setup and diagnostic instructions](README.md#optional-overseer).
-Nothing is adopted, configured or started without the operator's yes.
+## Configuration and migration in this update
+
+Keep the existing home and its `config/`, `data/`, and `state/` directories when you pull.
+Your backend selection and task records carry forward from that home.
+The restarted primary loads `SUPERVISOR.md` through the home's native instruction files and gives new workers their own contract from `worker/AGENTS.md`.
+If startup offers [the native rule file migration](#native-rule-files---2026-11-18), the primary applies it after approval, restarts, and migrates the existing notes using the steps in that entry.
+Homes that already applied it can proceed with their updated supervisor.
+The supervisor now tracks acknowledged wake notices individually and respects the general pause and each worker's declared wait when deciding whether to start or resume work.
+
+The [official overseer entry](#official-overseer---2026-11-24) offers optional setup or adoption to homes without `config/overseer`.
+If you accept, the primary confirms the harness and directory before it changes configuration, then verifies the overseer with its doctor and status commands.
+Older homes also see any pending Deck history, alias, or standing-grant steps documented below.
+The primary previews or offers the applicable steps and records each successful migration in that home.
 
 ## Client instructions for the next package
 
