@@ -84,3 +84,21 @@ for field in 'Found version' 'Minimum' 'macOS ships' 'Unavailable if missing' 'b
 done
 [ ! -e "$FM_HOME" ] || fail 'tools inventory changed the operational home'
 printf 'PASS: tools inventory is read-only and reports tool scope and consequences\n'
+
+# Ledger sampling reports aggregate facts without exposing record contents.
+python3 - "$TASK_TMP/ledger-state" <<'PY'
+from pathlib import Path
+import sys
+state = Path(sys.argv[1]); state.mkdir()
+(state / 'fleet-ledger.jsonl').write_text('{"secret":"private value"}\n{}\n')
+PY
+FM_STATE_OVERRIDE="$TASK_TMP/ledger-state" bash "$ROOT/bin/fm-doctor.sh" --ledger > "$TASK_TMP/sample" \
+  || fail 'ledger sample failed'
+python3 - "$TASK_TMP/sample" "$TASK_TMP/ledger-state/fleet-ledger.jsonl" <<'PY'
+import json, os, sys
+sample = json.load(open(sys.argv[1])); stat = os.stat(sys.argv[2])
+assert sample['bytes'] == stat.st_size and sample['lines'] == 2
+assert sample['inode'] == stat.st_ino and sample['compacted_at'] is None
+assert 'private value' not in json.dumps(sample) and sample['sampled_at'] > 0
+PY
+printf 'PASS: ledger sample reports aggregate facts without record contents\n'

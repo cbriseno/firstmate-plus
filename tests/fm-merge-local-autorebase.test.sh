@@ -108,3 +108,126 @@ test_worker_copy_stays_clean_after_rebase_landing
 test_worker_copy_keeps_its_own_edits_after_rebase_landing
 test_conflict_refuses_with_exact_cause_and_changes_nothing
 test_published_branch_is_not_rewritten
+
+test_remote_ready_line_lands_and_syncs() {
+  local dir="$TMP_ROOT/remote" primary="$TMP_ROOT/remote/primary" remote="$TMP_ROOT/remote/home"
+  local host_root="$TMP_ROOT/remote/host's checkout" fake="$TMP_ROOT/remote/ssh" remote_tip primary_tip
+  mkdir -p "$primary/bin" "$primary/data" "$primary/state" "$primary/config"
+  git -C "$primary" init -q -b main || fail "could not create primary"
+  git -C "$primary" config user.name Test
+  git -C "$primary" config user.email test@example.invalid
+  printf 'data/\nstate/\nconfig/\n.fm-secondmate-*\n' > "$primary/.gitignore"
+  printf '# Firstmate\n' > "$primary/AGENTS.md"
+  cp "$ROOT/bin/fm-remote-file.sh" "$ROOT/bin/fm-captain-hold.sh" "$ROOT/bin/fm-remote-secondmate-control.sh" "$primary/bin/"
+  cp "$ROOT/bin/fm-ff-lib.sh" "$ROOT/bin/fm-secondmate-registry-lib.sh" "$primary/bin/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$primary/bin/fm-guard.sh"
+  chmod +x "$primary/bin/fm-guard.sh"
+  git -C "$primary" add -A
+  git -C "$primary" commit -qm base
+  git clone -q --no-hardlinks "$primary" "$remote" || fail "could not create remote home"
+  git clone -q --no-hardlinks "$primary" "$host_root" || fail "could not create remote code root"
+  git -C "$remote" config user.name Test
+  git -C "$remote" config user.email test@example.invalid
+  git -C "$remote" checkout -qb fm/return-task
+  printf 'from the remote\n' > "$remote/delivered"
+  git -C "$remote" add delivered
+  git -C "$remote" commit -qm 'Remote delivery'
+  remote_tip=$(git -C "$remote" rev-parse HEAD)
+  git -C "$remote" checkout -q main
+  git -C "$primary" commit -qm 'Primary advanced while worker ran' --allow-empty
+  primary_tip=$(git -C "$primary" rev-parse HEAD)
+  mkdir -p "$remote/state" "$remote/data"
+  printf 'mobile\n' > "$remote/.fm-secondmate-home"
+  printf 'kind=ship\nmode=local-only\nproject=%s\nbranch=fm/return-task\n' "$remote" > "$remote/state/return-task.meta"
+  printf 'done [at=1]: ready in branch fm/return-task\n' > "$remote/state/return-task.status"
+  printf '%s\n' "- mobile - remote route (host: remote-mac; root: $host_root; home: $remote; scope: delivery; projects: none; added 2026-11-24)" > "$primary/data/secondmates.md"
+  printf 'kind=secondmate\nbackend=remote\nwindow=remote:mobile\nendpoint_task_id=mobile\nhome=%s\nremote_host=remote-mac\nremote_root=%s\n' \
+    "$remote" "$host_root" > "$primary/state/mobile.meta"
+  printf '\n- firstmate [local-only] - project\n' > "$primary/data/projects.md"
+  printf 'done [key=child-outcome-return-task-done-aabbccdd] [at=2]: child return-task done: ready in branch fm/return-task mode=local-only yolo=off head=%s\n' \
+    "$remote_tip" > "$primary/state/mobile.status"
+  cat > "$fake" <<'SH'
+#!/usr/bin/env bash
+set -eu
+while [ "${1:-}" = -o ]; do shift 2; done
+[ "${1:-}" != -- ] || shift
+[ "$1" = remote-mac ] || exit 91
+shift
+case "$1" in
+  'git-upload-pack '*|'git-receive-pack '*|'bash -s -- '*) exec bash -c "$1" ;;
+  fm-remote-entrypoint.sh) ;;
+  *) exit 92 ;;
+esac
+decode_argv() {
+  printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D
+}
+args=()
+while IFS= read -r -d '' arg; do args+=("$arg"); done < <(decode_argv "$5")
+case "${args[0]}:${args[1]}" in
+  fm-remote-secondmate-control.sh:send)
+    printf '%s\n' "${args[3]}" >> "$LAND_SEND"
+    exit 0 ;;
+  fm-remote-secondmate-control.sh:sync)
+    [ ! -f "$LAND_REJECT_SYNC" ] || exit 255 ;;
+esac
+FM_HOME="$LAND_REMOTE" FM_ROOT_OVERRIDE="$LAND_HOST_ROOT" exec "$LAND_TOOLS/bin/${args[0]}" "${args[@]:1}"
+SH
+  chmod +x "$fake"
+  (
+    export FM_HOME="$primary" FM_ROOT_OVERRIDE="$primary" FM_SSH_BIN="$fake" FM_SEND_REMOTE_BUDGET=120
+    export LAND_TOOLS="$ROOT" LAND_REMOTE="$remote" LAND_HOST_ROOT="$host_root"
+    export LAND_SEND="$dir/delivered-message" LAND_REJECT_SYNC="$dir/reject-sync"
+    # An existing installation has acknowledged this revision in its home,
+    # although its transport still executes from an older root checkout.
+    git -C "$host_root" fetch -q "$primary" "$primary_tip:refs/fm/primary-main"
+    git -C "$remote" fetch -q "$host_root" "$primary_tip"
+    git -C "$remote" merge -q --ff-only "$primary_tip"
+    printf '%s\n' "$primary_tip" > "$primary/state/.remote-main-mobile"
+    printf '# Uncommitted work\n' >> "$host_root/AGENTS.md"
+    if "$ROOT/bin/fm-remote-land.sh" --sync; then
+      fail "a dirty code root was reported as synchronized"
+    fi
+    assert_grep '# Uncommitted work' "$host_root/AGENTS.md" "the root's edit was overwritten"
+    [ "$(< "$primary/state/.remote-main-mobile")" = "$primary_tip" ] || fail "the incomplete sync was acknowledged"
+    git -C "$host_root" checkout -q -- AGENTS.md
+    "$ROOT/bin/fm-remote-land.sh" --tick 2>&1 || true
+    [ "$(git -C "$primary" rev-parse main)" = "$primary_tip" ] || fail "yolo off allowed automatic integration"
+    [ "$(git -C "$host_root" rev-parse HEAD)" = "$primary_tip" ] || fail "the code root stayed behind an already synced home"
+    printf '\n- firstmate [local-only +yolo] - project\n' > "$primary/data/projects.md"
+    touch "$LAND_REJECT_SYNC"
+    "$ROOT/bin/fm-remote-land.sh" --tick 2>&1 || true
+    [ -f "$primary/delivered" ] || fail "the remote ready branch did not land on primary main"
+    [ -f "$LAND_SEND" ] && fail "the official was notified before sync"
+    [ "$(git -C "$primary" rev-parse "refs/remotes/mobile/fm/return-task")" = "$remote_tip" ] || fail "the fetched source was rewritten"
+    git -C "$primary" merge-base --is-ancestor "$primary_tip" main || fail "primary history was rewritten"
+    rm -f -- "$LAND_REJECT_SYNC"
+    "$ROOT/bin/fm-remote-land.sh" --tick 2>&1 || true
+    [ "$(git -C "$remote" rev-parse main)" = "$(git -C "$primary" rev-parse main)" ] || fail "the remote home did not synchronize on retry"
+    assert_grep 'primary integrated return-task' "$LAND_SEND" "the official did not receive the landing confirmation"
+    "$ROOT/bin/fm-remote-land.sh" --tick 2>&1 || true
+    [ "$(wc -l < "$LAND_SEND")" -eq 1 ] || fail "the ready line replayed its acknowledgement"
+
+    git -C "$primary" checkout -qb fm/local-followup
+    printf 'ordinary local follow-up\n' > "$primary/followup"
+    git -C "$primary" add followup
+    git -C "$primary" commit -qm 'Ordinary local integration'
+    git -C "$primary" checkout -q main
+    printf 'project=%s\nmode=local-only\nbranch=fm/local-followup\n' "$primary" > "$primary/state/local-followup.meta"
+    # Registered machines still receive integrations when no agent is running.
+    mv "$primary/state/mobile.meta" "$dir/stopped-mate.meta"
+    "$MERGE_LOCAL" local-followup || fail "ordinary local merge did not land"
+    local deadline=$((SECONDS + 180)) landed
+    landed=$(git -C "$primary" rev-parse main)
+    while { [ "$(git -C "$remote" rev-parse main)" != "$landed" ] ||
+            [ "$(git -C "$host_root" rev-parse HEAD)" != "$landed" ]; } && [ "$SECONDS" -lt "$deadline" ]; do
+      sleep 0.1
+    done
+    [ "$(git -C "$remote" rev-parse main)" = "$landed" ] || fail "ordinary local merge did not propagate automatically"
+    [ "$(git -C "$host_root" rev-parse HEAD)" = "$landed" ] || fail "remote commands still run from the previous checkout"
+    [ "$(git -C "$host_root" rev-parse origin/main)" != "$landed" ] || fail "the private sync moved origin/main"
+    [ -f "$remote/state/return-task.status" ] || fail "remote home state was lost"
+  ) || exit 1
+  pass "a mirrored remote ready line returns and rebases its branch, retries sync and confirms once"
+}
+
+test_remote_ready_line_lands_and_syncs

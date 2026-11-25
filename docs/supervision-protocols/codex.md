@@ -2,7 +2,7 @@ Mode: Codex foreground checkpoint.
 
 When this session owns supervision and away mode is not active:
 1. Drain first with `bin/fm-wake-drain.sh`.
-   After handling all emitted wakes and reconciling open decisions and unread status lines, run the exact `--ack-through` command printed as `WAKE_ACK_REQUIRED`; until then the work remains durable for idempotent re-handling after interruption.
+   After handling all emitted wakes and reconciling open decisions and unread status lines, acknowledge each notice using its sequence and the `WAKE_ACK_REQUIRED` instructions; until then the work remains durable for idempotent re-handling after interruption.
 2. Source `__FM_X_MODE_ENV__` first when Relay is active.
 3. First cycle: run one foreground watcher checkpoint with `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`.
    Set `yield_time_ms` to about 50000 when starting or resuming a checkpoint, and do not poll it or any other running supervision command in shorter steps, because each poll is a model request carrying the whole context.

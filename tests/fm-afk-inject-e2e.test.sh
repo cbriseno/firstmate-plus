@@ -44,7 +44,9 @@ DAEMON_PID=
 SUPERVISOR_PANE=
 LOOP_SCRIPT=
 
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup_all; }
 pass() { printf 'ok - %s\n' "$1"; }
 
 cleanup_all() {

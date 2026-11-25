@@ -163,6 +163,21 @@ assert_grep 'both authorized recovery paths exhausted' "$TASK_HOME/state/reversi
 [ "$(wc -l < "$TASK_HOME/state/.wake-queue")" -eq 1 ] || fail 'terminal failure did not wake Firstmate'
 pass 'workers get a recovery prompt before a bare terminal failure can change state or wake Firstmate'
 
+# A worker may not give up on one failed path: blocked needs two distinct routes it tried.
+export FM_TASK_ID=giveup
+for bare in '' 'adb por usb' 'adb por wifi; adb por wifi'; do
+  OUT=$(publish_status giveup blocked 'sin conexion al telefono' --tried "$bare" 2>&1) \
+    && fail "blocked with tried '$bare' was accepted"
+  assert_contains "$OUT" 'at least two distinct routes' 'blocked refusal gave no guidance'
+done
+OUT=$(publish_status giveup blocked 'sin conexion al telefono' 2>&1) && fail 'blocked without --tried was accepted'
+[ ! -e "$TASK_HOME/state/giveup.status" ] || fail 'a refused blocked changed the status'
+publish_status giveup blocked 'sin conexion al telefono' --tried 'adb por usb; adb por wifi local'
+assert_grep 'tried: adb por usb; adb por wifi local' "$TASK_HOME/state/giveup.status" 'tried routes were not recorded'
+unset FM_TASK_ID
+publish_status firstmate-own blocked 'daemon error without a worker environment'
+pass 'a worker blocked report needs two distinct tried routes; firstmate own use is exempt'
+
 # Exercise the legacy owner path without a worker environment.
 unset FM_TASK_ID
 rm -f -- "$TASK_HOME/state/.wake-queue"
@@ -197,9 +212,10 @@ for event in blocked needs-decision failed; do
   printf 'kind=host\n' > "$TASK_HOME/state/$id.meta"
   publish_status "$id" "$event" 'prerequisite missing'
   FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" bash "$ROOT/bin/fm-wake-drain.sh" > "$TMP_ROOT/drain.out" 2> "$TMP_ROOT/drain.err" || true
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$TMP_ROOT/drain.err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$TMP_ROOT/drain.err")
-  FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" >/dev/null 2>&1 || fail 'status acknowledgement failed'
+  sequence=$(fm_test_wake_sequence_for_key "$TMP_ROOT/drain.out" "$id.status") \
+    || fail "status wake for $id was not presented exactly once"
+  generation=$(fm_test_wake_generation "$TMP_ROOT/drain.err")
+  FM_HOME="$TASK_HOME" FM_STATE_OVERRIDE="$TASK_HOME/state" bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" >/dev/null 2>&1 || fail 'status acknowledgement failed'
   FM_OBLIGATION_SECONDS=1 run_obligation_status_tick >/dev/null
   sleep 2
   OUT=$(FM_OBLIGATION_SECONDS=1 run_obligation_status_tick) || fail "status obligation check failed: $event"

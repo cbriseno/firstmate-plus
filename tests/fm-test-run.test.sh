@@ -429,6 +429,32 @@ test_changed_runner_surfaces_select_their_family() {
   pass "runner and its documentation surfaces select their curated family, not just their contract owners"
 }
 
+test_changed_prose_selects_audience_checks() {
+  local tmp repo surface path listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-prose.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  for surface in CLAUDE AGENTS GROK_BOT; do
+    path="$surface.md"
+    printf '# Agent instructions\n' >"$repo/$path"
+    git -C "$repo" add -- "$path"
+    git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm instructions
+    printf '\n' >>"$repo/$path"
+    listed=$("$repo/bin/fm-test-run.sh" --list --changed --base HEAD) \
+      || fail "changed selection rejected $path"
+    assert_contains "$listed" 'tests/fm-documentation-audiences.test.sh' "$path selects audience coverage"
+    git -C "$repo" checkout -- "$path"
+  done
+
+  printf 'A new guide\n' >"$repo/docs/nueva guía.rst"
+  listed=$("$repo/bin/fm-test-run.sh" --list --changed --base HEAD) \
+    || fail 'changed selection rejected an unmapped guide'
+  [ "$listed" = 'tests/fm-documentation-audiences.test.sh' ] \
+    || fail "an unmapped guide must select only audience coverage: $listed"
+  fm_test_remove_tree "$tmp"
+  pass 'root agent instructions and unmapped prose select audience coverage'
+}
+
 test_shell_line_ending_policy_selects_runner_contract() {
   local tmp repo listed
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-attributes.XXXXXX")
@@ -892,7 +918,7 @@ test_empty_selection_emits_summary() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-empty.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
-  printf 'documentation only\n' >"$repo/README.md"
+  printf '/ignored-output\n' >"$repo/.gitignore"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
     || fail "empty valid changed selection must pass"
   printf '%s\n' "$out" | grep -Eq \
@@ -993,6 +1019,36 @@ assert "family" in doc["scripts"][0]
 ' "$json" || { fm_test_remove_tree "$tmp"; fail "JSON timing artifact missing required fields"; }
   fm_test_remove_tree "$tmp"
   pass "timing markers and JSON artifact are valid"
+}
+
+test_not_ok_propagates() {
+  local tmp rc
+  tmp=$(fm_test_tmproot fm-test-not-ok)
+  cat >"$tmp/suite.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'not ok - deliberate failure\n'
+exit 0
+SH
+  set +e
+  "$RUNNER" "$tmp/suite.sh" >"$tmp/out" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "runner accepted a not ok line with exit zero"
+  grep -q 'FM_TEST_SUMMARY total=1 failed=1' "$tmp/out" || fail "runner did not count the failure"
+  set +e
+  bash -c '. "$1"; (fail deliberate); true' _ "$ROOT/tests/lib.sh" >"$tmp/direct" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "subshell assertion left the suite successful"
+  grep -q '^not ok - deliberate$' "$tmp/direct" || fail "subshell assertion did not execute"
+  set +e
+  bash -c '. "$1"; target=$2; cleanup() { touch "$target"; exit 0; }; (fm_test_fail deliberate cleanup); true' _ \
+    "$ROOT/tests/reporter.sh" "$tmp/cleaned" >"$tmp/standalone" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] && [ -e "$tmp/cleaned" ] || fail "standalone reporter lost failure or cleanup"
+  grep -q '^not ok - deliberate$' "$tmp/standalone" || fail "standalone assertion did not execute"
+  pass "not ok fails both the suite and the runner"
 }
 
 test_aggregate_exit_behavior() {
@@ -1613,7 +1669,7 @@ SH
 
   began=$(date +%s)
   set +e
-  GRANDCHILD_PID="$grandchild_pid" \
+  FM_LOAD_SCALE_SAMPLE="1 4" GRANDCHILD_PID="$grandchild_pid" \
     "$runner" --per-script-timeout-secs 3 "$hang" >"$tmp/out" 2>"$tmp/err"
   rc=$?
   set -e
@@ -1650,6 +1706,39 @@ SH
 
   fm_test_remove_tree "$tmp"
   pass "--per-script-timeout-secs turns a hung script into a bounded failure"
+}
+
+test_pressure_requeues_only_the_interrupted_script() {
+  local tmp repo
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-pressure.XXXXXX")
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  cat >"$repo/tests/fm-brief.test.sh" <<'SH'
+echo healthy >> "$EVIDENCE"
+sleep 4
+SH
+  cat >"$repo/tests/fm-composer-lib.test.sh" <<'SH'
+if grep -qx interrupted "$EVIDENCE" 2>/dev/null; then
+  echo retried >> "$EVIDENCE"
+  exit 0
+fi
+echo interrupted >> "$EVIDENCE"
+sleep 600
+SH
+  EVIDENCE="$tmp/evidence" FM_LOAD_SCALE_SAMPLE="8 4" \
+    "$repo/bin/fm-test-run.sh" --per-script-timeout-secs 3 \
+    tests/fm-brief.test.sh tests/fm-composer-lib.test.sh >"$tmp/out" 2>&1 ||
+    fail "test run with CPU pressure did not finish green: $(cat "$tmp/out")"
+  assert_equals "$(printf 'healthy\ninterrupted\nretried')" "$(LC_ALL=C sort "$tmp/evidence")" \
+    "only the cutoff script should enter the queue again"
+  grep -Eq '^FM_TEST_REQUEUE .+ tests/fm-composer-lib\.test\.sh reason=cpu-pressure$' "$tmp/out" ||
+    fail "the pressure cutoff did not requeue the affected script"
+  grep -Fq 'FM_TEST_SUMMARY total=2 failed=0' "$tmp/out" ||
+    fail "the pressure cutoff affected the final accounting"
+  fm_test_remove_tree "$tmp"
+  pass "CPU pressure extends active opportunity and only a cutoff script reenters the queue"
 }
 
 # The duration regression this guard exists for: a suite whose scripts are all
@@ -2000,7 +2089,7 @@ with tempfile.TemporaryDirectory() as tmp:
     os.mkdir(fakebin)
     for name, body in {
         "uname": 'echo "$TEST_OS"',
-        "getconf": 'echo 4',
+        "getconf": 'echo "$TEST_CPUS"',
         "awk": 'if [ "$2" = /proc/meminfo ]; then echo "$TEST_MEM_KB"; else exec "' + shutil.which("awk") + '" "$@"; fi',
         "sysctl": 'case "$2" in hw.memsize) echo 8589934592 ;; kern.memorystatus_level) echo 50 ;; esac',
     }.items():
@@ -2012,7 +2101,7 @@ with tempfile.TemporaryDirectory() as tmp:
     with open(fixture, "w") as out:
         out.write("#!/usr/bin/env bash\nexit 0\n")
     env = os.environ.copy()
-    env.update(PATH=fakebin + os.pathsep + env["PATH"], TEST_OS="unknown", TEST_MEM_KB="3145728")
+    env.update(PATH=fakebin + os.pathsep + env["PATH"], TEST_OS="unknown", TEST_MEM_KB="3145728", TEST_CPUS="4")
     env["FM_TEST_LOCK_DIR"] = lock_dir.name
     env.pop("FM_TEST_HOST_LOCKED", None)
     env.pop("FM_TEST_SKIP_HOST_LOCK", None)
@@ -2088,7 +2177,31 @@ with tempfile.TemporaryDirectory() as tmp:
                     child.wait()
             for fd in fds:
                 os.close(fd)
-    # With the first two slots occupied, both supported probes admit a third.
+    # Four cores admit no third script, even with abundant memory.
+    for system in ("Linux", "Darwin"):
+        env.update(TEST_OS=system, TEST_MEM_KB="8388608", TEST_CPUS="4")
+        held = []
+        for slot in (1, 2):
+            fd = os.open(os.path.join(lock_dir.name, f"firstmate-test-{os.getuid()}-{slot}.lock"), os.O_RDWR)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.append(fd)
+        with tempfile.TemporaryFile(mode="w+") as log:
+            proc = subprocess.Popen(["bash", sys.argv[1], fixture], stdout=log, stderr=log, env=env)
+            try:
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    log.seek(0)
+                    if "waiting for host test slots" in log.read():
+                        break
+                    assert proc.poll() is None, f"{system}: third script bypassed the two-slot limit"
+                    time.sleep(0.1)
+                else:
+                    raise AssertionError(f"{system}: no admission wait observed")
+            finally:
+                for fd in held: os.close(fd)
+                assert proc.wait(timeout=30) == 0
+    env["TEST_CPUS"] = "8"
+    # With eight cores and the first two slots occupied, both probes admit a third.
     for slot in (1, 2):
         fd = os.open(os.path.join(lock_dir.name, f"firstmate-test-{os.getuid()}-{slot}.lock"), os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -2140,9 +2253,9 @@ test_host_test_budget_spans_runs() {
   cp "$RUNNER" "$runner"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
-  # Two CPUs and ample memory make the machine budget two slots.
+  # Four CPUs and ample memory make the machine budget two slots.
   printf '#!/bin/sh\necho Linux\n' >"$fake_bin/uname"
-  printf '#!/bin/sh\necho 2\n' >"$fake_bin/getconf"
+  printf '#!/bin/sh\necho 4\n' >"$fake_bin/getconf"
   # shellcheck disable=SC2016 # the fake awk expands its own arguments
   printf '#!/bin/sh\nif [ "$2" = /proc/meminfo ]; then echo 8388608; else exec "%s" "$@"; fi\n' \
     "$(command -v awk)" >"$fake_bin/awk"
@@ -2392,7 +2505,7 @@ with tempfile.TemporaryDirectory() as tmp:
     fakebin = os.path.join(tmp, "bin")
     os.mkdir(fakebin)
     import shutil
-    for name, body in {"uname": "echo Linux", "getconf": "echo 2",
+    for name, body in {"uname": "echo Linux", "getconf": "echo 4",
                        "awk": 'if [ "$2" = /proc/meminfo ]; then echo 8388608; else exec "' + shutil.which("awk") + '" "$@"; fi'}.items():
         path = os.path.join(fakebin, name)
         with open(path, "w") as out:
@@ -2461,6 +2574,7 @@ fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 2 ]; then
 test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
+test_changed_prose_selects_audience_checks
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
 fi
@@ -2477,6 +2591,7 @@ test_empty_selection_emits_summary
 test_timing_markers_and_json
 fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 5 ]; then
+test_not_ok_propagates
 test_aggregate_exit_behavior
 test_gate_skip_accounting
 test_gate_skip_reason_is_recorded
@@ -2503,6 +2618,7 @@ fi
 if [ "${FM_TEST_SUITE_PART:-0}" = 9 ]; then
 test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
+test_pressure_requeues_only_the_interrupted_script
 test_changed_bound_gives_slow_watcher_suites_headroom
 test_every_selection_gets_the_default_bound
 test_max_wall_ms_is_a_result_not_advice

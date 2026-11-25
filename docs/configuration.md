@@ -204,7 +204,7 @@ When this Codex primary's private opt-in selects the root and supervision is req
 The already registered shared Stop entrypoint delegates this requirement before its legacy loop allowance, so enforcement does not depend solely on loading the new shim definition.
 A foreground checkpoint alone cannot satisfy that native requirement; keep the turn open with foreground supervision and progress updates while repairing the bound owner.
 This does not prove that the frontend loaded either hook definition legitimately; that live acceptance remains separate.
-Queue acceptance never acknowledges a durable wake: the handling turn must drain, act and run the drain's exact acknowledgement command.
+Queue acceptance never acknowledges a durable wake: the handling turn must drain, act and acknowledge each notice using its sequence and the generation in the drain instructions.
 Removing the opt-in revokes the callback on its next poll; a restart, executable change or binding change requires fresh verification before opt-in can be restored.
 
 ### Direct inbox delivery to a Codex primary
@@ -630,6 +630,8 @@ Every other key may appear at most once.
 Declare local CPU-intensive work with a `Dispatch CPU: heavy` line in the task brief to apply that threshold on both dispatch and retry.
 The general lane estimate and tasks without this declaration still use the common limits, including any configured `max-load1`.
 Either configured load limit replaces the generic one-minute load-at-core-count probe.
+Lane admission also defers while all host test slots are occupied and a test run is waiting for a turn.
+After starting a worker, admission gives load and test demand time to become visible before starting another; see `bin/fm-capacity.sh --help` for the observation windows.
 An unknown key, a repeated single key, or a malformed value makes the whole file invalid: the report exits 1 naming the line, and the published facts carry the cap as invalid, because the captain's limits are never guessed.
 
 A pressure file is any producer of the `lookout.beat` 1.x shape, read by its own file age on this machine; a missing, stale, or unreadable one is skipped with its reason and the host's own probes stand in, so a broken beat never blocks anything.
@@ -638,9 +640,16 @@ A pressure file is any producer of the `lookout.beat` 1.x shape, read by its own
 Memory admits as many lanes as fit between the available memory and the kept reserve, each sized by `lane-footprint-gb` or, without it, by the measured resident memory of this home's live lanes; a task refused for any limit shows that cause on its card until it launches.
 On macOS the available figure is `hw.memsize` times `kern.memorystatus_level` percent; how closely that level tracks memory a lane can really use has not been measured on a Mac, so read it there and set `min-avail-gb` from what you see.
 
+A general pause is independent of this file: `bin/fm-pause-general.sh on [reason]` writes `state/.pause-general`, and while it exists every fresh launch is deferred (with or without `config/lane-capacity`, and without touching its cap), the watcher parks each idle worker without asking for a date or load threshold, and declared-wait expiry notices stay quiet.
+`bin/fm-pause-general.sh off` removes it; the watcher then resumes each worker the pause parked, one per tick while capacity admits it, before launching queued work.
+A worker still inside a turn when the pause starts finishes that turn and parks when it ends.
+The script's header owns the contract.
+
 While the file exists, the watcher runs `bin/fm-capacity.sh --publish` detached at most every 30 seconds, writing this home's lane facts to `state/lane-capacity.json`: its lanes, its cap and limits, its machine's pressure and boots, its watcher's freshness, and its own admission verdict.
 Publishing is best-effort and never changes what the watcher does; spawns do not use the cached document.
 Fresh ship and scout admission uses a live `--admit` check in `bin/fm-spawn.sh`; its header owns the deferral, queue, batch, and exclusion contract.
+Automatic dispatch has its own general pause, separate from the cap: `bin/fm-autodispatch.sh --pause [--for 2h] [--reason TEXT]` stops every automatic launch, deferred replay, and ready-work report of this home until `--resume` (or the `--for` time) lifts it, because lowering the cap does not stop work already queued.
+A queued row with no brief is never launched by itself, so once it has stood unbriefed beside a free lane for `FM_UNBRIEFED_GRACE_SECS` the watcher adds it to the one ready-work notice, naming `bin/fm-brief.sh` and the hold that keeps a non-dispatch row quiet.
 The script's header owns the report line, the published document's fields, the verdict, the beat freshness rules, the host-constraint thresholds, and the probe fallbacks.
 
 ## PR-ready line after green (config/ready-after-green)
@@ -2734,6 +2743,7 @@ FM_INFO_SUMMARY_SECS=3600 # shared ordinary-action/information interval; minimum
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
+FM_UNBRIEFED_GRACE_SECS=120  # seconds a queued row may stand with no brief beside a free lane before the ready-work notice names it; zero or invalid values use 120 and 0 notices at once
 FM_OBLIGATION_SECONDS=900 # deadline for unresolved obligations; config/obligation-seconds also sets this per installation
 FM_TASK_INBOX_GRACE_SECS=90   # seconds an unhandled steering-inbox message may sit before the watcher attempts doorbell delivery on an idle pane; also the minimum spacing between attempts
 FM_TASK_INBOX_RING_MAX=3      # watcher delivery attempts without an acknowledgement before the task surfaces as a stale wake for recovery

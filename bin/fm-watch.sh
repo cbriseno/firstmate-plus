@@ -127,6 +127,8 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-project-capacity-lib.sh
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+# shellcheck source=bin/fm-autodispatch-pause-lib.sh
+. "$SCRIPT_DIR/fm-autodispatch-pause-lib.sh"
 
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
@@ -577,10 +579,14 @@ pause_resume_failure() {  # <task> <declaration-key> <failure-output> <retry-fil
 # fm-send owns durable delivery; a parked worker with a queued notice needs
 # lifecycle recovery before the ordinary inbox retry can ring its pane.
 paused_until_resume() {  # <window> <task> <declared-wait-line>
-  local win=$1 task=$2 last=$3 until threshold load ceiling marker key before after hold_rc wait_rc=1 legacy stamp age message check_rc due=0 timed=0 valid=1 migration=0 unsafe=0
+  local win=$1 task=$2 last=$3 until threshold load ceiling marker key before after hold_rc wait_rc=1 legacy stamp age message check_rc due=0 timed=0 migration=0 unsafe=0
   local old_marker notice parked=0 retry=0 reason wait_task wait_problem='' target visited
   local retry_file retry_output retry_rc
   [ -n "$task" ] || return 0
+  # The general pause (bin/fm-pause-general.sh) is itself the wait: nothing
+  # expires or resumes while it stands, and its lifting resumes what it parked.
+  [ ! -e "$STATE/.pause-general" ] || return 0
+  [ "$(fm_meta_get "$STATE/$task.parked" park_cause)" != general-pause ] || return 0
   marker="$STATE/.pause-notice-$task"
   retry_file="$STATE/.pause-retries-$task"
   old_marker="$STATE/.paused-resumed-$(window_key "$win")"
@@ -626,20 +632,19 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
     # uptime prints both Linux's "load average" and Darwin's "load averages".
     load=$(LC_ALL=C uptime 2>/dev/null | sed -nE 's/.*load averages?:[[:space:]]*([0-9]+([.][0-9]+)?).*/\1/p')
     case "$load" in
-      ''|*[!0-9.]*) valid=0 ;;
-      *) awk -v l="$load" -v t="$threshold" 'BEGIN {exit !(l < t)}' || valid=0 ;;
+      ''|*[!0-9.]*) ;;
+      *) awk -v l="$load" -v t="$threshold" 'BEGIN {exit !(l < t)}' && due=1 ;;
     esac
     timed=1
   fi
   if until=$(status_paused_until "$last"); then
-    [ "$(fm_platform_epoch)" -ge "$until" ] || valid=0
+    [ "$(fm_platform_epoch)" -lt "$until" ] || due=1
     timed=1
   fi
   # Discard a legacy recheck marker that could suppress this condition's notice.
   if { [ "$timed" = 1 ] || [ -n "$wait_task" ]; } && [ -e "$legacy" ]; then
     rm -f "$marker" "$old_marker" "$legacy"
   fi
-  [ "$timed" = 1 ] && [ "$valid" = 1 ] && due=1
   [ "$wait_rc" != 0 ] || due=1
   [ "$unsafe" = 0 ] || due=1
   [ -z "$wait_problem" ] || due=1
@@ -651,13 +656,8 @@ paused_until_resume() {  # <window> <task> <declared-wait-line>
   [ "$due" = 1 ] || { fm_obligation_clear "pause-$task"; return 0; }
   hold_rc=0; pause_backlog_hold "$task" || hold_rc=$?
   [ "$hold_rc" = 1 ] || { fm_obligation_clear "pause-$task"; return 0; }
-  # A worker in a provable turn is attending its own wait, so the notice and
-  # its deadline start when that turn ends, not while it still runs.
-  if [ ! -f "$STATE/$task.parked" ] && [ -f "$STATE/$task.meta" ]; then
-    case $(fm_busy_classify_meta "$STATE/$task.meta" "$task" "$STATE") in
-      'busy '*) fm_obligation_clear "pause-$task"; return 0 ;;
-    esac
-  fi
+  # Deliver through the durable inbox even during a busy turn: a background
+  # wait can keep that turn busy after its declared deadline has passed.
   # The notice belongs to the declaration and task, including after resume
   # replaces its endpoint. Adopt pre-upgrade notices with their original age.
   key=$(printf '%s' "$last" | sed -n 's/^[^ ]* *\[[^]]*at=\([0-9]*\)[^]]*\].*/\1/p')
@@ -3346,11 +3346,14 @@ obligation_status_tick() {
 # Automatic parking requires both an idle turn and a verified process scope.
 worker_wait_park() {  # <task> <current-status-line>
   local task=$1 last=$2 job
-  case "$(status_line_verb "$last")" in
-    needs-decision|captain-held|done) ;;
-    paused) status_paused_until "$last" >/dev/null || status_paused_load1 "$last" >/dev/null || return 0 ;;
-    *) return 0 ;;
-  esac
+  # The general pause is the wait condition: every idle worker may park.
+  if [ ! -e "$STATE/.pause-general" ]; then
+    case "$(status_line_verb "$last")" in
+      needs-decision|captain-held|done) ;;
+      paused) status_paused_until "$last" >/dev/null || status_paused_load1 "$last" >/dev/null || return 0 ;;
+      *) return 0 ;;
+    esac
+  fi
   case "$last" in *'[wait-job='*|*'[wait-pid='*) return 0 ;; esac
   for job in "$STATE/$task.jobs"/*.json; do
     [ -f "$job" ] || continue
@@ -3457,6 +3460,10 @@ worker_completion_tick() {
       fi
     fi
     if [ "$finished" = 0 ]; then
+      if [ "$parked" = 0 ] && [ -e "$STATE/.pause-general" ]; then
+        worker_wait_park "$task" "$last"
+        continue
+      fi
       [ -e "$marker" ] || touch "$marker"
       if [ "$(age_of "$marker")" -ge 1800 ] && ! crew_is_provably_working "$task"; then
         reason="check: worker idle without a result or declared wait for over 30 minutes: $task; inspect or close with fm-teardown.sh --preserve"
@@ -3671,6 +3678,16 @@ refresh_spawn_deferral_cause() {  # <cause> <marker>...
   done
 }
 
+# A deferral for the home's capacity keeps the task's place in the work order,
+# so a task behind it never launches ahead of it; only a per-project limit,
+# which lets other projects proceed, does not hold the line.
+spawn_deferral_holds_line() {  # <task-id>
+  case "$(cat "$STATE/$1.spawn-deferred.reason" 2>/dev/null)" in
+    project\ *) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # The replayed launch runs beside the watcher, never inside its poll cycle:
 # under load fm-spawn.sh can take minutes, and the liveness beacon is touched
 # once per cycle. One replay at a time keeps launches serial, as before. The
@@ -3768,10 +3785,55 @@ ready_local_result() {
   printf '%s\n' "$tip"
 }
 
+# A queued row with no brief is never launched by itself. Once it has stood unbriefed
+# with a free lane for FM_UNBRIEFED_GRACE_SECS (default 120, so the add-then-brief
+# sequence of one turn raises nothing), print the actionable cause for the ready-work
+# notice; the obligation owns repeats. State: state/.unbriefed-seen-<id> holds the
+# first-seen epoch and is removed once the row is briefed, launched or not queued.
+unbriefed_notice_due() {  # <task-id> <now>
+  local seen="$STATE/.unbriefed-seen-$1" first grace=${FM_UNBRIEFED_GRACE_SECS:-120}
+  case "$grace" in ''|*[!0-9]*) grace=120 ;; esac
+  first=$(cat "$seen" 2>/dev/null || true)
+  case "$first" in ''|*[!0-9]*) printf '%s\n' "$2" > "$seen" || true; first=$2 ;; esac
+  [ "$(($2 - first))" -ge "$grace" ] || return 1
+  printf '%s\n' "no brief yet, so autodispatch skips it (write it with bin/fm-brief.sh, or hold the row if it is not for dispatch)"
+}
+
+# Lifting the general pause (bin/fm-pause-general.sh off) resumes each worker
+# it parked, one per tick and only while capacity admits it; this runs before
+# new launches so resumed work is not starved by them.
+pause_resume_tick() {
+  local parked task
+  [ ! -e "$STATE/.pause-general" ] || return 0
+  for parked in "$STATE"/.pause-resume-failed-*; do
+    [ -e "$parked" ] || continue
+    [ -f "$STATE/${parked##*/.pause-resume-failed-}.parked" ] || rm -f -- "$parked"
+  done
+  for parked in "$STATE"/*.parked; do
+    [ -f "$parked" ] || continue
+    [ "$(fm_meta_get "$parked" park_cause)" = general-pause ] || continue
+    [ "$(fm_meta_get "$parked" park_phase)" = parked ] || continue
+    task=${parked##*/}; task=${task%.parked}
+    task_lifecycle_busy "$task" && continue
+    # A failed resume waits two minutes before its retry so it never starves the rest.
+    [ ! -e "$STATE/.pause-resume-failed-$task" ] || [ "$(age_of "$STATE/.pause-resume-failed-$task")" -ge 120 ] || continue
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || return 0
+    if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+        bash "$SCRIPT_DIR/fm-control.sh" "$task" resume >/dev/null 2>&1; then
+      rm -f -- "$STATE/.pause-resume-failed-$task"
+      triage_log "general pause lifted: resumed $task"
+      return 0
+    fi
+    : > "$STATE/.pause-resume-failed-$task"
+    triage_log "general pause lifted: resume of $task failed; retrying in two minutes"
+  done
+}
+
 # Queue primary obligations before capacity admission. Replay deferred and
 # fresh dispatches in the same order, leaving admission to fm-spawn.sh.
 ready_work_tick() {
-  local now capacity free=0 rows marker reason launched failed left id task_state rc out stop=0 fmark result cause
+  local now capacity free=0 rows marker reason launched failed left id task_state rc out stop=0 fmark result cause paused=0 unbriefed='' failed_seen=''
   local data="${FM_DATA_OVERRIDE:-$FM_HOME/data}" previous next obligation pending='' pending_read=0 key observed_results='' old_result prior
   collect_spawn_retry_results || return 1
   now=$(date +%s)
@@ -3782,6 +3844,10 @@ ready_work_tick() {
     [ -f "$fmark" ] || return 0
   fi
   READY_WORK_PROBED_AT=$now
+  if [ -s "$data/secondmates.md" ] && [ ! -e "$FM_HOME/.fm-secondmate-home" ] &&
+    [[ $(< "$data/secondmates.md") = *" (host:"* ]]; then
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-remote-land.sh" --tick </dev/null >/dev/null 2>&1 &
+  fi
   marker="$STATE/.ready-work-wake"
   rows=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
     bash "$SCRIPT_DIR/fm-tasks-axi.sh" work continuations 2>/dev/null) || return 0
@@ -3834,13 +3900,26 @@ ready_work_tick() {
     fi
   fi
   launched=; failed=; left=
+  # A general pause (fm-autodispatch.sh --pause) launches, replays and reports nothing.
+  fm_autodispatch_paused "$STATE" && paused=1
   while IFS=$'\t' read -r id task_state; do
-    [ "$task_state" = queued ] && [ -f "$data/$id/brief.md" ] && [ ! -f "$STATE/$id.meta" ] || continue
+    [ "$paused" -eq 0 ] || break
+    [ "$task_state" = queued ] && [ ! -f "$STATE/$id.meta" ] || continue
+    if [ ! -f "$data/$id/brief.md" ]; then
+      # Autodispatch only takes briefed work: tell the primary once, after a short grace, that this row waits for its brief.
+      [ "$free" -gt 0 ] || continue
+      unbriefed="$unbriefed $id"
+      if cause=$(unbriefed_notice_due "$id" "$now"); then left="${left:+$left; }$id: $cause"; fi
+      continue
+    fi
     [ "$stop" -eq 0 ] || continue
+    [ ! -e "$STATE/.pause-general" ] || continue
     if [ -f "$STATE/$id.spawn-deferred" ]; then
       [ ! -f "$CONFIG/lane-capacity" ] || [ "$free" -gt 0 ] || continue
       result=$(retry_deferred_spawn "$id" "$data/$id/brief.md") || return 1
       reason=${result:-$reason}
+      # A task waiting for home capacity, or whose replay just claimed it, keeps its place.
+      if [ ! -f "$STATE/$id.spawn-deferred" ] || spawn_deferral_holds_line "$id"; then stop=1; fi
       continue
     fi
     [ "$free" -gt 0 ] || continue
@@ -3858,7 +3937,13 @@ ready_work_tick() {
       case "$(cat "$STATE/.autodispatch-failed-$id" 2>/dev/null)" in
         'error: another Treehouse slot allocation or return is in progress for '*) rm -f -- "$STATE/.autodispatch-failed-$id" ;;
         "error: this home's task set is locked by another spawn;"*) rm -f -- "$STATE/.autodispatch-failed-$id" ;;
-        *) continue ;;
+        *)
+          # The failure wake fired once; free lanes with this task still queued stay an obligation.
+          cause=$(cat "$STATE/.autodispatch-failed-$id" 2>/dev/null)
+          fm_obligation_observe "ready-failed-$id" ready-work "failed:$id:$cause" \
+            "$id (automatic launch failed: $cause; dispatch it manually or hold it)" || return 1
+          failed_seen="$failed_seen ready-failed-$id"
+          continue ;;
       esac
     fi
     rc=0
@@ -3869,7 +3954,9 @@ ready_work_tick() {
       75)
         # Only a shared limit can defer all the remaining candidates.
         FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-          bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || stop=1 ;;
+          bash "$SCRIPT_DIR/fm-capacity.sh" --admit >/dev/null 2>&1 || stop=1
+        # A lighter task behind it must not take the capacity this one waits for.
+        ! spawn_deferral_holds_line "$id" || stop=1 ;;
       76) # A supervised waiter can retry without waiting for this cycle.
         if ! python3 "$SCRIPT_DIR/fm-task-job.py" --autodispatch "$STATE" "$id" "$FM_HOME" "$CONFIG" ||
           ! python3 "$SCRIPT_DIR/fm-task-job.py" --dispatch "$STATE"; then
@@ -3889,9 +3976,18 @@ ready_work_tick() {
     [ -f "$STATE/$id.meta" ] || continue
     rm -f -- "$fmark" "$fmark.reason"
   done
+  for fmark in "$STATE"/.obligation-ready-failed-*; do
+    [ -f "$fmark" ] || continue
+    id=${fmark##*/.obligation-}
+    case " $failed_seen " in *" $id "*) ;; *) fm_obligation_clear "$id" || return 1 ;; esac
+  done
   for fmark in "$STATE"/.autodispatch-failed-*; do
     [ -f "$fmark" ] || continue
     printf '%s\n' "$rows" | cut -f1 | grep -Fxq -- "${fmark##*/.autodispatch-failed-}" || rm -f -- "$fmark"
+  done
+  for fmark in "$STATE"/.unbriefed-seen-*; do
+    [ -f "$fmark" ] || continue
+    case " $unbriefed " in *" ${fmark##*/.unbriefed-seen-} "*) ;; *) rm -f -- "$fmark" ;; esac
   done
   # A wake ends this watcher turn, so queue every outcome first and wake once.
   if [ -n "$launched" ]; then
@@ -3990,6 +4086,7 @@ ready_obligations_tick() {
     future_hold_tick || triage_log "future hold check unavailable"
     obligation_status_tick || return 1
   fi
+  pause_resume_tick
   ready_work_tick || return 1
   [ -z "$obligation_batch_reason" ] || wake "$obligation_batch_reason"
 }

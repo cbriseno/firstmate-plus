@@ -255,7 +255,7 @@ test_future_hold_requires_date_and_no_blocker() {
   if wrapper_from_code "$dir" hold future-1 --kind future --reason event >/dev/null 2>&1; then
     fail "undated future hold was accepted"
   fi
-  wrapper_from_code "$dir" block future-1 --by future-2 >/dev/null || fail "block failed"
+  wrapper_from_code "$dir" block future-1 --by future-2 --because "needs the dependency output first" >/dev/null || fail "block failed"
   if wrapper_from_code "$dir" hold future-1 --kind future --reason dependency --until 2099-01-01 >/dev/null 2>&1; then
     fail "future hold on a dependency was accepted"
   fi
@@ -264,6 +264,27 @@ test_future_hold_requires_date_and_no_blocker() {
   assert_contains "$out" future-1 "dependency closure did not release the task"
   wrapper_from_code "$dir" hold future-1 --kind future --reason date --until 2099-01-01 >/dev/null || fail "dated hold refused"
   pass "future holds require a date; dependency-only blocks release on close"
+}
+
+test_block_requires_registered_reason() {
+  local dir out
+  dir=$(make_split block-reason)
+  wrapper_from_code "$dir" add work-1 "Work" --body "first line" >/dev/null 2>&1 || fail "add failed"
+  wrapper_from_code "$dir" add dep-1 "Dependency" >/dev/null 2>&1 || fail "add failed"
+  out=$(wrapper_from_code "$dir" block work-1 --by dep-1 2>&1) && fail "block without a reason was accepted"
+  assert_contains "$out" "parallel" "refusal does not name the parallel default"
+  wrapper_from_code "$dir" block work-1 --by dep-1 --because "too short" >/dev/null 2>&1 && fail "a two-word reason was accepted"
+  wrapper_from_code "$dir" block work-1 --by dep-1 --because $'two\nlines of reason here' >/dev/null 2>&1 && fail "a multi-line reason was accepted"
+  out=$(wrapper_from_code "$dir" ready 2>&1)
+  assert_contains "$out" work-1 "a refused block still sequenced the task"
+  wrapper_from_code "$dir" block work-1 --by dep-1 --because "work-1 reads the file dep-1 writes" >/dev/null 2>&1 || fail "block with a reason failed"
+  wrapper_from_code "$dir" block work-1 --by dep-1 --because "work-1 reads the file dep-1 writes" >/dev/null 2>&1 || fail "repeated block failed"
+  out=$(wrapper_from_code "$dir" show work-1 --full 2>&1)
+  assert_contains "$out" "first line" "block lost the existing body"
+  assert_contains "$out" "Blocked by dep-1 because: work-1 reads the file dep-1 writes" "reason was not registered in the body"
+  [ "$(grep -c 'Blocked by dep-1 because' "$dir/home/data/backlog.md")" = 1 ] || fail "repeated block duplicated the reason"
+  wrapper_from_code "$dir" block --help >/dev/null 2>&1 || fail "block --help was refused"
+  pass "block needs a registered reason and records it in the task body"
 }
 
 test_wrapper_single_home() {
@@ -362,6 +383,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refusals
   test_wrapper_refuses_add_start
   test_future_hold_requires_date_and_no_blocker
+  test_block_requires_registered_reason
 test_wrapper_refuses_captain_hold
   test_wrapper_single_home
   test_wrapper_cancel

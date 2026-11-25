@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Discover and recover unattended, home-owned Lavish boards.
-# Usage: fm-lavish-watch.sh scan|needed|owned|in-use <task>
+# Usage: fm-lavish-watch.sh scan|needed|owned|unattended|in-use <task>
+# unattended prints home-owned boards with queued feedback and no listener
+# (one line of tab-separated board id and artifact path), without recovery.
 # needed is read-only: exit 0 for an owned open board, 1 for none, 2 on error.
 # owned is read-only too: it prints one tab-separated line per open board
 # (task, artifact, status, pending prompts) - task is - for a home board no task
@@ -37,7 +39,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 case "${1-}" in
-  scan|needed|owned) [ "$#" -eq 1 ] || exit 2 ;;
+  scan|needed|owned|unattended) [ "$#" -eq 1 ] || exit 2 ;;
   in-use) [ "$#" -eq 2 ] && [[ "$2" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || exit 2 ;;
   *) sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
@@ -186,7 +188,9 @@ fi
 sources=''
 if [ -s "$rows" ]; then
   command -v curl >/dev/null 2>&1 || { echo "error: curl is required for Lavish listener discovery" >&2; exit 1; }
-  sources=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" list) || exit 1
+  if [ "$mode" = scan ]; then
+    sources=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" list) || exit 1
+  fi
 fi
 now=$(date +%s)
 seen=' '
@@ -210,6 +214,12 @@ while IFS=$'\t' read -r id task artifact status pending port; do
         then if any(.listeners[]; .key == $key) then "live" else "none" end
         else "unknown" end' 2>/dev/null || printf unknown)
     fi
+  fi
+  if [ "$mode" = unattended ]; then
+    if [ "$listener" = none ] && [ "$pending" -gt 0 ]; then
+      printf '%s\t%s\n' "$id" "$artifact"
+    fi
+    continue
   fi
   pending_wake=0
   pending_marker="$watch_dir/$id.pending"
@@ -261,6 +271,7 @@ while IFS=$'\t' read -r id task artifact status pending port; do
   tmp=$(umask 077; mktemp "$watch_dir/.episode.XXXXXX") || exit 1
   printf '%s %s %s\n' "$since" "$last" "$nonce" > "$tmp" && mv -f -- "$tmp" "$marker" || exit 1
 done < "$rows"
+[ "$mode" = scan ] || exit 0
 
 # Closing, removing, or restoring coverage ends an episode. A later loss has a
 # new nonce, so the watcher never suppresses it as an already-surfaced wake.

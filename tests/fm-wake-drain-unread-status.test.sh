@@ -482,6 +482,44 @@ test_routine_working_and_covered_done_stay_silent_on_the_empty_queue() {
   pass "routine working and branch-covered done lines print nothing on an empty-queue drain"
 }
 
+test_acknowledges_only_the_named_presented_notice() {
+  local dir state out err generation
+  dir=$(make_case individual-ack)
+  state="$dir/state" out="$dir/out" err="$dir/err"
+  append_wake "$state" signal first 'first complete notice'
+  append_wake "$state" signal second 'second complete notice'
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" > "$out" 2> "$err" || fail 'drain failed'
+  grep -E '^[0-9]+[[:space:]]+1[[:space:]]+signal[[:space:]]+first[[:space:]]+first complete notice$' "$out" >/dev/null || fail 'first notice missing'
+  grep -E '^[0-9]+[[:space:]]+2[[:space:]]+signal[[:space:]]+second[[:space:]]+second complete notice$' "$out" >/dev/null || fail 'second notice missing'
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p' "$err")
+  [ -n "$generation" ] || fail 'missing generation'
+  if grep '^WAKE_ACK_REQUIRED:' "$err" | grep -E -- '--ack [0-9]+' >/dev/null; then fail 'filtered instructions exposed a notice sequence'; fi
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" --ack 2 --recovery-generation "$generation" >/dev/null 2>&1 || fail 'individual ack failed'
+  grep -F 'first complete notice' "$state/.wake-queue" >/dev/null || fail 'ack consumed another notice'
+  if grep -F 'second complete notice' "$state/.wake-queue" >/dev/null; then fail 'named notice remains'; fi
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" --ack-through 1 --recovery-generation "$generation" >/dev/null 2>&1 && fail 'global ack accepted'
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" --ack 1 --recovery-generation "$generation" >/dev/null 2>&1 || fail 'remaining ack failed'
+  [ ! -s "$state/.wake-queue" ] || fail 'queue not empty'
+  pass 'individual acknowledgements retain every other notice'
+}
+
+test_signal_notice_keeps_status_text_beside_its_sequence_on_replay() {
+  local dir state out err
+  dir=$(make_case individual-signal)
+  state="$dir/state" out="$dir/out" err="$dir/err"
+  printf 'needs-decision: captain supervisor message\n' > "$state/task.status"
+  append_wake "$state" signal task.status "signal: $state/task.status"
+  printf 'note: later replacement\n' > "$state/task.status"
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" > "$out" 2> "$err" || fail 'first signal drain failed'
+  grep -E '^[0-9]+[[:space:]]+1[[:space:]]+signal[[:space:]]+task[.]status[[:space:]].*needs-decision: captain supervisor message$' "$out" >/dev/null || fail 'notice omitted status text beside sequence'
+  FM_STATE_OVERRIDE="$state" bash "$DRAIN" > "$out" 2> "$err" || fail 'signal replay failed'
+  grep -E '^[0-9]+[[:space:]]+1[[:space:]]+signal[[:space:]]+task[.]status[[:space:]].*needs-decision: captain supervisor message$' "$out" >/dev/null || fail 'replay omitted status text beside sequence'
+  pass 'signal contents remain beside their sequence on replay'
+}
+
+test_signal_notice_keeps_status_text_beside_its_sequence_on_replay
+test_acknowledges_only_the_named_presented_notice
+
 test_incident_note_answer_buried_under_routine_note_surfaces_both
 test_already_presented_notes_are_not_replayed
 test_brand_new_note_after_presentation_is_surfaced

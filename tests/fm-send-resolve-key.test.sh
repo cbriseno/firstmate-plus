@@ -186,9 +186,9 @@ test_captain_answer_wakes_owner_then_reaches_worker() {
     else
       assert_contains "$show" 'state: done' 'question-shaped answer did not close its call'
     fi
-    seq=$(awk -F '\t' 'END { print $2 }' "$home/state/.wake-queue")
+    seq=$(printf '%s\n' "$out" | awk -F '\t' 'NF >= 5 && $3 ~ /^(signal|stale|check|heartbeat)$/ { print $2 }')
     generation=$(cut -d: -f3 "$home/state/.watcher-down")
-    env FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$DRAIN" --ack-through "$seq" \
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$DRAIN" --ack "$seq" \
       --recovery-generation "$generation" >/dev/null 2>&1 || fail 'handled owner wake could not be acknowledged'
     [ ! -s "$home/state/.wake-queue" ] || fail 'handled owner wake remained queued'
   done

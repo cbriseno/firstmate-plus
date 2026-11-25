@@ -16,7 +16,7 @@
 # watches, refuses (retryably) unless the agent reads positively idle; a
 # relaunch's unconfirmed seed or an unknown activity is never stopped. resume reuses the native chat from sessions.jsonl when
 # readable, otherwise reports the reason and relaunches with that saved note.
-# A changed usage-policy harness opens a captain hold before automatic resume.
+# A changed usage-policy harness resumes with the current verified adapter.
 # After recording the answer, Firstmate passes its chosen profile explicitly.
 # Same-harness choices reuse the chat; a takeover uses the saved progress note.
 # Mixed dispatch profiles require Firstmate to resolve the policy and choice.

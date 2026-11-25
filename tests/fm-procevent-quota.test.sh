@@ -184,7 +184,9 @@ printf '{"schemaVersion":5,"providers":[{"provider":"codex","quotaSemantics":{"s
 SH
 chmod +x "$FAKEBIN/quota-axi"
 
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 ok() { printf 'ok - %s\n' "$1"; }
 
 if help=$("$BIN/fm-procevent-quota.sh" --help 2>&1); then

@@ -577,7 +577,7 @@ class Owner:
         for i, row in self.rows.items():
             if not ID.fullmatch(i) or row['state'] not in ('queued', 'in_flight') or self.progress_reporting_held(i):
                 continue
-            if row.get('kind') == 'captain' or self.presentations[i]['presentation'].get('closure'):
+            if row.get('kind') in ('captain', 'primary') or self.presentations[i]['presentation'].get('closure'):
                 continue
             if any(b['open'] for b in self.blockers(i, edges)):
                 continue
@@ -956,7 +956,7 @@ class Owner:
             if unit[t['key']] in placed:
                 return (placed.index(unit[t['key']]), 1)
             return (next((i for i, k in enumerate(placed) if sort_key(t) < best.get(k, (9,))), len(placed)), 0)
-        sigue = [t['key'] for t in sorted(tasks, key=lambda t: (slot(t), sort_key(t))) if t['state'] == 'ready']
+        sigue = [t['key'] for t in sorted(tasks, key=lambda t: (slot(t), sort_key(t))) if t['state'] == 'ready' and self.rows[t['key'][5:]].get('kind') != 'primary']
         if controls_only:
             return dict(tasks=tasks, sigue=sigue)
         # Who gives way when there is no room: the running work lowest in the
@@ -1092,7 +1092,7 @@ class Owner:
                 deps = row.setdefault('deps', [])
                 if name == 'add_dep' and not exists:
                     deps.append(dict(type='blocked-by', id=blocker[5:]))
-                    command = ['block', task_id, '--by', blocker[5:]]
+                    command = ['block', task_id, '--by', blocker[5:], '--because', op.get('reason') or 'dependency declared in the Deck by ' + op.get('actor', 'captain')]
                 elif name == 'remove_dep' and exists:
                     deps[:] = [d for d in deps if not (d.get('type') == 'blocked-by' and d.get('id') == blocker[5:])]
                     command = ['unblock', task_id, '--by', blocker[5:]]
@@ -1440,7 +1440,14 @@ class Owner:
             return result.stdout
         refuse(not shutil.which('lavish-axi'), 'unavailable', 'lavish-axi is not installed.')
         destination = 'primary'
-        if (self.home / ('state/' + task + '.parked')).exists():
+        lifecycle = [line for line in self.status.get(task, '').splitlines()
+                     if re.match(r'^(working|paused|needs-decision|captain-held|blocked|failed|done)\b', line)]
+        finished = (self.rows[task]['state'] == 'done'
+                    or bool(self.presentations[task]['presentation'].get('closure'))
+                    or bool(lifecycle and re.match(r'^done\b', lifecycle[-1])))
+        if finished:
+            pass
+        elif (self.home / ('state/' + task + '.parked')).exists():
             control('fm-control.sh', task, 'resume')
             refuse(self.worker_liveness(task)['state'] != 'alive',
                    'owner_failed', 'The resumed report author is not confirmed alive.')

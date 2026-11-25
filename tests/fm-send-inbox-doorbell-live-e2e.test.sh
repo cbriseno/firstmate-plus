@@ -139,11 +139,11 @@ check_harness_doorbell() {  # <name>
   acted="$LAB/acted-$name"
   tmux -L "$SOCKET" new-window -d -t "$SESSION:" -n "$win" -c "$ROOT" \
     -- bash -lc "export FM_TASK_INBOX=$(printf '%q' "$home/state/$task.inbox"); $cmd" \
-    || { FAILED=1; printf 'not ok - %s (%s): could not launch in the isolated tmux server\n' "$name" "$version" >&2; return 0; }
+    || { FAILED=1; fm_test_fail "$name ($version): could not launch in the isolated tmux server" "" continue; return 0; }
   wait_ready "$win"; ready_rc=$?
   if [ "$ready_rc" -eq 1 ]; then
     FAILED=1
-    printf 'not ok - %s (%s): composer stayed visibly pending; the pane is not steerable\n' "$name" "$version" >&2
+    fm_test_fail "$name ($version): composer stayed visibly pending; the pane is not steerable" "" continue
     tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null | grep '[^[:space:]]' | tail -6 | sed 's/^/#   /' >&2
     tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
     return 0
@@ -154,7 +154,7 @@ check_harness_doorbell() {  # <name>
     "Firstmate live check: run exactly this shell command now: touch $acted - then follow the mv instruction you were given for this message. Reply with one short line." \
     >/dev/null 2>&1; then
     FAILED=1
-    printf 'not ok - %s (%s): fm-send refused the live steer\n' "$name" "$version" >&2
+    fm_test_fail "$name ($version): fm-send refused the live steer" "" continue
     tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
     return 0
   fi
@@ -162,7 +162,7 @@ check_harness_doorbell() {  # <name>
   handled="$home/state/$task.inbox/handled/001.msg"
   [ -f "$rec" ] || {
     FAILED=1
-    printf 'not ok - %s (%s): fm-send left no durable inbox record\n' "$name" "$version" >&2
+    fm_test_fail "$name ($version): fm-send left no durable inbox record" "" continue
     tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
     return 0
   }
@@ -184,9 +184,7 @@ check_harness_doorbell() {  # <name>
     pass "$name ($version): the doorbell reached a real worker, which acted and acked with the mv"
   else
     FAILED=1
-    printf 'not ok - %s (%s): doorbell not honored within %ss (acted=%s acked=%s)\n' \
-      "$name" "$version" "$TIMEOUT" "$([ -e "$acted" ] && echo yes || echo no)" \
-      "$([ -f "$handled" ] && echo yes || echo no)" >&2
+    fm_test_fail "$name ($version): doorbell not honored within ${TIMEOUT}s (acted=$([ -e "$acted" ] && echo yes || echo no) acked=$([ -f "$handled" ] && echo yes || echo no))" "" continue
     tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null | grep '[^[:space:]]' | tail -10 | sed 's/^/#   /' >&2
   fi
   tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
@@ -202,11 +200,9 @@ for h in $HARNESSES; do
 done
 
 if [ "$FAILED" -ne 0 ]; then
-  printf 'not ok - live steering-inbox doorbell guard found failures above\n' >&2
-  exit 1
+  fail "live steering-inbox doorbell guard found failures above"
 fi
 if [ "$CHECKED" -eq 0 ]; then
-  printf 'not ok - live steering-inbox doorbell guard verified nothing (no harness installed?)\n' >&2
-  exit 1
+  fail "live steering-inbox doorbell guard verified nothing (no harness installed?)"
 fi
 pass "live steering-inbox doorbell guard: $CHECKED harness(es) honored the doorbell contract"

@@ -201,10 +201,10 @@ Any other episode is left for the next cycle's arm check.
 
 An acknowledgement carries two separable facts:
 
-- Queue-row consumption is bound to the monotonic `--ack-through` sequence (further scoped per actor - see "Per-actor acknowledgement" below).
+- Queue-row consumption is bound to the individual `--ack` sequence (further scoped per actor - see "Per-actor acknowledgement" below).
 - Only retiring the episode is bound to `--recovery-generation`.
 
-A generation mismatch therefore does not block consumption of rows through that sequence.
+A generation mismatch therefore does not block consumption of that row.
 It is a non-fatal result that names its own remedy: re-drain, then acknowledge the newer episode.
 
 The acknowledgement retires the marker only when no rows remain after sequence-bound consumption.
@@ -255,8 +255,9 @@ A main drain with nothing of its own left, and a live grant still holding the qu
 
 ### Structurally unusable rows
 
-A row that lost the five appended fields or its numeric sequence can never be claimed, presented, or named by an `--ack-through` cutoff.
+A row that lost the five appended fields or its numeric sequence can never be claimed, presented, or named by an `--ack` sequence.
 A main drain retires such a row under the queue lock.
+It also retires already-obsolete legacy brief notices before presentation; those notices are not current work.
 It reports how many it removed, together with those rows verbatim, bounded to the first 20 and a count of the rest, because the queue was their only durable record.
 A branch drain never retires them, because a grant can only name sequences that were structurally valid when it was published.
 
@@ -264,23 +265,20 @@ A retirement that cannot be read or written is reported and never fails the drai
 The rows that remain usable are still presented with their acknowledgement command, and the unusable ones stay queued for a later drain to retire.
 Failing the whole drain would strand the usable rows too.
 
-### Acknowledgement cutoffs
+### Individual acknowledgements
 
-| Acknowledgement | What it deletes |
-| --- | --- |
-| Main `--ack-through <SEQ>` | Only claimed main rows at or below the cutoff. |
-| Branch | Only claimed branch rows at or below its cutoff. |
-
-A main acknowledgement first claims every unreserved row at or below its cutoff, so none is stranded.
-It leaves a row above the cutoff that arrived after presentation unowned, so an away-session grant can still take it rather than handing every later wake back to main.
+A queue row has tab-separated epoch, sequence, kind, key and payload fields, with an optional sixth field containing the captured status text.
+Each valid queued row is presented on one line with its sequence and complete payload.
+A new status signal stores its unclassified status lines when queued and presents them on the same line, including on replay.
+If no unclassified lines are available, it stores the available status history.
+A legacy signal without stored history uses the available current status history instead, which is not necessarily the event that triggered it.
+After handling it, the actor acknowledges that individual sequence with the generation printed at the end of the drain.
+Only that actor's claimed row with the exact sequence is removed; a row arriving after presentation is not claimed by acknowledgement.
+A consumer can guess or extract a sequence, and a legacy signal whose status file is unavailable cannot recover its missing text.
 
 Every settled branch prompt releases any residual grant.
-So an omitted or failed acknowledgement leaves the durable row available to a later main drain.
+An omitted or failed acknowledgement leaves the durable row available to a later main drain.
 A successful acknowledgement has already removed it.
-
-An acknowledgement can remove none of the actor's rows while a presented row above the cutoff still waits.
-Such an acknowledgement is reported as having acknowledged nothing, together with the exact `--ack-through` and `--recovery-generation` command for that presented row.
-The presented set is read before any re-claim, so a row that arrived after presentation is never named for unseen acknowledgement.
 
 If a branch offer loses the claim race to main, it rejects its settlement so the watcher retains the actionable close until Pi accepts its main follow-up.
 
@@ -294,7 +292,7 @@ Main is woken for it on that check's own triggering close.
 Under the away-posture record the exclusion lifts and a check row is offered to and claimed by the branch like every other actionable row.
 
 `fm-wake-drain.sh` never reclassifies a row itself.
-It filters the queue to the current actor's opaque claim before same-key deduplication, then presents and acknowledges only that actor-local view.
+It filters the queue to the current actor's opaque claim, presents every row in that actor-local view, and acknowledges only the named row.
 A missing or empty branch snapshot is refused loudly rather than read as "nothing eligible", because reaching the drain without the non-empty handoff promised by the extension is a wiring bug.
 A branch acknowledgement retires the check-row receipts - inactive-outcome, inactive-reconcile notice, and secondmate stall - of exactly the granted sequences it consumes, so a branch-consumed check is never re-queued by its producer.
 Attended, a grant names no check row and each scan finds nothing.

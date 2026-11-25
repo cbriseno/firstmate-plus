@@ -170,10 +170,9 @@ call_choose() {
   return "$rc"
 }
 
-fail() {
-  printf 'not ok - %s\n' "$1" >&2
-  exit 1
-}
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 
 ok() {
   printf 'ok - %s\n' "$1"

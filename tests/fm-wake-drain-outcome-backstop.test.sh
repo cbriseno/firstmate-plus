@@ -131,11 +131,11 @@ test_branch_annotation_cannot_consume_the_main_resurfacing_backstop() {
   if grep -F 'STATUS OUTCOME BACKSTOP (' "$branch_out" >/dev/null; then
     fail "the branch actor presented the main-only outcome backstop"
   fi
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$branch_err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$branch_err")
+  sequence=$(fm_test_single_wake_sequence "$branch_out")
+  generation=$(fm_test_wake_generation "$branch_err")
   [ -n "$sequence" ] && [ -n "$generation" ] || fail "branch drain omitted its acknowledgement boundary"
   FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" \
-    --ack-through "$sequence" --recovery-generation "$generation" \
+    --ack "$sequence" --recovery-generation "$generation" \
     || fail "branch acknowledgement failed"
   [ ! -s "$state/.wake-queue" ] || fail "branch acknowledgement did not consume its queue row"
 

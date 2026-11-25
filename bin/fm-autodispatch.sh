@@ -3,6 +3,16 @@
 # manual dispatch follows, so lanes that are free never wait for the primary.
 #
 # Usage: fm-autodispatch.sh <task-id>
+#        fm-autodispatch.sh --pause [--for <N>{m|h|d}] [--reason <text>]
+#        fm-autodispatch.sh --resume | --status
+#
+# The general pause switch stops every automatic launch of this home until
+# lifted: with --for it lifts itself after that long, without it only
+# --resume lifts it. While paused, the watcher launches nothing, replays no
+# deferred launch and reports no ready work waiting for a lane, and this script
+# exits 77 for a task id; launching by hand is unaffected. Lowering
+# config/lane-capacity is not a pause. bin/fm-autodispatch-pause-lib.sh owns the
+# marker (state/.autodispatch-paused).
 #
 # The watcher calls this in `fm-tasks-axi.sh work continuations` order for a
 # queued task with a brief and no spawn-deferred marker once capacity admits.
@@ -21,7 +31,8 @@
 # Then it runs fm-spawn.sh, which still owns every admission, category and
 # delivery check; a spawn that refuses reports its own error here.
 #
-# Exit: 0 launched (fm-spawn's line on stdout), 75 spawn deferred for capacity
+# Exit: 77 automatic dispatch is paused (nothing was tried; no report is due),
+#   0 launched (fm-spawn's line on stdout), 75 spawn deferred for capacity
 #   (its marker is written; the watcher's deferral tick relaunches it),
 #   76 allocation lock held (marker records the lock; the watcher retries),
 #   3 not auto-launchable (reason on stderr; the primary decides as before),
@@ -35,12 +46,45 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 export FM_HOME
+# shellcheck source=bin/fm-autodispatch-pause-lib.sh
+. "$SCRIPT_DIR/fm-autodispatch-pause-lib.sh"
+pause_usage() { echo "usage: fm-autodispatch.sh --pause [--for <N>{m|h|d}] [--reason <text>] | --resume | --status" >&2; exit 2; }
+case "${1:-}" in
+  --pause)
+    shift; span=; reason=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --for) [ "$#" -ge 2 ] || pause_usage; span=$2; shift 2 ;;
+        --reason) [ "$#" -ge 2 ] || pause_usage; reason=$2; shift 2 ;;
+        *) pause_usage ;;
+      esac
+    done
+    stop_at=0
+    if [ -n "$span" ]; then
+      case "$span" in
+        [1-9]*[mhd]) n=${span%[mhd]}; unit=${span#"$n"} ;;
+        *) echo "fm-autodispatch: --for takes a positive count and m, h or d (for example 90m)" >&2; exit 2 ;;
+      esac
+      case "$n" in *[!0-9]*) echo "fm-autodispatch: --for takes a positive count and m, h or d (for example 90m)" >&2; exit 2 ;; esac
+      case "$unit" in m) mult=60 ;; h) mult=3600 ;; d) mult=86400 ;; esac
+      stop_at=$(( $(date +%s) + n * mult ))
+    fi
+    reason=$(printf '%s' "$reason" | tr '\n' ' ' | cut -c1-200)
+    mkdir -p "$STATE" || exit 1
+    printf 'since=%s\nuntil=%s\nreason=%s\n' "$(date +%s)" "$stop_at" "$reason" > "$STATE/.autodispatch-paused.tmp" &&
+      mv -f -- "$STATE/.autodispatch-paused.tmp" "$STATE/.autodispatch-paused" || exit 1
+    fm_autodispatch_pause_describe "$STATE"; exit 0 ;;
+  --resume) rm -f -- "$STATE/.autodispatch-paused" || exit 1; fm_autodispatch_pause_describe "$STATE"; exit 0 ;;
+  --status) fm_autodispatch_pause_describe "$STATE"; exit 0 ;;
+  -*) pause_usage ;;
+esac
 ID=${1:?usage: fm-autodispatch.sh <task-id>}
 BRIEF="$DATA/$ID/brief.md"
 
 skip() { echo "not auto-launchable: $*" >&2; exit 3; }
 tasks() { FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" bash "$SCRIPT_DIR/fm-tasks-axi.sh" "$@"; }
 
+! fm_autodispatch_paused "$STATE" || { echo "automatic dispatch is paused; nothing was launched" >&2; exit 77; }
 [ -f "$BRIEF" ] || skip "no brief"
 [ ! -f "$STATE/$ID.meta" ] || skip "already launched"
 # A brief still being written is not ready work; fm-spawn.sh would refuse it.
@@ -80,6 +124,11 @@ fi
 FORGE=$("$SCRIPT_DIR/fm-project-mode.sh" --forge "$REPO" 2>/dev/null) || skip "registry entry for $REPO does not resolve"
 YOLO=$("$SCRIPT_DIR/fm-project-mode.sh" "$REPO" 2>/dev/null | cut -d' ' -f2)
 case "$YOLO" in on|off) ;; *) skip "no registered yolo posture for $REPO" ;; esac
+if [ "$MODE" = local-only ] && [ -f "$FM_HOME/.fm-secondmate-home" ]; then
+  # shellcheck source=bin/fm-secondmate-parent-lib.sh
+  . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+  if fm_secondmate_parent_returns_project "$FM_HOME" "$PROJ"; then YOLO=off; fi
+fi
 case "$FORGE" in gerrit|external) YOLO=off ;; esac
 
 args=("$ID" "$PROJ" --mode "$MODE" --yolo "$YOLO")

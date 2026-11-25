@@ -4012,11 +4012,11 @@ test_procevent_unacknowledged_result_redrains_until_handled() {
     || fail "the successor drain did not re-print the durable process-event row"
 
   pe_case "$dir" handled delivery-src 1 >/dev/null || fail "could not acknowledge the captured result"
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$replay_err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$replay_err")
+  sequence=$(fm_test_single_wake_sequence "$replay_out")
+  generation=$(fm_test_wake_generation "$replay_err")
   [ -n "$sequence" ] && [ -n "$generation" ] \
     || fail "the replay drain omitted its post-handling acknowledgement boundary"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack "$sequence" --recovery-generation "$generation" \
     || fail "completed process-event handling could not acknowledge the replay"
   [ ! -s "$state/.wake-queue" ] || fail "acknowledged process-event replay remained durable"
 
@@ -4272,11 +4272,11 @@ test_procevent_surface_crash_boundaries() {
     || fail "post-marker successor drain failed"
   grep "$(printf '\tcheck\t')" "$out.replay.drain" | grep -F 'procevent fixture after-marker 1' >/dev/null \
     || fail "post-marker successor did not re-drain the durable record"
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$replay_err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$replay_err")
+  sequence=$(fm_test_single_wake_sequence "$out.replay.drain")
+  generation=$(fm_test_wake_generation "$replay_err")
   [ -n "$sequence" ] && [ -n "$generation" ] \
     || fail "post-marker replay omitted its post-handling acknowledgement boundary"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack "$sequence" --recovery-generation "$generation" \
     || fail "post-marker replay acknowledgement failed"
   [ ! -s "$state/.wake-queue" ] || fail "post-marker acknowledgement left the durable record queued"
   pass "surfacing failures replay until post-handling acknowledgement"
@@ -4690,6 +4690,29 @@ test_paused_bg_job_without_reference_is_rechecked_once() {
   [ "$(bg_job_stale_wakes "$state")" -eq 0 ] \
     || fail "legacy job recheck also queued a primary stale wake"
   pass "a legacy job pause is rechecked once without waking the primary"
+}
+
+test_expired_pause_reaches_busy_worker() {
+  local dir state gen variant FM_HOME FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE
+  for variant in busy load; do
+    dir=$(bg_job_paused_case "expired-$variant" "paused [at=100]: until 2000-01-01T00:00Z load1 < 99999 waiting for capacity")
+    state="$dir/state"
+    cat > "$dir/fakebin/uptime" <<'SH'
+#!/usr/bin/env bash
+printf 'load average: 999999.00, 999999.00, 999999.00\n'
+SH
+    chmod +x "$dir/fakebin/uptime"
+    if [ "$variant" = busy ]; then
+      gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" parked)
+      printf 'busy_gen=%s\n' "$gen" >> "$state/parked.meta"
+      "$ROOT/bin/fm-busy-event.sh" apply "$state" parked busy --gen "$gen" --source claude-hook --event prompt
+    fi
+    export FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" FM_CONFIG_OVERRIDE="$dir/config"
+    parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" test:fm-parked absorb \
+      || fail "$variant: expired pause scan unexpectedly woke the primary"
+    [ -f "$state/parked.inbox/001.msg" ] || fail "$variant: expired pause did not reach worker"
+  done
+  pass 'an expired pause reaches a busy worker or one waiting on high load'
 }
 
 test_parked_resume_failure_wakes_after_two_retries() {
@@ -5276,6 +5299,7 @@ test_paused_bg_job_without_reference_is_rechecked_once
 test_paused_bg_job_until_timeout_resumes_after_the_job_ends
 test_completed_job_is_not_starved_by_a_later_wake
 test_completed_job_is_not_starved_by_an_early_signal
+test_expired_pause_reaches_busy_worker
 test_parked_resume_failure_wakes_after_two_retries
 
 # The recorded Claude background-task exit picker. The footer is the last

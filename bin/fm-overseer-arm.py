@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""Arm one overseer event wait, deliver its event, and stop it on request."""
+"""Own a session's background watch and retire watches from the old Stop hook.
+
+Usage: fm-overseer-arm.py watch [RELAY --ready DIRECTORY START_FILE] | stop |
+                          stop-legacy | status | locked | remove-hook FILE [--check]
+"""
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
-import select
+import shlex
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get('FM_HOME') or ROOT)
 STATE = Path(os.environ.get('FM_STATE_OVERRIDE') or HOME / 'state') / 'overseer'
 LOCK = STATE / 'watch.lock'
-CONNECTION_KEYS = ('PATH', 'TMUX', 'TMUX_TMPDIR', 'HERDR_SESSION', 'FM_BACKEND',
-                   'FM_OVERSEER_POLL', 'FM_OVERSEER_WAIT')
 
 
 def lock_file():
@@ -24,179 +28,42 @@ def lock_file():
     return LOCK.open('a+')
 
 
-def run(ready):
-    lock = lock_file()
-    while True:
+def watch(ready):
+    with lock_file() as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
         except BlockingIOError:
-            lock.seek(0)
-            lines = lock.read().splitlines()
-            if len(lines) > 1 and lines[1] == 'watching':
-                os.write(ready, b'already\n')
-                os.close(ready)
-                return 0
-            time.sleep(0.2)
-    def phase(value):
-        lock.seek(0)
-        lock.truncate()
-        lock.write(str(os.getpid()) + '\n' + value + '\n')
+            print('overseer watch already running', file=sys.stderr)
+            return 1
+        if (STATE / 'stopping').exists():
+            return 1
+        lock.truncate(0)
+        lock.write(f'{os.getpid()}\nsession-watch\n')
         lock.flush()
-    phase('watching')
-    try:
-        current_session = (STATE / 'session').read_text(encoding='utf-8').strip()
-    except OSError:
-        current_session = ''
-    if (STATE / 'stopping').exists() or current_session != os.environ.get('FM_OVERSEER_SESSION'):
-        os.write(ready, b'failed\n')
-        os.close(ready)
-        lock.close()
-        return 1
-    watcher = None
-    def terminate(_signum, _frame):
-        raise SystemExit(143)
-    signal.signal(signal.SIGTERM, terminate)
-    try:
-        watcher = subprocess.Popen(['bash', str(ROOT / 'bin/fm-overseer-watch.sh')],
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   text=True, start_new_session=True)
-        if watcher.poll() is not None:
-            os.write(ready, b'failed\n')
-            return 1
-        os.write(ready, b'armed\n')
-        os.close(ready)
-        output, _ = watcher.communicate()
-        lines = output.splitlines()
-        if watcher.returncode or len(lines) < 2 or not lines[0].startswith('event_id='):
-            return 1
-        event_id = lines[0][len('event_id='):]
-        if not re.fullmatch(r'[A-Za-z0-9._-]+', event_id):
-            return 1
-        phase('delivering')
+
+        def terminate(_signum, _frame):
+            raise SystemExit(143)
+
+        signal.signal(signal.SIGTERM, terminate)
+        child = subprocess.Popen(['bash', str(ROOT / 'bin/fm-overseer-watch.sh')],
+                                 env={**os.environ, 'FM_OVERSEER_WATCH_OWNER': str(os.getpid())},
+                                 start_new_session=True)
         try:
-            backend, target = (STATE / 'session').read_text().split()
-        except (OSError, ValueError):
-            return 1
-        message = 'Overseer event: read state/overseer/pending-event in firstmate-home.'
-        command = '. "$1/fm-backend.sh"; fm_backend_send_text_submit "$2" "$3" "$4" 3 0.5 1'
-        while True:
-            sender = subprocess.Popen(['bash', '-c', command, 'overseer-event', str(ROOT / 'bin'),
-                                       backend, target, message], stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, text=True, start_new_session=True)
-            try:
-                output, _ = sender.communicate()
-            finally:
-                if sender.poll() is None:
-                    try:
-                        os.killpg(sender.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    sender.wait()
-            verdict = output.strip()
-            if sender.returncode == 0 and verdict == 'empty':
-                return 0
-            if sender.returncode == 0 and verdict == 'send-failed':
-                time.sleep(30)
-                continue
-            # The text may already be in the composer or in a queued turn.
-            # Never type it a second time without resolving that uncertainty.
-            (STATE / 'unconfirmed-event').write_text(event_id + '\n', encoding='utf-8')
-            return 1
-    finally:
-        if watcher and watcher.poll() is None:
-            try:
-                os.killpg(watcher.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            watcher.wait()
-        lock.close()
+            if ready:
+                subprocess.run([*ready, str(os.getpid())], stdout=sys.stderr, check=True, timeout=30)
+            return child.wait()
+        finally:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                child.wait()
 
 
-def arm(quiet=False):
-    if (STATE / 'stopping').exists():
-        print('overseer session is stopping', file=sys.stderr)
-        return 1
-    if (STATE / 'unconfirmed-event').exists():
-        print('event delivery is unconfirmed; inspect the recorded session before any retry', file=sys.stderr)
-        return 1
-    if not (ROOT / 'bin/fm-overseer-watch.sh').is_file():
-        print('overseer watch is unavailable', file=sys.stderr)
-        return 1
-    try:
-        connection = json.loads((STATE / 'session-env.json').read_text(encoding='utf-8'))
-        if not isinstance(connection, dict) or any(not isinstance(connection.get(key), str) for key in CONNECTION_KEYS):
-            raise ValueError('invalid connection context')
-    except (OSError, ValueError, TypeError):
-        print('overseer session connection context is unavailable', file=sys.stderr)
-        return 1
-    try:
-        session = (STATE / 'session').read_text(encoding='utf-8').strip()
-    except OSError:
-        print('overseer session is unavailable', file=sys.stderr)
-        return 1
-    if not session:
-        print('overseer session is unavailable', file=sys.stderr)
-        return 1
-    for key in CONNECTION_KEYS:
-        os.environ[key] = connection[key]
-    os.environ['FM_OVERSEER_SESSION'] = session
-    read_fd, write_fd = os.pipe()
-    try:
-        child = subprocess.Popen([sys.executable, __file__, 'run', str(write_fd)],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True,
-                                 pass_fds=(write_fd,))
-        os.close(write_fd)
-        write_fd = -1
-        ready, _, _ = select.select([read_fd], [], [], 75)
-        response = os.read(read_fd, 32).decode().strip() if ready else ''
-        if response in ('armed', 'already'):
-            if not quiet:
-                print('overseer watch ' + response)
-            return 0
-        if not ready:
-            child.terminate()
-            child.wait()
-        print('overseer watch did not confirm readiness', file=sys.stderr)
-        return 1
-    finally:
-        os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
-
-
-def adopt_own_session():
-    """Record the endpoint this turn ends in when it differs from the record.
-
-    A relay successor or a pane that moved has a new endpoint; the newest
-    overseer turn owns the record so events reach the live session.
-    """
-    if (STATE / 'stopping').exists():
-        return
-    try:
-        connection = json.loads((STATE / 'session-env.json').read_text(encoding='utf-8'))
-        current = (STATE / 'session').read_text(encoding='utf-8').split()
-    except (OSError, ValueError):
-        return
-    if not isinstance(connection, dict) or len(current) != 2:
-        return
-    env = dict(os.environ)
-    env.update({key: value for key, value in connection.items() if key in CONNECTION_KEYS and isinstance(value, str)})
-    try:
-        found = subprocess.run(['bash', str(ROOT / 'bin/fm-overseer-primary.sh'), '--locate', str(os.getpid())],
-                               env=env, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return
-    endpoint = found.stdout.split()
-    if found.returncode or len(endpoint) != 2 or endpoint == current or endpoint[0] != current[0]:
-        return
-    temporary = STATE / 'session.tmp'
-    temporary.write_text(' '.join(endpoint) + '\n', encoding='utf-8')
-    os.replace(temporary, STATE / 'session')
-
-
-def stop():
+def stop(legacy_only=False):
+    if not LOCK.exists():
+        return 0
     lock = lock_file()
     try:
         try:
@@ -211,12 +78,14 @@ def stop():
         pid = int(raw)
         result = subprocess.run(['ps', '-p', str(pid), '-o', 'args='], text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
-        prefix, separator, _ = result.stdout.strip().rpartition(' run ')
-        interpreter, space, script = prefix.partition(' ')
-        if (result.returncode or not separator or not space or not interpreter or
-                Path(script.strip()).resolve() != Path(__file__).resolve()):
+        # Old processes say 'run FD'; the native background task says 'watch'.
+        match = re.fullmatch(r'\S+ (.+?) (run [0-9]+|watch(?: .*)?)', result.stdout.strip())
+        if (result.returncode or not match or
+                Path(match[1]).resolve() != Path(__file__).resolve()):
             print('overseer watch identity cannot be verified', file=sys.stderr)
             return 1
+        if legacy_only and not match[2].startswith("run "):
+            return 0
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -233,50 +102,104 @@ def stop():
         lock.close()
 
 
-def status():
-    if (STATE / 'unconfirmed-event').exists():
-        print('event: delivery unconfirmed; inspect the recorded session before any retry')
-    if (STATE / 'pending-event').exists():
-        print('event: pending delivery or acknowledgement')
+def locked():
     if not LOCK.exists():
-        print('watch: not armed')
-        return
+        return False
     with LOCK.open('r') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
         except BlockingIOError:
-            lock.seek(0)
-            lines = lock.read().splitlines()
-            print('watch: delivering' if len(lines) > 1 and lines[1] == 'delivering' else 'watch: armed')
-        else:
-            print('watch: not armed')
+            return True
+
+
+def status():
+    if (STATE / 'pending-event').exists():
+        print('event: pending acknowledgement')
+    if LOCK.exists():
+        with LOCK.open('r') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lines = lock.read().splitlines()
+                if lines[1:2] == ['session-watch']:
+                    print('watch: armed')
+                else:
+                    print('watch: legacy (run setup to retire it)')
+                return
+    print('watch: not armed')
+
+
+def remove_hook(path, check):
+    """Remove only the generated Stop command, preserving adjacent settings."""
+    if path.is_symlink():
+        raise ValueError(f'{path} is a symlink')
+    if not path.exists():
+        return
+    mode = path.stat().st_mode
+    if not stat.S_ISREG(mode):
+        raise ValueError(f'{path} is not a regular file')
+    data = json.loads(path.read_text(encoding='utf-8'))
+    mapping = data.get('hooks', {})
+    if 'Stop' not in mapping:
+        return
+
+    def legacy(hook):
+        if hook.get('type') != 'command':
+            return False
+        try:
+            args = shlex.split(hook.get('command', ''))
+        except ValueError:
+            return False
+        return (len(args) >= 5 and args[0] == 'env' and args[1].startswith('FM_HOME=')
+                and args[-3] == 'python3' and args[-2].endswith('/bin/fm-overseer-arm.py')
+                and args[-1] == 'guard')
+
+    entries = []
+    for group in mapping['Stop']:
+        hooks = [hook for hook in group['hooks'] if not legacy(hook)]
+        if hooks:
+            entries.append({**group, 'hooks': hooks})
+    if entries == mapping['Stop'] or check:
+        return
+    if entries:
+        mapping['Stop'] = entries
+    else:
+        del mapping['Stop']
+        if not mapping:
+            del data['hooks']
+    if not data:
+        path.unlink()
+        return
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(data, stream, indent=2)
+            stream.write('\n')
+            stream.close()
+            temporary.chmod(stat.S_IMODE(mode))
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2 and sys.argv[1] == 'arm':
-        sys.exit(arm())
-    if len(sys.argv) == 2 and sys.argv[1] == 'stop':
-        sys.exit(stop())
-    if len(sys.argv) == 2 and sys.argv[1] == 'guard':
-        if (STATE / 'pending-event').exists():
-            print('A watch event is pending; read and handle it, then acknowledge its ID before ending the turn.', file=sys.stderr)
-            sys.exit(2)
-        try:
-            (STATE / 'unconfirmed-event').unlink(missing_ok=True)
-        except OSError:
-            print('Could not clear the resolved delivery state.', file=sys.stderr)
-            sys.exit(2)
-        adopt_own_session()
-        if arm(quiet=True):
-            print('Overseer watch could not be armed; inspect the installation before ending this turn.', file=sys.stderr)
-            sys.exit(2)
-        sys.exit(0)
-    if len(sys.argv) == 2 and sys.argv[1] == 'adopt':
-        adopt_own_session()
-        sys.exit(arm(quiet=True))
-    if len(sys.argv) == 2 and sys.argv[1] == 'status':
-        status()
-        sys.exit(0)
-    if len(sys.argv) == 3 and sys.argv[1] == 'run':
-        sys.exit(run(int(sys.argv[2])))
-    sys.exit('usage: fm-overseer-arm.py arm|stop|adopt')
+    action, *args = sys.argv[1:] or ['help']
+    try:
+        if action == 'watch':
+            sys.exit(watch(args))
+        if action in ('stop', 'stop-legacy'):
+            sys.exit(stop(legacy_only=action == 'stop-legacy'))
+        if action == 'locked':
+            sys.exit(0 if locked() else 3)
+        if action == 'status':
+            status()
+        elif action == 'remove-hook':
+            remove_hook(Path(args[0]), args[1:] == ['--check'])
+        elif action == 'guard':
+            # Already open Claude and Codex sessions may still invoke this hook.
+            pass
+        else:
+            sys.exit(__doc__)
+    except (OSError, AttributeError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
+        sys.exit(str(error))

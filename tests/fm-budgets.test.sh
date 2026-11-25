@@ -316,15 +316,15 @@ TABLE
   assert_present "$HOME_DIR/state/nudges.jsonl"
   python3 "$ROOT/bin/fm_nudge.py" import-legacy || fail 'import historical table'
   python3 "$ROOT/bin/fm_nudge.py" import-legacy || fail 'repeat historical import'
-  if bash "$ROOT/bin/fm-nudge.sh" record --category resources --text 'check load'; then
-    fail 'accepted a mechanical nudge without a detector class'
+  if bash "$ROOT/bin/fm-nudge.sh" record --level overseer --category resources --text 'check load'; then
+    fail 'accepted a correction without a general cause'
   fi
-  bash "$ROOT/bin/fm-nudge.sh" record --category dispatch --gap ready-work --text 'launch work' --task task-42 || fail 'record mechanical nudge'
-  bash "$ROOT/bin/fm-nudge.sh" record --category resources --new-gap stale-cpu-probe --task fix-probe --text 'check load' || fail 'file a new detector class'
-  bash "$ROOT/bin/fm-nudge.sh" record --category new-orders --text 'new order' || fail 'record new order'
+  bash "$ROOT/bin/fm-nudge.sh" record --level overseer --category dispatch --cause ready-work --text 'launch work' || fail 'record mechanical nudge'
+  bash "$ROOT/bin/fm-nudge.sh" record --level overseer --category resources --cause stale-cpu-probe --text 'check load' || fail 'record a second cause'
+  bash "$ROOT/bin/fm-nudge.sh" record --level captain --category new-orders --text 'new order' || fail 'record new order'
   python3 "$BUDGETS" check >/dev/null || fail 'measure nudges'
   jq -e '.measures.nudges_dispatch_per_day.value == 2 and .measures.nudges_dispatch_per_day.exceeded and .measures["nudges_new-orders_per_day"].value == 1 and .measures["nudges_new-orders_per_day"].limit == null' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'daily category counts or limits'
-  assert_grep 'task-42' "$HOME_DIR/state/budget-nudges_dispatch_per_day.budget-alarm" 'alarm contains task'
+  assert_grep 'launch work' "$HOME_DIR/state/budget-nudges_dispatch_per_day.budget-alarm" 'alarm contains the correction'
   assert_grep 'tarea-existente' "$HOME_DIR/state/budget-nudges_dispatch_per_day.budget-alarm" 'alarm includes historic task'
   jq -e '.measures.nudges_unclassified.value == 2' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'old ambiguous nudges disappeared after their day'
   assert_grep 'tarea-antigua' "$HOME_DIR/state/budget-nudges_unclassified.budget-alarm" 'old ambiguous category is surfaced for classification'
@@ -335,3 +335,55 @@ TABLE
   pass 'nudges import once, count by category, and alarm only for mechanical nudges'
 }
 test_nudge_record_import_and_alarm
+
+# Every correction, at every level, names a general cause; each cause needs an
+# open root task in the real backlog, and a cause recorded after its root task
+# closed is a recurrence that reopens the debt.
+test_corrections_link_root_tasks_and_detect_recurrence() {
+  command -v tasks-axi >/dev/null 2>&1 || { echo 'skip: tasks-axi is not installed'; return 0; }
+  new_home
+  local out
+  printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\n' > "$HOME_DIR/.tasks.toml"
+  : > "$HOME_DIR/data/backlog.md"
+  bash "$ROOT/bin/fm-tasks-axi.sh" add root-parallel 'Root: independent work runs in parallel' --kind ship >/dev/null 2>&1 || fail 'open root task'
+  mkdir -p "$HOME_DIR/state/overseer"
+  : > "$HOME_DIR/SUPERVISOR.md"
+  printf '%s\n' '{"t":"2026-11-24T19:41:56+00:00","c":"firstmate","e":"overseer.intervention","category":"captain-correction","observed":"sequenced-work","task":"live-1234567890abcdef","action":"asked-primary","root_task":1}' \
+    '{"t":"2026-11-24T19:39:00+00:00","c":"firstmate","e":"overseer.intervention","category":"idle-capacity","observed":"lane-cap","task":"live-1234567890abcdee","action":"asked-primary","root_task":0}' \
+    > "$HOME_DIR/state/overseer/interventions.jsonl"
+  bash "$ROOT/bin/fm-nudge.sh" record --level captain --cause sequenced-work --text 'sequenced independent work' >/dev/null || fail 'record captain correction'
+  jq -s -e '[.[] | select(.intervention_t)] | length == 2 and (map(.level) | sort == ["captain", "overseer"])' "$HOME_DIR/state/nudges.jsonl" >/dev/null \
+    || fail 'existing overseer interventions were not imported once with their level'
+  python3 "$BUDGETS" check >/dev/null || fail 'measure unrooted causes'
+  jq -e '.measures.correction_causes_unrooted | .value == 2 and .exceeded and (.detail | contains("idle-capacity") and contains("sequenced-work"))' \
+    "$HOME_DIR/state/budgets.json" >/dev/null || fail 'causes without a root task are not reported'
+  if bash "$ROOT/bin/fm-nudge.sh" link --cause sequenced-work --task no-such-task >/dev/null 2>&1; then
+    fail 'linked a root task that is not in the backlog'
+  fi
+  bash "$ROOT/bin/fm-nudge.sh" link --cause sequenced-work --task root-parallel || fail 'link root task'
+  bash "$ROOT/bin/fm-overseer.sh" intervention record --category idle-capacity --observed lane-cap \
+    --evidence task-1 --action asked-primary --root-task root-parallel >/dev/null || fail 'overseer links its intervention'
+  jq -s -e 'last | .root_task == 1' "$HOME_DIR/state/overseer/interventions.jsonl" >/dev/null || fail 'linked intervention not exported as rooted'
+  bash "$ROOT/bin/fm-nudge.sh" record --level primary --cause sequenced-work --target t1 --text 'run it in parallel' >/dev/null || fail 'record primary correction'
+  jq -s -e 'last | .task == "root-parallel" and .level == "primary"' "$HOME_DIR/state/nudges.jsonl" >/dev/null || fail 'a known cause did not inherit its root task'
+  python3 "$BUDGETS" check >/dev/null || fail 'measure linked causes'
+  jq -e '.measures.correction_causes_unrooted.value == 0' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'linked causes still counted as debt'
+  bash "$ROOT/bin/fm-tasks-axi.sh" 'done' root-parallel >/dev/null 2>&1 || fail 'close root task'
+  out=$(bash "$ROOT/bin/fm-nudge.sh" causes) || fail 'list causes'
+  assert_contains "$out" 'fixed, no recurrence since' 'a closed root task without recurrence is not shown as fixed'
+  if bash "$ROOT/bin/fm-nudge.sh" link --cause sequenced-work --task root-parallel >/dev/null 2>&1; then
+    fail 'linked a closed root task'
+  fi
+  out=$(bash "$ROOT/bin/fm-nudge.sh" record --level captain --cause sequenced-work --text 'sequenced again') || fail 'record recurrence'
+  assert_contains "$out" 'RECURRENCE' 'a correction after the root task closed is not flagged'
+  python3 "$BUDGETS" check >/dev/null || fail 'measure recurrence'
+  jq -e '.measures.correction_causes_unrooted | .value == 1 and (.detail | contains("recurred: sequenced-work"))' \
+    "$HOME_DIR/state/budgets.json" >/dev/null || fail 'a recurred cause is not reported'
+  assert_contains "$(bash "$ROOT/bin/fm-nudge.sh" causes)" 'recurred' 'causes list hides the recurrence'
+  bash "$ROOT/bin/fm-tasks-axi.sh" add root-parallel-2 'Root: parallel dispatch, second fix' --kind ship >/dev/null 2>&1 || fail 'open second root task'
+  bash "$ROOT/bin/fm-nudge.sh" link --cause sequenced-work --task root-parallel-2 >/dev/null || fail 'link second root task'
+  python3 "$BUDGETS" check >/dev/null || fail 'measure relinked cause'
+  jq -e '.measures.correction_causes_unrooted.value == 0' "$HOME_DIR/state/budgets.json" >/dev/null || fail 'relinked cause still counted as debt'
+  pass 'corrections group by cause, link open root tasks, and flag a recurrence after the fix'
+}
+test_corrections_link_root_tasks_and_detect_recurrence

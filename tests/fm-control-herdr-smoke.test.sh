@@ -24,7 +24,9 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 pass() { printf 'ok - %s\n' "$1"; }
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
@@ -37,8 +39,7 @@ herdr_forget_inherited_pane
 # The agent-named process below is a symlink to fm_agent_standin's stand-in;
 # decide it before any lab session exists so an impossible case skips cleanly.
 STANDIN_DIR=$(fm_test_tmproot fm-control-herdr-standin) || {
-  printf 'not ok - %s\n' "could not create the stand-in directory" >&2
-  exit 1
+  fm_test_fail "could not create the stand-in directory"
 }
 STANDIN_BIN=$(fm_agent_standin "$STANDIN_DIR") || {
   echo "skip: no long-running stand-in binary survives a rename (multicall coreutils, no C compiler)"
@@ -55,18 +56,18 @@ cleanup_all() {
   if [ -n "$SCRATCH" ]; then
     if [ -d "$SCRATCH/home/state/hsmoke.git-hooks" ]; then
       chmod u+w "$SCRATCH/home/state/hsmoke.git-hooks" || {
-        echo "not ok - could not restore write permission on test git hooks" >&2
+        fm_test_fail "could not restore write permission on test git hooks" "" continue
         cleanup_status=1
       }
     fi
     fm_test_remove_tree "$SCRATCH" || {
-      echo "not ok - could not remove Herdr smoke scratch tree: $SCRATCH" >&2
+      fm_test_fail "could not remove Herdr smoke scratch tree: $SCRATCH" "" continue
       cleanup_status=1
     }
   fi
   if [ "$LAB_PREPARED" = 1 ]; then
     herdr_safe_stop_and_delete "$SESSION" || {
-      echo "not ok - could not tear down Herdr smoke lab session: $SESSION" >&2
+      fm_test_fail "could not tear down Herdr smoke lab session: $SESSION" "" continue
       cleanup_status=1
     }
   fi

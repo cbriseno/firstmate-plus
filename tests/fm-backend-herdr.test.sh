@@ -403,6 +403,36 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
 }
 
+# --- server_ensure: a redirected caller is released once the server is up ----
+#
+# The remote doctor calls server_ensure with stdout/stderr redirected over its
+# SSH channel. A shell left waiting on the long-lived server kept the caller's
+# saved descriptors open, so the channel (here, a $(...) capture) never closed.
+# shellcheck disable=SC2016
+test_server_ensure_releases_a_redirected_callers_output() {
+  local dir="$TMP_ROOT/server-ensure-release" out elapsed pid
+  mkdir -p "$dir/bin" "$dir/tools"
+  ln -sf "$(command -v jq)" "$dir/tools/jq"
+  cat > "$dir/bin/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  status) if [ -f "$FM_HERDR_PAIR_DIR/up" ]; then echo '{"server":{"running":true}}'; else echo '{"server":{"running":false}}'; fi ;;
+  server) echo $$ > "$FM_HERDR_PAIR_DIR/server.pid"; touch "$FM_HERDR_PAIR_DIR/up"; exec sleep 20 ;;
+esac
+SH
+  chmod +x "$dir/bin/herdr"
+  out=$(run_with_clients "$dir" "$dir/bin" \
+    's=$(date +%s); got=$(fm_backend_herdr_server_ensure released >/dev/null 2>&1; echo returned); echo "$got $(( $(date +%s) - s ))"')
+  pid=$(cat "$dir/server.pid" 2>/dev/null || true)
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  elapsed=${out##* }
+  [ "${out%% *}" = returned ] || fail "server_ensure should return to its caller, got: $out"
+  [ -n "$pid" ] || fail "the fake server should have been started"
+  [ "$elapsed" -lt 10 ] \
+    || fail "a redirected caller's capture should close once the server reports running, not when the server exits (took ${elapsed}s)"
+  pass "server_ensure releases a redirected caller's output while the server keeps running"
+}
+
 # --- client selection: a stale client shadowing a compatible one -------------
 #
 # Two herdr clients on PATH is a real host shape (a self-updated ~/.local/bin
@@ -5835,6 +5865,7 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_server_ensure_releases_a_redirected_callers_output
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
 test_stale_registration_over_a_shell_only_pane_is_agent_free

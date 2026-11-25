@@ -26,7 +26,9 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup_all; }
 pass() { printf 'ok - %s\n' "$1"; }
 assert_contains_local() {  # <haystack> <needle> <msg>
   case "$1" in
@@ -50,8 +52,7 @@ TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-launcher-e2e.XX
 HERDR_LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name fm-herdr-launcher-ws) || {
   rm -rf "$TMP_ROOT"
-  printf 'not ok - could not generate an isolated Herdr lab session name\n' >&2
-  exit 1
+  fm_test_fail "could not generate an isolated Herdr lab session name"
 }
 export HERDR_SESSION="$HERDR_LAB_SESSION"
 
@@ -445,8 +446,7 @@ pass "real herdr E2E: teardown closes only the worker's own pane and leaves the 
 
 if ! cleanup_all; then
   trap - EXIT
-  printf 'not ok - isolated Herdr lab teardown failed or the default fleet session changed\n' >&2
-  exit 1
+  fm_test_fail "isolated Herdr lab teardown failed or the default fleet session changed"
 fi
 trap - EXIT
 pass "real herdr E2E: isolated lab session removed and default fleet session unchanged"

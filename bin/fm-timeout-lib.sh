@@ -292,6 +292,10 @@ fm_run_external_timeout() {
 fm_run_timed() {  # <seconds> <command...>
   local seconds=$1 timeout_path
   shift
+  if [ -n "${FM_TIMEOUT_ACTIVE_RESULT:-}" ]; then
+    fm_run_active_timed "$seconds" "$@"
+    return
+  fi
   case "$(fm_timeout_mechanism)" in
     timeout|gtimeout)
       timeout_path=$(fm_external_timeout_path) || return 127
@@ -304,6 +308,81 @@ fm_run_timed() {  # <seconds> <command...>
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
     *) return 124 ;;
   esac
+}
+
+# A suite gets its own clock of CPU opportunity. During measured Linux
+# scheduler stalls, charge the estimated runnable share instead of stopping
+# the clock. Without stall data, estimate the share from load and core count.
+# Only the watchdog writes the verdict, so a command exit of 124 cannot requeue.
+fm_run_active_timed() {
+  python3 -c '
+import os, signal, subprocess, sys, time
+
+limit, grace = map(int, sys.argv[1:3])
+result = os.environ.pop("FM_TIMEOUT_ACTIVE_RESULT")
+sample = os.environ.get("FM_LOAD_SCALE_SAMPLE")
+cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+
+def cpu_stall():
+    if sys.platform == "linux" and not sample:
+        try:
+            with open("/proc/pressure/cpu") as pressure:
+                return int(pressure.readline().rsplit("total=", 1)[1]) / 1e6
+        except (OSError, IndexError, ValueError):
+            pass
+    return None
+
+def available(elapsed, previous, current):
+    try:
+        load, count = map(float, sample.split()) if sample else (os.getloadavg()[0], cores)
+        share = min(1, max(1, count) / max(load, 1))
+    except (OSError, ValueError):
+        return elapsed  # Unknown pressure cannot justify a retry.
+    if previous is None or current is None:
+        return elapsed * share
+    stalled = min(elapsed, max(0, current - previous))
+    return elapsed - stalled * (1 - share)
+
+def send_group(sig):
+    try:
+        os.killpg(child.pid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+
+def cancel(sig, _frame):
+    send_group(sig)
+    raise SystemExit(128 + sig)
+
+start = last = time.monotonic()
+previous = cpu_stall()
+child = subprocess.Popen(sys.argv[3:], start_new_session=True, restore_signals=False)
+for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(sig, cancel)
+active = 0
+try:
+    while True:
+        try:
+            status = child.wait(timeout=max(0.1, min(1, limit - active)))
+            sys.exit(status if status >= 0 else 128 - status)
+        except subprocess.TimeoutExpired:
+            now, current = time.monotonic(), cpu_stall()
+            active += available(now - last, previous, current)
+            last, previous = now, current
+        if active >= limit and child.poll() is None:
+            with open(result, "w") as verdict:
+                verdict.write("pressure\n" if active < (last - start) * 0.8 else "timeout\n")
+            send_group(signal.SIGTERM)
+            sys.exit(124)
+finally:
+    if child.returncode is None:
+        until = time.monotonic() + grace
+        while send_group(0) and time.monotonic() < until:
+            child.poll()
+            time.sleep(0.05)
+        send_group(signal.SIGKILL)
+        child.wait()
+' "$1" "$(fm_timeout_grace)" "${@:2}"
 }
 
 fm_timed_out() {  # <status>

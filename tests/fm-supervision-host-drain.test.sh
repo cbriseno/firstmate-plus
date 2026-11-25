@@ -121,6 +121,14 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   assert_contains "$out" "eligible=1" "an attended signal trigger with a claimable row must be the branch's"
   assert_contains "$out" "rows=1 2" "the host offer must carry check observations too"
 
+  append_wake "$state" check overseer-1795557068-4023390 'overseer: check the waiting delivery'
+  out=$(printf 'check: rearm-resurface\n' | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=0" "the host must leave instructions addressed to MAIN for its idle turn"
+  out=$(FM_HOME="$home" node "$DISPATCH" scope --afk)
+  assert_contains "$out" "rows=1 2" "the away host must preserve MAIN's instruction too"
+  out=$(FM_HOME="$home" bash "$ROOT/bin/fm-wake-drain.sh" 2>&1)
+  assert_contains "$out" "overseer: check the waiting delivery" "MAIN must see the queued instruction on drain"
+
   append_wake "$state" signal demo.status 'needs-decision: demo.status'
   out=$(printf 'check: rearm-resurface\n' | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=0" "recovery must preserve a queued decision's MAIN ownership"

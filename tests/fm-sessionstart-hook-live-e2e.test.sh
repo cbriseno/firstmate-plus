@@ -45,10 +45,9 @@ fm_live_gate opt-in FM_SESSIONSTART_HOOK_LIVE_E2E tmux
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unset NO_MISTAKES_GATE
 
-fail() {
-  printf 'not ok - %s\n' "$1" >&2
-  exit 1
-}
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 

@@ -38,6 +38,7 @@ make_settle_fakebin() {
 #!/usr/bin/env bash
 set -u
 window_file="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}.window"
+countfile="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}"
 case "$*" in
   *"#{pane_current_path}"*)
     countfile="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}"
@@ -68,7 +69,17 @@ case "${1:-}" in
     exit 0 ;;
   kill-window) : > "$window_file"; exit 0 ;;
   has-session|new-session) exit 0 ;;
-  send-keys) exit 0 ;;
+  send-keys)
+    if [ "${FM_FAKE_TREEHOUSE_FAIL:-0}" = 1 ]; then
+      marker=$(printf '%s\n' "$*" | sed -n "s/.*'\(FM_TREEHOUSE_RESULT_[0-9]*:\)'.*/\1/p")
+      [ -z "$marker" ] || printf 'all 1 worktrees are in use or dirty\n%s23\n' "$marker" > "$countfile.result"
+    fi
+    exit 0 ;;
+  capture-pane)
+    if [ -n "${FM_FAKE_LOCK:-}" ] && { [ -e "$FM_FAKE_LOCK" ] || [ -L "$FM_FAKE_LOCK" ]; }; then
+      : > "$countfile.lock-held"
+    fi
+    [ ! -f "$countfile.result" ] || cat "$countfile.result"; exit 0 ;;
 esac
 exit 0
 SH
@@ -304,11 +315,34 @@ test_unborn_head_project_is_refused_at_once() {
   pass "a project with an unborn HEAD is refused at once with its cause named"
 }
 
+test_acquisition_failure_is_reported_immediately() {
+  local rec id out status reads lock
+  id=settle-treehouse-failure
+  rec=$(make_settle_case failure "$id" 100000)
+  read_settle_record "$rec"
+  STALE_DIR=$PROJ_DIR
+  WT_DIR=$PROJ_DIR
+  lock=$(FM_HOME="$HOME_DIR" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$PROJ_DIR")
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+  out=$(FM_FAKE_TREEHOUSE_FAIL=1 FM_FAKE_LOCK="$lock" run_settle_spawn "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail 'failed acquisition was accepted'
+  assert_contains "$out" 'finished with status 23' 'the real acquisition status was lost'
+  assert_contains "$out" 'all 1 worktrees are in use or dirty' 'the real acquisition output was lost'
+  reads=0
+  [ ! -f "$COUNTFILE" ] || reads=$(cat "$COUNTFILE")
+  [ "$reads" -lt 10 ] || fail "failure waited for $reads path polls"
+  [ ! -e "$COUNTFILE.lock-held" ] || fail 'project lock was held while waiting for Treehouse'
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail 'failed acquisition published metadata'
+  pass 'a completed acquisition failure is reported without the 60-poll wait'
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
 test_transient_primary_checkout_is_not_accepted
 test_large_acquisition_outlives_the_initial_window
 test_primary_checkout_that_never_settles_fails_at_the_deadline
 test_unborn_head_project_is_refused_at_once
+test_acquisition_failure_is_reported_immediately
 
 echo "# all fm-spawn-worktree-settle tests passed"

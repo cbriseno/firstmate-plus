@@ -215,7 +215,7 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
     assert_grep 'regression test that fails without the change' "$brief" "$id: brief missing change-specific regression"
     assert_grep "the project's check, and a short run of the critical flow" "$brief" "$id: brief missing local checks"
-    assert_grep '--changed --base origin/main' "$brief" "$id: brief missing the Firstmate publication check"
+    assert_grep '--publish --changed --base origin/main' "$brief" "$id: brief missing the prioritized Firstmate publication check"
     assert_grep 'once per batch before publication' "$brief" "$id: brief missing the boundary for the publication check"
     assert_grep 'never a bare number such as "PR 108"' "$ROOT/worker/AGENTS.md" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$ROOT/worker/AGENTS.md" \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--correction <cause>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -134,7 +134,9 @@
 # and makes a later remote enqueue deduplicate onto that same record. An
 # unconfirmed fire-and-forget request exits 3 and names the same delivery id to
 # retry. Every remote transport attempt is bounded by FM_SEND_REMOTE_BUDGET
-# seconds (default 30, and any override must be a positive integer): a bound
+# seconds. Text defaults to the remote job's queue and execution envelope
+# plus transport overhead. Raw keys default to 30 seconds. An override must
+# be a positive integer. A bound
 # hit is completion-unknown and exits through this same unconfirmed contract
 # instead of waiting out a busy remote queue.
 # The remote host runs no re-ring ladder of its own: a swallowed ordinary
@@ -145,6 +147,12 @@
 # FM_SEND_EXPECTED_REMOTE_HOST to require that sampled identity to still match
 # during the final locked remote-route validation; unset or empty guards do not
 # change ordinary sends.
+#
+# Correction record: --correction <cause> marks a steer that corrects or pushes
+# the worker. After a successful send it is recorded as a primary-level
+# correction of that task under the general cause in this home's correction
+# ledger (bin/fm_nudge.py owns the ledger, root-task linking, and recurrence);
+# a ledger failure only warns, because the steer was already delivered.
 #
 # Decision closure (answerer-closes): pass --resolve-key <key> (repeatable,
 # before the message) when this send answers an open keyed needs-decision: or
@@ -269,6 +277,11 @@ fm_diag_stage_begin protected-send guard
 fm_send_diag_exit() {
   local rc=$?
   if declare -F fm_lease_guard_release >/dev/null; then fm_lease_guard_release; fi
+  if [ "$rc" = 0 ] && [ -n "${CORRECTION_CAUSE:-}" ]; then
+    python3 "$SCRIPT_DIR/fm_nudge.py" record --level primary --cause "$CORRECTION_CAUSE" \
+      --target "$CORRECTION_TARGET" --text "$CORRECTION_TEXT" >&2 ||
+      echo "warning: the steer was delivered but its correction was not recorded; record it with bin/fm-nudge.sh record" >&2
+  fi
   fm_diag_stage_end "$rc"
   return "$rc"
 }
@@ -302,6 +315,7 @@ fi
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
+CORRECTION_CAUSE=
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -352,9 +366,30 @@ while :; do
     FIRE_AND_FORGET_ID=${1#--fire-and-forget=}
     shift
     ;;
+  --correction)
+    [ $# -ge 2 ] || {
+      echo "error: --correction requires a cause" >&2
+      exit 1
+    }
+    printf '%s' "$2" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,59}$' || {
+      echo "error: --correction cause must be a short lowercase slug naming the general cause" >&2
+      exit 1
+    }
+    CORRECTION_CAUSE=$2
+    shift 2
+    ;;
   *) break ;;
   esac
 done
+if [ -n "$CORRECTION_CAUSE" ]; then
+  if [ "${1:-}" = "--key" ] || [ -z "$*" ] || [ -z "$TARGET_META" ]; then
+    CORRECTION_CAUSE=
+    echo "error: --correction needs a task selector resolved through this home's metadata and a text message" >&2
+    exit 1
+  fi
+  CORRECTION_TARGET=$(fm_send_id_from_meta "$TARGET_META")
+  CORRECTION_TEXT="$*"
+fi
 
 if [ "$TARGET_BACKEND" != remote ]; then
   fm_backend_validate "$TARGET_BACKEND" || exit 1
@@ -635,7 +670,14 @@ else
     exit 1
   fi
   if [ "$TARGET_BACKEND" = remote ]; then
-    FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
+    if [ -z "${FM_SEND_REMOTE_BUDGET:-}" ]; then
+      # shellcheck source=bin/fm-remote-job-lib.sh
+      . "$SCRIPT_DIR/fm-remote-job-lib.sh"
+      FM_SEND_REMOTE_BUDGET=$(fm_remote_job_steer_wait_budget) || {
+        echo 'error: remote steering job budget is invalid' >&2
+        exit 1
+      }
+    fi
     case "$FM_SEND_REMOTE_BUDGET" in
     '' | *[!0-9]* | 0)
       echo "error: FM_SEND_REMOTE_BUDGET must be a positive integer: $FM_SEND_REMOTE_BUDGET" >&2
@@ -735,7 +777,7 @@ else
     # reply-bearing request's expectation, while fire-and-forget reports the
     # delivery id that must be reused, because the record may have landed.
     # Every transport attempt is bounded by FM_SEND_REMOTE_BUDGET seconds
-    # (default 30, overridable) so a busy remote queue cannot hold this send
+    # so a busy remote queue cannot hold this send
     # open indefinitely; a bound hit exits through the same
     # unconfirmed-delivery contract.
     REMOTE_META_LOCK=$(fm_meta_lock_path "$TARGET_META") || exit 1
@@ -972,7 +1014,7 @@ else
     fi
     case "$ring_rc" in
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
-    2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
+    2) echo "fm-send: doorbell submission unconfirmed at $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
     esac
     printf "sent %s %s\n" "$INBOX_TASK_ID" "${INBOX_RECORD##*/}"

@@ -235,7 +235,10 @@ A Codex update is a banner and a Claude update is not shown with auto-update off
 `bin/fm-startup-dialogs.sh` answers the first three Codex and Claude dialogs named above inside the captain's approved scope and leaves the others.
 Refresh it by running `bin/fm-startup-dialogs.sh tmux <target> <harness> <launch-dir>` against a pane launched with a fresh config and reading its `startup-dialog:` lines, plus `tests/fm-startup-dialogs.test.sh` for the scope rules.
 On 2026-11-20, Codex 0.169.0 on Linux rendered a folder path across multiple rows; the startup dialog handler accepted the exact reconstructed launch path. The `tests/fm-launch-prompt-signals-live-e2e.test.sh` live guard captures that real dialog and replays it in a private pane without writing the trust store. Refresh with `FM_LAUNCH_PROMPT_SIGNALS_LIVE=1 bash bin/fm-test-run.sh tests/fm-launch-prompt-signals-live-e2e.test.sh`.
-Herdr's name for the Down key is not verified, so on Herdr the script's check that the accepting row is selected fails and the dialog stays for the operator.
+On 2026-11-25, `FM_LAUNCH_PROMPT_SIGNALS_LIVE=1 FM_TEST_CODEX_WRAPPED_ONLY=1 bash bin/fm-test-run.sh tests/fm-launch-prompt-signals-live-e2e.test.sh` on Linux printed `ok - codex codex-cli 0.169.0: real wrapped folder dialog accepted in private replay`.
+The portable `tests/fm-startup-dialogs.test.sh` also checks both cursor choices with byte-oriented matching and an actionable refusal notice.
+Herdr's Down key and both dialogs remain unverified for this change.
+Run `FM_HERDR_STARTUP_DIALOGS_LIVE=1 bash bin/fm-test-run.sh tests/fm-herdr-startup-dialogs-live-e2e.test.sh` where the lab helper's default-session tripwire is satisfied.
 
 ## Codex worker editing and native repository skills
 

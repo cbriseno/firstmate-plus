@@ -2282,7 +2282,7 @@ fm_wake_append() {
 # deletes consumed rows under the same lock) acquire the lock once, run this and
 # their own write, then release.
 fm_wake_append_locked() {
-  local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
+  local kind=$1 key=$2 payload=$3 clean_key clean_payload status_text='' status_offset epoch seq seq_file status
   local recovery_marker
   case "$kind" in
     signal|stale|check|heartbeat) ;;
@@ -2291,6 +2291,13 @@ fm_wake_append_locked() {
 
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)
+  if [ "$kind" = signal ] && fm_wake_status_key_map "$clean_key"; then
+    status_offset=$(fm_wake_signal_seen_size "$STATE" "$STATE/$FM_WAKE_STATUS_KEY")
+    if fm_wake_unread_events "$STATE/$FM_WAKE_STATUS_KEY" 0 "$status_offset" \
+      || fm_wake_unread_events "$STATE/$FM_WAKE_STATUS_KEY" 0 0; then
+      status_text=$(printf '%s' "$FM_WAKE_UNREAD_LINES" | fm_wake_clean_field)
+    fi
+  fi
   epoch=$(date +%s)
   seq_file="$STATE/.wake-queue.seq"
   recovery_marker="$STATE/.watcher-down"
@@ -2318,7 +2325,11 @@ fm_wake_append_locked() {
     printf '%s\n' "$seq" > "$seq_file" || status=$?
   fi
   if [ "$status" -eq 0 ]; then
-    printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
+    if [ -n "$status_text" ]; then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" "$status_text" >> "$FM_WAKE_QUEUE" || status=$?
+    else
+      printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
+    fi
   fi
   if [ "$status" -ne 0 ]; then
     _fm_wake_append_recovery_restore_locked || true
@@ -2444,7 +2455,7 @@ fm_wake_secondmate_stall_receipt_write() { # <task> <row-key>
   fi
 }
 
-fm_wake_commit_secondmate_stall_receipts_through() { # <cutoff> [<rows-file>]
+fm_wake_commit_secondmate_stall_receipt() { # <cutoff> [<rows-file>]
   local cutoff=$1 rows=${2:-} key seq rest epoch task row_key
   while IFS= read -r key; do
     seq=${key##*-}
@@ -2459,7 +2470,7 @@ fm_wake_commit_secondmate_stall_receipts_through() { # <cutoff> [<rows-file>]
     fm_wake_secondmate_stall_receipt_write "$task" "$row_key" || return 1
   done < <(awk -F '\t' -v cutoff="$cutoff" -v rows="$rows" '
     BEGIN { if (rows != "") while ((getline line < rows) > 0) owned[line]=1 }
-    NF >= 5 && $2 ~ /^[0-9]+$/ && $2 <= cutoff \
+    NF >= 5 && $2 ~ /^[0-9]+$/ && ("x" $2) == ("x" cutoff) \
       && (rows == "" || ($2 in owned)) && $3 == "check" \
       && $4 ~ /^secondmate-wake-loop-[A-Za-z0-9._-]+-[0-9]+-[0-9]+$/ { print $4 }
   ' "$FM_WAKE_QUEUE" 2>/dev/null)

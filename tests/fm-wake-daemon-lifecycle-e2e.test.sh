@@ -62,14 +62,6 @@ run_watcher_once() {
   wait_for_exit "$pid" "$limit"
 }
 
-ack_handled_wakes() {  # <state> <drain-stderr>
-  local state=$1 drain_err=$2 sequence generation
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$drain_err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$drain_err")
-  [ -n "$sequence" ] && [ -n "$generation" ] || return 1
-  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" \
-    --recovery-generation "$generation"
-}
 
 # --- Phase 1: routine progress absorbed; terminal caught after restart ---
 test_routine_then_terminal_after_restart() {
@@ -117,7 +109,7 @@ test_routine_then_terminal_after_restart() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2> "$drain_err" \
     || fail "drain after terminal signal failed"
   FM_STATE_OVERRIDE="$state" handle_wake "signal: $status_file" "$state"
-  ack_handled_wakes "$state" "$drain_err" || fail "terminal wake acknowledgement failed"
+  ack_drain_output "$state" "$drain_out" "$drain_err" || fail "terminal wake acknowledgement failed"
   [ -s "$state/.subsuper-escalations" ] || fail "captain-relevant terminal status was not buffered"
   [ "$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')" -eq 1 ] \
     || fail "expected exactly one buffered digest after the terminal signal"

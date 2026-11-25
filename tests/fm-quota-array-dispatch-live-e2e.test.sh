@@ -16,10 +16,9 @@ fm_live_gate opt-in FM_QUOTA_ARRAY_DISPATCH_LIVE_E2E pi python3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OWNER="$ROOT/.agents/skills/quota-array-dispatch/SKILL.md"
 
-fail() {
-  printf 'not ok - %s\n' "$1" >&2
-  exit 1
-}
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 
 [ -f "$OWNER" ] || fail "quota-array-dispatch skill not found"
 

@@ -2,12 +2,13 @@
 # fm-test-run.sh - single owner of Firstmate's behavior-test runner, lane
 # composition for portable CI shards, local --jobs for proven-concurrent work,
 # timing markers, and the complete-regression coverage guard.
+# A suite fails if it exits nonzero or emits a line beginning with `not ok`.
 #
 # Machine test budget: every executing test script, serial or concurrent, holds
 # one of N host slots in /tmp shared by every run in every home and worktree, so the
 # internal --jobs workers of simultaneous runs draw from one pool instead of
 # multiplying. N is two baseline slots plus one per available GiB above the
-# first, capped at the CPU count (minimum two); unknown memory retains two.
+# first, capped at half the CPU count (minimum one); unknown memory retains two before the CPU cap.
 # A run waiting for a slot prints one line naming the holders' runner PIDs and
 # the bypass FM_TEST_SKIP_HOST_LOCK=1. Tests and nested runners execute inside
 # their script's slot; parallel nested scripts share it one at a time or acquire
@@ -103,11 +104,11 @@
 #                   machine test slots (see the header); FM_TEST_PUBLISH=1 is
 #                   equivalent and is inherited by nested runners.
 #   --per-script-timeout-secs N
-#                   terminate a script that runs longer than N seconds and
-#                   record it as exit 124; 0 disables the bound. Every
-#                   selection applies 1500s when this is not given, above the
-#                   current slowest CI hint with margin; exceeding it becomes a
-#                   bounded failure, not proof of a hang. --max-wall-ms is
+#                   bound each script to N seconds of CPU opportunity; 0
+#                   disables the bound. Every selection defaults to 1500s.
+#                   A cutoff with sustained CPU contention queues just that
+#                   script once; a final cutoff is recorded as exit 124.
+#                   --max-wall-ms is
 #                   checked after the run and so cannot catch a hang on its own.
 #                   External interruption cleanup is outside this runner's
 #                   guarantee; configured per-script bounds remain authoritative.
@@ -121,6 +122,7 @@
 #
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_QUEUE <iso8601> <script> (concurrent dispatch before host admission)
+#   FM_TEST_REQUEUE <iso8601> <script> reason=cpu-pressure
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
 #   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false>
 #
@@ -180,6 +182,8 @@
 # that names it is selected as that SCRIPT, because the reference is per-script
 # evidence. Consumer bin/ scripts still resolve through the curated map, so
 # recorded family-level coupling still expands to the whole family.
+# Documentation without a curated mapping selects the documentation audience
+# check. Other existing source paths still require a mapping or a test reader.
 # tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh and tests/*-fixture.sh are
 # shared files that map to the suites naming them; a fixture under
 # tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
@@ -415,7 +419,7 @@ family_for_basename() {
     fm-secondmate-busy-contract-live-e2e.test.sh|\
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
     \
-    fm-herdr-submit-confirm-live-e2e.test.sh|fm-herdr-codex-delayed-live-e2e.test.sh|\
+    fm-herdr-submit-confirm-live-e2e.test.sh|fm-herdr-codex-delayed-live-e2e.test.sh|fm-herdr-startup-dialogs-live-e2e.test.sh|\
     fm-watch-wedge-cap-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
@@ -450,7 +454,7 @@ family_for_basename() {
       printf '%s\n' snapshot-bearings
       ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
-    fm-busy-state.test.sh|fm-capacity.test.sh|fm-classify-corr-token.test.sh|\
+    fm-busy-state.test.sh|fm-capacity.test.sh|fm-pause-general.test.sh|fm-classify-corr-token.test.sh|\
     fm-claude-stop-autoarm.test.sh|\
     fm-dispatch-resolve.test.sh|\
     fm-extension-binding.test.sh|fm-gitignore-config.test.sh|\
@@ -1499,6 +1503,10 @@ families_for_changed_path() {
       printf '%s\n' secondmate
       printf '%s\n' session-bootstrap
       ;;
+    bin/fm-remote-land.sh)
+      printf '%s\n' secondmate
+      printf '%s\n' __script__:fm-merge-local-autorebase.test.sh
+      ;;
     bin/fm-secondmate*|bin/fm-remote*|bin/fm-on.sh|bin/fm-home-seed.sh|\
     bin/fm-backlog-handoff.sh|bin/fm-backlog-receive.sh|bin/fm-procevent-remote-reply.sh|\
     bin/fm-config-inherit-lib.sh|bin/fm-config-push.sh|bin/fm-shared*|\
@@ -1530,7 +1538,19 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
       ;;
     bin/fm-capacity.sh)
-      printf '%s\n' "__script__:fm-capacity.test.sh"
+      printf '%s\n' "__script__:fm-capacity.test.sh" "__script__:fm-pause-general.test.sh"
+      ;;
+    bin/fm-pause-general.sh|bin/fm-worker-parking-lib.sh)
+      printf '%s\n' "__script__:fm-pause-general.test.sh" "__script__:fm-control.test.sh"
+      ;;
+    bin/fm-overseer*)
+      printf '%s\n' __script__:fm-overseer.test.sh __script__:fm-overseer-watch.test.sh __script__:fm-overseer-primary.test.sh
+      ;;
+    overseer/*)
+      printf '%s\n' pure-contract-unit __script__:fm-overseer.test.sh __script__:fm-overseer-watch.test.sh __script__:fm-overseer-primary.test.sh
+      ;;
+    bin/fm-lavish-watch.sh)
+      printf '%s\n' __script__:fm-lavish-watch.test.sh __script__:fm-overseer-watch.test.sh
       ;;
     bin/fm-env-lib.sh)
       # The one .env accessor, sourced by bin/fm-x-lib.sh (Relay token) and
@@ -1670,7 +1690,7 @@ families_for_changed_path() {
     docs/fm-test-isolation-proof.json)
       printf '%s\n' pure-contract-unit
       ;;
-    .github/*|.gitattributes|.tasks.toml|AGENTS.md|SUPERVISOR.md|worker/*|overseer/*|CLAUDE.md|CONTRIBUTING.md|\
+    .github/*|.gitattributes|.tasks.toml|AGENTS.md|SUPERVISOR.md|worker/*|CLAUDE.md|CONTRIBUTING.md|\
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
@@ -1692,7 +1712,11 @@ families_for_changed_path() {
     bin/fm_progress.py)
       printf '%s\n' __script__:fm-progress-reporting.test.sh __script__:fm-progress-holds.test.sh __script__:fm-notification-command.test.sh
       ;;
-    bin/fm_integration.py|bin/fm_test_slots.py|bin/fm-budgets.py)
+    bin/fm_test_slots.py)
+      printf '%s\n' __script__:fm-capacity.test.sh __script__:fm-budgets.test.sh \
+        __script__:fm-home-summary-budget.test.sh __script__:fm-test-run.test.sh
+      ;;
+    bin/fm_integration.py|bin/fm-budgets.py)
       printf '%s\n' __script__:fm-budgets.test.sh __script__:fm-home-summary-budget.test.sh __script__:fm-test-run.test.sh
       ;;
     bin/fm-notify.py|locales/*)
@@ -1720,6 +1744,13 @@ families_for_changed_path() {
         || [ ! -e "$path" ] \
         || printf '%s\n' "__unmapped__:$path"
       ;;
+    docs/*|*.md|*.mdx|*.rst|*.txt)
+      printf '%s\n' __script__:fm-documentation-audiences.test.sh
+      case "$path" in
+        docs/*|README.md|assets/*) ;;
+        *) families_for_test_reference "$path" || true ;;
+      esac
+      ;;
     bin/*)
       # A deleted script has no consuming suite left to select, the same rule
       # the fixture case above applies. Refusing on its absent mapping would
@@ -1729,7 +1760,7 @@ families_for_changed_path() {
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
-    README.md|LICENSE|assets/*|docs/*|.gitignore)
+    LICENSE|assets/*|.gitignore)
       ;;
     *)
       if [ -e "$path" ]; then
@@ -1754,7 +1785,7 @@ select_changed() {
     die "changed-file base ref not found: $base (pass --base <ref>)"
   fi
 
-  while IFS= read -r path; do
+  while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -1771,9 +1802,9 @@ select_changed() {
           ;;
       esac
     done < <(families_for_changed_path "$path")
-  done < <(git -C "$ROOT" diff --name-only "${base}...HEAD" 2>/dev/null; \
-           git -C "$ROOT" diff --name-only HEAD 2>/dev/null; \
-           git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null)
+  done < <(git -C "$ROOT" diff --name-only -z "${base}...HEAD" 2>/dev/null; \
+           git -C "$ROOT" diff --name-only -z HEAD 2>/dev/null; \
+           git -C "$ROOT" ls-files --others --exclude-standard -z 2>/dev/null)
 
   # Dedup families
   local f seen_f
@@ -2286,7 +2317,7 @@ fi
 # here also keeps every array expansion below off the empty-array path: under
 # `set -u`, bash 3.2 (the stock macOS shell) treats "${arr[@]}" on an empty
 # array as an unbound-variable error, while bash 4.4+ makes it a harmless no-op.
-# A contributor on stock macOS who changes only documentation must still get
+# A contributor on stock macOS with no applicable changes must still get
 # total=0 and exit 0 rather than a crash.
 if [ "${#SCRIPTS[@]}" -eq 0 ]; then
   log "nothing to run"
@@ -2343,8 +2374,9 @@ if [ "${FM_TEST_SKIP_HOST_LOCK:-0}" != 1 ]; then
     *) TEST_SLOTS=$((2 + available_kb / 1048576 - 1)); [ "$TEST_SLOTS" -ge 2 ] || TEST_SLOTS=2 ;;
   esac
   cpus=$(cpu_count)
-  [ "$cpus" -ge 2 ] || cpus=2
-  [ "$TEST_SLOTS" -le "$cpus" ] || TEST_SLOTS=$cpus
+  cpu_slots=$((cpus / 2))
+  [ "$cpu_slots" -ge 1 ] || cpu_slots=1
+  [ "$TEST_SLOTS" -le "$cpu_slots" ] || TEST_SLOTS=$cpu_slots
   # Suites have always inherited SIGPIPE ignored (once from the Python lock
   # wrapper that exec'd this runner); keep it, so a suite stopped together with
   # its output pipe still reaches its own cleanup trap. Nested runs inherit it.
@@ -2375,13 +2407,16 @@ def owner_alive():
 lock_dir = os.environ.get("FM_TEST_LOCK_DIR", "/tmp")
 # Demand follows the holder lock even when the waiting shell is interrupted.
 # An abrupt exit releases the lock and makes the record invisible to budgets.
+demand_state_offset = None
 try:
     demand, demand_path = tempfile.mkstemp(prefix=f"firstmate-test-{os.getuid()}-run-", dir=lock_dir)
     atexit.register(os.unlink, demand_path)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     fcntl.flock(demand, fcntl.LOCK_EX)
     priority_run = int(os.environ.get("FM_TEST_PUBLISH") == "1")
-    os.write(demand, f"{runner} {slots} {time.time():.3f} {priority_run}\n".encode())
+    record = f"{runner} {slots} {time.time():.3f} {priority_run} 0\n".encode()
+    os.write(demand, record)
+    demand_state_offset = len(record) - 2
 except OSError:
     pass  # Demand observations never govern test admission.
 # A nested script may borrow the parent slot once; further scripts acquire
@@ -2439,6 +2474,11 @@ if priority:
 os.ftruncate(held, 0)
 os.lseek(held, 0, os.SEEK_SET)
 os.write(held, runner.encode())
+if demand_state_offset is not None:
+    try:
+        os.pwrite(demand, b"1", demand_state_offset)
+    except OSError:
+        pass  # A failed observation must not prevent the script from starting.
 os.close(os.open(ready, os.O_CREAT | os.O_WRONLY, 0o600))
 while owner_alive():
     time.sleep(0.2)
@@ -2710,12 +2750,8 @@ record_script_result() {
 }
 
 # Run <script>, capturing output to <out>. <stream> 1 also echoes it live.
-# <id> only has to be unique within this run. When PER_SCRIPT_TIMEOUT_SECS is
-# positive, a script that outruns it is terminated and reported as exit 124: a
-# hung script must become a bounded failure rather than an unbounded suite,
-# because an unbounded suite is what silently outruns its caller's budget.
-run_script_bounded() (  # <script> <out> <stream> <id>
-  local script=$1 out=$2 stream=$3 id=$4
+run_script_bounded() (  # <script> <out> <stream>
+  local script=$1 out=$2 stream=$3
   local command=(bash "$script")
   case "$(family_for_basename "$(basename "$script")")" in
     live-harness-optin|real-herdr-gated)
@@ -2732,14 +2768,13 @@ run_script_bounded() (  # <script> <out> <stream> <id>
   # shellcheck disable=SC2016
   command=(bash -c 'printf "%s\n" "$$" > "$1" && shift && exec "$@"' fm-test-suite \
     "$out.pid" "${command[@]}")
-  local rc FM_TIMEOUT_WAIT_CLEANUP=1
-  : "$id"
+  local rc
   set +e
   if [ "$stream" -eq 1 ]; then
     if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
       # Expansion is intentionally deferred to the child bash passed to -c.
       # shellcheck disable=SC2016
-      fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
+      FM_TIMEOUT_ACTIVE_RESULT="$out.bound" fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
         'out=$1; shift; "$@" 2>&1 | tee "$out"; exit "${PIPESTATUS[0]}"' _ "$out" "${command[@]}"
       rc=$?
     else
@@ -2747,52 +2782,62 @@ run_script_bounded() (  # <script> <out> <stream> <id>
       rc=${PIPESTATUS[0]}
     fi
   elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" "${command[@]}" >"$out" 2>&1
+    FM_TIMEOUT_ACTIVE_RESULT="$out.bound" fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" "${command[@]}" >"$out" 2>&1
     rc=$?
   else
     "${command[@]}" >"$out" 2>&1
     rc=$?
   fi
-  if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ] && [ "$rc" -eq 124 ]; then
-    printf 'not ok - %s exceeded the per-script bound of %ss and was terminated\n' \
-      "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
-    [ "$stream" -eq 1 ] && tail -1 "$out"
+  if [ "$rc" -eq 0 ] && LC_ALL=C grep -Eq '^not ok([[:space:]]|$)' "$out"; then
+    rc=1
   fi
   rm -f "$out.pid"
   return "$rc"
 )
 
+# Each attempt releases its slot. Reenter the existing host queue once for a
+# pressure-bound attempt, and record only the final outcome of this script.
+run_test_with_slot() {  # <script> <out> <stream> <ready-file> <family> <expected>
+  local script=$1 out=$2 stream=$3 ready=$4 family=$5 expected=$6
+  local begin_ms elapsed rc retry=1
+  SUITE_DURATION_MS=0
+  while :; do
+    acquire_test_slot "$ready"
+    begin_ms=$(now_ms)
+    if [ "$retry" -eq 1 ]; then
+      printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
+        "$(now_iso)" "$script" "$family" "$expected"
+    fi
+    FM_TEST_SLOT_TOKEN="${TEST_SLOT_PID:+$ready}" run_script_bounded "$script" "$out" "$stream"
+    rc=$?
+    release_test_slot
+    elapsed=$(($(now_ms) - begin_ms))
+    [ "$elapsed" -le 0 ] || SUITE_DURATION_MS=$((SUITE_DURATION_MS + elapsed))
+    [ "$retry" -eq 1 ] && [ "$rc" -eq 124 ] && [ -f "$out.bound" ] && [ "$(cat "$out.bound")" = pressure ] || break
+    printf 'FM_TEST_REQUEUE %s %s reason=cpu-pressure\n' "$(now_iso)" "$script"
+    rm -f "$out.bound"
+    retry=0
+  done
+  if [ "$rc" -eq 124 ] && [ -f "$out.bound" ]; then
+    printf 'not ok - %s exceeded the per-script bound of %ss and was terminated\n' \
+      "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+  fi
+  return "$rc"
+}
+
 run_one_serial() {
   local script=$1
-  local base family expected out begin_iso begin_ms end_ms end_iso duration rc
-  local FM_TEST_SLOT_TOKEN
+  local base family expected out rc
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
   out="$RUN_TMP/out.$TOTAL"
-  acquire_test_slot "$RUN_TMP/slot.serial"
-  if [ "$TEST_SLOTS" -gt 0 ]; then FM_TEST_SLOT_TOKEN="$RUN_TMP/slot.serial"; export FM_TEST_SLOT_TOKEN; fi
-  begin_iso=$(now_iso)
-  begin_ms=$(now_ms)
-
-  printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
-    "$begin_iso" "$script" "$family" "$expected"
-
   set +e
-  # Stream live output while retaining a copy for gate-skip detection.
-  run_script_bounded "$script" "$out" 1 "s$TOTAL"
+  run_test_with_slot "$script" "$out" 1 "$RUN_TMP/slot.serial" "$family" "$expected"
   rc=$?
-  release_test_slot
   set -e
-  : "${rc:=1}"
-
-  end_ms=$(now_ms)
-  end_iso=$(now_iso)
-  duration=$((end_ms - begin_ms))
-  if [ "$duration" -lt 0 ]; then
-    duration=0
-  fi
-  record_script_result "$script" "$rc" "$duration" "$out" "$end_iso"
+  record_script_result "$script" "$rc" "$SUITE_DURATION_MS" "$out" "$(now_iso)"
 }
 
 if [ "$JOBS" -eq 1 ]; then
@@ -2901,22 +2946,9 @@ else
       unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
         FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
       cd "$ROOT" || exit 1
-      acquire_test_slot "$work/slot"
-      if [ "$TEST_SLOTS" -gt 0 ]; then FM_TEST_SLOT_TOKEN="$work/slot"; export FM_TEST_SLOT_TOKEN; fi
-      begin_ms=$(now_ms)
-      printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
-        "$(now_iso)" "$script" "$family" "$expected"
-      set +e
-      run_script_bounded "$script" "$work/output" 0 "w$worker_n"
+      run_test_with_slot "$script" "$work/output" 0 "$work/slot" "$family" "$expected"
       rc=$?
-      release_test_slot
-      set -e
-      end_ms=$(now_ms)
-      duration=$((end_ms - begin_ms))
-      if [ "$duration" -lt 0 ]; then
-        duration=0
-      fi
-      printf '%s\n' "$duration" >"$work/duration_ms"
+      printf '%s\n' "$SUITE_DURATION_MS" >"$work/duration_ms"
       printf '%s\n' "$rc" >"$work/exit"
       exit 0
     ) &

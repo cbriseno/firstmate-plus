@@ -155,9 +155,11 @@ try:
     run(pe, "handled", source, "1")
     drain = str(root / "bin/fm-wake-drain.sh")
     presented = run(drain)
-    ack = re.search(r"--ack-through (\d+) --recovery-generation ([A-Za-z0-9._-]+)", presented)
-    assert ack, presented
-    run(drain, "--ack-through", ack.group(1), "--recovery-generation", ack.group(2))
+    generation = re.search(r"--recovery-generation ([A-Za-z0-9._-]+)", presented)
+    rows = [line.split("\t") for line in presented.splitlines() if len(line.split("\t")) >= 5 and line.split("\t")[2] in ("signal", "stale", "check", "heartbeat")]
+    assert generation and rows, presented
+    for row in rows:
+        run(drain, "--ack", row[1], "--recovery-generation", generation.group(1))
 
     # A genuinely live lock holder must remain untouched. Reconciliation must
     # time out, reject concurrent work, and let discovery report uncertainty.

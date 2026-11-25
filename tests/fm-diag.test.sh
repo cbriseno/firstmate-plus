@@ -120,8 +120,10 @@ test_wake_ack_records_attention_latency() {
   FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh" && fm_wake_append check diag-test "test wake"' _ "$ROOT" \
     || fail "wake append failed"
   out=$(FM_HOME="$home" bash "$ROOT/bin/fm-wake-drain.sh" 2>&1)
-  ack=$(printf '%s\n' "$out" | sed -n 's/.*run bin\/fm-wake-drain.sh \(--ack-through [0-9]* --recovery-generation [^ ]*\).*/\1/p')
-  [ -n "$ack" ] || fail "drain printed no acknowledgement command: $out"
+  seq=$(printf '%s\n' "$out" | awk -F '\t' 'NF >= 5 && $3 ~ /^(signal|stale|check|heartbeat)$/ { print $2 }')
+  generation=$(printf '%s\n' "$out" | sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p')
+  ack="--ack $seq --recovery-generation $generation"
+  [ -n "$seq" ] && [ -n "$generation" ] || fail "drain printed no complete notice and acknowledgement generation: $out"
   # shellcheck disable=SC2086 # the printed flags are split on purpose
   FM_HOME="$home" bash "$ROOT/bin/fm-wake-drain.sh" $ack || fail "acknowledgement failed"
   jq -e -s 'length == 1 and .[0].e == "wake.ack" and .[0].kind == "check" and (.[0].age_s | type) == "number"' \

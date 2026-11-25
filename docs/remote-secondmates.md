@@ -70,7 +70,7 @@ The entrypoint authorizes that bootstrap in one of two ways:
 
 ### The remote job worker
 
-After setup, every other command goes through Firstmate's account-owned remote job worker.
+After setup, other commands sent through `fm-on.sh` go through Firstmate's account-owned remote job worker.
 Each such command takes these steps:
 
 1. It verifies the worker.
@@ -133,6 +133,8 @@ It never touches a worker whose checkout still exists.
 - The remote account must provide the required toolchain, the selected worker runtime, the selected session backend, and credentials that work on that host.
 - A [worker account pin](configuration.md#worker-account-pin-configclaude-account) for the second mate or its workers lives in the remote home's own configuration on that host.
 - The origin URL named for each project must be reachable from the remote account, because projects are cloned on that host rather than copied from the primary.
+- The host must not sleep while it serves a second mate, because a suspended host leaves the route unavailable until someone wakes it in person.
+  An administrator disables system sleep there once, for example `systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target` on systemd Linux or `pmset -c sleep 0` on macOS.
 
 ## Non-interactive tool contract
 
@@ -648,10 +650,13 @@ Move a live remote second mate onto a newly pinned harness, model, or effort wit
 
 ### Firstmate code convergence
 
-Session start and every remote launch converge the persistent remote home on the primary's own default-branch commit rather than on the Firstmate copy that host keeps.
+After local integration, the primary sends its default-branch commit through a private Git ref and safely fast-forwards the code root that serves remote commands and the secondmate's persistent home.
+This runs in the background for every registered remote route, even while the secondmate's agent is stopped.
+If transport or either checkout prevents the update, the primary retries on a later supervision cycle.
+The code-root fast-forward runs a fixed Git update over SSH before invoking the updated root's normal home sync command through the remote job worker.
 The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md) owns the guarded convergence contract, including the distinct `/updatefirstmate` behavior, and [`bin/fm-remote-secondmate-control.sh`](../bin/fm-remote-secondmate-control.sh) owns the commit-import mechanics.
-Neither session start nor launch moves the host's own Firstmate copy.
-An unsafe or unavailable target is reported and left untouched.
+Both checkouts preserve their branch and operational data.
+An unsafe checkout keeps its local work.
 A completed sync reports which watched instruction paths its advance changed.
 The primary needs that fact because it cannot diff a checkout it cannot read.
 It uses the fact to decide whether the running remote agent must be replaced to actually reload.

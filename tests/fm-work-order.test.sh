@@ -98,5 +98,11 @@ with tempfile.TemporaryDirectory(prefix='fm-work-order-') as tmp:
     order = [t['id'] for t in cli('work','continuations')['tasks']]
     check(order[:2] == ['a-new', 'd1'], 'releasing a dependency wins the tie before age')
     check('depends' not in order and order.index('c1') < order.index('b1'), 'the continuation respects the dependency and placed order')
+    cli('add','primary-note','Primary handoff note','--repo','alpha','--kind','primary',raw=True)
+    cli('add','real-docs','Documentation work','--repo','alpha','--kind','docs',raw=True)
+    ready = [t['id'] for t in cli('work','continuations')['tasks']]
+    check('primary-note' not in ready and 'real-docs' in ready, 'primary notes do not occupy worker capacity while documentation remains ready')
+    next_tasks = snapshot()['sigue']
+    check('task:primary-note' not in next_tasks and 'task:real-docs' in next_tasks, 'primary notes do not occupy the work order')
     print('PASS: %d work order assertions' % checks)
 PY

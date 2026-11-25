@@ -57,7 +57,9 @@ cleanup() {
     fm_test_remove_tree "$LAB"
   }
 }
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup; }
 trap cleanup EXIT
 
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-bearings-lavish-live.XXXXXX") || fail "cannot create the guard lab"

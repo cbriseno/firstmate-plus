@@ -14,6 +14,8 @@
 # ids unapplied, and causes no repeated automatic offer; apply remains available.
 # Format: ## <id> - YYYY-MM-DD, Action: <label>, Command: `<argv>`.
 # Entries without Command are informational. Existing ids are immutable.
+# An entry may add `Unless-exists: <path inside the home>`: once that path exists
+# the home already has what the entry sets up, so it is neither offered nor pending.
 # No overrides: each invocation addresses exactly the named FM_HOME.
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

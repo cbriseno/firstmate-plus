@@ -1761,7 +1761,7 @@ handle_wake() {  # <reason> <state>
 
 handle_durable_wakes() {  # <watcher-reason> <state>
   local fallback_reason=$1 state=$2 out err tab epoch sequence kind key payload rest
-  local handled=0 failed=0 ack_through ack_generation
+  local handled=0 failed=0 ack_generation
   out=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || return 1
   err=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || { rm -f "$out"; return 1; }
   if ! "$FM_DAEMON_DIR/fm-wake-drain.sh" > "$out" 2> "$err"; then
@@ -1780,20 +1780,25 @@ handle_durable_wakes() {  # <watcher-reason> <state>
   done < "$out"
   if [ "$handled" -eq 0 ]; then handle_wake "$fallback_reason" "$state" || failed=1; fi
 
-  ack_through=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err" | tail -1)
-  ack_generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err" | tail -1)
+  ack_generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\).*$/\1/p' "$err" | tail -1)
   grep -v '^WAKE_ACK_REQUIRED:' "$err" >&2 || true
-  rm -f "$out" "$err"
-  if [ "$failed" -ne 0 ]; then
-    log "wake classification failed; retaining durable wakes"
+  rm -f "$err"
+  if [ "$failed" -ne 0 ] || [ -z "$ack_generation" ]; then
+    rm -f "$out"
+    log "wake handling or acknowledgement failed; retaining durable wakes"
     return 1
   fi
-  if [ -z "$ack_through" ] || [ -z "$ack_generation" ]; then
-    log "wake drain omitted its generation-bound acknowledgement; retaining durable wakes"
-    return 1
+  while IFS="$tab" read -r epoch sequence kind key payload rest; do
+    case "$epoch" in ''|*[!0-9]*) continue ;; esac
+    case "$sequence" in ''|*[!0-9]*) continue ;; esac
+    case "$kind" in signal|stale|check|heartbeat) ;; *) continue ;; esac
+    "$FM_DAEMON_DIR/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$ack_generation" || { failed=1; break; }
+  done < "$out"
+  rm -f "$out"
+  [ "$failed" -eq 0 ] || return 1
+  if [ "$handled" -eq 0 ]; then
+    "$FM_DAEMON_DIR/fm-wake-drain.sh" --ack 0 --recovery-generation "$ack_generation"
   fi
-  "$FM_DAEMON_DIR/fm-wake-drain.sh" --ack-through "$ack_through" \
-    --recovery-generation "$ack_generation"
 }
 
 # --- log --------------------------------------------------------------------

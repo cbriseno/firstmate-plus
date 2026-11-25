@@ -7,6 +7,7 @@ import json, os, pathlib, subprocess, sys, tempfile
 root=pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory() as tmp:
     home=pathlib.Path(tmp); (home/'config').mkdir()
+    os.environ['FM_STATE_OVERRIDE'] = str(home/'state')
     def run(*args):
         return subprocess.run([sys.executable,str(root/'bin/fm-notify.py'),'--home',str(home),'--event','ready','--text','literal $(touch unwanted); text',*args],capture_output=True)
     assert run().returncode==0
@@ -62,31 +63,65 @@ with tempfile.TemporaryDirectory() as tmp:
     (home/'config/notification-quiet-hours').write_text('23:00-07:00\n')
     def at(clock,*args,tool='fm-notify.py'):
         return subprocess.run([sys.executable,str(root/'bin'/tool),'--home',str(home),*args],env=dict(os.environ,FM_NOTIFY_NOW=clock,FM_HOME=str(home),FM_LANGUAGE='en'),capture_output=True)
-    assert at('23:30','--event','overseer-alert','--text','one').returncode==0
+    def alert(clock, message):
+        env = dict(os.environ, FM_NOTIFY_NOW=clock, FM_HOME=str(home), FM_STATE_OVERRIDE=str(home/'state'))
+        return subprocess.run(['bash', str(root/'bin/fm-overseer.sh'), 'alert', message], env=env, capture_output=True)
+    config.unlink()
+    unconfigured = alert('07:04', 'no adapter')
+    assert unconfigured.returncode == 1, unconfigured
+    for response, rc in (
+        ('', 0),
+        ('accepted by publisher', 0),
+        ('{"event":"captain-review","receipt":"accepted-18"}', 0),
+        ('{"event":"overseer-alert","receipt":""}', 0),
+        ('{"event":"overseer-alert","receipt":"accepted-18"}', 1),
+    ):
+        # An adapter with a plausible receipt still has to exit successfully.
+        config.write_text(json.dumps([sys.executable, '-c', 'import json, sys; print(json.loads(sys.argv[1])); sys.exit(int(sys.argv[2]))', json.dumps(response), str(rc)]))
+        rejected = alert('07:04', 'no valid evidence')
+        assert rejected.returncode == 1 and not rejected.stdout and b'no valid delivery receipt' in rejected.stderr, rejected
+    config.write_text(json.dumps([sys.executable,str(consumer2),str(sink)]))
+    assert at('23:30','--event','captain-published','--text','one').returncode==0
     assert at('02:00','--event','captain-review','--text','two').returncode==0
     assert at('03:00','--flush').returncode==0 and not sink.exists()
     assert at('08:00','--flush').returncode==0
     assert sink.read_text()=='quiet-digest|2 held during quiet hours: one | two\n'
     assert at('09:00','--flush').returncode==0 and sink.read_text().count('\n')==1
     sink.unlink()
-    # A single held notice arrives whole under its own event, even at the 240-character limit.
+    # A held alert returns pending and keeps its full text across a failed flush.
     full='x'*236+' end'
-    assert at('23:30','--event','overseer-alert','--text',full).returncode==0
-    assert at('08:00','--flush').returncode==0 and sink.read_text()=='overseer-alert|'+full+'\n'
+    pending = alert('23:30', full)
+    assert pending.returncode == 1 and not pending.stdout and b'delivery pending' in pending.stderr
+    held = home/'state/notification-held.jsonl'
+    original = held.read_text()
+    assert json.loads(original) == dict(event='overseer-alert', text=full)
+    config.write_text(json.dumps([sys.executable, '-c', 'pass']))
+    assert at('08:00', '--flush').returncode == 1 and held.read_text() == original
+    config.write_text(json.dumps([sys.executable, '-c', '''
+import json, pathlib, sys
+path, event, text = sys.argv[1:]
+with pathlib.Path(path).open('a', encoding='utf-8') as log:
+    print(event + '|' + text, file=log)
+print(json.dumps(dict(event=event, receipt='accepted-' + text[-3:])))
+''', str(sink)]))
+    assert at('23:45','--event','captain-review','--text','ordinary').returncode == 0
+    confirmed = alert('08:00', 'now')
+    assert confirmed.returncode == 0 and json.loads(confirmed.stdout) == dict(event='overseer-alert', receipt='accepted-now')
+    assert sink.read_text().splitlines() == ['overseer-alert|' + full, 'captain-review|ordinary', 'overseer-alert|now']
+    assert not held.exists()
     sink.unlink()
+    config.write_text(json.dumps([sys.executable,str(consumer2),str(sink)]))
     # The digest prefix follows the installation language.
-    assert at('23:30','--event','overseer-alert','--text','uno').returncode==0
-    assert at('23:40','--event','overseer-alert','--text','dos').returncode==0
+    assert at('23:30','--event','captain-published','--text','uno').returncode==0
+    assert at('23:40','--event','captain-review','--text','dos').returncode==0
     spanish=subprocess.run([sys.executable,str(root/'bin/fm-notify.py'),'--home',str(home),'--flush'],env=dict(os.environ,FM_NOTIFY_NOW='08:00',FM_HOME=str(home),FM_LANGUAGE='es-MX'),capture_output=True)
     assert spanish.returncode==0 and sink.read_text()=='quiet-digest|2 avisos retenidos en horario de silencio: uno | dos\n', sink.read_text()
     sink.unlink()
-    assert at('12:00','--event','overseer-alert','--text','now').returncode==0 and sink.read_text()=='overseer-alert|now\n'
+    assert at('12:00','--event','captain-review','--text','now').returncode==0 and sink.read_text()=='captain-review|now\n'
     sink.unlink()
     assert at('12:00','--kind','published','--title','repo refs/heads/main',tool='fm-captain-notice.py').returncode==0
     assert sink.read_text()=='captain-published|Published: repo refs/heads/main\n'
-    overseer=subprocess.run(['bash',str(root/'bin/fm-overseer.sh'),'alert','careful'],env=dict(os.environ,FM_NOTIFY_NOW='23:30',FM_HOME=str(home)),capture_output=True)
-    assert overseer.returncode==0 and 'careful' in (home/'state/notification-held.jsonl').read_text()
-print('ok - disabled notifications, literal argv, failures, timeout, installation language, link and captain notices')
+print('ok - receipt enforcement, quiet hours, optional notifications, literal argv, failures, timeout, installation language, link and captain notices')
 PY
 
 # The presentation owner tells the captain once per newly reviewable result.

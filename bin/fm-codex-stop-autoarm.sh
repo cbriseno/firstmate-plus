@@ -280,7 +280,7 @@ wait "$CHILD" || rc=$?
 CHILD=
 owned && fm_supervision_needed "$STATE" || exit 0
 [ "$(cat "$FALLBACK" 2>/dev/null)" != "$BINDING" ] || exit 0
-message='Firstmate watcher wake: drain the durable queue, handle every presented wake and open decision, then run the exact WAKE_ACK_REQUIRED command after handling. Native Stop owns the next cycle; do not start another watcher.'
+message='Firstmate watcher wake: drain the durable queue, handle every presented wake and open decision, then acknowledge each notice using its sequence and the generation in WAKE_ACK_REQUIRED. Native Stop owns the next cycle; do not start another watcher.'
 case "$rc" in
   124|137) message='Firstmate native watcher lease ended: drain and handle pending events, ACK after handling, then let the next Stop renew the native cycle.' ;;
   0)

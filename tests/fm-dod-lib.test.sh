@@ -738,4 +738,53 @@ PYREQ
 }
 test_original_requirements_acceptance
 
+test_reassigned_requirement() {
+  local data="$TMP_ROOT/reassignment" reason
+  mkdir -p "$data/source" "$data/target"
+  cat > "$data/source/brief.md" <<'BRIEF'
+# Task
+## Captain's intent
+Run the integration.
+
+## Captain's requirements
+1. Run the integration.
+BRIEF
+  cp "$data/source/brief.md" "$data/target/brief.md"
+  printf '%s\n' '{"requirements":[{"text":"Run the integration.","status":"reassigned","target":"target","evidence":"destination task"}]}' > "$data/source/acceptance.json"
+  reason=$(FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/source/brief.md" "$data/source/acceptance.json") && fail 'unmarked reassignment accepted'
+  FM_DATA_OVERRIDE="$data" bash "$ROOT/bin/fm-reassign-requirement.sh" source 1 target || fail 'reassignment command failed'
+  FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/source/brief.md" "$data/source/acceptance.json" || fail 'verified reassignment refused'
+  sed 's/Run the integration/Run another task/g' "$data/target/brief.md" > "$data/target/other"
+  mv "$data/target/other" "$data/target/brief.md"
+  reason=$(FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/source/brief.md" "$data/source/acceptance.json") && fail 'destination without original requirement accepted'
+  cat > "$data/source/brief.md" <<'BRIEF'
+# Task
+## Captain's intent
+Run lint and run integration and publish.
+
+## Captain's requirements
+1. Run lint and run integration and publish.
+BRIEF
+  cat > "$data/target/brief.md" <<'BRIEF'
+# Task
+## Firstmate spec
+run integration.
+BRIEF
+  printf '%s\n' '{"requirements":[{"text":"Run lint and run integration and publish.","status":"fulfilled","evidence":"lint tested; integration assigned to target"}]}' > "$data/source/acceptance.json"
+  FM_DATA_OVERRIDE="$data" bash "$ROOT/bin/fm-reassign-requirement.sh" source 1 target 'run integration' || fail 'partial reassignment failed'
+  FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/source/brief.md" "$data/source/acceptance.json" || fail 'partial reassignment with remaining work fulfilled refused'
+  mkdir -p "$data/second"
+  printf '# Task\n## Firstmate spec\npublish.\n' > "$data/second/brief.md"
+  FM_DATA_OVERRIDE="$data" bash "$ROOT/bin/fm-reassign-requirement.sh" source 1 second 'publish.' || fail 'second destination failed'
+  FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/source/brief.md" "$data/source/acceptance.json" || fail 'multiple destinations refused'
+  mkdir -p "$data/remote-source" "$data/remote-copy"
+  printf "# Task\n## Captain's intent\nRun remote tests.\n\n## Captain's requirements\n1. Run remote tests.\n" > "$data/remote-source/brief.md"
+  printf '# Task\n## Firstmate spec\nRun remote tests.\n' > "$data/remote-copy/brief.md"
+  printf '%s\n' '{"requirements":[{"text":"Run remote tests.","status":"reassigned","target":"remote","evidence":"remote assignment"}]}' > "$data/remote-source/acceptance.json"
+  FM_DATA_OVERRIDE="$data" bash "$ROOT/bin/fm-reassign-requirement.sh" remote-source 1 remote '' "$data/remote-copy/brief.md" || fail 'remote reassignment failed'
+  FM_DATA_OVERRIDE="$data" fm_dod_accept_requirements "$data/remote-source/brief.md" "$data/remote-source/acceptance.json" || fail 'retained remote destination refused'
+  pass 'reassignment requires a destination brief carrying the original scope'
+}
+test_reassigned_requirement
+
 echo "all fm-dod-lib tests passed"

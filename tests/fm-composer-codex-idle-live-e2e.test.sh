@@ -45,7 +45,9 @@ SESSION="codexidle"
 WIN="codex"
 CHECKED=0
 
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup; }
 pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 

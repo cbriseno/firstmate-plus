@@ -585,6 +585,21 @@ test_session_mechanics_preserve_declared_wait() {
   pass 'session restoration preserves pauses and holds; explicit worker intent resumes work'
 }
 
+test_park_under_general_pause_needs_no_date() {
+  local dir out declaration
+  for declaration in 'paused: waiting without a date' 'working: running tests'; do
+    dir=$(new_case park-general-pause)
+    add_task "$dir" t1 claude
+    printf '%s\n' "$declaration" > "$dir/home/state/t1.status"
+    printf '1\npausa del capitán\n' > "$dir/home/state/.pause-general"
+    out=$(run_control "$dir" t1 park) || fail "$out"
+    assert_contains "$out" 'parked t1' 'the general pause is the wait condition'
+    [ ! -s "$dir/fake/windows" ] || fail 'general-pause park left its window open'
+    grep -q '^park_cause=general-pause$' "$dir/home/state/t1.parked" || fail 'park did not record its cause'
+  done
+  pass 'park: a general pause parks any idle worker without a date or threshold'
+}
+
 test_park_refuses_active_or_undated_wait() {
   local dir out declaration gen
   for declaration in 'working: running tests' 'paused: waiting without a date'; do
@@ -629,41 +644,32 @@ test_park_refuses_active_or_undated_wait() {
   pass 'park: active work and undated pauses remain running'
 }
 
-# The automatic inbox path must stop before a launch when usage policy changed.
+# A changed policy selects the configured harness without asking the captain.
 test_resume_changed_policy_opens_choice() {
   local dir out
   dir=$(new_case resume-policy)
-  add_task "$dir" t1 codex
-  printf 'done [at=1]: ready for merge\n' > "$dir/home/state/t1.status"
+  add_task "$dir" t1 claude
+  printf 'needs-decision: waiting for work\n' > "$dir/home/state/t1.status"
   run_control "$dir" t1 park >/dev/null || fail 'could not park policy fixture'
-  mkdir -p "$dir/home/config"
-  fm_test_tasks_toml "$dir/home/.tasks.toml"
-  (cd "$dir/home" && tasks-axi add t1 'Resume waiting work' --kind ship --repo sample --start) >/dev/null || fail 'could not register fixture'
-  printf claude > "$dir/home/config/crew-harness"
-  if out=$(run_control "$dir" t1 resume); then fail 'changed policy resumed without a choice'; fi
-  jq -e '.call | .recommended == "current" and ([.options[].id] | sort == ["current","original"])' \
-    "$dir/home/data/t1/captain-call.json" >/dev/null || fail "missing harness choice: $out"
-  [ -f "$dir/home/state/t1.parked" ] || fail 'choice removed parked continuation'
-  [ -z "$(literals "$dir")" ] || fail 'choice launched or typed before an answer'
-  # Use a separate worker without an open captain hold for the continuation.
+  mkdir -p "$dir/home/config" "$dir/home/data/t1"
+  printf '{"rules":[{"category":"standard","use":{"harness":"codex","model":"gpt-test"}}],"default":{"harness":"claude"}}\n' > "$dir/home/config/crew-dispatch.json"
+  printf 'Dispatch category: standard\nDispatch effort: high\n' > "$dir/home/data/t1/brief.md"
+  out=$(run_control "$dir" t1 resume) || true
+  [ ! -f "$dir/home/data/t1/captain-call.json" ] || fail 'policy change opened a captain choice'
+  assert_contains "$out" 'replacement agent for t1 could not be launched' 'policy change must reach launch'
+  [ -f "$dir/home/state/t1.parked" ] || fail 'failed launch lost parking record'
+  assert_contains "$(cat "$dir/home/state/t1.control-relaunch")" 'to_model=gpt-test' 'category model must reach launch'
+  assert_contains "$(cat "$dir/home/state/t1.control-relaunch")" 'to_effort=high' 'brief effort must reach launch'
   dir=$(new_case resume-mixed-policy)
   add_task "$dir" t1 codex
-  printf 'done [at=1]: ready for merge\n' > "$dir/home/state/t1.status"
-  run_control "$dir" t1 park >/dev/null || fail 'could not park mixed-policy fixture'
   mkdir -p "$dir/home/config"
-  printf claude > "$dir/home/config/crew-harness"
-  # Dispatch overrides the static pin; a mixed policy retains the saved adapter.
-  printf '{"rules":[{"when":"all","use":{"harness":"codex"}}]}' > "$dir/home/config/crew-dispatch.json"
-  out=$(FM_HOME="$dir/home" SCRIPT_DIR="$ROOT/bin" bash -c '. "$SCRIPT_DIR/fm-worker-parking-lib.sh"; die() { echo "$*" >&2; exit 1; }; resume_policy_harness') || fail "$out"
-  [ "$out" = codex ] || fail 'dispatch was ignored in favor of static harness'
   printf '{"rules":[{"when":"all","use":[{"harness":"claude"},{"harness":"pi"}]}]}' > "$dir/home/config/crew-dispatch.json"
-  out=$(run_control "$dir" t1 resume) || true
+  out=$(FM_HOME="$dir/home" SCRIPT_DIR="$ROOT/bin" HARNESS=codex bash -c '. "$SCRIPT_DIR/fm-worker-parking-lib.sh"; die() { echo "$*" >&2; exit 1; }; resume_policy_harness' 2>&1) || true
   assert_contains "$out" 'resolve the current dispatch profile' 'mixed policy without saved harness must remain unresolved'
   printf '{"rules":[{"when":"all","use":[{"harness":"codex"},{"harness":"claude"}]}]}' > "$dir/home/config/crew-dispatch.json"
-  out=$(run_control "$dir" t1 resume) || true
-  assert_contains "$out" 'the replacement agent for t1 could not be launched' 'mixed policy must reach launch with the saved harness'
-  [ -f "$dir/home/state/t1.parked" ] || fail 'failed launch lost parking record'
-  pass 'resume: changed usage policy opens a recommended choice before launch; dispatch remains authoritative'
+  out=$(FM_HOME="$dir/home" SCRIPT_DIR="$ROOT/bin" HARNESS=codex bash -c '. "$SCRIPT_DIR/fm-worker-parking-lib.sh"; die() { echo "$*" >&2; exit 1; }; resume_policy_harness') || fail "$out"
+  [ "$out" = codex ] || fail 'mixed policy must retain saved candidate'
+  pass 'resume: changed usage policy proceeds without captain choice'
 }
 
 test_resume_identity_comes_from_saved_launch() {
@@ -1429,6 +1435,7 @@ test_relaunch_blocked_dispatch_keeps_owner_running
 test_park_declared_waits_preserves_work
 test_session_mechanics_preserve_declared_wait
 test_park_refuses_active_or_undated_wait
+test_park_under_general_pause_needs_no_date
 test_resume_identity_comes_from_saved_launch
 test_resume_changed_policy_opens_choice
 test_relaunch_only_flags_are_rejected_on_other_verbs

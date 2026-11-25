@@ -11,6 +11,9 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-autodispatch)
 export NODE_NO_WARNINGS=1
+# The fixture's lane capacity is independent of test runs queued on this host.
+export FM_TEST_LOCK_DIR="$TMP_ROOT/test-locks"
+mkdir -p "$FM_TEST_LOCK_DIR"
 
 # A home whose bin/ is a copy with fm-spawn.sh replaced by a recorder.
 make_home() {
@@ -122,7 +125,7 @@ test_watcher_launches_ready_work() {
   date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
   printf '%s\n' 'error: another Treehouse slot allocation or return is in progress for fixture; refusing to race it' > "$state/.autodispatch-failed-good"
   PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
-    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 FM_UNBRIEFED_GRACE_SECS=0 \
     bash "$dir/bin/fm-watch.sh" > "$out" 2>&1 &
   child=$!
   for ((i=0; i<900; i++)); do
@@ -142,8 +145,87 @@ test_watcher_launches_ready_work() {
   grep -F 'ready-work:primary:dispatch' "$state/.wake-queue" |
     grep -Fq 'plain: brief has no ship delivery contract' ||
     fail "a free lane wake must send the dispatch diagnosis to the primary"
-  assert_grep 'verify-work (prepare its brief' "$state/.wake-queue" "queued verification must reach the same primary watcher"
+  assert_grep 'verify-work: no brief yet, so autodispatch skips it' "$state/.wake-queue" "a queued row with no brief must reach the primary watcher"
   pass "watcher launches ready work itself, reports a failed launch once, and still wakes the primary for the rest"
+}
+
+# Run a real watcher until <pattern> shows in <file> or <seconds> pass; extra arguments are environment.
+run_watch_until() {
+  local dir=$1 state=$2 pattern=$3 file=$4 seconds=$5 child i; shift 5
+  env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 "$@" \
+    bash "$dir/bin/fm-watch.sh" > "$dir/watch-run.out" 2>&1 &
+  child=$!
+  for ((i=0; i<seconds*10; i++)); do
+    grep -qF -- "$pattern" "$file" 2>/dev/null && break
+    kill -0 "$child" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -TERM "$child" 2>/dev/null || true
+  wait_for_exit "$child" 100 || true
+  kill -KILL "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  grep -qF -- "$pattern" "$file" 2>/dev/null
+}
+
+# An unbriefed queued ship is never launched, so its absence must reach the
+# primary once, after the add-then-brief grace, and the written brief launches.
+test_unbriefed_queued_ship_reaches_the_primary() {
+  local dir=$TMP_ROOT/unbriefed home state
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"; state="$home/state"
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add nobrief 'queued with no brief' --repo demo >/dev/null 2>&1 || fail "fixture: add nobrief"
+  : > "$dir/spawn.log"; mv "$home/data/good" "$dir/good-brief"
+  run_watch_until "$dir" "$state" '' "$state/.unbriefed-seen-nobrief" 30 FM_UNBRIEFED_GRACE_SECS=3600 ||
+    fail "the first sighting of the unbriefed row was not recorded: $(cat "$dir/watch-run.out")"
+  ! grep -qF 'nobrief' "$state/.wake-queue" 2>/dev/null || fail "the notice arrived inside the grace period: $(cat "$state/.wake-queue")"
+  run_watch_until "$dir" "$state" 'nobrief: no brief yet' "$state/.wake-queue" 20 FM_UNBRIEFED_GRACE_SECS=0 ||
+    fail "an unbriefed queued ship never reached the primary: $(cat "$state/.wake-queue" "$dir/watch-run.out" 2>&1)"
+  grep -F 'ready-work:primary:dispatch' "$state/.wake-queue" | grep -F 'bin/fm-brief.sh' >/dev/null || fail "the notice names no action"
+  [ "$(grep -c 'ready-work:primary:dispatch' "$state/.wake-queue")" -eq 1 ] || fail "the notice was queued more than once"
+  [ ! -s "$dir/spawn.log" ] || fail "a row with no brief reached the spawn"
+  : > "$state/.wake-queue"  # the primary drained the notice
+  mkdir -p "$home/data/nobrief"; cp "$dir/good-brief/brief.md" "$home/data/nobrief/brief.md"
+  sed -i.bak 's/good/nobrief/' "$home/data/nobrief/brief.md"; rm -f "$home/data/nobrief/brief.md.bak"
+  run_watch_until "$dir" "$state" 'launched automatically with its dispatch rules: nobrief' "$state/.wake-queue" 30 FM_UNBRIEFED_GRACE_SECS=0 ||
+    fail "the watcher did not report the launch of the briefed row: $(cat "$dir/watch-run.out")"
+  grep -q '^nobrief ' "$dir/spawn.log" || fail "the briefed row did not reach the spawn"
+  [ ! -f "$state/.unbriefed-seen-nobrief" ] || fail "the grace marker outlived the missing brief"
+  pass "a queued ship with no brief reaches the primary once with its action, and launches once briefed"
+}
+
+# The general pause: nothing launches, replays or is reported while it stands;
+# a timed pause lifts itself; resuming lets the same queued work launch.
+test_general_pause_stops_automatic_dispatch() {
+  local dir=$TMP_ROOT/pause home state out rc
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"; state="$home/state"
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add nobrief 'queued with no brief' --repo demo >/dev/null 2>&1 || fail "fixture: add nobrief"
+  out=$(FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --pause --reason 'captain pause') || fail "pause was refused"
+  assert_contains "$out" 'PAUSED' "pause must say it is on: $out"
+  assert_contains "$(FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --status)" 'captain pause' "status must show the reason"
+  rc=0; FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" good >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 77 ] || fail "a paused autodispatch must exit 77, got $rc"
+  printf '%s\n' "$dir/proj" > "$state/good.spawn-deferred"
+  run_watch_until "$dir" "$state" 'good' "$dir/spawn.log" 5 FM_UNBRIEFED_GRACE_SECS=0 &&
+    fail "the watcher launched or replayed work while paused: $(cat "$dir/spawn.log")"
+  [ ! -s "$state/.wake-queue" ] || ! grep -Eq 'review and dispatch|launched automatically|automatic launch' "$state/.wake-queue" ||
+    fail "the watcher reported ready work while paused: $(cat "$state/.wake-queue")"
+  rm -f -- "$state/good.spawn-deferred"
+  FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --pause --for 90m >/dev/null || fail "timed pause was refused"
+  grep -Eq '^until=[1-9][0-9]+$' "$state/.autodispatch-paused" || fail "a timed pause must record its end"
+  rc=0; FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --pause --for soon >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "an unreadable --for must be refused (exit $rc)"
+  printf 'since=1\nuntil=2\nreason=expired\n' > "$state/.autodispatch-paused"
+  assert_contains "$(FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --status)" 'expired' "an expired pause must read as running"
+  FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --pause >/dev/null || fail "pause again"
+  FM_HOME="$home" bash "$dir/bin/fm-autodispatch.sh" --resume >/dev/null || fail "resume was refused"
+  [ ! -e "$state/.autodispatch-paused" ] || fail "resume left the marker"
+  run_watch_until "$dir" "$state" 'good' "$dir/spawn.log" 20 FM_UNBRIEFED_GRACE_SECS=0 ||
+    fail "the queued work did not launch after resume: $(cat "$dir/watch-run.out")"
+  pass "the general pause stops every automatic launch and report, expires on request, and resume restores dispatch"
 }
 
 test_watcher_continues_without_lanes() (
@@ -261,7 +343,7 @@ SH
 # A deferred launch that takes minutes under load must not stop the watcher's
 # liveness beacon, which the Stop hook reads as "the watcher is dead".
 test_deferred_spawn_keeps_the_beacon_alive() (
-  local dir=$TMP_ROOT/slow-spawn home="$TMP_ROOT/slow-spawn/home" state="$TMP_ROOT/slow-spawn/home/state" child i age
+  local dir=$TMP_ROOT/slow-spawn home="$TMP_ROOT/slow-spawn/home" state="$TMP_ROOT/slow-spawn/home/state" child i
   mkdir -p "$dir"
   make_home "$dir" only-good
   fm_test_track_watcher_state "$state"
@@ -269,7 +351,10 @@ test_deferred_spawn_keeps_the_beacon_alive() (
   cat > "$dir/bin/fm-spawn.sh" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$dir/spawn.log"
-sleep 8
+for ((i=0; i<1800; i++)); do
+  [ -e "$dir/release" ] && break
+  sleep 0.1
+done
 touch "$dir/spawn.done"
 exit 0
 SH
@@ -285,10 +370,15 @@ SH
     sleep 0.1
   done
   [ -s "$dir/spawn.log" ] || fail "the watcher never replayed the deferred launch: $(cat "$dir/watch.out")"
-  sleep 4
-  age=$(bash -c '. "$1"; fm_path_age "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$state/.last-watcher-beat")
-  [ ! -e "$dir/spawn.done" ] || fail "fixture: the slow launch ended before the beacon was read"
-  [ "$age" -le 3 ] || fail "the beacon went stale for ${age}s while the deferred launch ran"
+  touch "$dir/beacon-check"
+  for ((i=0; i<600; i++)); do
+    [ "$state/.last-watcher-beat" -nt "$dir/beacon-check" ] && break
+    [ ! -e "$dir/spawn.done" ] || break
+    sleep 0.1
+  done
+  [ ! -e "$dir/spawn.done" ] || fail "fixture: the slow launch ended before the beacon advanced"
+  [ "$state/.last-watcher-beat" -nt "$dir/beacon-check" ] || fail "the beacon did not advance while the deferred launch ran"
+  touch "$dir/release"
   for ((i=0; i<600; i++)); do
     grep -Fq 'launched deferred task good' "$state/.wake-queue" 2>/dev/null && break
     sleep 0.1
@@ -551,13 +641,100 @@ SH
   assert_contains "$out" 'branch integrated into local main but absent from origin/main' 'missing local-only divergence diagnosis'
   printf 'uncommitted\n' >> "$slot/landed"
   out=$(PATH="$dir/fakebin:$PATH" bash "$ROOT/bin/fm-treehouse-diagnose.sh" "$repo")
-  [ -z "$out" ] || fail "dirty work was mislabeled: $out"
+  assert_contains "$out" 'uncommitted changes' 'dirty work was not reported'
+  [[ "$out" != *'branch integrated into local main but absent from origin/main'* ]] || fail "dirty work was mislabeled: $out"
   git -C "$slot" checkout -q -- landed
   git -C "$slot" commit -qm unlanded --allow-empty
   out=$(PATH="$dir/fakebin:$PATH" bash "$ROOT/bin/fm-treehouse-diagnose.sh" "$repo")
   assert_contains "$out" 'branch absent from both local main and origin/main' 'unlanded work was mislabeled'
   pass "Treehouse exhaustion diagnosis distinguishes locally landed branches from dirty and unlanded work"
 }
+
+# After the allocation wait, a task the dispatcher leaves to the primary says why.
+test_retry_names_why_it_is_not_launchable() {
+  local dir=$TMP_ROOT/retry-skip home state rc=0
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"; state="$home/state"
+  cat > "$dir/bin/fm-autodispatch.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "not auto-launchable: dispatch category 'x' needs a recorded effort" >&2
+exit 3
+SH
+  chmod +x "$dir/bin/fm-autodispatch.sh"
+  printf '%s\n' "$dir/allocation.lock" > "$state/.autodispatch-lock-good"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-autodispatch-retry.sh" good "$home" "$state" "$home/config" >/dev/null || rc=$?
+  [ "$rc" = 1 ] || fail "skip after the wait returned $rc"
+  assert_contains "$(cat "$state/.wake-queue")" "needs a recorded effort" 'the skip reason did not reach the primary'
+  pass 'a task left to the primary after the allocation wait names its reason'
+}
+
+# With free lanes, a failed automatic launch is not left to its single wake: it
+# keeps reminding until the task is dispatched or held.
+test_failed_launch_keeps_reminding_while_lanes_are_free() {
+  local dir=$TMP_ROOT/failed-reminder home state queue
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"; state="$home/state"; queue="$state/.wake-queue"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold good --kind external --reason fixture >/dev/null || fail "fixture: hold good"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add fail-one 'Launch that fails' --repo demo --kind ship >/dev/null || fail "fixture: add fail-one"
+  mkdir -p "$home/data/fail-one"
+  printf '# Task\n## Captain'"'"'s intent\nx\n## Firstmate spec\ny\nDispatch category: standard\nDelivery contract: mode=local-only\nShip branch: fm/fail-one\n' > "$home/data/fail-one/brief.md"
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
+  run_watch_until "$dir" "$state" 'automatic launch of ready task fail-one failed: error: boom' "$queue" 300 FM_OBLIGATION_SECONDS=1 ||
+    fail "no failure wake: $(cat "$dir/watch-run.out")"
+  # The primary has read that wake, so each later watcher starts from an empty queue.
+  : > "$queue"
+  run_watch_until "$dir" "$state" '' "$state/.obligation-ready-failed-fail-one" 300 FM_OBLIGATION_SECONDS=1 ||
+    fail "a failed launch left no obligation"
+  sleep 2
+  : > "$queue"
+  run_watch_until "$dir" "$state" 'fail-one (automatic launch failed: error: boom' "$queue" 300 FM_OBLIGATION_SECONDS=1 ||
+    fail "a failed launch was not reminded while lanes stayed free: $(cat "$queue" "$dir/watch-run.out" 2>&1)"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold fail-one --kind external --reason fixture >/dev/null || fail "fixture: hold fail-one"
+  # A watcher that starts with another wake pending ends on it before its pass, so give it a few turns.
+  for _ in 1 2 3; do
+    : > "$queue"
+    run_watch_until "$dir" "$state" 'never-appears' "$queue" 60 FM_OBLIGATION_SECONDS=1 || true
+    [ -e "$state/.obligation-ready-failed-fail-one" ] || break
+  done
+  [ ! -e "$state/.obligation-ready-failed-fail-one" ] || fail "a held task kept its failure reminder: $(cat "$dir/watch-run.out")"
+  pass "a failed automatic launch keeps reminding while lanes are free and stops once the task is held"
+}
+
+# A higher-priority task waiting for home capacity keeps its place: a task behind
+# it must not launch into the lane it waits for, even when that task would fit.
+test_deferred_task_keeps_its_place() {
+  local dir=$TMP_ROOT/priority home state holder
+  mkdir -p "$dir"; make_home "$dir" only-good; home="$dir/home"; state="$home/state"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add urgent 'Urgent work' --repo demo --kind ship --priority 0 >/dev/null || fail "fixture: add urgent"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" add nobrief 'Ship nobody briefed' --repo demo --kind ship --priority 3 >/dev/null || fail "fixture: add nobrief"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" update good --priority 2 >/dev/null || fail "fixture: prioritize good"
+  mkdir -p "$home/data/urgent"
+  sed 's#fm/good#fm/urgent#' "$home/data/good/brief.md" > "$home/data/urgent/brief.md"
+  printf '%s\n' "$dir/proj" > "$state/urgent.spawn-deferred"
+  printf '%s\n' 'memory: no room for a 0.46 GB lane' > "$state/urgent.spawn-deferred.reason"
+  # Another replay is still running, so the waiting task cannot start this cycle.
+  sleep 600 &
+  # shellcheck disable=SC2031
+  holder=$!
+  printf '%s\n' "$holder" > "$state/.spawn-retry.pid"
+  fm_test_track_watcher_state "$state"
+  date +%s > "$state/.cleanup-low-disk"; date +%s > "$state/.last-info-summary"
+  # The unbriefed row sits behind both tasks, so its notice proves the pass reached the end of the queue.
+  if ! run_watch_until "$dir" "$state" 'nobrief: no brief yet' "$state/.wake-queue" 300 FM_UNBRIEFED_GRACE_SECS=0; then
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+    fail "the watcher never finished its dispatch pass: $(cat "$dir/watch-run.out")"
+  fi
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  ! grep -q '^good ' "$dir/spawn.log" 2>/dev/null || fail "a lower-priority task launched ahead of the one waiting for capacity"
+  [ -f "$state/urgent.spawn-deferred" ] || fail "the waiting task lost its place"
+  pass "a task waiting for capacity keeps its place against lower-priority launches"
+}
+
+if [ "${FM_TEST_CAPACITY_GAPS_ONLY:-0}" = 1 ]; then
+  test_retry_names_why_it_is_not_launchable
+  test_failed_launch_keeps_reminding_while_lanes_are_free
+  test_deferred_task_keeps_its_place
+  exit 0
+fi
 
 if [ "${FM_TEST_AUTODISPATCH_RETRY_ONLY:-0}" = 1 ]; then
   test_watcher_retries_allocation_after_release || exit $?
@@ -583,9 +760,14 @@ test_manual_profile_reaches_launch_and_record
 test_treehouse_exhaustion_diagnosis
 test_retry_job_is_not_duplicated
 test_retry_reports_real_failure
+test_retry_names_why_it_is_not_launchable
 test_watcher_retries_allocation_after_release || exit $?
 FM_TEST_STOP_WATCHER=1 test_watcher_retries_allocation_after_release || exit $?
 test_watcher_launches_ready_work
+test_unbriefed_queued_ship_reaches_the_primary
+test_general_pause_stops_automatic_dispatch
+test_failed_launch_keeps_reminding_while_lanes_are_free
+test_deferred_task_keeps_its_place
 test_watcher_classifies_cpu_deferral
 test_deferred_spawn_keeps_the_beacon_alive
 test_watcher_continues_without_lanes

@@ -94,7 +94,11 @@ exec /bin/bash "$@"
         check(cli('work','report.review',payload={'target':'task:a'})['code']=='no_report', 'symlink report refuses before opening Lavish')
         report.unlink(); report.write_text('<html><body>Result</body></html>')
         try:
+            (home/'state/a.status').write_text('done: ready for integration\n')
+            (home/'state/a.parked').write_text('park_phase=parked\n')
             first=cli('work','report.review',payload={'target':'task:a'})
+            (home/'state/a.parked').unlink()
+            (home/'state/a.status').unlink()
             second=cli('work','report.review',payload={'target':'task:a'})
             check(first.get('ok') is True and first.get('owner')=='primary'
                   and second.get('ok') is True and second.get('owner')=='primary'
@@ -541,7 +545,8 @@ exec /bin/bash "$@"
         for key, repo in (('x','alpha'), ('y','beta'), ('z','beta')):
             pcli('add', key, key+' task', '--repo', repo)
         pcli('add', 'w', 'w task', '--repo', 'beta', '--request-from', 'x')
-        pcli('block', 'y', '--by', 'x'); pcli('block', 'z', '--by', 'x'); pcli('block', 'z', '--by', 'y')
+        R = ('--because', 'the later task consumes the earlier output')
+        pcli('block', 'y', '--by', 'x', *R); pcli('block', 'z', '--by', 'x', *R); pcli('block', 'z', '--by', 'y', *R)
         s = json.loads(pcli('work', 'snapshot'))
         groups = {g['key']: g for g in s['projects']}
         check(sorted(groups['project:alpha']['requests']) == ['request:x'] and sorted(groups['project:beta']['requests']) == ['request:y', 'request:z']
@@ -846,7 +851,7 @@ exec /bin/bash "$@"
     # repository identities or resumes tasks, and aliases survive that topology.
     cli('add','public-unit','Public work','--repo','alpha-public',raw=True)
     cli('hold','public-unit','--kind','parked','--reason','Keep public work paused',raw=True)
-    cli('block','public-unit','--by','b',raw=True)
+    cli('block','public-unit','--by','b','--because','the public unit consumes the other output',raw=True)
     state=json.loads((home/'data/work-structure.json').read_text())
     state['groups']['subproject:alpha-public/relay']=dict(kind='subproject',repo='alpha-public',label='Relay',priority=1,pause=None,blocked_by=[],aliases=['Old relay name'])
     state['membership']['public-unit']='subproject:alpha-public/relay'

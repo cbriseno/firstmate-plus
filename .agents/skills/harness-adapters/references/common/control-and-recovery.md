@@ -42,11 +42,10 @@ Its executable owner refuses known busy activity and reports unknown activity ex
 It saves the launch, session reference, work location, progress and wait before closing the agent and pane.
 A failed stop or close is incomplete parking; retry park after resolving the named failure.
 A message sent through the existing inbox resumes a parked task before delivery; a failed resume retains that response pending and must not be resent.
-Before an automatic resume, compare the saved harness with the current usage policy.
-A different harness opens the existing captain hold with original-worker and current-harness takeover options, recommending the current policy; no agent launches and the inbox response stays pending.
-If dispatch profiles contain several harnesses, resolve the applicable rule and quota choice yourself; never substitute the static crew setting. If that choice differs from the saved harness, open the same two-option captain hold before resuming explicitly.
-Record the captain's actual answer through the hold owner, releasing the work in flight; then call resume with the explicitly chosen --harness, --model and --effort profile.
-Choosing the original harness reopens its saved chat when possible; choosing another starts fresh with the saved progress note. Never resend the pending message.
+An automatic resume applies the current dispatch profile when the task records its category; older tasks use the unambiguous current harness.
+If it selects a different harness, resume starts a fresh worker with the saved progress note and pending message.
+If dispatch profiles require a selection, resolve the applicable rule and quota choice yourself and pass the chosen profile; a harness change alone does not require a captain hold.
+Never resend the pending message.
 The existing dated-pause watcher recheck also uses this route.
 [Agent lifecycle control](../../../../../docs/agent-control.md) describes the lifecycle boundary; the command header owns exact mechanics.
 Relaunch starts a fresh chat with a progress note; resume reopens the parked chat when its native identity is available, otherwise reports the reason for a fresh-chat fallback.

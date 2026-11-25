@@ -430,17 +430,22 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
 }
 
 # A condition-aware declared wait: a `paused:` line may say WHEN it expects to
-# clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` (or Spanish `hasta`) anywhere in its text (UTC only, so
+# clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` or `[until=...]` (also Spanish `hasta`) in its text (UTC only, so
 # no local-zone guess is ever recorded). Prints that time as epoch seconds so a
 # supervisor rechecks the wait when the worker said it would clear instead of on
 # the flat cadence; returns 1 when the line is not a pause or declares no time,
 # or the time is malformed, so a bad token falls back to the cadence rather than
 # silencing the wait.
 status_paused_until() {  # <status-line> -> epoch on stdout
-  local line=$1 token
-  status_is_paused "$line" || return 1
+  local line=$1 token head
+  head=${line#"${line%%[![:space:]]*}"}
+  head=${head%%:*}
+  head=${head%%\[*}
+  head=${head%"${head##*[![:space:]]}"}
+  [ "$head" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] || return 1
+  case "$line" in *[Uu][Nn][Tt][Ii][Ll]*|*[Hh][Aa][Ss][Tt][Aa]*) ;; *) return 1 ;; esac
   token=$(printf '%s' "$line" \
-    | sed -En 's/.*[[:space:]]([Uu][Nn][Tt][Ii][Ll]|[Hh][Aa][Ss][Tt][Aa])[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z).*/\2/p' \
+    | sed -En 's/.*[[:space:][]([Uu][Nn][Tt][Ii][Ll]|[Hh][Aa][Ss][Tt][Aa])([[:space:]]+|=)([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z).*/\3/p' \
     | head -1)
   [ -n "$token" ] || return 1
   fm_utc_iso_to_epoch "$token"
@@ -724,7 +729,7 @@ status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
   # Unstructured pauses about firstmate or main open the decision path.
   # A named task supplies its own mechanical exit condition.
   if { [ "$out" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ] || [ "$out" = blocked ]; } \
-    && ! { [ "$out" != blocked ] && status_wait_task_id "$1" >/dev/null; }; then
+    && ! { [ "$out" != blocked ] && { status_wait_task_id "$1" >/dev/null || status_paused_until "$1" >/dev/null; }; }; then
     _fm_status_unstamped "$1" word
     word=${word#*:}
     if status_note_waits_for_main "$word" || _fm_classify_matches "$word" \
@@ -1271,7 +1276,7 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 # Version 4 was already spent on the bracketed-tag parser change above, and a
 # cursor persisted under that reading predates this one, so it must still be
 # discarded and rebuilt from byte 0 under the new reading.
-FM_OPEN_DECISIONS_FOLD_VERSION=12
+FM_OPEN_DECISIONS_FOLD_VERSION=13
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity

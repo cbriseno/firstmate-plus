@@ -641,3 +641,15 @@ EOF
 }
 
 test_firstmate_and_main_waits_open_decisions
+
+line='paused [at=1795574075]: [until=2026-11-25T03:30Z] Esperando la verificación que falló contra main; firstmate integra.'
+[ "$(status_line_verb "$line")" = paused ] || fail 'dated pause became a decision'
+[ "$(status_paused_until "$line")" = 1795577400 ] || fail 'bracketed deadline was not parsed'
+printf '%s\n' "$line" > "$TMP_ROOT/dated-wait.status"
+[ -z "$(status_open_decisions "$TMP_ROOT/dated-wait.status")" ] || fail 'dated wait opened a decision'
+pass 'dated status wait remains a pause and supplies its deadline'
+# A cursor written by the former fold must be rebuilt on upgrade.
+ident=$(_fm_open_decisions_file_ident "$TMP_ROOT/dated-wait.status")
+printf 'version=12:unknown\noffset=%s\nident=%s\ndefault\tneeds-decision\told interpretation\n' "$(wc -c < "$TMP_ROOT/dated-wait.status" | tr -d ' ')" "$ident" > "$TMP_ROOT/.dated-wait.open-decisions-cursor"
+[ -z "$(status_open_decisions_incremental "$TMP_ROOT/dated-wait.status")" ] || fail 'upgrade retained a phantom decision'
+pass 'upgrade rebuilds existing decision cursors'

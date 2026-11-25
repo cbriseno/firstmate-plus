@@ -232,7 +232,7 @@ fi
 if [ "$GUARD_ACTOR" = branch ]; then
   :
 elif "$handling_pending"; then
-  echo 'NOTICE: presented wakes await handling and acknowledgement; no live watcher holds the lock. Finish handling, use the printed WAKE_ACK_REQUIRED command, then resume the supervision cycle before ending the turn.' >&2
+  echo 'NOTICE: presented wakes await handling and acknowledgement; no live watcher holds the lock. Finish handling, acknowledge each notice as WAKE_ACK_REQUIRED instructs, then resume the supervision cycle before ending the turn.' >&2
 elif [ "$watcher_healthy" = false ]; then
   episode_key=$(fm_guard_stale_episode_key "$watcher_down_reason")
   episode_key=${episode_key%$'\n'}

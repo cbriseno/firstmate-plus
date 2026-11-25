@@ -139,3 +139,38 @@ call('fm-upgrade.sh','apply')
 assert (home/'data/upgrades/applied').read_text() == 'v11b\nfixture\n'
 print('PASS: upgrade hold, no implicit migration, acceptance, decline, command failure and successful ids')
 PYTHON
+
+# The shipped official-overseer entry is offered once to a home without config/overseer,
+# never to a home that already has it, and applying it leaves the home unconfigured.
+python3 - "$ROOT" "$TASK_HOME" <<'PYTHON'
+import os, pathlib, subprocess, sys
+root, base = map(pathlib.Path, sys.argv[1:])
+code = base/'overseer-release'; code.mkdir(); (code/'bin').symlink_to(root/'bin', target_is_directory=True)
+entry = (root/'UPGRADING.md').read_text().split('## official-overseer', 1)[1]
+(code/'UPGRADING.md').write_text('## official-overseer' + entry)
+def make(name, official):
+    home = base/name
+    for sub in ('data', 'state', 'config'):
+        (home/sub).mkdir(parents=True)
+    (home/'data/backlog.md').write_text('## Queued\n\n## In flight\n\n## Done\n')
+    if official:
+        (home/'config/overseer').write_text('enabled=on\ndirectory=/somewhere/overseer\n')
+    return home, dict(os.environ, FM_HOME=str(home), FM_ROOT_OVERRIDE=str(code))
+def call(env, *args, status=0):
+    p = subprocess.run(['bash', str(root/'bin/fm-upgrade.sh'), *args], env=env, capture_output=True, text=True)
+    assert p.returncode == status, (args, p.stdout, p.stderr)
+    return p.stdout
+home, env = make('overseer-plain', False)
+assert 'upgrade-official-overseer' in call(env, 'check')
+assert call(env, 'check') == ''
+answer = base/'overseer-answer.txt'; answer.write_text('Aplicarlas - fixture acceptance\n')
+subprocess.run(['bash', str(root/'bin/fm-captain-hold.sh'), 'answer', 'upgrade-official-overseer',
+                '--decision-file', str(answer)], env=env, check=True, capture_output=True)
+assert 'configured: off' in call(env, 'apply')
+assert (home/'data/upgrades/applied').read_text() == 'official-overseer\n'
+assert not (home/'config/overseer').exists()
+home, env = make('overseer-official', True)
+assert call(env, 'check') == '' and call(env, 'apply') == ''
+assert not (home/'data/upgrades').exists()
+print('PASS: official overseer offered once, skipped when config/overseer exists, apply changes nothing')
+PYTHON

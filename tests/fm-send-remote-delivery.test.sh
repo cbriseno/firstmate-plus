@@ -91,6 +91,9 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
+  # The fixture models delivery to the remote inbox without a live remote pane.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fb/herdr"
+  chmod +x "$fb/herdr"
   cat > "$fb/sleep" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -109,6 +112,9 @@ if [ -n "${FM_FAKE_SSH_HANG:-}" ]; then
   # real sleep, because the stubbed one on PATH returns immediately.
   /bin/sleep "$FM_FAKE_SSH_HANG"
   exit 255
+fi
+if [ -n "${FM_FAKE_SSH_QUEUE_DELAY:-}" ]; then
+  /bin/sleep "$FM_FAKE_SSH_QUEUE_DELAY"
 fi
 if [ "${FM_FAKE_SSH_AFTER_AMBIGUOUS_RC:-0}" -ne 0 ] && [ "$count" -gt 1 ]; then
   exit "$FM_FAKE_SSH_AFTER_AMBIGUOUS_RC"
@@ -706,6 +712,22 @@ test_remote_send_budget_bounds_busy_lane() {
   pass "fm-send remote: the remote leg is budget-bounded and stays idempotent across the bound"
 }
 
+test_default_send_wait_covers_the_remote_queue() {
+  local dir fb ssh_log rhome parent
+  dir="$TMP_ROOT/remote-wait"
+  mkdir -p "$dir"
+  fb=$(make_stubs "$dir")
+  ssh_log="$dir/ssh.log"
+  rhome=$(setup_remote_secondmate_home remote-wait)
+  parent=$(setup_remote_parent_home remote-wait "$rhome")
+  send_env "$fb" "$parent" "$ssh_log" FM_FAKE_SSH_QUEUE_DELAY=31 \
+    "$SEND" rsm --fire-and-forget fedcba9876543210 'continue after the busy lane' \
+    >"$dir/out" 2>"$dir/err" || fail "default transport quit before the remote worker: $(cat "$dir/err")"
+  [ "$(cat "$ssh_log.count")" = 1 ] || fail 'the successful delivery retried the transport'
+  assert_contains "$(cat "$dir/out")" 'sent rsm' 'the successful remote enqueue omitted its receipt'
+  pass 'fm-send remote: the default budget reaches a delayed remote receipt'
+}
+
 test_local_secondmate_pending_keeps_expectation_armed() {
   local dir fb log home rc rec corr
   dir="$TMP_ROOT/local-pending-expectation"; mkdir -p "$dir"
@@ -797,6 +819,7 @@ test_remote_real_failure_still_fails
 test_remote_exit3_no_longer_delivered
 test_remote_transport_loss_preserves_expectation
 test_remote_send_budget_bounds_busy_lane
+test_default_send_wait_covers_the_remote_queue
 test_local_pending_reports_delivered_unconfirmed
 test_local_pending_does_not_close_resolve_key
 test_local_secondmate_pending_keeps_expectation_armed

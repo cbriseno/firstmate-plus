@@ -184,10 +184,11 @@
 #   other refusals name forced teardown or another operation when known. --relaunch is exempt
 #   because the existing task's control lock covers it.
 #   A fresh Treehouse-backed spawn also takes the project-identity lock in the local
-#   root Firstmate home's state directory before slot allocation and holds it through
-#   task metadata publication. Teardown holds that same lock while proving and
-#   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published. Under that same lock it writes the slot's owner claim, which is
+#   root Firstmate home's state directory to reconcile existing reservations, then
+#   releases it during Treehouse acquisition and reacquires it before claiming the
+#   acquired slot and publishing task metadata. Treehouse keeps the acquired slot
+#   busy through the foreground shell. Teardown holds the same lock while proving
+#   and returning a slot. Under that lock spawn writes the owner claim, which is
 #   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
 #   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
 #   cannot be claimed refuses the spawn rather than launching a worker whose slot
@@ -206,8 +207,8 @@
 #   scout spawn counts the places already held while holding that same
 #   project-identity lock - taken on every backend whenever the declaration caps
 #   any project, because an uncapped clone's worker still holds a
-#   place for a capped clone of the same origin - and holds it through metadata
-#   publication. A spawn that finds
+#   place for a capped clone of the same origin - and rechecks after acquiring
+#   a slot before holding it through metadata publication. A spawn that finds
 #   every place held prints one `deferred:` line and exits 75 before any brief
 #   render, endpoint, worktree, record, or backlog move exists, so the task stays
 #   exactly as queued as it was; an unreadable declaration refuses with exit 1.
@@ -215,6 +216,8 @@
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   project capacity. Fresh ships and scouts also consult fm-capacity.sh --admit
 #   with the task brief under the home task-set lock before creating launch resources.
+#   With lane capacity configured, that lock stays held until launch submission
+#   and publication of its time for the next capacity check.
 #   That script owns the opt-in lane ceiling and live resource verdict; exit 75
 #   keeps the item queued, while invalid configuration remains an error.
 #   Either deferral writes state/<id>.spawn-deferred: the absolute project path
@@ -2077,8 +2080,8 @@ spawn_defer_marker() {  # <reason> <project-limit|null>
     "$SCRIPT_DIR/fm-fleet-ledger.sh" entity task.dispatch_wait "$ID" >/dev/null 2>&1 || true
 }
 # Read live home capacity for each fresh worker, never the watcher's cached
-# document. The existing task-set lock stays held through metadata publication,
-# so the next spawn sees this worker before making its own admission decision.
+# document. Configured admission owns the task-set lock until launch submission.
+pace_lane_launch=0
 if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   spawn_capacity_rc=0
   spawn_capacity_err=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
@@ -2091,6 +2094,7 @@ if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
     fi
     exit "$spawn_capacity_rc"
   fi
+  [ ! -f "$CONFIG/lane-capacity" ] || pace_lane_launch=1
 fi
 # Project capacity admission (bin/fm-project-capacity-lib.sh owns the
 # declaration, what holds a place, and why this is race-safe). A fresh worker
@@ -2259,6 +2263,12 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ] || [ "$KIND" = host ]; then
   if printf '%s\n' "$CHANGED_INSTRUCTIONS" | grep -E -- '(^|[^[:alnum:]_-])--changed([^[:alnum:]_-]|$)' | grep -Eiv '(^|[[:space:]])(no|never|do not|don.t)([[:space:]]|$)' >/dev/null &&
      ! grep -Ei '^(Publication task: yes|Outward effect: .*(publish|publication|publica|publicación|push))' "$BRIEF" >/dev/null; then
     echo "error: $BRIEF requests the --changed batch without a publication effect; use targeted tests and the project check, or declare the publication effect" >&2
+    exit 1
+  fi
+  if ! fm_brief_task_heading_present "$BRIEF" "## Requested steps"; then
+    echo "warning: $BRIEF has no ## Requested steps section; continuing legacy brief" >&2
+  elif UNTRACED_STEPS=$(fm_brief_steps_untraced "$BRIEF") && [ -n "$UNTRACED_STEPS" ]; then
+    echo "error: $BRIEF ## Requested steps has a step without the captain's words: $(printf '%s' "$UNTRACED_STEPS" | head -n 1); cite words that appear verbatim inside a «...» quote of ## Captain's intent, or remove the step, or ask the captain before adding it" >&2
     exit 1
   fi
   if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
@@ -3378,7 +3388,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  treehouse_marker="FM_TREEHOUSE_RESULT_${$}:"
+  spawn_send_text_line "$WT_TARGET" "treehouse get; printf '\\n%s%s\\n' '$treehouse_marker' \"\$?\"" || exit 1
+  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
+  fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK"
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
@@ -3414,8 +3427,16 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 
   last_seen=""
   last_reason="the pane reported no path"
   waited=0
-  recycled=0
   while :; do
+    treehouse_output=$(fm_backend_capture "$BACKEND" "$WT_TARGET" 200 2>/dev/null || true)
+    treehouse_result=$(printf '%s\n' "$treehouse_output" | tr -d '\r' | sed -n "s/^${treehouse_marker}\\([0-9][0-9]*\\)$/\\1/p" | tail -n 1)
+    if [ -n "$treehouse_result" ]; then
+      printf 'error: treehouse get finished with status %s; output follows:\n%s\n' "$treehouse_result" "$treehouse_output" >&2
+      case "$treehouse_output" in
+        *"worktrees are in use or dirty"*) bash "$SCRIPT_DIR/fm-treehouse-diagnose.sh" "$PROJ_ABS" >&2 ;;
+      esac
+      exit 1
+    fi
     previous_candidate=$candidate
     p=$(spawn_current_path "$WT_TARGET" || true)
     [ -z "$p" ] || last_seen="$p"
@@ -3436,12 +3457,6 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 
       # The subshell can take the foreground just as its isolated cwd first
       # appears. Give that new candidate its existing second-read check.
       if [ -z "$candidate" ] || [ -n "$previous_candidate" ]; then
-        if [ "$recycled" = 0 ] && "$SCRIPT_DIR/fm-treehouse-recycle.sh" "$PROJ_ABS" "$STATE"; then
-          recycled=1
-          waited=0
-          spawn_send_text_line "$WT_TARGET" 'treehouse get'
-          continue
-        fi
         break
       fi
     fi
@@ -3460,6 +3475,26 @@ elif [ "$KIND" != secondmate ] && [ "$KIND" != host ] && [ "$INSTALLATION" != 1 
     exit 1
   fi
 
+  if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+    if [ "${FM_AUTODISPATCH:-0}" = 1 ] && { [ -d "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] || [ -n "${FM_LOCK_HELD_PID:-}" ]; }; then
+      printf '%s\n' "$SPAWN_TREEHOUSE_PROJECT_LOCK" > "$STATE/.autodispatch-lock-$ID" || exit 1
+      exit 76
+    fi
+    echo "error: another Treehouse slot allocation or return is in progress; cannot safely claim $WT" >&2
+    exit 1
+  fi
+  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+  if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
+    if ! fm_project_capacity_occupants "$SPAWN_TREEHOUSE_PROJECT_LOCK" "$PROJ_ABS" "$STATE" "$ID"; then
+      echo "error: cannot recheck project capacity after Treehouse acquisition ($FM_PROJECT_CAPACITY_ERROR)" >&2
+      exit 1
+    fi
+    if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
+      spawn_defer_marker "project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place" "$SPAWN_PROJECT_CAPACITY" || exit 1
+      echo "deferred: project capacity was filled during Treehouse acquisition; task $ID was not launched and its backlog item stays queued" >&2
+      exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
+    fi
+  fi
   validate_spawn_worktree "treehouse get" "$T"
 
   # The claim protects old reassigned records; the durable lease prevents this
@@ -4004,10 +4039,8 @@ if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
   fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK"
 fi
-if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
-  # The record is published, so this task is now part of the set a teardown
-  # enumerates and locks per task. The set lock is only needed across that
-  # publication.
+if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ] && [ "$pace_lane_launch" -eq 0 ]; then
+  # Without pacing, metadata publication completes the task-set operation.
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
@@ -4409,6 +4442,13 @@ fi
 if ! spawn_send_key "$T" Enter; then
   exit 1
 fi
+if [ "$pace_lane_launch" -eq 1 ]; then
+  # The next admission must see this launch even if preparing it was slow.
+  touch "$STATE/.last-lane-launch" ||
+    echo "warning: could not record lane launch time for the next admission" >&2
+  SPAWN_TASK_SET_LOCK_HELD=0
+  fm_lock_release "$SPAWN_TASK_SET_LOCK"
+fi
 # The operator's standing approval covers the harness start-up dialogs that ask
 # to trust their own or Firstmate's directory and hooks; the pane is read and
 # those are answered so the agent reaches its brief (bin/fm-startup-dialogs.sh
@@ -4417,7 +4457,8 @@ case "$HARNESS" in
 claude*|codex*)
   startup_dir=$WT
   [ "$KIND" != secondmate ] || startup_dir=$PROJ_ABS
-  "$FM_ROOT/bin/fm-startup-dialogs.sh" "$BACKEND" "$T" "$HARNESS" "$startup_dir" 45 "fm-$ID" || true
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_STARTUP_DIALOGS_ALERT_ID="startup-dialog-$SPAWN_GEN" "$FM_ROOT/bin/fm-startup-dialogs.sh" "$BACKEND" "$T" "$HARNESS" "$startup_dir" 45 "fm-$ID" || true
   ;;
 esac
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then

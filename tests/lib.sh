@@ -97,13 +97,50 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- reporters --------------------------------------------------------------
 
-fail() {
-  printf 'not ok - %s\n' "$1" >&2
-  exit 1
-}
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 
 pass() {
   printf 'ok - %s\n' "$1"
+}
+
+# Extract the sequence only from a single notice actually presented by a drain.
+fm_test_single_wake_sequence() { # <stdout-file>
+  awk -F '\t' 'NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^(signal|stale|check|heartbeat)$/ { seq=$2; count++ } END { if (count == 1) print seq; else exit 1 }' "$1"
+}
+
+fm_test_wake_sequence_or_recovery() { # <stdout-file> <stderr-file>
+  local sequence
+  if sequence=$(fm_test_single_wake_sequence "$1"); then
+    printf '%s\n' "$sequence"
+  elif ! awk -F '\t' 'NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^(signal|stale|check|heartbeat)$/ { found=1 } END { exit !found }' "$1" \
+    && grep -q -- '--ack 0 --recovery-generation ' "$2"; then
+    printf '0\n'
+  else
+    return 1
+  fi
+}
+
+fm_test_wake_sequence_for_key() { # <stdout-file> <key-prefix>
+  awk -F '\t' -v prefix="$2" 'NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && index($4,prefix) == 1 { seq=$2; count++ } END { if (count == 1) print seq; else exit 1 }' "$1"
+}
+
+fm_test_wake_generation() { # <stderr-file>
+  sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p' "$1" | tail -1
+}
+
+# Acknowledge every row actually printed by the drain after handling.
+ack_drain_output() {  # <state> <stdout-file> <stderr-file>
+  local state=$1 out=$2 err=$3 sequence generation sequences
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p' "$err" | tail -1)
+  [ -n "$generation" ] || return 1
+  sequences=$(awk -F '\t' 'NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^(signal|stale|check|heartbeat)$/ {print $2}' "$out") || return 1
+  [ -n "$sequences" ] || sequences=0
+  while IFS= read -r sequence; do
+    [ -n "$sequence" ] || continue
+    FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" || return 1
+  done <<< "$sequences"
 }
 
 # --- setup failure and removal guard -----------------------------------------

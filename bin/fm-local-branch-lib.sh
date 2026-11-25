@@ -17,10 +17,10 @@ fm_local_head_in_base() {  # <git-directory> <base-branch> [tip-ref, default HEA
 # A clean merge that introduces no change proves HEAD's content is integrated,
 # including rewritten or squashed commits. Shared by auto-close and teardown;
 # conflicts and inspection failures remain inconclusive.
-fm_local_content_in_ref() {  # <worktree> <integration-ref>
-  local wt=$1 ref=$2 default_tree merged_tree
+fm_local_content_in_ref() {  # <worktree> <integration-ref> [source, default HEAD]
+  local wt=$1 ref=$2 source=${3:-HEAD} default_tree merged_tree
   default_tree=$(git -C "$wt" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
-  merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" "$source" 2>/dev/null) || return 1
   merged_tree=${merged_tree%%$'\n'*}
   [ "$merged_tree" = "$default_tree" ]
 }

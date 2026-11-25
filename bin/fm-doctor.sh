@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only local prerequisite check, with no installs, network or fleet actions.
-# Usage: bash bin/fm-doctor.sh [--backend <name> | --tools]
+# Usage: bash bin/fm-doctor.sh [--backend <name> | --tools | --ledger]
 # Defaults to normal backend resolution (FM_BACKEND/config/ambient/tmux).
 # Reports command availability, basic Unix capabilities and the selected route;
 # missing feature tools are optional and report their effect without failing.
@@ -8,6 +8,31 @@
 # Exit 0: prerequisites found (not a live harness/backend certification).
 # Exit 1: missing prerequisite/capability. Exit 2: unsupported platform/options.
 set -eu
+# Aggregate-only ledger sample for comparing two captures at least 24 hours apart.
+if [ "${1:-}" = --ledger ] && [ "$#" = 1 ]; then
+  ledger_state=${FM_STATE_OVERRIDE:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}/state}
+  FM_DOCTOR_STATE="$ledger_state" FM_DOCTOR_BASH="$BASH_VERSION" python3 - <<'PY'
+import json, os, platform, time
+from pathlib import Path
+state = Path(os.environ['FM_DOCTOR_STATE'])
+ledger, stamp = state / 'fleet-ledger.jsonl', state / '.fleet-ledger.compacted'
+try:
+    with ledger.open('rb') as stream:
+        stat = os.fstat(stream.fileno())
+        lines = sum(1 for _ in stream)
+    try:
+        compacted = stamp.stat().st_mtime
+    except FileNotFoundError:
+        compacted = None
+    print(json.dumps(dict(sampled_at=int(time.time()), platform=platform.system(),
+        bash=os.environ['FM_DOCTOR_BASH'], bytes=stat.st_size, lines=lines,
+        device=stat.st_dev, inode=stat.st_ino, compacted_at=compacted)))
+except OSError as error:
+    print('fm-doctor: cannot sample ledger: ' + str(error), file=__import__('sys').stderr)
+    raise SystemExit(1)
+PY
+  exit $?
+fi
 # Inventory mode performs no fleet, authentication, network, or installation work.
 if [ "${1:-}" = --tools ] && [ "$#" = 1 ]; then
   printf '%-21s | %-24s | %-12s | %-12s | %s\n' 'Tool (scope)' 'Found version' 'Minimum' 'macOS ships' 'Unavailable if missing'

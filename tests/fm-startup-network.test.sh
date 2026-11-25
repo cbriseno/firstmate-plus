@@ -74,6 +74,21 @@ SH
   chmod +x "$root/bin/fm-bootstrap.sh"
   cat > "$root/bin/ps" <<'SH'
 #!/usr/bin/env bash
+# The ancestry reader takes one wide process-table snapshot. Make the fixture
+# harness visible there as well as in individual -p queries.
+case "$*" in
+  *'-A -ww'*)
+    /bin/ps "$@" | awk -v fake="${FM_FAKE_HARNESS_PID:-}" '
+      NR == 1 { c=index($0,"CCCC"); a=index($0,"ARGS"); print; next }
+      $1 == fake && c && a {
+        printf "%s%-*s %s\n", substr($0,1,c-1), a-c-1, "claude", "/usr/local/bin/claude"
+        next
+      }
+      { print }
+    '
+    exit
+    ;;
+esac
 pid=
 previous=
 for argument in "$@"; do
@@ -185,7 +200,8 @@ EOF
   started=$(date +%s)
   # Command substitution reads to EOF, exactly like a hook harvesting hook output.
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=10 \
-    run_stage "$home" "$root" start --locked 1 --harvest-pid $$ >/dev/null
+    run_stage "$home" "$root" start --locked 1 --harvest-pid $$ >/dev/null \
+    || fail "the detached stage refused to start"
   elapsed=$(( $(date +%s) - started ))
 
   [ "$elapsed" -lt 4 ] || fail "start blocked for ${elapsed}s behind a 10s worker"
@@ -430,13 +446,13 @@ EOF
       "$kind marker fixture unexpectedly depended on the network report"
 
     err="$home/drain.err"
-    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" >/dev/null 2> "$err"
-    seq=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation .*/\1/p' "$err")
-    generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" > "$home/drain.out" 2> "$err"
+    seq=$(fm_test_single_wake_sequence "$home/drain.out")
+    generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\).*/\1/p' "$err")
     [ -n "$seq" ] && [ -n "$generation" ] \
       || fail "$kind marker wake did not issue a durable acknowledgement"
     FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" \
-      --ack-through "$seq" --recovery-generation "$generation" >/dev/null
+      --ack "$seq" --recovery-generation "$generation" >/dev/null
     assert_no_grep 'inactive-reconcile-diagnostic:invalid-secondmate-home' "$home/state/.wake-queue" \
       "$kind marker wake could not be acknowledged"
   done

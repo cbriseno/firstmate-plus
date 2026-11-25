@@ -13,6 +13,8 @@ set -u
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-capacity)
 CAPACITY="$ROOT/bin/fm-capacity.sh"
+export FM_TEST_LOCK_DIR="$TMP_ROOT/test-locks"
+mkdir -p "$FM_TEST_LOCK_DIR"
 
 # make_home <name> <ship-count> <secondmate-count>: a home with that many
 # ship metas and secondmate metas.
@@ -98,6 +100,63 @@ test_configured_load_admission() {
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" "$CAPACITY" --admit >/dev/null 2>&1 || rc=$?
   expect_code 75 "$rc" "insufficient configured memory must defer"
   pass "configured load permits admission while lane and memory limits remain enforced"
+}
+
+test_test_queue_admission() {
+  local home fakebin
+  home=$(make_home test-queue 1 0)
+  fakebin=$(make_probes "$TMP_ROOT/p-test-queue" 7.00 65 4 20971520)
+  printf '12\nmax-load1 40\n' > "$home/config/lane-capacity"
+  PATH="$fakebin:$PATH" FM_HOME="$home" python3 - "$CAPACITY" <<'PY' ||
+import fcntl, json, os, pathlib, subprocess, sys, time
+
+prefix = pathlib.Path(os.environ["FM_TEST_LOCK_DIR"]) / f"firstmate-test-{os.getuid()}-"
+def hold(name, record):
+    stream = open(f"{prefix}{name}", "w")
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    stream.write(record)
+    stream.flush()
+    return stream
+
+def capacity(flag):
+    return subprocess.run(["bash", sys.argv[1], flag], capture_output=True, text=True)
+
+with hold("1.lock", "101"), hold("run-active", f"101 1 {time.time()} 0"):
+    assert capacity("--admit").returncode == 0, "full slots with no queue"
+    with hold("run-waiting", f"102 1 {time.time()} 0"):
+        for flag in ("--admit", "--admit-notice"):
+            verdict = capacity(flag)
+            assert verdict.returncode == 75 and "1 runs waiting" in verdict.stderr, verdict
+        verdict = json.loads(capacity("--json").stdout)
+        assert verdict["test_slots"] == dict(slots=1, occupied=1, waiting_runs=1), verdict
+        assert verdict["verdict"]["free_lanes"] == 0, verdict
+    assert capacity("--admit").returncode == 0, "released wait record"
+    with hold("run-nested-held", f"103 1 {time.time()} 0 1"):
+        assert capacity("--admit").returncode == 0, "borrowed slot already executing"
+        with hold("run-nested-waiting", f"103 1 {time.time()} 0 0"):
+            assert capacity("--admit").returncode == 75, "active run with another turn waiting"
+
+marker = pathlib.Path(os.environ["FM_HOME"]) / "state" / ".last-lane-launch"
+marker.touch()
+def started(minutes_ago):
+    stamp = time.time() - 60 * minutes_ago
+    os.utime(marker, (stamp, stamp))
+
+started(2)
+assert capacity("--admit").returncode == 0, "one-minute load window passed with no tests"
+with hold("1.lock", "101"), hold("run-active", f"101 4 {time.time()} 0 1"):
+    # Free slots and a clear wait queue still leave tests actively using CPU.
+    for flag in ("--admit", "--admit-notice"):
+        verdict = capacity(flag)
+        assert verdict.returncode == 75 and "observing load" in verdict.stderr, verdict
+    verdict = json.loads(capacity("--json").stdout)
+    assert verdict["test_slots"] == dict(slots=4, occupied=1, waiting_runs=0), verdict
+    assert verdict["verdict"]["free_lanes"] == 0, verdict
+    started(6)
+    assert capacity("--admit").returncode == 0, "five-minute load window passed with active tests"
+PY
+    fail "test demand must control admission and its load sampling window"
+  pass "test demand defers new lanes with a full queue or during the load observation window"
 }
 
 test_parked_worker_releases_lane() {
@@ -635,6 +694,7 @@ test_watcher_publishes_only_when_opted_in() {
 }
 
 test_configured_load_admission
+test_test_queue_admission
 test_parked_worker_releases_lane
 test_no_target_prints_counts_only
 test_no_target_never_prints_constrained_line

@@ -27,6 +27,7 @@
 # checkout. A failure only warns on stderr; it never changes the merge result.
 # A project with no declaration is untouched. docs/configuration.md owns it.
 # Usage: fm-merge-local.sh <task-id>
+# Internal: fm-merge-local.sh --remote <task-id> <fetched-remote-ref> <expected-head>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +44,14 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+REMOTE_REF=
+REMOTE_HEAD=
+if [ "${1:-}" = --remote ] && [ "$#" -eq 4 ]; then
+  REMOTE_REF=$3
+  REMOTE_HEAD=$4
+  shift
+  set -- "$1"
+fi
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
   echo "error: invalid local merge request" >&2
   exit 2
@@ -68,32 +77,65 @@ META="$STATE/$ID.meta"
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "local-only landing (fm-merge-local)"
 
-[ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
-if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
-  echo "error: local merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  exit 1
-fi
-MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
-
 MERGE_CONTROL_LOCK=
+PROJECT_MERGE_LOCK=
 merge_control_cleanup() {
+  [ -z "$PROJECT_MERGE_LOCK" ] || fm_lock_release "$PROJECT_MERGE_LOCK" || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
 }
 trap merge_control_cleanup EXIT
-MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
-fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
-if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
-  echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  exit 1
-fi
-if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
-  echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
-  exit 1
-fi
+if [ -z "$REMOTE_REF" ]; then
+  [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
+    echo "error: local merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  fi
+  MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
 
-PROJ=$(grep '^project=' "$META" | cut -d= -f2-)
-MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
-[ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge PR tasks with bin/fm-pr-merge.sh <id> <PR url> after approval" >&2; exit 1; }
+  fm_lock_acquire_wait "$STATE/.control-$ID.lock"
+  MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
+
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
+    echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  fi
+  if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
+    echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
+    exit 1
+  fi
+
+  PROJ=$(grep '^project=' "$META" | cut -d= -f2-)
+  MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
+  [ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge PR tasks with bin/fm-pr-merge.sh <id> <PR url> after approval" >&2; exit 1; }
+
+  BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
+  [ -n "$BRANCH" ] || BRANCH="fm/$ID"
+  if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+    echo "error: task $ID has an invalid recorded ship branch '$BRANCH'" >&2
+    exit 1
+  fi
+  BRANCH_REF="refs/heads/$BRANCH"
+  # Remote Firstmate homes return their own local-only work to their primary.
+  # Preserve the normal local merge path for their other projects.
+  if [ -f "$FM_HOME/.fm-secondmate-home" ]; then
+    # shellcheck source=bin/fm-secondmate-parent-lib.sh
+    . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+    if fm_secondmate_parent_returns_project "$FM_HOME" "$PROJ"; then
+      echo "error: this branch must be integrated by the primary" >&2
+      exit 1
+    fi
+  fi
+else
+  [[ "$REMOTE_REF" = refs/remotes/*/* ]] && git check-ref-format "$REMOTE_REF" &&
+    [ ! -e "$META" ] && [ ! -e "$FM_HOME/.fm-secondmate-home" ] &&
+    [ "$("$SCRIPT_DIR/fm-project-mode.sh" firstmate)" = 'local-only on' ] || {
+    echo "error: remote Firstmate landing is unavailable or not authorized" >&2
+    exit 1
+  }
+  PROJ=$FM_ROOT
+  BRANCH_REF=$REMOTE_REF
+  BRANCH=${REMOTE_REF#refs/remotes/}
+fi
 
 default_branch() {
   local ref branch
@@ -111,14 +153,12 @@ default_branch() {
   return 1
 }
 
-BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
-[ -n "$BRANCH" ] || BRANCH="fm/$ID"
-if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
-  echo "error: task $ID has an invalid recorded ship branch '$BRANCH'" >&2
-  exit 1
-fi
-git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
+# Serialize local and remote git operations on main across task ids.
+fm_lock_acquire_wait "$STATE/.local-project-merge.lock"
+PROJECT_MERGE_LOCK="$STATE/.local-project-merge.lock"
+BRANCH_TIP=$(git -C "$PROJ" rev-parse --verify --quiet "$BRANCH_REF^{commit}") || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
 
+[ -z "$REMOTE_REF" ] || [ "$BRANCH_TIP" = "$REMOTE_HEAD" ] || { echo "error: remote branch changed after readiness was checked" >&2; exit 1; }
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
 # The project's main checkout must be clean and on its default branch, or on
@@ -140,26 +180,39 @@ fi
 # fell behind because another task landed first is rebased onto DEFAULT in a
 # throwaway clone before updating either branch. A conflict or a branch already
 # published to a remote refuses and leaves every ref as it was.
-TIP=$BRANCH
+TIP=$BRANCH_TIP
+if [ -n "$REMOTE_REF" ]; then
+  # shellcheck source=bin/fm-afk-contract.sh
+  . "$SCRIPT_DIR/fm-afk-contract.sh"
+  if fm_afk_contract_away_present "$STATE" || { [ -e "$STATE/.afk" ] && [ "$(fm_afk_mode "$STATE")" = away ]; }; then
+    echo "error: remote local-only landing waits for the captain's return" >&2
+    exit 1
+  fi
+  if fm_local_content_in_ref "$PROJ" "refs/heads/$DEFAULT" "$BRANCH_TIP"; then
+    TIP=$(git -C "$PROJ" rev-parse "refs/heads/$DEFAULT")
+  fi
+fi
 REBASED=
 REBASE_TMP=
 rebase_cleanup() { [ -z "$REBASE_TMP" ] || rm -rf -- "$REBASE_TMP"; }
 trap 'rebase_cleanup; merge_control_cleanup' EXIT
-if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
+if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$TIP"; then
   refuse_diverged() {
     echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged): $1" >&2
     echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry. $BRANCH and $DEFAULT are unchanged." >&2
     exit 1
   }
-  if [ -n "$(git -C "$PROJ" branch -r --contains "$BRANCH" 2>/dev/null | head -1)" ]; then
+  if [ -n "$REMOTE_REF" ]; then
+    git -C "$PROJ" merge-base "$DEFAULT" "$BRANCH_TIP" >/dev/null || refuse_diverged "no shared history"
+  elif [ -n "$(git -C "$PROJ" branch -r --contains "$BRANCH_TIP" 2>/dev/null | head -1)" ]; then
     refuse_diverged "it is already published, so it is not rewritten"
   fi
   REBASE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-merge-rebase.XXXXXX")
   git clone -q --local --no-checkout "$PROJ" "$REBASE_TMP/c" || refuse_diverged "could not prepare a copy to rebase in"
   base_sha=$(git -C "$PROJ" rev-parse "$DEFAULT")
-  name=$(git -C "$PROJ" config user.name || git -C "$PROJ" log -1 --format=%an "$BRANCH")
-  email=$(git -C "$PROJ" config user.email || git -C "$PROJ" log -1 --format=%ae "$BRANCH")
-  git -C "$REBASE_TMP/c" checkout -q --detach "$(git -C "$PROJ" rev-parse "$BRANCH")" || refuse_diverged "could not prepare a copy to rebase in"
+  name=$(git -C "$PROJ" config user.name || git -C "$PROJ" log -1 --format=%an "$BRANCH_TIP")
+  email=$(git -C "$PROJ" config user.email || git -C "$PROJ" log -1 --format=%ae "$BRANCH_TIP")
+  git -C "$REBASE_TMP/c" checkout -q --detach "$BRANCH_TIP" || refuse_diverged "could not prepare a copy to rebase in"
   if ! git -C "$REBASE_TMP/c" -c "user.name=$name" -c "user.email=$email" rebase --quiet "$base_sha" >"$REBASE_TMP/rebase.out" 2>&1; then
     conflicts=$(git -C "$REBASE_TMP/c" diff --name-only --diff-filter=U | tr '\n' ' ')
     patch=$(git -C "$REBASE_TMP/c" rebase --show-current-patch 2>/dev/null | head -1 | cut -c1-80)
@@ -224,9 +277,8 @@ case "$hold_status" in
     ;;
 esac
 merge_status=0
-if [ -n "$REBASED" ]; then
-  OLD_TIP=$(git -C "$PROJ" rev-parse "$BRANCH")
-  git -C "$PROJ" update-ref "refs/heads/$BRANCH" "$REBASED" "$OLD_TIP" || {
+if [ -n "$REBASED" ] && [ -z "$REMOTE_REF" ]; then
+  git -C "$PROJ" update-ref "$BRANCH_REF" "$REBASED" "$BRANCH_TIP" || {
     echo "error: $BRANCH moved while rebasing; nothing landed" >&2
     exit 1
   }
@@ -234,7 +286,7 @@ if [ -n "$REBASED" ]; then
   # checked out: the worker's copy would show the new commits as reverted
   # changes and refuse to close. Carry that copy to the new tip with a
   # two-way merge, which keeps the worker's own uncommitted edits.
-  follow_checked_out_copies "$BRANCH" "$OLD_TIP" "$REBASED"
+  follow_checked_out_copies "$BRANCH" "$BRANCH_TIP" "$REBASED"
 fi
 # Attach the owner and request to the actual ref change. A failed merge or one
 # already up to date contributes no movement. Preserve landing if attribution
@@ -242,12 +294,12 @@ fi
 integration_note=$(FM_HOME="$FM_HOME" python3 "$SCRIPT_DIR/fm_integration.py" "$ID" "$DATA") \
   || integration_note="firstmate integrate [\"$ID\", null]"
 if [ -z "$INTEGRATION" ]; then
-  GIT_REFLOG_ACTION="$integration_note" git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
+  GIT_REFLOG_ACTION="$integration_note" git -C "$PROJ" merge --ff-only "$TIP" >/dev/null || merge_status=$?
 else
-  git -C "$PROJ" update-ref -m "$integration_note" "refs/heads/$DEFAULT" "$(git -C "$PROJ" rev-parse "$BRANCH")" \
+  git -C "$PROJ" update-ref -m "$integration_note" "refs/heads/$DEFAULT" "$TIP" \
     "$(git -C "$PROJ" rev-parse "$DEFAULT")" || merge_status=$?
 fi
-fm_lock_release "$MERGE_CONTROL_LOCK" || true
+[ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
@@ -259,6 +311,11 @@ if [ "$before" != "$after" ]; then
   integration_request=$(printf '%s' "${integration_note#firstmate integrate }" | jq -r '.[1] // empty') || integration_request=
   fm_diag_emit integration.ok "task=$ID" "project=$PROJ" "request=$integration_request"
   fm_merge_notify_waiters "$FM_HOME" "$STATE" "$ID" "$PROJ"
+  if [ -f "$DATA/secondmates.md" ]; then
+    sync_args=(--sync)
+    [ -z "$REMOTE_REF" ] || sync_args+=("${BRANCH%%/*}")
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-remote-land.sh" "${sync_args[@]}" </dev/null >/dev/null 2>&1 &
+  fi
 fi
 # A separate integration task can land a previously preserved fm/<id> branch.
 # Reconcile only matching queued rows whose exact branch is now contained in the
@@ -301,7 +358,7 @@ reconcile_preserved_branches() {
 $refs
 EOF
 }
-reconcile_preserved_branches
+[ -n "$REMOTE_REF" ] || reconcile_preserved_branches
 restart_after_landing() {
   local decl restart verify tries wait n=0
   decl="$CONFIG/restart/$(basename "$PROJ")"
@@ -327,13 +384,15 @@ restart_after_landing() {
   done
   echo "warning: $ID landed and $(basename "$PROJ") restarted, but it did not answer its verify command: $verify" >&2
 }
-# Retain the ready-head/integration facts through the same presentation owner.
-# A failed publication does not undo a successful merge; reads can reconstruct
-# ancestry and the warning requires reconciliation before cleanup.
-FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" presentation "$ID" --reconcile >/dev/null \
-  || echo "warning: $ID landed; progress receipt needs owner reconciliation before cleanup" >&2
-# Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
-[ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
+if [ -z "$REMOTE_REF" ]; then
+  # Retain the ready-head/integration facts through the same presentation owner.
+  # A failed publication does not undo a successful merge; reads can reconstruct
+  # ancestry and the warning requires reconciliation before cleanup.
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" presentation "$ID" --reconcile >/dev/null \
+    || echo "warning: $ID landed; progress receipt needs owner reconciliation before cleanup" >&2
+  # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
+  [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
+fi
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
 [ -n "$INTEGRATION" ] || { restart_after_landing; exit 0; }
 name=$(git -C "$PROJ" config user.name || git -C "$PROJ" show -s --format=%an "$INTEGRATION")
@@ -344,5 +403,5 @@ if git -C "$PROJ" -c "user.name=$name" -c "user.email=$email" rebase --quiet "$D
 else
   git -C "$PROJ" rebase --abort || true
   echo "warning: $BRANCH landed on $DEFAULT, but rebasing $INTEGRATION onto it conflicted and was aborted; $INTEGRATION is unchanged. Resolve with: git -C $PROJ rebase $DEFAULT" >&2
-  exit 3
+  [ -n "$REMOTE_REF" ] || exit 3
 fi

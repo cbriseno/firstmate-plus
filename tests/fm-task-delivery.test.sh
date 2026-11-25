@@ -1034,6 +1034,50 @@ EOF
   pass "fm-spawn/fm-promote: leftover Task placeholders are refused until both subsections are filled"
 }
 
+# A step the brief asks for beyond the requirements must cite the captain's own
+# words; a step with no quote, or a quote the captain never said, is refused at
+# spawn, and a brief written before the section existed only warns.
+test_requested_steps_cite_the_captain_words() {
+  local rec home proj fakebin id out status
+  rec=$(make_home requested-steps)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_steps_brief() {  # <id> <steps-block-or-empty>
+    local sid=$1 steps=$2
+    write_brief "$home" "$sid" no-mistakes
+    {
+      printf '# Task\n## Captain'"'"'s intent\nReparte el trabajo entre las dos PCs.\n« no, no, no, nada de medir, la idea es coordinar »\n\n'
+      [ -z "$steps" ] || printf '## Requested steps\n%s\n\n' "$steps"
+      printf '## Firstmate spec\nCoordina.\n\n# Definition of done\nDelivery contract: mode=no-mistakes\n'
+    } > "$home/data/$sid/brief.md"
+  }
+  id='steps-uncited'
+  write_steps_brief "$id" '- comparar corridas de pruebas con datos medidos'
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail 'a step without the captain words was accepted'
+  assert_contains "$out" 'step without the captain' 'refusal did not name the missing words'
+  assert_contains "$out" 'comparar corridas de pruebas' 'refusal did not name the step'
+  assert_absent "$home/state/$id.meta" 'refused steps wrote task metadata'
+  id='steps-invented'
+  write_steps_brief "$id" '- medir tiempos «mide cada corrida»'
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail 'a quote the captain never said was accepted'
+  assert_contains "$out" 'step without the captain' 'invented quote was not refused'
+  id='steps-cited'
+  write_steps_brief "$id" '- repartir el trabajo «la idea es coordinar»
+- none beyond these'
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off) || true
+  assert_not_contains "$out" 'step without the captain' 'a verbatim citation was refused'
+  assert_present "$home/data/$id/launch-brief.md" 'a cited step brief did not launch'
+  id='steps-legacy'
+  write_steps_brief "$id" ''
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off) || true
+  assert_contains "$out" 'has no ## Requested steps section; continuing legacy brief' 'legacy brief was not warned'
+  assert_present "$home/data/$id/launch-brief.md" 'a legacy brief without the section did not launch'
+  pass "fm-spawn: requested steps must cite the captain's words, legacy briefs only warn"
+}
+
 # Exercise the serialized input a worker is told to pass to no-mistakes, not
 # just the presence of words somewhere in its much larger launch brief.
 # No live model or pipeline is needed: spawn publishes this exact input before
@@ -1923,5 +1967,6 @@ test_spawn_refuses_a_registry_forge_it_cannot_read
 test_promotion_carries_the_forge_binding
 test_forge_forgejo_rides_the_same_binding
 test_spawn_and_promote_require_filled_task_subsections
+test_requested_steps_cite_the_captain_words
 test_project_mode_resolves_branch_prefix
 echo "# all fm-task-delivery tests passed"

@@ -415,9 +415,9 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
       continue;
     }
     if (kind === "check") {
-      // The primary owns preparing briefs and reconciling local branches.
-      // Preserve the row for it even if the optional engine is away.
-      if (key.startsWith("ready-work:primary:")) {
+      // Dispatch obligations and instructions addressed to the primary stay
+      // queued for that recipient, including while the optional engine is away.
+      if (key.startsWith("ready-work:primary:") || /^overseer-[0-9]+-[0-9]+$/.test(key)) {
         needsDecisionKeys.push(key);
         continue;
       }

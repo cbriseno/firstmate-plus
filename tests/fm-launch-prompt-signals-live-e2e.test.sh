@@ -62,7 +62,9 @@ cleanup_all() {
 }
 trap cleanup_all EXIT
 
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1"; }
 
 fm_live_gate opt-in FM_LAUNCH_PROMPT_SIGNALS_LIVE tmux
 

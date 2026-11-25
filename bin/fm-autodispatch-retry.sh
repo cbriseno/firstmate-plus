@@ -31,7 +31,10 @@ done
 [ -f "$marker" ] || exit 0
 case ${rc:-3} in
   0|75) printf '%s\n' "$out"; rm -f -- "$marker"; exit 0 ;;
-  3) out='not auto-launchable after waiting for allocation' ;;
+  77) rm -f -- "$marker"; exit 0 ;;  # paused: the watcher relaunches the still-queued task once resumed
+  3) # Keep the dispatcher's own reason: the primary decides from it, not from a bare refusal.
+     reason=$(printf '%s\n' "${out:-}" | sed -n 's/^not auto-launchable: //p' | tail -n 1)
+     out="not auto-launchable after waiting for allocation: ${reason:-no reason reported}" ;;
 esac
 printf '%s\n' "${out:-automatic dispatch failed}" | python3 "$SCRIPT_DIR/fm-redact-log.py" | tail -n 1 | cut -c1-300 > "$STATE/.autodispatch-failed-$id"
 rm -f -- "$marker"

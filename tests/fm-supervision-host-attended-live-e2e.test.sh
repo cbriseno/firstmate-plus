@@ -183,7 +183,7 @@ commands_since() {  # <lab> <epoch>
     | .message.content[]? | select(.type == "tool_use" and .name == "Bash") | .input.command' "$t" 2>/dev/null
 }
 acked_since() {  # <lab> <epoch>: a turn drained and ran its generation-bound acknowledgement
-  commands_since "$1" "$2" | grep -q 'fm-wake-drain.sh --ack-through [0-9]* --recovery-generation'
+  commands_since "$1" "$2" | grep -q 'fm-wake-drain.sh --ack [0-9]* --recovery-generation'
 }
 turn_idle() {  # <lab> <after-epoch>: a turn ended at or after the epoch
   local t
@@ -260,7 +260,7 @@ claude_ready_state() {  # <socket> <target> -> diagnostic state; success when re
 start_primary() {  # <lab>
   local lab=$1 sock screen i started prompt readiness=unknown last_seen=none
   sock="$SOCKET-$(basename "$lab")"
-  prompt='This is an isolated Firstmate test lab, not a real fleet. Reply with exactly READY now and use no tools. Later, whenever a "Stop hook feedback" message wakes you, do exactly this and nothing else: run `bin/fm-wake-drain.sh` once with the Bash tool, then run the exact `bin/fm-wake-drain.sh --ack-through ...` command that its WAKE_ACK_REQUIRED line prints, then reply with exactly ACKED. Never run any other command, never run bin/fm-watch-arm.sh, and never use any other tool.'
+  prompt='This is an isolated Firstmate test lab, not a real fleet. Reply with exactly READY now and use no tools. Later, whenever a "Stop hook feedback" message wakes you, do exactly this and nothing else: run `bin/fm-wake-drain.sh` once with the Bash tool, then read every complete wake line, then run `bin/fm-wake-drain.sh --ack SEQUENCE --recovery-generation GENERATION` for each presented sequence using the generation in its WAKE_ACK_REQUIRED line, then reply with exactly ACKED. Never run any other command, never run bin/fm-watch-arm.sh, and never use any other tool.'
   started=$(date +%s)
   tmux -L "$sock" new-session -d -s primary -x 220 -y 50 -c "$lab/fm" \
     "sh -c '. \"$lab/env\"; printf \"%s\\n\" \"\$\$\" > state/.lock; exec claude --model $MODEL --effort low --dangerously-skip-permissions'" \

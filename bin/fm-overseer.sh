@@ -13,7 +13,9 @@
 #                                move an existing hand-made overseer directory
 #                                onto the official contract (see below)
 #   fm-overseer.sh intervention record --category TOKEN --observed TOKEN
-#       --evidence REF --action TOKEN --root-task yes|no
+#       --evidence REF --action TOKEN [--root-task TASK-ID] [--level captain]
+#       The category is the general cause; each record is also a correction
+#       in the home's correction ledger (bin/fm_nudge.py).
 #   fm-overseer.sh intervention export OUTPUT.zip
 #       Tokens are anonymous short identifiers (letters, digits, dot, dash,
 #       underscore; at most 40 characters). The reference is anonymized.
@@ -22,8 +24,9 @@
 #       to detect names or all private content.
 #   fm-overseer.sh alert TEXT    tell the captain through the installation's
 #                                notification command (event overseer-alert;
-#                                held and delivered later inside quiet hours,
-#                                see bin/fm-notify.py); TEXT is one plain line
+#                                requires a delivery receipt; held alerts
+#                                report pending delivery, see bin/fm-notify.py);
+#                                TEXT is one plain line
 #                                of at most 240 characters, never a secret
 #   fm-overseer.sh status        report configuration and session liveness
 #   fm-overseer.sh doctor        read prerequisites and local diagnostic evidence
@@ -41,12 +44,12 @@
 #   fm-overseer.sh relay-ready START_FILE
 #                                successor: take over the session record and
 #                                confirm readiness to the outgoing overseer
-#       The watch belongs to the installation, not to a session: it keeps
-#       running across the relay and only changes which pane it wakes. The
+#       Run relay-ready as the successor session’s first background watch.
+#       Pending events remain in the installation across relay. The
 #       relay script is FM_RELAY_LITE, else the extensions runtime under
 #       $XDG_DATA_HOME (default ~/.local/share).
 #   fm-overseer.sh stop          close the recorded overseer session
-#   fm-overseer.sh hook          print the generated Stop-hook settings
+#   fm-overseer.sh watch         run inside a native background task in the overseer session
 #   fm-overseer.sh -h|--help     print this text
 #
 # setup creates <dir> when missing and writes three untracked entries in it:
@@ -54,9 +57,7 @@
 #   AGENTS.md       symlink to the same file (Codex loads it)
 #   firstmate-home  one line: the physical path of the home being overseen,
 #                   FM_HOME when set, otherwise this script's code root
-#   .codex/hooks.json  Stop hook that arms the overseer's event wait
-#   .claude/settings.json  the same Stop hook for Claude, so any session
-#                   started there, including a relay successor, arms it
+# setup retires the previous generated Stop hooks and their detached wait.
 # Both loaders are symlinks to the contract itself, so a repository update
 # reaches the next overseer session without rerunning setup. They are not an
 # @-import: Claude treats an import that resolves outside its directory as an
@@ -65,8 +66,7 @@
 # setup refuses, changing nothing, when <dir> or any ancestor holds
 # SUPERVISOR.md (an agent there would also load a home's or a task copy's
 # instructions), or when an entry exists with other content. An entry that
-# already matches is left alone, so setup is idempotent, and a Stop hook an
-# earlier setup generated is rewritten; it prints one line per
+# already matches is left alone. Setup prints one line per
 # entry written and a final OVERSEER_READY line.
 #
 # adopt is for a directory where a person already runs a hand-made overseer.
@@ -136,35 +136,6 @@ refuse() {
   exit 1
 }
 
-hook_definition() {
-  python3 - "$script_dir/fm-overseer-arm.py" "${1:-${FM_HOME:-$code_root}}" "$code_root" "${FM_STATE_OVERRIDE:-}" "${FM_CONFIG_OVERRIDE:-}" "${FM_DATA_OVERRIDE:-}" "${FM_PROJECTS_OVERRIDE:-}" <<'PY'
-import json, shlex, sys
-env = ['FM_HOME=' + sys.argv[2], 'FM_ROOT_OVERRIDE=' + sys.argv[3]]
-for key, value in zip(('FM_STATE_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_PROJECTS_OVERRIDE'), sys.argv[4:]):
-    env.append(key + '=' + value)
-command = 'env ' + ' '.join(shlex.quote(item) for item in env) + ' python3 ' + shlex.quote(sys.argv[1]) + ' guard'
-print(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': command, 'timeout': 90}]}]}}))
-PY
-}
-
-# True when hook file $1 is a Stop hook an earlier setup generated: setup
-# rewrites its own output (another version, or the same home reached through
-# explicit state/config paths) and refuses anything else.
-generated_hook() {
-  python3 - "$1" <<'PY'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1], encoding='utf-8'))
-    hooks = data['hooks']['Stop'][0]['hooks']
-    ok = (list(data) == ['hooks'] and list(data['hooks']) == ['Stop'] and len(data['hooks']['Stop']) == 1
-          and len(hooks) == 1 and hooks[0].get('type') == 'command'
-          and hooks[0].get('command', '').endswith('/bin/fm-overseer-arm.py guard'))
-except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
-    ok = False
-sys.exit(0 if ok else 1)
-PY
-}
-
 # Print the first ancestor of physical directory $1, or $1 itself, that holds
 # SUPERVISOR.md; print nothing when none does.
 supervisor_ancestor() {
@@ -192,7 +163,7 @@ check_link() {
 }
 
 setup() {
-  local dir=${1:?usage: fm-overseer.sh setup <dir>} home contract existing ancestor claude agents homefile hook hooksfile hookswrite claudefile claudewrite
+  local dir=${1:?usage: fm-overseer.sh setup <dir>} home contract existing ancestor claude agents homefile settings
   contract="$code_root/overseer/AGENTS.md"
   [ -f "$contract" ] || refuse "contract missing: $contract"
   home=${FM_HOME:-$code_root}
@@ -219,33 +190,19 @@ setup() {
   else
     homefile=1
   fi
-  hook=$(hook_definition "$home") || refuse 'cannot construct the Codex Stop hook'
-  hooksfile="$dir/.codex/hooks.json"
-  hookswrite=
-  [ ! -L "$dir/.codex" ] || refuse "$dir/.codex is a symlink"
-  [ ! -e "$dir/.codex" ] || [ -d "$dir/.codex" ] || refuse "$dir/.codex is not a directory"
+  for settings in .codex .claude; do
+    [ ! -L "$dir/$settings" ] || refuse "$dir/$settings is a symlink"
+    [ ! -e "$dir/$settings" ] || [ -d "$dir/$settings" ] || refuse "$dir/$settings is not a directory"
+  done
   [ ! -e "$dir/.codex/config.toml" ] && [ ! -L "$dir/.codex/config.toml" ] ||
     refuse "$dir/.codex/config.toml carries separate settings; choose another directory"
-  if [ -e "$hooksfile" ] || [ -L "$hooksfile" ]; then
-    if [ -L "$hooksfile" ] || [ ! -f "$hooksfile" ] || { [ "$(cat "$hooksfile")" != "$hook" ] && ! generated_hook "$hooksfile"; }; then
-      refuse "$hooksfile already exists with different content; move it away first"
-    fi
-  else
-    hookswrite=1
-  fi
-  [ ! -f "$hooksfile" ] || [ "$(cat "$hooksfile")" = "$hook" ] || hookswrite=1
-  claudefile="$dir/.claude/settings.json"
-  claudewrite=
-  [ ! -L "$dir/.claude" ] || refuse "$dir/.claude is a symlink"
-  [ ! -e "$dir/.claude" ] || [ -d "$dir/.claude" ] || refuse "$dir/.claude is not a directory"
-  if [ -e "$claudefile" ] || [ -L "$claudefile" ]; then
-    if [ -L "$claudefile" ] || [ ! -f "$claudefile" ] || { [ "$(cat "$claudefile")" != "$hook" ] && ! generated_hook "$claudefile"; }; then
-      refuse "$claudefile already exists with different content; move it away first"
-    fi
-  else
-    claudewrite=1
-  fi
-  [ ! -f "$claudefile" ] || [ "$(cat "$claudefile")" = "$hook" ] || claudewrite=1
+  for settings in .codex/hooks.json .claude/settings.json; do
+    python3 "$script_dir/fm-overseer-arm.py" remove-hook "$dir/$settings" --check || refuse "cannot read $dir/$settings"
+  done
+  FM_HOME="$home" python3 "$script_dir/fm-overseer-arm.py" stop-legacy || refuse 'could not retire the legacy overseer watch'
+  for settings in .codex/hooks.json .claude/settings.json; do
+    python3 "$script_dir/fm-overseer-arm.py" remove-hook "$dir/$settings" || refuse "cannot update $dir/$settings"
+  done
   if [ -n "$claude" ]; then
     ln -s -- "$contract" "$dir/CLAUDE.md"
     echo "OVERSEER_SETUP: linked $dir/CLAUDE.md to $contract"
@@ -257,16 +214,6 @@ setup() {
   if [ -n "$homefile" ]; then
     printf '%s\n' "$home" >"$dir/firstmate-home"
     echo "OVERSEER_SETUP: wrote $dir/firstmate-home naming $home"
-  fi
-  if [ -n "$hookswrite" ]; then
-    mkdir -p "$dir/.codex"
-    printf '%s\n' "$hook" > "$hooksfile"
-    echo "OVERSEER_SETUP: wrote $hooksfile"
-  fi
-  if [ -n "$claudewrite" ]; then
-    mkdir -p "$dir/.claude"
-    printf '%s\n' "$hook" > "$claudefile"
-    echo "OVERSEER_SETUP: wrote $claudefile"
   fi
   echo "OVERSEER_READY: $dir oversees $home; a Claude or Codex session started there loads the overseer contract"
 }
@@ -359,10 +306,13 @@ status() {
 }
 
 session_action() {
-  local action=$1 state record backend target extra live ses name ident container seeded ids pane command prompt arg quoted located session
+  local action=$1 state record backend target extra live ses name ident container seeded ids pane command prompt arg quoted located session setting harness_bin
   read_config
   [ "$action" != start ] || [ "$overseer_enabled" = on ] || { echo 'overseer is disabled'; return 0; }
   [ "$action" != start ] || [ -f "$script_dir/fm-overseer-watch.sh" ] || refuse 'overseer watch is unavailable; update the installation'
+  if [ "$action" = start ]; then
+    [ -n "$overseer_dir" ] || refuse 'set directory in config/overseer'
+  fi
   state=${FM_STATE_OVERRIDE:-${FM_HOME:-$code_root}/state}/overseer
   mkdir -p "$state"
   # shellcheck source=bin/fm-wake-lib.sh
@@ -373,6 +323,15 @@ session_action() {
   fm_lock_acquire_wait_max "$OVERSEER_SESSION_LOCK" 10 || refuse 'session is busy; retry'
   trap 'fm_lock_release "$OVERSEER_SESSION_LOCK"' EXIT
   record="$state/session"
+  if [ "$action" = start ]; then
+    if python3 "$script_dir/fm-overseer-arm.py" locked; then
+      echo 'overseer watch is already running; preserving its session'
+      return 0
+    else
+      [ "$?" -eq 3 ] || refuse 'cannot inspect the overseer watch lock'
+    fi
+  fi
+  [ "$action" != start ] || setup "$overseer_dir"
   [ "$action" != stop ] || : > "$state/stopping"
   if [ -f "$record" ]; then
     IFS=' ' read -r backend target extra < "$record" || refuse 'cannot read session record'
@@ -397,13 +356,11 @@ session_action() {
     return 0
   fi
   if [ "$action" = stop ]; then echo 'overseer stopped'; return 0; fi
-  [ -n "$overseer_dir" ] || refuse 'set directory in config/overseer'
-  setup "$overseer_dir"
   overseer_dir=$(CDPATH='' cd -- "$overseer_dir" && pwd -P)
   FM_HOME=${FM_HOME:-$code_root}
   FM_HOME=$(CDPATH='' cd -- "$FM_HOME" && pwd -P)
   export FM_HOME
-  command -v "$overseer_harness" >/dev/null 2>&1 || refuse "$overseer_harness is unavailable"
+  harness_bin=$(command -v "$overseer_harness") || refuse "$overseer_harness is unavailable"
   if [ "$overseer_harness" = claude ]; then
     "$script_dir/fm-claude-trust.sh" --overseer-dir "$overseer_dir" "$FM_HOME" >/dev/null || refuse 'could not register workspace trust'
   fi
@@ -450,28 +407,20 @@ EOF
     fm_backend_kill "$backend" "$target" || true
     refuse 'cannot record overseer session'
   fi
-  python3 - "$state/session-env.json" <<'PY' || refuse 'cannot record the session connection context'
-import json, os, sys, tempfile
-keys = ('PATH', 'TMUX', 'TMUX_TMPDIR', 'HERDR_SESSION', 'FM_BACKEND',
-        'FM_OVERSEER_POLL', 'FM_OVERSEER_WAIT')
-path = sys.argv[1]
-fd, temporary = tempfile.mkstemp(prefix='.session-env-', dir=os.path.dirname(path))
-try:
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        json.dump({key: os.environ.get(key, '') for key in keys}, stream)
-    os.replace(temporary, path)
-finally:
-    if os.path.exists(temporary):
-        os.unlink(temporary)
-PY
   rm -f -- "$state/stopping"
-  prompt='Read your overseer contract and begin monitoring the Firstmate home named in firstmate-home. The Stop hook arms the watch at the end of each turn; you do not need to arm it during a turn.'
+  printf -v prompt 'Read your overseer contract and start a native background command in this session: bash %q watch. Handle the result and rearm the background command after each event.' "$script_dir/fm-overseer.sh"
   printf -v command 'export FM_HOME=%q' "$FM_HOME"
   if [ -n "${FM_STATE_OVERRIDE:-}" ]; then printf -v arg ' FM_STATE_OVERRIDE=%q' "$FM_STATE_OVERRIDE"; command=$command$arg; fi
   if [ -n "${FM_CONFIG_OVERRIDE:-}" ]; then printf -v arg ' FM_CONFIG_OVERRIDE=%q' "$FM_CONFIG_OVERRIDE"; command=$command$arg; fi
   if [ -n "${FM_DATA_OVERRIDE:-}" ]; then printf -v arg ' FM_DATA_OVERRIDE=%q' "$FM_DATA_OVERRIDE"; command=$command$arg; fi
   if [ -n "${FM_PROJECTS_OVERRIDE:-}" ]; then printf -v arg ' FM_PROJECTS_OVERRIDE=%q' "$FM_PROJECTS_OVERRIDE"; command=$command$arg; fi
-  printf -v arg '; %q' "$overseer_harness"; command=$command$arg
+  for setting in FM_OVERSEER_POLL FM_OVERSEER_WAIT FM_OVERSEER_ROUND; do
+    if [ -n "${!setting:-}" ]; then
+      printf -v arg ' %s=%q' "$setting" "${!setting}"
+      command=$command$arg
+    fi
+  done
+  printf -v arg '; %q' "$harness_bin"; command=$command$arg
   [ "$overseer_harness" != codex ] || command="$command --no-daemon"
   case "$overseer_harness:$overseer_permission" in
     codex:auto) command="$command --approve-for-me" ;;
@@ -493,7 +442,7 @@ PY
   "$script_dir/fm-startup-dialogs.sh" "$backend" "$target" "$overseer_harness" "$overseer_dir" 45 "$name"
   live=$(fm_backend_agent_state "$backend" "$target")
   [ "$live" = alive ] || refuse "overseer launch state is $live; session record retained"
-  echo 'overseer started; its Stop hook arms the watch when the first turn ends'
+  echo 'overseer started; its session arms its own background watch'
 }
 
 # place: keep the overseer's Herdr pane right of the primary's, in its tab.
@@ -521,16 +470,20 @@ relay_out() {
     "${overseer_model:--}" "${overseer_effort:--}" "$state/handoff.md" -
 }
 
-# Successor: point the running watch at this pane, then confirm with its PID.
+# Retire a wait owned by the predecessor before changing the endpoint.
 relay_ready() {
-  local state relay pid
+  local state relay located
   state=${FM_STATE_OVERRIDE:-${FM_HOME:-$code_root}/state}/overseer
   read_config
   relay=$(relay_script)
   [ -x "$relay" ] || refuse "the extensions relay is not installed at $relay"
-  python3 "$script_dir/fm-overseer-arm.py" adopt || refuse 'could not take over the session record and arm the watch'
-  pid=$(sed -n 1p "$state/watch.lock")
-  exec "$relay" --ready "$overseer_dir" "$1" "$pid"
+  located=$(bash "$script_dir/fm-overseer-primary.sh" --locate "$$") || refuse 'cannot find the successor pane'
+  case "$located" in "herdr "*:*) ;; *) refuse 'the overseer relay needs Herdr' ;; esac
+  setup "$overseer_dir"
+  python3 "$script_dir/fm-overseer-arm.py" stop || refuse 'could not stop the predecessor watch'
+  printf '%s\n' "$located" > "$state/session.tmp"
+  mv -f -- "$state/session.tmp" "$state/session"
+  exec python3 "$script_dir/fm-overseer-arm.py" watch "$relay" --ready "$overseer_dir" "$1"
 }
 
 place() {
@@ -587,7 +540,7 @@ case "${1:-}" in
     exec python3 "$script_dir/fm-notify.py" --home "$FM_HOME" --event overseer-alert --text "$1" ;;
   status) shift; [ "$#" -eq 0 ] || refuse "status takes no arguments"; status ;;
   doctor) shift; [ "$#" -eq 0 ] || refuse "doctor takes no arguments"; exec python3 "$script_dir/fm-overseer-doctor.py" ;;
-  hook) shift; [ "$#" -eq 0 ] || refuse "hook takes no arguments"; hook_definition ;;
+  watch) shift; [ "$#" -eq 0 ] || refuse "watch takes no arguments"; exec python3 "$script_dir/fm-overseer-arm.py" watch ;;
   place) shift; [ "$#" -eq 0 ] || refuse "place takes no arguments"; place ;;
   relay) shift; [ "$#" -eq 0 ] || refuse "relay takes no arguments"; relay_out ;;
   relay-ready) shift; [ "$#" -eq 1 ] || refuse "usage: fm-overseer.sh relay-ready START_FILE"; relay_ready "$1" ;;

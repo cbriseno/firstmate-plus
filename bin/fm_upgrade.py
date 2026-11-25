@@ -38,6 +38,11 @@ def run():
             action = re.search(r'^Action: (.+)$', section, re.M)
             if not heading or not action:
                 raise ValueError('upgrade command needs a dated id and Action')
+            unless = re.search(r'^Unless-exists: (\S+)$', section, re.M)
+            if unless and (os.path.isabs(unless[1]) or '..' in Path(unless[1]).parts):
+                raise ValueError('Unless-exists must be a path inside the home')
+            if unless and (home / unless[1]).exists():
+                continue
             entries.append((heading[1], action[1], command[1]))
     folder = home / 'data/upgrades'
 

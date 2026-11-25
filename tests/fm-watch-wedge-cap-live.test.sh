@@ -82,7 +82,9 @@ cleanup() {
   fi
   fm_test_cleanup
 }
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup; }
 trap cleanup EXIT
 
 # say <text>: one timestamped transcript line, on stdout and in the transcript.

@@ -20,8 +20,8 @@ The command's header and help own detection, per-home records and application.
    If the native rule file action runs, restart the primary again as that entry directs.
 
 On a managed Mac, the [read-only tool inventory](README.md#required-versus-optional-tools) can check the tools already available to the updated installation.
-To enable the optional overseer after updating, follow the [overseer setup and diagnostic instructions](README.md#optional-overseer).
-If an installation already runs a hand-made overseer, move it with `fm-overseer.sh adopt` as described in [the same section](README.md#optional-overseer); nothing is adopted automatically.
+The `official-overseer` entry below offers the optional overseer once to each installation that has no `config/overseer`, including a hand-made overseer to adopt; see the [overseer setup and diagnostic instructions](README.md#optional-overseer).
+Nothing is adopted, configured or started without the operator's yes.
 
 ## Client instructions for the next package
 
@@ -115,3 +115,26 @@ Then the primary, or a worker it dispatches, migrates the installation's existin
 From then on, `SUPERVISOR.md` section 6 writes every new rule straight to its audience's file, so the notes do not refill.
 
 Command: `bash bin/fm-home-instructions.sh .`
+
+## official-overseer - 2026-11-24
+
+Action: Offer the official overseer: adopt an existing hand-made one, or set up a new one.
+
+The overseer is an optional agent session that watches the primary; the [README section](README.md#optional-overseer) describes it.
+A home that already has `config/overseer` runs or has chosen the official overseer and is not offered this entry.
+Accepting runs only a read-only status command; the steps below change nothing until the operator has answered their questions.
+The primary then does the following, working from the installation root with its `FM_HOME`:
+
+1. Ask whether the operator already runs an overseer session built by hand.
+2. Ask which harness to use, `claude` or `codex`, and for an absolute directory outside every Firstmate checkout.
+   For a hand-made overseer, that is its existing directory.
+3. If a hand-made overseer exists, run `bash bin/fm-overseer.sh adopt <directory>`, adding `--handoff <file>` for each old handoff file, then set `harness=` in the `config/overseer` it wrote.
+   Otherwise create `config/overseer` with `enabled=on`, `harness=<harness>` and `directory=<directory>`.
+4. Run `bash bin/fm-overseer.sh doctor`, then `start`, then `status`, and show the operator the result.
+5. After an adopted overseer shows a live session and an armed watch, repeat the adopt command with `--old-watch-pid <pid>` only if the operator names the old watcher, as the README describes.
+   On a Mac, none of this needs administrator rights.
+
+If the operator declines, nothing changes and the offer is not repeated; the same steps remain available from the README.
+
+Unless-exists: config/overseer
+Command: `bash bin/fm-overseer.sh status`

@@ -15,15 +15,6 @@ make_home() {  # <dir>
   mkdir -p "$1" && : >"$1/SUPERVISOR.md"
 }
 
-write_connection() {
-  mkdir -p "$1/state/overseer"
-  python3 - "$1/state/overseer/session-env.json" <<'PY'
-import json, os, sys
-keys = ('PATH', 'TMUX', 'TMUX_TMPDIR', 'HERDR_SESSION', 'FM_BACKEND', 'FM_OVERSEER_POLL', 'FM_OVERSEER_WAIT')
-json.dump({key: os.environ.get(key, '') if key == 'PATH' else '' for key in keys}, open(sys.argv[1], 'w'))
-PY
-}
-
 test_setup_writes_native_loaders() {
   local home dir out real_home
   home="$TMP_ROOT/home-a"
@@ -34,8 +25,8 @@ test_setup_writes_native_loaders() {
   [ "$(readlink "$dir/CLAUDE.md")" = "$CONTRACT" ] || fail "CLAUDE.md does not link to the contract"
   [ "$(readlink "$dir/AGENTS.md")" = "$CONTRACT" ] || fail "AGENTS.md does not link to the contract"
   [ "$(cat "$dir/firstmate-home")" = "$real_home" ] || fail "firstmate-home does not name the home"
-  [ -f "$dir/.codex/hooks.json" ] || fail 'setup did not install the Stop hook'
-  cmp -s "$dir/.codex/hooks.json" "$dir/.claude/settings.json" || fail 'setup did not give Claude the same Stop hook'
+  [ ! -e "$dir/.codex/hooks.json" ] && [ ! -e "$dir/.claude/settings.json" ] ||
+    fail 'a fresh setup still installs a Stop hook'
   cmp -s "$dir/CLAUDE.md" "$CONTRACT" || fail "Claude's loader does not resolve to the contract text"
   assert_contains "$out" "OVERSEER_READY:" "setup did not report readiness"
   pass "setup links both harness loaders to the contract and names the home"
@@ -44,181 +35,43 @@ test_setup_writes_native_loaders() {
   assert_not_contains "$out" "OVERSEER_SETUP:" "a second setup rewrote an entry that already matched"
   pass "setup is idempotent"
 
-  # A primary start passes explicit state/config paths: setup rewrites its own
-  # earlier hook instead of refusing to start the overseer.
-  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" bash "$OVERSEER" setup "$dir" 2>&1) ||
-    fail "setup refused the hook an earlier setup generated: $out"
-  assert_contains "$(cat "$dir/.codex/hooks.json")" "FM_STATE_OVERRIDE=$home/state" 'setup did not rewrite its own Codex hook'
-  cmp -s "$dir/.codex/hooks.json" "$dir/.claude/settings.json" || fail 'setup did not rewrite its own Claude hook'
-  pass "setup rewrites the Stop hook an earlier setup generated"
+  mkdir -p "$dir/.codex" "$dir/.claude"
+  cat > "$dir/.codex/hooks.json" <<'JSON'
+{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"env FM_HOME='/old home' python3 '/old root/bin/fm-overseer-arm.py' guard","timeout":90}]}]}}
+JSON
+  jq '.permissions = {"allow":["Bash(date)"]} | .hooks.Stop[0].hooks += [{"type":"command","command":"date"}]' \
+    "$dir/.codex/hooks.json" > "$dir/.claude/settings.json"
+  out=$(FM_HOME="$home" bash "$OVERSEER" setup "$dir" 2>&1) || fail "upgrade setup refused old generated hooks: $out"
+  [ ! -e "$dir/.codex/hooks.json" ] || fail 'upgrade setup retained the old Codex hook'
+  jq -e '.permissions.allow == ["Bash(date)"] and [.hooks.Stop[].hooks[].command] == ["date"]' \
+    "$dir/.claude/settings.json" >/dev/null || fail 'upgrade setup changed custom settings or retained the old hook'
+  pass 'setup removes old generated Stop commands and preserves adjacent user settings'
 }
 
-test_watch_arm_and_stop() (
-  local lab home out
-  lab="$TMP_ROOT/watch-code"
-  home="$TMP_ROOT/watch-home"
-  mkdir -p "$lab/bin" "$lab/alias" "$home/state"
-  write_connection "$home"
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  if FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1; then
-    fail 'turn guard accepted a missing watch'
-  else
-    [ "$?" -eq 2 ] || fail 'missing watch must block the turn'
-  fi
-  printf 'while :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  out=$(FM_HOME="$home" python3 "$lab/alias/../bin/fm-overseer-arm.py" arm 2>&1) || fail "watch did not start: $out"
-  assert_contains "$out" 'watch armed' 'arm did not confirm a listener'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm 2>&1) || fail "second arm failed: $out"
-  assert_contains "$out" 'watch already' 'a second arm did not reuse the listener'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" status)
-  assert_contains "$out" 'watch: armed' 'status omitted the live listener'
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop || fail 'watch did not stop'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" status)
-  assert_contains "$out" 'watch: not armed' 'stopped listener remains active'
-  : > "$home/state/overseer/stopping"
-  if FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1; then
-    fail 'a late Stop hook restarted the watch after shutdown'
-  fi
-  pass 'watch arm is idempotent and stop reaps the listener'
-)
-
-test_watch_delivers_event() (
-  local lab home out i
-  lab="$TMP_ROOT/event-code"
-  home="$TMP_ROOT/event-home"
+test_watch_delivers_to_its_session() (
+  local lab="$TMP_ROOT/watch-code" home="$TMP_ROOT/watch-home" out pid
   mkdir -p "$lab/bin" "$home/state/overseer"
-  write_connection "$home"
   cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  cat > "$lab/bin/fm-overseer-watch.sh" <<'SH'
-if [ "${1:-}" = --ack ]; then printf '%s\n' "$2" > "$FM_EVENT_TEST_ACK"; rm -f -- "$FM_HOME/state/overseer/pending-event"; exit 0; fi
-sleep 1
-printf 'event_id=123-456\ntask needs attention\n' > "$FM_HOME/state/overseer/pending-event"
-cat "$FM_HOME/state/overseer/pending-event"
-SH
-  cat > "$lab/bin/fm-backend.sh" <<'SH'
-fm_backend_send_text_submit() { printf '%s\n' "$3" > "$FM_EVENT_TEST_OUTPUT"; printf empty; }
-SH
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  export FM_EVENT_TEST_OUTPUT="$home/event"
-  export FM_EVENT_TEST_ACK="$home/ack"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm 2>&1) || fail "event wait failed to start: $out"
-  for i in $(seq 1 120); do
-    [ -s "$home/event" ] && break
-    sleep 1
-  done
-  [ -s "$home/event" ] || fail 'watch event was not delivered to the session'
-  assert_contains "$(cat "$home/event")" 'pending-event' 'doorbell did not point to the pending event'
-  [ ! -e "$home/ack" ] || fail 'event was acknowledged before the agent acted'
-  if FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1; then fail 'pending event did not block the turn'; fi
-  FM_HOME="$home" bash "$lab/bin/fm-overseer-watch.sh" --ack 123-456
-  [ "$(cat "$home/ack")" = '123-456' ] || fail 'agent acknowledgement failed'
-  for i in $(seq 1 120); do
-    out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" status)
-    case "$out" in *'watch: not armed'*) break ;; esac
-    sleep 1
-  done
-  mv "$home/ack" "$home/ack-first"
-  # shellcheck disable=SC2016 # the fake backend expands this variable at delivery time
-  printf 'fm_backend_send_text_submit() { : > "$FM_EVENT_TEST_ATTEMPT"; printf unknown; }\n' > "$lab/bin/fm-backend.sh"
-  export FM_EVENT_TEST_ATTEMPT="$home/attempt"
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm 2>&1) || fail "second event wait failed: $out"
-  for i in $(seq 1 120); do
-    [ -e "$home/state/overseer/unconfirmed-event" ] && break
-    sleep 1
-  done
-  [ -e "$home/attempt" ] || fail 'the unconfirmed delivery was never attempted'
-  [ ! -e "$home/ack" ] || fail 'an unconfirmed delivery was acknowledged'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" status)
-  assert_contains "$out" 'event: delivery unconfirmed' 'the uncertain delivery was not surfaced'
-  if FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1; then
-    fail 'an uncertain delivery allowed a blind resend'
-  fi
-  pass 'watch delivers its event as evidence to the recorded session'
-)
-
-test_guard_rearms_after_delivery() (
-  local lab="$TMP_ROOT/rearm-code" home="$TMP_ROOT/rearm-home" out i
-  mkdir -p "$lab/bin" "$home/state/overseer"
-  write_connection "$home"
-  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  cat > "$lab/bin/fm-overseer-watch.sh" <<'SH'
-if [ "${1:-}" = --ack ]; then : > "$FM_REARM_ACK"; exit 0; fi
-if [ -e "$FM_REARM_ONCE" ]; then while :; do sleep 30; done; fi
-: > "$FM_REARM_ONCE"
-sleep 1
+  cat >"$lab/bin/fm-overseer-watch.sh" <<'SH'
+while [ ! -f "$FM_HOME/ready" ]; do sleep 0.1; done
 printf 'event_id=123-456\ntest event\n'
 SH
-  cat > "$lab/bin/fm-backend.sh" <<'SH'
-fm_backend_send_text_submit() { : > "$FM_REARM_SENDING"; sleep 3; printf empty; }
-SH
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  export FM_REARM_ACK="$home/ack" FM_REARM_ONCE="$home/once" FM_REARM_SENDING="$home/sending"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm >/dev/null || fail 'initial watch failed'
-  for i in $(seq 1 120); do [ -e "$home/sending" ] && break; sleep 1; done
-  [ -e "$home/sending" ] || fail 'event delivery never began'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard 2>&1) || fail "guard did not wait and rearm: $out"
-  assert_equals '' "$out" 'a successful Stop hook must not print invalid hook output'
-  [ -e "$home/sending" ] || fail 'guard returned before delivery began'
-  out=$(FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" status)
-  assert_contains "$out" 'watch: armed' 'guard failed to leave the next wait armed'
-  pass 'turn guard waits for delivery before arming the next event wait'
-)
-
-test_stop_during_delivery() (
-  local lab="$TMP_ROOT/stop-code" home="$TMP_ROOT/stop-home" i sender
-  mkdir -p "$lab/bin" "$home/state/overseer"
-  write_connection "$home"
-  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  printf 'sleep 1\nprintf "event_id=123-456\\ntest event\\n"\n' > "$lab/bin/fm-overseer-watch.sh"
-  cat > "$lab/bin/fm-backend.sh" <<'SH'
-fm_backend_send_text_submit() { printf '%s\n' "$$" > "$FM_SENDER_PID"; sleep 30; printf empty; }
-SH
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  export FM_SENDER_PID="$home/sender"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm >/dev/null || fail 'watch failed to start'
-  for i in $(seq 1 120); do [ -s "$home/sender" ] && break; sleep 1; done
-  [ -s "$home/sender" ] || fail 'delivery never began'
-  sender=$(cat "$home/sender")
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop || fail 'stop did not end an active delivery'
-  if kill -0 "$sender" 2>/dev/null; then fail 'sender survived stop'; fi
-  pass 'stop ends an in-progress event delivery'
-)
-
-test_stop_hook_uses_bound_home() (
-  local lab="$TMP_ROOT/hook-code" home="$TMP_ROOT/hook-home" other="$TMP_ROOT/hook-other" dir="$TMP_ROOT/outside/hook-session" command out
-  mkdir -p "$lab/bin" "$lab/overseer" "$home/state" "$other/state"
-  write_connection "$home"
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  : > "$home/SUPERVISOR.md"
-  cp "$ROOT/bin/fm-overseer.sh" "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  cp "$ROOT/overseer/AGENTS.md" "$lab/overseer/AGENTS.md"
-  # shellcheck disable=SC2016 # the fake watch expands these variables when it runs
-  printf 'printf "%%s\\n" "$TMUX_TMPDIR" > "$FM_CONTEXT_TEST"\nwhile :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
-  python3 - "$home/state/overseer/session-env.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-value = json.load(open(path))
-value['TMUX_TMPDIR'] = '/tmp/firstmate-test-socket'
-json.dump(value, open(path, 'w'))
-PY
-  trap 'env -u FM_STATE_OVERRIDE FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE -u FM_DATA_OVERRIDE -u FM_PROJECTS_OVERRIDE FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" setup "$dir" >/dev/null || fail 'hook setup failed'
-  command=$(python3 - "$dir/.codex/hooks.json" <<'PY'
-import json, sys
-print(json.load(open(sys.argv[1]))['hooks']['Stop'][0]['hooks'][0]['command'])
-PY
-  )
-  out=$(FM_HOME="$other" FM_STATE_OVERRIDE="$other/state" TMUX_TMPDIR=/tmp/wrong FM_CONTEXT_TEST="$home/context" bash -c "$command" 2>&1) || fail "bound hook failed: $out"
-  [ -f "$home/state/overseer/watch.lock" ] || fail 'hook did not arm the bound home'
-  [ ! -e "$other/state/overseer/watch.lock" ] || fail 'hook armed the inherited foreign home'
-  for _ in $(seq 1 120); do [ -s "$home/context" ] && break; sleep 1; done
-  [ "$(cat "$home/context")" = /tmp/firstmate-test-socket ] || fail 'hook did not restore the session socket'
-  pass 'Stop hook arms the bound home even when its process inherits another home'
+  export FM_HOME="$home"
+  python3 "$lab/bin/fm-overseer-arm.py" watch > "$home/output" &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 100); do [ -s "$home/state/overseer/watch.lock" ] && break; sleep 0.1; done
+  out=$(python3 "$lab/bin/fm-overseer-arm.py" status)
+  assert_contains "$out" 'watch: armed' 'status omitted the native background wait'
+  if python3 "$lab/bin/fm-overseer-arm.py" watch >/dev/null 2>&1; then fail 'two session watches were accepted'; fi
+  : > "$home/ready"
+  wait "$pid" || fail 'native background wait failed'
+  assert_contains "$(cat "$home/output")" 'test event' 'the event did not return to its own background job'
+  out=$(python3 "$lab/bin/fm-overseer-arm.py" guard)
+  assert_equals '' "$out" 'the legacy hook produced a reminder'
+  out=$(python3 "$lab/bin/fm-overseer-arm.py" status)
+  assert_contains "$out" 'watch: not armed' 'the legacy hook armed a background watch'
+  pass 'a single native background job returns its event through stdout'
 )
 
 test_setup_refuses_inside_a_firstmate_tree() {
@@ -281,7 +134,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert z.testzip() is None
     assert set(z.namelist()) == {'events.jsonl', 'manifest.json'}
     rows = [json.loads(line) for line in z.read('events.jsonl').splitlines()]
-    assert len(rows) == 2 and rows[0]['root_task'] == 0 and rows[1]['root_task'] == 1
+    # root_task reports a linked root task in the correction ledger; a bare yes links none.
+    assert len(rows) == 2 and rows[0]['root_task'] == 0 and rows[1]['root_task'] == 0
     assert rows[0]['observed'] == 'ready-work-unattended'
 PYTEST
   if FM_DIAGNOSTICS_HOME="$TMP_ROOT/diagnostics" FM_HOME="$home" bash "$OVERSEER" intervention record --category recovery --observed 'person@example.com' --evidence task-1 --action asked-primary --root-task no >/dev/null 2>&1; then
@@ -303,7 +157,13 @@ make_placement_lab() {  # <lab> <located-endpoint-or-empty>
   ln -s "$ROOT/overseer" "$lab/overseer"
   rm -f "$lab/bin/fm-overseer-primary.sh"
   if [ -n "$2" ]; then
-    printf '#!/usr/bin/env bash\n[ "$1" = --locate ] && echo %q\n' "$2" > "$lab/bin/fm-overseer-primary.sh"
+    {
+      cat <<'SH'
+#!/usr/bin/env bash
+[ "$1" = --locate ] || exit 1
+SH
+      printf 'echo %q\n' "$2"
+    } > "$lab/bin/fm-overseer-primary.sh"
   else
     printf '#!/usr/bin/env bash\nexit 1\n' > "$lab/bin/fm-overseer-primary.sh"
   fi
@@ -323,6 +183,28 @@ SH
   printf '#!/usr/bin/env bash\nexit 0\n' > "$lab/fake/claude"
   chmod +x "$lab/fake/herdr" "$lab/fake/claude" "$lab/bin/fm-overseer-primary.sh"
 }
+
+test_start_preserves_armed_watch_without_session() (
+  local lab="$TMP_ROOT/armed-code" home="$TMP_ROOT/armed-home" dir="$TMP_ROOT/outside/armed" pid out
+  make_home "$home"; make_placement_lab "$lab" 'herdr fake:w1:p1'
+  rm -f "$lab/bin/fm-overseer-arm.py" "$lab/bin/fm-overseer-watch.sh"
+  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
+  printf 'while :; do sleep 1; done\n' > "$lab/bin/fm-overseer-watch.sh"
+  mkdir -p "$home/config" "$home/state/overseer" "$TMP_ROOT/armed-user"
+  printf 'enabled=on\nharness=claude\ndirectory=%s\n' "$dir" > "$home/config/overseer"
+  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" watch >/dev/null &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 100); do [ -s "$home/state/overseer/watch.lock" ] && break; sleep 0.1; done
+  out=$(env -u TMUX HOME="$TMP_ROOT/armed-user" PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr HERDR_SESSION=fake bash "$lab/bin/fm-overseer.sh" start 2>&1) || true
+  [ ! -e "$home/state/overseer/session" ] || fail "start replaced a missing record despite an armed watch: $out"
+  printf 'herdr fake:w1:p9\n' > "$home/state/overseer/session"
+  out=$(env -u TMUX HOME="$TMP_ROOT/armed-user" PATH="$lab/fake:$PATH" FM_HOME="$home" FM_BACKEND=herdr HERDR_SESSION=fake bash "$lab/bin/fm-overseer.sh" start 2>&1) || fail "start refused the armed watch: $out"
+  [ "$(cat "$home/state/overseer/session")" = 'herdr fake:w1:p9' ] || fail 'start changed the session record'
+  kill -0 "$pid" 2>/dev/null || fail 'start stopped the armed watch'
+  [ ! -s "$lab/fake/log" ] || fail 'start contacted the backend despite an armed watch'
+  pass 'start preserves an armed watch even without a session record'
+)
 
 test_start_beside_the_primary_on_herdr() {
   local home dir lab out lang want
@@ -367,52 +249,53 @@ test_place_moves_the_overseer_beside_the_primary() {
   pass 'place moves the overseer right of the primary in its tab and follows the new pane id'
 }
 
-test_relay_keeps_the_installation_watch() (
-  local lab home dir out pid
+test_relay_retires_legacy_watch() (
+  local lab home dir out pid successor
   lab="$TMP_ROOT/relay-code" home="$TMP_ROOT/relay-home" dir="$TMP_ROOT/outside/relay"
   make_home "$home"; make_placement_lab "$lab" 'herdr fake:w1:p7'
   rm -f "$lab/bin/fm-overseer-arm.py" "$lab/bin/fm-overseer-watch.sh"
-  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  printf 'while :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
-  printf '#!/usr/bin/env bash\nprintf "%%s%%s %%s\\n" "${RELAY_WAIT_SECONDS:-}" "$HERDR_PANE_ID" "$*" >> "${0%%/*}/relay.log"\n' > "$lab/fake/relay"
+  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/new-arm.py"
+  printf 'printf "event_id=123-456\\nretained event\\n"\n' > "$lab/bin/fm-overseer-watch.sh"
+  cat > "$lab/fake/relay" <<'SH'
+#!/usr/bin/env bash
+printf '%s%s %s\n' "${RELAY_WAIT_SECONDS:-}" "${HERDR_PANE_ID:-}" "$*" >> "${0%/*}/relay.log"
+SH
   chmod +x "$lab/fake/relay"
-  mkdir -p "$home/config"
+  mkdir -p "$home/config" "$home/state/overseer"
   printf 'enabled=on\nharness=claude\nmodel=m1\neffort=high\ndirectory=%s\n' "$dir" > "$home/config/overseer"
-  write_connection "$home"
   printf 'herdr fake:w1:p2\n' > "$home/state/overseer/session"
   printf 'state\n' > "$home/state/overseer/handoff.md"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  # Outgoing: its real pane (not a stale HERDR_PANE_ID) and '-' for the watch.
+  cat >"$lab/bin/fm-overseer-arm.py" <<'PY'
+import fcntl, os, pathlib, time
+home = pathlib.Path(os.environ['FM_HOME'])
+with (home / 'state/overseer/watch.lock').open('w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    lock.write(f'{os.getpid()}\nwatching\n')
+    lock.flush()
+    while (home / 'state/overseer/session').read_text().strip() == 'herdr fake:w1:p2':
+        time.sleep(0.02)
+    (home / 'typed-reminder').touch()
+    time.sleep(30)
+PY
+  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" run 1 &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 100); do [ -s "$home/state/overseer/watch.lock" ] && break; sleep 0.1; done
+  mv "$lab/bin/new-arm.py" "$lab/bin/fm-overseer-arm.py"
   out=$(HERDR_PANE_ID=w9:p3 FM_RELAY_LITE="$lab/fake/relay" FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" relay 2>&1) || fail "relay failed: $out"
   [ "$(cat "$lab/fake/relay.log")" = "90w1:p7 --supervisor $dir claude m1 high $home/state/overseer/handoff.md -" ] ||
-    fail "relay did not hand over with the real pane and the installation watch: $(cat "$lab/fake/relay.log")"
-  # Successor: takes the session record and confirms with the one running watch.
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" arm >/dev/null || fail 'the installation watch did not arm'
-  pid=$(sed -n 1p "$home/state/overseer/watch.lock")
+    fail "relay did not pass the real pane: $(cat "$lab/fake/relay.log")"
   : > "$lab/fake/relay.log"
   out=$(env -u HERDR_PANE_ID FM_RELAY_LITE="$lab/fake/relay" FM_HOME="$home" bash "$lab/bin/fm-overseer.sh" relay-ready "$dir/state/relay-start.x" 2>&1) || fail "relay-ready failed: $out"
   [ "$(cat "$home/state/overseer/session")" = 'herdr fake:w1:p7' ] || fail 'the successor did not take over the session record'
-  if [ "$(sed -n 1p "$home/state/overseer/watch.lock")" != "$pid" ] || ! kill -0 "$pid"; then
-    fail 'the relay replaced or stopped the installation watch'
-  fi
-  [ "$(cat "$lab/fake/relay.log")" = " --ready $dir $dir/state/relay-start.x $pid" ] ||
-    fail "relay-ready did not confirm with the running watch: $(cat "$lab/fake/relay.log")"
-  pass 'an overseer relay keeps the installation watch, uses the real pane, and points the watch at the successor'
-)
-
-test_guard_adopts_the_pane_its_turn_ends_in() (
-  local lab home
-  lab="$TMP_ROOT/adopt-code" home="$TMP_ROOT/adopt-home"
-  mkdir -p "$lab/bin" "$home/state"
-  write_connection "$home"
-  printf 'tmux firstmate:overseer\n' > "$home/state/overseer/session"
-  cp "$ROOT/bin/fm-overseer-arm.py" "$lab/bin/"
-  printf 'while :; do sleep 30; done\n' > "$lab/bin/fm-overseer-watch.sh"
-  printf '#!/usr/bin/env bash\n[ "$1" = --locate ] && [ -n "$2" ] && echo "tmux %%9"\n' > "$lab/bin/fm-overseer-primary.sh"
-  trap 'FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" stop >/dev/null 2>&1 || true' EXIT
-  FM_HOME="$home" python3 "$lab/bin/fm-overseer-arm.py" guard >/dev/null 2>&1 || fail 'guard did not arm'
-  [ "$(cat "$home/state/overseer/session")" = 'tmux %9' ] || fail 'a relay successor did not take over the session record'
-  pass 'the Stop guard records the endpoint its turn ends in, so a relay successor receives events'
+  if kill -0 "$pid" 2>/dev/null; then fail 'predecessor wait survived relay-ready'; fi
+  [ ! -e "$home/typed-reminder" ] || fail 'predecessor wrote into the successor session'
+  successor=$(sed -n 1p "$home/state/overseer/watch.lock")
+  [ "$successor" != "$pid" ] || fail 'the successor did not own a new wait'
+  [ "$(cat "$lab/fake/relay.log")" = " --ready $dir $dir/state/relay-start.x $successor" ] ||
+    fail "relay-ready did not confirm with the successor watch: $(cat "$lab/fake/relay.log")"
+  assert_contains "$out" 'retained event' 'the successor background wait lost the pending event'
+  pass 'relay-ready retires the detached legacy watch before handing the event to the successor job'
 )
 
 test_status_before_start() {
@@ -566,14 +449,10 @@ test_adopt_restores_on_refusal
 
 test_interventions_record_and_export
 test_status_before_start
+test_start_preserves_armed_watch_without_session
 test_start_beside_the_primary_on_herdr
 test_place_moves_the_overseer_beside_the_primary
-test_relay_keeps_the_installation_watch
-test_guard_adopts_the_pane_its_turn_ends_in
+test_relay_retires_legacy_watch
 test_doctor_uses_local_evidence
 test_overseer_trust_scope
-test_watch_arm_and_stop
-test_watch_delivers_event
-test_guard_rearms_after_delivery
-test_stop_during_delivery
-test_stop_hook_uses_bound_home
+test_watch_delivers_to_its_session

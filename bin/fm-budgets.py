@@ -41,7 +41,7 @@ import time
 
 from fm_integration import DEADLINE, snapshot as delivery_snapshot
 from fm_test_slots import sample as slot_snapshot
-from fm_nudge import CATEGORIES, rows as nudge_rows
+from fm_nudge import CATEGORIES, cause_of, rows as nudge_rows, unrooted
 
 # key: family, unit, window seconds, default limit, scope, meaning
 MEASURES = {
@@ -60,7 +60,8 @@ MEASURES = {
 for category in CATEGORIES:
     MEASURES[f'nudges_{category}_per_day'] = ('rate', 'nudges', 86400, 0 if CATEGORIES[category] else None, 'home', f'supervisor nudges today: {category}')
 MEASURES['nudges_unclassified'] = ('accumulation', 'nudges', 0, 0, 'home', 'historical nudges needing category review')
-MEASURES['supervisor_interventions_per_day'] = ('rate', 'nudges', 86400, 0, 'home', 'mechanical supervisor interventions today')
+MEASURES['supervisor_interventions_per_day'] = ('rate', 'nudges', 86400, 0, 'home', 'corrections recorded today at every level')
+MEASURES['correction_causes_unrooted'] = ('accumulation', 'causes', 0, 0, 'home', 'correction causes without an open root task, or recurred after it closed')
 DEFAULT_EXTRA = {'primary_quiet_wakes_per_h': {'limit_idle': 1},
                  'nudges_new-orders_per_day': {'alarm': False},
                  'supervisor_interventions_per_day': {'alarm': False}}
@@ -331,15 +332,16 @@ def compute(now, cache, rows):
     values['usd_per_day'] = (None if old is None else round(max(0.0, usd_total - old), 2), f'{usd_total:.0f} USD recorded in total')
 
     today = time.strftime('%Y-%m-%d', time.localtime(now))
-    all_nudges = [r for r in nudge_rows(STATE / 'nudges.jsonl') if r.get('time')]
+    ledger = nudge_rows(STATE / 'nudges.jsonl')
+    all_nudges = [r for r in ledger if r.get('time') and not r.get('link')]
     nudges = [r for r in all_nudges if str(r.get('time', '')).startswith(today)]
-    gaps = Counter(str(r.get('gap') or 'historical unmapped') for r in nudges
+    gaps = Counter(str(cause_of(r) or 'historical unmapped') for r in nudges
                    if CATEGORIES.get(r.get('category'), True))
     values['supervisor_interventions_per_day'] = (
         sum(gaps.values()), ', '.join(f'{gap}: {count}' for gap, count in sorted(gaps.items()))
         or 'no mechanical interventions today')
     for category in (*CATEGORIES, 'unclassified'):
-        matching = ([r for r in all_nudges if r.get('category') not in CATEGORIES]
+        matching = ([r for r in all_nudges if 'legacy_category' in r and r.get('category') not in CATEGORIES]
                     if category == 'unclassified' else [r for r in nudges if r.get('category') == category])
         details = [(('[' + ' '.join(str(r.get('legacy_category', '')).split()) + '] ')
                     if category == 'unclassified' else '') + ' '.join(str(r.get('text', '')).split()) +
@@ -350,6 +352,13 @@ def compute(now, cache, rows):
             detail = 'classify historical categories; ' + detail
         key = 'nudges_unclassified' if category == 'unclassified' else f'nudges_{category}_per_day'
         values[key] = (len(matching), detail)
+    debt = unrooted(ledger)
+    bare = [f"{name} ({item['count']})" for name, item in sorted(debt.items()) if not item['recurred']]
+    back = [f"{name} ({item['count']}, after {item['root']} closed)" for name, item in sorted(debt.items()) if item['recurred']]
+    values['correction_causes_unrooted'] = (len(debt), '; '.join(
+        ([f"recurred: {', '.join(back)}"] if back else []) + ([f"no root task: {', '.join(bare)}"] if bare else []))
+        + '; link each to an open root task with bin/fm-nudge.sh link' if debt
+        else 'every cause has an open or verified root task')
 
     table = {}
     for key, item in lim.items():

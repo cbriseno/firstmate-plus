@@ -19,6 +19,8 @@ trap 'tmux kill-server >/dev/null 2>&1 || true' EXIT
 DIALOGS="${DIALOGS_UNDER_TEST:-$ROOT/bin/fm-startup-dialogs.sh}"
 DIALOGS_BASH="${FM_DIALOGS_BASH:-bash}"
 export FM_STARTUP_DIALOGS_POLL=0.2
+# Exercise multibyte cursor recognition even when awk uses byte-oriented matching.
+export LC_ALL=C
 
 # The fake agent: fake-agent <log> <cursor-glyph> <heading-line>... -- <row>...
 # Down moves the cursor, Enter records the row it landed on and then shows the
@@ -104,11 +106,35 @@ if [ "${FM_TEST_WRAPPED_FOLDER_ONLY:-0}" = 1 ]; then
   exit 0
 fi
 
+test_codex_folder_with_repository_note_is_trusted() {
+  local log="$TMP_ROOT/log-note" out split first second
+  split=$((${#LAUNCH} / 2))
+  first=${LAUNCH:0:split}; second=${LAUNCH:split}
+  out=$(run_case rootnote "$LAUNCH" "$log" '›' "Folder access" "  $first" "  $second" "" \
+    "  Note: You’re in a subdirectory of a Git project. Trusting will apply to the" \
+    "  repository root:" "  /some/repository" "" "Trust this folder? Codex can read." -- "${FOLDER_ROWS[@]}")
+  assert_contains "$(cat "$log")" 'enter:1. Trust and continue' 'repository note prevented launch folder trust'
+}
+
 test_codex_folder_elsewhere_is_left() {
   local log="$TMP_ROOT/log2" out
   out=$(run_case other "$LAUNCH" "$log" '›' "Folder access" "/somewhere/else" "Trust this folder? Codex can read." -- "${FOLDER_ROWS[@]}")
   assert_equals "" "$(cat "$log")" "a folder that is not the launch directory received keys"
   assert_contains "$out" "left for the operator" "the refusal was not reported"
+}
+
+test_refusal_queues_one_actionable_notice() {
+  local home="$TMP_ROOT/notice-home" log="$TMP_ROOT/log-notice" out count
+  mkdir -p "$home/state" "$home/data" "$home/config"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_STARTUP_DIALOGS_ALERT_ID=notice-test \
+    run_case notice "$LAUNCH" "$log" '›' "Folder access" "/somewhere/else" "Trust this folder?" -- "${FOLDER_ROWS[@]}")
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_STARTUP_DIALOGS_ALERT_ID=notice-test \
+    run_case notice-again "$LAUNCH" "$log" '›' "Folder access" "/somewhere/else" "Trust this folder?" -- "${FOLDER_ROWS[@]}")
+  count=$(find "$home/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')
+  assert_equals 1 "$count" 'refusal should queue one notice for the launch'
+  assert_contains "$(cat "$home/state/inbox/"*.note)" 'Inspect the pane before sending input' 'notice must give an action'
 }
 
 test_codex_hooks_are_trusted_with_down_then_enter() {
@@ -152,11 +178,12 @@ test_codex_hooks_of_prepared_overseer_are_trusted() {
   FM_HOME="$home" bash "$ROOT/bin/fm-overseer.sh" setup "$dir" >/dev/null || fail 'overseer setup failed'
   out=$(FM_HOME="$home" run_case overseer "$dir" "$log" '›' "${HOOKS_HEAD[@]}" -- "${HOOKS_ROWS[@]}")
   assert_contains "$(cat "$log")" 'enter:2. Trust all and continue' 'prepared overseer hook was not trusted'
+  mkdir -p "$dir/.codex"
   printf '{"hooks":{}}\n' > "$dir/.codex/hooks.json"
   out=$(FM_HOME="$home" run_case overseer-modified "$dir" "$log" '›' "${HOOKS_HEAD[@]}" -- "${HOOKS_ROWS[@]}")
-  assert_equals '' "$(cat "$log")" 'modified hooks received trust'
-  assert_contains "$out" 'left for the operator' 'modified hooks were not refused'
-  pass 'only the prepared overseer hook receives Codex trust'
+  assert_equals '' "$(cat "$log")" 'new project hooks received trust'
+  assert_contains "$out" 'left for the operator' 'new project hooks were not refused'
+  pass 'prepared overseer without project hooks receives Codex trust'
 }
 
 test_claude_imports_outside_are_left() {
@@ -198,7 +225,9 @@ fi
 
 test_codex_folder_in_launch_dir_is_trusted
 test_codex_folder_wrapped_across_lines_is_trusted
+test_codex_folder_with_repository_note_is_trusted
 test_codex_folder_elsewhere_is_left
+test_refusal_queues_one_actionable_notice
 test_codex_hooks_are_trusted_with_down_then_enter
 test_codex_hooks_of_a_foreign_project_are_left
 test_codex_hooks_of_a_firstmate_checkout_are_trusted

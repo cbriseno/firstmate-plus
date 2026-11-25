@@ -15,8 +15,14 @@ An installation with another channel for an event, such as a private integration
 
 The publication gate (`bin/fm-publication-gate.py`) also announces each successful push or forge publication it ran as `captain-published`, when `FM_HOME` is set, so nobody has to remember to relay it.
 The overseer sends its own alerts with `bin/fm-overseer.sh alert TEXT` (event `overseer-alert`).
-An installation can create `config/notification-quiet-hours` with one line such as `23:00-07:00` (local time, may span midnight): notices sent with the configured command during that window are held and delivered once, as one `quiet-digest` event, when it ends.
-The overseer's watch delivers the digest without waking any model; without a running overseer, the next notice after the window delivers it.
+Before updating Firstmate, make sure its alert adapter returns a reference to a verifiable acceptance record from its destination, using the receipt format in the executable help.
+The alert reports failure if the reference is missing and prints the receipt when delivery is confirmed.
+An installation can create `config/notification-quiet-hours` with one line such as `23:00-07:00` (local time, may span midnight).
+Notices sent with the configured command during that window are held.
+An overseer alert reports pending delivery and stays in the queue until its individual delivery has a receipt.
+Other held notices are combined into a digest when there is more than one.
+The overseer's watch sends held notices without waking any model.
+Without a running overseer, the next notice after the window sends them.
 The window applies to the configured command, not to an explicit `--command-file` such as the watcher's login-expiry alert.
 
 The executable also accepts a command file for one invocation, without editing installation configuration; its help owns that option.

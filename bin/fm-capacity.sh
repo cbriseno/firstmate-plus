@@ -46,7 +46,11 @@
 #             < 5120 MB; or a disk row under min-disk-gb
 #   pressure  beat basis: the pressure level is warn or critical
 #   load      load1 is at or over max-load1
+#   tests     all host test slots are occupied and at least one run is waiting
+#   settling  a worker started within the current load observation window
 #   reserve   a reserve-flag file exists
+#   pause     the general pause record state/.pause-general exists (bin/fm-pause.sh
+#             owns it); it holds every new launch whatever the cap or config
 #   battery   a fresh beat reports the machine on battery
 # Otherwise reason is ok when free_lanes > 0 and full when it is 0.
 #
@@ -111,6 +115,7 @@
 #   memory {reserve_gb, lane_footprint_gb, footprint_basis configured|measured|
 #     default, measured_lanes, lanes_fit} (the Memory rule's figures; null
 #     when available memory is unknown),
+#   test_slots {slots, occupied, waiting_runs}, with nulls when unobserved,
 #   verdict {admit, free_lanes, reasons[]}.
 # verdict.admit is true only with a valid cap, lanes under it, and no
 # constraint; its reasons are the constraints in words. The document carries
@@ -126,11 +131,15 @@
 # best-effort: every failure goes to stderr and it exits 0.
 #
 # --admit exits 0 when config/lane-capacity is absent or the verdict admits,
-# and 75 with one `deferred:` line on stderr when it does not.
+# and 75 with one `deferred:` line on stderr when it does not. A general pause
+# defers even with config/lane-capacity absent, and never edits the cap.
 # A task brief with an exact "Dispatch CPU: heavy" line selects the sustained
 # load check. Existing briefs and the general lane report use model admission.
 # --admit-notice uses the same verdict but requires load at least 1 below a
 # configured max-load1, reducing false retry wakes as load changes.
+# Fresh admission waits one minute after the last ship or scout launch was
+# submitted, or five minutes while the shared test budget is active.
+# fm-spawn.sh updates state/.last-lane-launch under the home task-set lock.
 #
 # Environment: FM_HOME, FM_STATE_OVERRIDE, FM_CONFIG_OVERRIDE, and
 # FM_PROJECTS_OVERRIDE resolve the home exactly as the other bin/ scripts do.
@@ -156,6 +165,8 @@ LANE_FOOTPRINT_DEFAULT_GB=0.5
 LANE_FOOTPRINT_FLOOR_GB=0.3
 QUOTA_TIMEOUT=5
 BOOTS_KEPT=10
+LANE_LOAD_SAMPLE_SECS=60
+LANE_TEST_SAMPLE_SECS=300
 
 mode=report
 notice=0
@@ -196,6 +207,16 @@ file_mtime() {
 
 now=$(date +%s)
 
+PAUSE_RECORD="$STATE/.pause-general"
+pause_label=
+if [ -e "$PAUSE_RECORD" ]; then
+  pause_label=$(sed -n '2p' "$PAUSE_RECORD" 2>/dev/null | tr -d '\r' | cut -c1-120)
+  pause_label=${pause_label:-paused by the captain}
+fi
+if [ "$mode" = admit ] && [ -n "$pause_label" ]; then
+  echo "deferred: lane capacity of this home ($LANE_CONFIG) does not admit another lane: general pause: $pause_label" >&2
+  exit 75
+fi
 case "$mode" in
   admit|publish) [ -e "$LANE_CONFIG" ] || exit 0 ;;
 esac
@@ -633,7 +654,22 @@ if [ "$notice" -eq 1 ] && [ -n "$max_load1" ] && [ -n "$lim_load1" ] &&
   awk -v l="$lim_load1" -v m="$max_load1" 'BEGIN{exit !(l + 1 > m)}'; then
   add_constraint load "load: $lim_load1 is less than 1 below max-load1 $max_load1"
 fi
+read -r test_slots test_occupied test_waiting < <(python3 -B "$SCRIPT_DIR/fm_test_slots.py" 2>/dev/null) || true
+if [ "${test_occupied:-0}" -ge "${test_slots:-1}" ] && [ "${test_waiting:-0}" -gt 0 ]; then
+  add_constraint tests "tests: $test_waiting runs waiting for $test_slots occupied host slots"
+fi
+if [ -z "$constraints" ] && is_uint "$target" && [ "$lanes" -lt "$target" ] &&
+  [ -f "$STATE/.last-lane-launch" ] && launched_at=$(file_mtime "$STATE/.last-lane-launch"); then
+  sample_secs=$LANE_LOAD_SAMPLE_SECS
+  if [ "${test_occupied:-0}" -gt 0 ] || [ "${test_waiting:-0}" -gt 0 ]; then
+    sample_secs=$LANE_TEST_SAMPLE_SECS
+  fi
+  if [ "$launched_at" -le "$now" ] && [ "$((now - launched_at))" -lt "$sample_secs" ]; then
+    add_constraint settling "launch: observing load after a recent worker start"
+  fi
+fi
 [ "$reserve_flag" != present ] || add_constraint reserve "captain reserve: $reserve_label"
+[ -z "$pause_label" ] || add_constraint pause "general pause: $pause_label"
 [ "$on_battery" != true ] || add_constraint battery "on battery"
 
 free_lanes=unknown
@@ -801,6 +837,7 @@ doc=$(jq -n \
   --arg measured_lanes "$measured_lanes" --arg lanes_fit "$lanes_fit" --arg lane_footprint "$lane_footprint_gb" \
   --arg min_avail "$min_avail_gb" --arg min_disk "$min_disk_gb" --arg max_load1 "$max_load1" \
   --arg max_load5_per_core "$max_load5_per_core" \
+  --arg test_slots "$test_slots" --arg test_occupied "$test_occupied" --arg test_waiting "$test_waiting" \
   --arg admit "$admit" --arg free_lanes "$free_lanes" --arg reasons "$verdict_reasons" '
   def num: if . == "" then null else tonumber + 0 end;
   def lines: split("\n") | map(select(. != ""));
@@ -823,6 +860,7 @@ doc=$(jq -n \
      max_load5_per_core: ($max_load5_per_core | num)},
    memory: {reserve_gb: ($reserve | num), lane_footprint_gb: ($footprint | num), footprint_basis: $footprint_basis,
      measured_lanes: ($measured_lanes | tonumber), lanes_fit: ($lanes_fit | num)},
+   test_slots: {slots: ($test_slots | num), occupied: ($test_occupied | num), waiting_runs: ($test_waiting | num)},
    verdict: {admit: ($admit == "true"), free_lanes: ($free_lanes | if . == "unknown" then null else tonumber end),
      reasons: ($reasons | lines)}}') || {
   echo "fm-capacity: could not assemble the lane capacity document" >&2

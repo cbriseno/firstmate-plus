@@ -7,6 +7,9 @@
 # The watcher sends a resume notice when that task is integrated or closed.
 # Workers reporting terminal failure must pass --exhausted-recovery with the
 # recovery evidence in <note>. See the worker contract for when to stop.
+# A worker reporting blocked must pass --tried 'route one; route two': at least
+# two distinct routes it attempted, appended to the note as `[tried: ...]`, so
+# a block never rests on a single failed path. Firstmate's own use is exempt.
 # Timestamps are generated here. Routine progress stays silent; decisions,
 # blockers and terminal events reach the queue even without a watcher.
 # The watcher remains the backstop for legacy plain status appends.
@@ -25,7 +28,7 @@ ID=$1 VERB=$2 NOTE=$3
 shift 3
 case "$ID" in ''|*[!A-Za-z0-9._-]*) exit 2 ;; esac
 case "$VERB" in working|resolved|needs-decision|blocked|paused|done|failed|captain-held) ;; *) echo "error: invalid state '$VERB'; expected working, resolved, needs-decision, blocked, paused, done, failed, or captain-held" >&2; exit 2 ;; esac
-PFILE='' OVERRIDES=() PUBLISH=0 EXHAUSTED=0
+PFILE='' OVERRIDES=() PUBLISH=0 EXHAUSTED=0 TRIED=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --exhausted-recovery ] && [ "$VERB" = failed ]; then
     EXHAUSTED=1
@@ -33,6 +36,11 @@ while [ "$#" -gt 0 ]; do
     continue
   fi
   [ "$#" -ge 2 ] || { echo "error: $1 requires a value" >&2; exit 2; }
+  if [ "$1" = --tried ] && [ "$VERB" = blocked ]; then
+    TRIED=$2
+    shift 2
+    continue
+  fi
   case "$1" in
     --card-status) OVERRIDES+=(card_status "$2") ;;
     --summary) OVERRIDES+=(summary "$2") ;;
@@ -45,6 +53,14 @@ done
 if [ "$VERB" = failed ] && [ -n "${FM_TASK_ID:-}" ] && [ "$EXHAUSTED" = 0 ]; then
   echo 'error: if authorized work remains, choose a reversible step, record why, and continue. For terminal failure, follow Obstacles and escalation, describe the exhausted recovery in the status note, and pass --exhausted-recovery.' >&2
   exit 2
+fi
+if [ "$VERB" = blocked ] && [ -n "${FM_TASK_ID:-}" ]; then
+  tried_count=$(printf '%s\n' "$TRIED" | tr ';' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | sort -u | wc -l | tr -d '[:space:]')
+  if [ "${tried_count:-0}" -lt 2 ]; then
+    echo "error: blocked needs --tried 'route one; route two': at least two distinct routes you already attempted to get past it. Try another authorized route first (a different tool, address, account or method), then report all of them." >&2
+    exit 2
+  fi
+  NOTE="$NOTE [tried: $TRIED]"
 fi
 SCRIPT_DIR=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 # shellcheck source=bin/fm-wake-lib.sh

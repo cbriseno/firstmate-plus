@@ -40,7 +40,9 @@ SESSION="cmxlive"
 CHECKED=0
 FAILED=0
 
-fail() { printf 'not ok - %s\n' "$1" >&2; cleanup; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "$1" cleanup; }
 pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 
@@ -101,8 +103,8 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
     tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null \
       | grep '[^[:space:]]' | tail -8 | sed 's/^/#   /' >&2
     FAILED=1
-    printf 'not ok - %s (%s): idle composer never classified empty (last verdict: %s)\n' \
-      "$name" "$version" "${verdict:-unreadable}" >&2
+    fm_test_fail "$(printf '%s (%s): idle composer never classified empty (last verdict: %s)' \
+      "$name" "$version" "${verdict:-unreadable}")" "" continue
   else
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): real idle composer classifies empty"
@@ -125,8 +127,8 @@ check_harness_idle_cursorless() {  # <name> <version> <target>
   local name=$1 version=$2 target=$3 pane caps verdict identity
   pane=$(fm_tmux_composer_capture "$target") || {
     FAILED=1
-    printf 'not ok - %s (%s): cursorless re-read could not capture the proven-idle pane\n' \
-      "$name" "$version" >&2
+    fm_test_fail "$(printf '%s (%s): cursorless re-read could not capture the proven-idle pane' \
+      "$name" "$version")" "" continue
     return 0
   }
   caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=0')
@@ -143,15 +145,15 @@ check_harness_idle_cursorless() {  # <name> <version> <target>
     tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null \
       | grep '[^[:space:]]' | tail -8 | sed 's/^/#   /' >&2
     FAILED=1
-    printf 'not ok - %s (%s): a proven-idle composer read cursorless as pending; every steer to this harness would skip its doorbell\n' \
-      "$name" "$version" >&2
+    fm_test_fail "$(printf '%s (%s): a proven-idle composer read cursorless as pending; every steer to this harness would skip its doorbell' \
+      "$name" "$version")" "" continue
   elif [ "${CMX_REQUIRE_CURSORLESS_EMPTY:-0}" = 1 ] && [ "$verdict" != empty ]; then
     printf '# %s cursorless pane tail:\n' "$name" >&2
     tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null \
       | grep '[^[:space:]]' | tail -8 | sed 's/^/#   /' >&2
     FAILED=1
-    printf 'not ok - %s (%s): a proven-idle composer read cursorless as %s, expected empty; away-mode delivery to this pane would defer forever\n' \
-      "$name" "$version" "${verdict:-unreadable}" >&2
+    fm_test_fail "$(printf '%s (%s): a proven-idle composer read cursorless as %s, expected empty; away-mode delivery to this pane would defer forever' \
+      "$name" "$version" "${verdict:-unreadable}")" "" continue
   else
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): the same idle pane read cursorless is not pending (verdict: $verdict)"
@@ -189,11 +191,11 @@ if [ "$verdict" = unknown ]; then
     pass "strict posture live: a blank shell row classifies unknown and injection defers"
   else
     FAILED=1
-    printf 'not ok - strict posture live: pane_input_pending did not defer on an unknown verdict\n' >&2
+    fm_test_fail "$(printf 'strict posture live: pane_input_pending did not defer on an unknown verdict')" "" continue
   fi
 else
   FAILED=1
-  printf 'not ok - strict posture live: blank shell row classified %s, expected unknown\n' "${verdict:-unreadable}" >&2
+  fm_test_fail "$(printf 'strict posture live: blank shell row classified %s, expected unknown' "${verdict:-unreadable}")" "" continue
 fi
 tmux -L "$SOCKET" kill-window -t "$SESSION:strictblank" 2>/dev/null || true
 

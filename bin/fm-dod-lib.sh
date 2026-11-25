@@ -137,9 +137,13 @@
 # interpreting or shortening prose. Each line can contain multiple obligations;
 # reviewers must check all of them against the original, never only the plan.
 # data/<id>/acceptance.json is {"requirements": [{"text": <original line>,
-# "status": "fulfilled"|"deferred", "evidence": <verification reference>,
+# "status": "fulfilled"|"deferred"|"reassigned", "evidence": <verification reference>,
 # "notice": {"file": <notice path>, "hold": <captain-held task id>,
 # "occurrence": <positive hold occurrence>}}]}.
+# A reassigned row has "target": <task id>; fm-reassign-requirement.sh marks
+# the source brief and the gate verifies the destination brief carries the same
+# scope; for a partial assignment, fulfilled evidence must cover the remainder.
+# Reassignment is not a notice to the captain.
 # For a deferral the file must exist and its captain call must link to it.
 # Relative notice paths resolve against the acceptance file's directory.
 # Missing definitions on legacy briefs warn and continue; a defined list fails
@@ -152,29 +156,50 @@ fm_brief_requirements() {  # <brief>
 }
 
 fm_dod_accept_requirements() {  # <brief> <acceptance.json>
-  local brief=$1 acceptance=$2 original listed home=${FM_HOME:-.}
+  local brief=$1 acceptance=$2 original listed reassigned home=${FM_HOME:-.}
   if ! fm_brief_task_heading_present "$brief" "## Captain's requirements"; then
     printf '%s\n' "warning: requirements list undefined in $brief; continuing legacy task" >&2
     return 0
   fi
   original=$(fm_brief_requirements "$brief")
   listed=$(fm_brief_task_heading_body "$brief" "## Captain's requirements")
+  reassigned=$(fm_brief_task_heading_body "$brief" "## Reassigned requirements")
   FM_HOME="$home" FM_DATA_OVERRIDE="${FM_DATA_OVERRIDE:-${DATA:-$home/data}}" \
     FM_STATE_OVERRIDE="${FM_STATE_OVERRIDE:-${STATE:-$home/state}}" \
     FM_CONFIG_OVERRIDE="${FM_CONFIG_OVERRIDE:-$home/config}" \
-    python3 - "$original" "$listed" "$acceptance" "${BASH_SOURCE[0]%/*}" <<'PYREQ'
+    python3 - "$original" "$listed" "$acceptance" "${BASH_SOURCE[0]%/*}" "$brief" "$reassigned" <<'PYREQ'
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-original, listed, path, scripts = sys.argv[1:]
+original, listed, path, scripts, brief, reassigned = sys.argv[1:]
 try:
     expected = original.splitlines()
     actual = [line for line in listed.splitlines() if line.strip()]
     if not expected or expected != actual:
         raise ValueError("numbered requirements must preserve every original intent line; regenerate with fm-brief.sh --requirements")
+    assignments = {}
+    for entry in reassigned.splitlines():
+        if not entry.strip():
+            continue
+        match = re.fullmatch(r"([1-9][0-9]*)\. ([A-Za-z0-9][A-Za-z0-9_.-]*) (.+)", entry)
+        if not match:
+            raise ValueError("invalid reassignment entry")
+        number, target, scope = int(match.group(1)), match.group(2), match.group(3)
+        if number > len(expected) or target == Path(brief).resolve().parent.name:
+            raise ValueError("invalid reassignment number or destination")
+        target_brief = Path(brief).resolve().parent / ("reassignment-destination-" + target + ".md")
+        if not target_brief.is_file():
+            target_brief = Path(os.environ["FM_DATA_OVERRIDE"]) / target / "brief.md"
+        requirement = expected[number - 1].split(". ", 1)[1]
+        if scope not in requirement or scope not in target_brief.read_text(encoding="utf-8"):
+            raise ValueError(f"requirement {number}: destination brief does not carry the reassigned scope")
+        item = (target, scope == requirement, scope)
+        if item in assignments.get(number, []):
+            raise ValueError(f"requirement {number}: duplicate reassignment")
+        assignments.setdefault(number, []).append(item)
     with open(path, encoding="utf-8") as stream:
         rows = json.load(stream)["requirements"]
     if not isinstance(rows, list) or len(rows) != len(expected):
@@ -182,10 +207,15 @@ try:
     for number, (line, row) in enumerate(zip(expected, rows), 1):
         if row.get("text") != line.split(". ", 1)[1]:
             raise ValueError(f"requirement {number}: acceptance text differs from original")
-        if row.get("status") not in ("fulfilled", "deferred"):
+        if row.get("status") not in ("fulfilled", "deferred", "reassigned"):
             raise ValueError(f"requirement {number}: still unmet")
         if not isinstance(row.get("evidence"), str) or not row["evidence"].strip():
             raise ValueError(f"requirement {number}: verification evidence missing")
+        if row["status"] == "reassigned":
+            if assignments.get(number) != [(row.get("target"), True, line.split(". ", 1)[1])]:
+                raise ValueError(f"requirement {number}: reassignment missing or differs from brief")
+        elif number in assignments and (row["status"] != "fulfilled" or any(item[1] for item in assignments[number])):
+            raise ValueError(f"requirement {number}: acceptance does not match reassignment")
         if row["status"] == "deferred":
             notice = row.get("notice")
             if not isinstance(notice, dict) or not isinstance(notice.get("file"), str) or not notice["file"].strip():
@@ -445,6 +475,33 @@ fm_brief_intent_address_line() {  # <file>
     /^[[:space:]]*(Captain('\''s (words|ask|intent))?:|Captain,)/ { print; found = 1; exit }
     END { exit !found }
   '
+}
+
+# `## Requested steps` lists the work steps the brief asks for beyond the
+# numbered requirements; each line cites the captain's words in «...» and the
+# cited words must appear verbatim inside a «...» span of `## Captain's intent`,
+# so a step the captain never asked for cannot be written as if he had. The
+# scaffold's default line (`- none ...`) asks for no step. Print each line whose
+# citation is missing or not found; a brief without the section (written before
+# this contract) prints nothing, and fm-spawn.sh warns once and continues.
+fm_brief_steps_untraced() {  # <file>
+  local file=$1 steps intent
+  fm_brief_task_heading_present "$file" "## Requested steps" || return 0
+  steps=$(fm_brief_task_heading_body "$file" "## Requested steps")
+  intent=$(fm_brief_task_heading_body "$file" "## Captain's intent")
+  PYTHONUTF8=1 python3 -I -c '
+import re, sys
+intent, steps = sys.argv[1], sys.argv[2]
+norm = lambda t: " ".join(t.split()).casefold()
+spans = [norm(m) for m in re.findall(r"\u00ab([^\u00bb]*)\u00bb", intent)]
+for line in steps.splitlines():
+    text = line.strip()
+    if not text or re.match(r"^[-*]?\s*none\b", text, re.I):
+        continue
+    cites = [norm(m) for m in re.findall(r"\u00ab([^\u00bb]*)\u00bb", text)]
+    if not cites or not all(c and any(c in sp for sp in spans) for c in cites):
+        print(line)
+' "$intent" "$steps"
 }
 
 # The `nm-<run>-<step>` decision key this block mandates is load-bearing beyond

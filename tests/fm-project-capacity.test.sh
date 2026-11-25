@@ -805,6 +805,7 @@ SH
   capacity_watch "$case_dir"; pid=$!
   wait_poll_cycle "$home/state" "$pid" || fail "the watcher did not hold the heavy task while load remained high"
   assert_equals queued "$(row_state "$home" task-c)" "retry bypassed the sustained load check"
+  age_worker_launch "$home" 360 || fail "could not advance the launch clock"
   printf '3.54 15.95 2.00\n' > "$fakebin/loadavg"
   expect_capacity_wake "$home" "$pid"
   pass "sustained load defers only the heavy task and its retry starts it after load falls"
@@ -833,6 +834,46 @@ test_batch_rereads_lane_capacity_after_each_spawn() {
   pass "batch publishes one worker before rereading live capacity for the next"
 }
 
+age_worker_launch() {  # <home> <seconds-ago>
+  python3 - "$1/state/.last-lane-launch" "$2" <<'PY'
+import os
+import sys
+import time
+stamp = time.time() - int(sys.argv[2])
+os.utime(sys.argv[1], (stamp, stamp))
+PY
+}
+
+test_recent_launch_spaces_a_dispatch_burst() {
+  local case_dir home out rc id FM_TEST_LOCK_DIR
+  command -v jq >/dev/null 2>&1 || { printf 'ok - skipped launch pacing case (jq absent)\n'; return; }
+  case_dir=$(make_case launch-burst task-a task-b task-c task-d)
+  home="$case_dir/home"
+  export FM_TEST_LOCK_DIR="$case_dir/test-slots"
+  mkdir -p "$FM_TEST_LOCK_DIR"
+  printf '12\nmax-load1 40\npressure-file %s\n' "$home/beat.json" > "$home/config/lane-capacity"
+  write_capacity_beat "$home" 17 6
+  out=$(spawn_ship "$case_dir" task-a) || fail "first worker should launch: $out"
+  assert_present "$home/state/task-a.meta" "first launch must publish its worker"
+  assert_present "$home/state/.last-lane-launch" "first launch must publish its submission time"
+  for id in task-b task-c task-d; do
+    # Each request belongs to the same simulated minute, even on a busy host.
+    age_worker_launch "$home" 0 || fail "could not set the launch clock"
+    rc=0
+    out=$(spawn_ship "$case_dir" "$id") || rc=$?
+    expect_code "$DEFER_EXIT" "$rc" "launch burst admitted a second worker at unchanged load: $out"
+    assert_contains "$out" 'observing load after a recent worker start' "deferral must explain the wait"
+    assert_present "$home/state/$id.spawn-deferred" "the deferred worker lost its retry"
+    assert_absent "$home/state/$id.meta" "a deferred worker published a launch record"
+    assert_absent "$home/data/$id/launch-brief.md" "a deferred worker rendered its launch"
+  done
+  age_worker_launch "$home" 360 || fail "could not advance the launch clock"
+  write_capacity_beat "$home" 38 6
+  out=$(spawn_ship "$case_dir" task-b "$case_dir/wt-task-b") || fail "next worker should launch after sampling load: $out"
+  assert_present "$home/state/task-b.meta" "admission did not reopen after its observation window"
+  pass "four requests start one worker at a time and a deferred request can then launch"
+}
+
 if [ "${FM_PROJECT_CAPACITY_TEST_AUTO_WAIT:-0}" = 1 ]; then
   test_automatic_spawn_waits_for_allocation
   exit 0
@@ -843,6 +884,7 @@ if [ "${FM_PROJECT_CAPACITY_TEST_EVENTS:-0}" != 0 ]; then
   exit 0
 fi
 
+test_recent_launch_spaces_a_dispatch_burst
 test_dispatch_wait_events
 test_resource_verdict_defers_then_admits
 test_sustained_load_defers_only_heavy_work

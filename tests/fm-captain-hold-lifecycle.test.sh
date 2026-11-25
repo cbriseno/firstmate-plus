@@ -1113,6 +1113,33 @@ test_undeclared_close_releases_in_flight_work() {
   assert_contains "$(tasks_in "$home" show direct-close --full)" "state: done" \
     "a plain answer, an explicit close, no longer completed its task"
 
+  # A direct answer cannot finish a ship while its branch is not integrated.
+  git init -q -b main "$home/project"
+  git -C "$home/project" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m base
+  git -C "$home/project" checkout -q -b fm/unmerged
+  git -C "$home/project" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m work
+  tasks_in "$home" add unmerged "Unintegrated work" --kind ship --repo sample --start >/dev/null
+  printf 'kind=ship\nproject=%s\nbranch=fm/unmerged\n' "$home/project" > "$home/state/unmerged.meta"
+  run_captain "$home" hold unmerged "${FM_TEST_CALL[@]}" --reason "choice" >/dev/null
+  run_captain "$home" answer unmerged --decision-file "$home/go.txt" >/dev/null || fail "answer failed"
+  assert_contains "$(tasks_in "$home" show unmerged --full)" "state: in_flight" "answer completed unintegrated work"
+
+  # Preserved work remains open even after the worker metadata was removed.
+  printf 'Preserved work: preserved-branch:fm/unmerged\n' > "$home/preserved.txt"
+  tasks_in "$home" add preserved "Preserved work" --kind ship --repo sample >/dev/null
+  tasks_in "$home" update preserved --body-file "$home/preserved.txt" >/dev/null
+  run_captain "$home" hold preserved "${FM_TEST_CALL[@]}" --reason "choice" >/dev/null
+  printf 'preserved\tcontinue\t\n' | run_captain "$home" answers --source chat >/dev/null || fail "preserved answer failed"
+  assert_contains "$(tasks_in "$home" show preserved --full)" "state: queued" "answer completed preserved work"
+  printf 'preserved\tcontinue\t\n' | run_captain "$home" answers --source chat >/dev/null || fail "preserved answer retry failed"
+
+  git -C "$home/project" update-ref refs/heads/main refs/heads/fm/unmerged
+  tasks_in "$home" add integrated "Integrated work" --kind ship --repo sample --start >/dev/null
+  printf 'kind=ship\nproject=%s\nbranch=fm/unmerged\n' "$home/project" > "$home/state/integrated.meta"
+  run_captain "$home" hold integrated "${FM_TEST_CALL[@]}" --reason "choice" >/dev/null
+  run_captain "$home" answer integrated --decision-file "$home/go.txt" >/dev/null || fail "integrated answer failed"
+  assert_contains "$(tasks_in "$home" show integrated --full)" "state: done" "answer did not close integrated work"
+
   # An interrupted release retries to the same release, never a close.
   tasks_in "$home" add flaky-ship "Interrupted release" --kind ship --repo sample --start >/dev/null
   run_captain "$home" hold flaky-ship "${FM_TEST_CALL[@]}" --reason "interrupted" >/dev/null
@@ -2000,12 +2027,12 @@ test_reconcile_retry_after_public_ack() {
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     bash "$ROOT/bin/fm-wake-drain.sh" > "$out" 2> "$err" || fail "public drain failed"
   assert_contains "$(cat "$out")" 'check: captain-reconcile task=review-call' "drain did not present reconcile wake"
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  sequence=$(fm_test_single_wake_sequence "$out")
+  generation=$(fm_test_wake_generation "$err")
   [ -n "$sequence" ] && [ -n "$generation" ] || fail "drain omitted ACK boundary"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
-    bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" >/dev/null || fail "public ACK failed"
+    bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" >/dev/null || fail "public ACK failed"
   [ ! -s "$home/state/.wake-queue" ] || fail "ACK did not consume reconcile wake"
   printf 'review-call\tchanged retry note\n' | run_captain "$home" reconcile-requests --source-id review-board --source retry >/dev/null || fail "retry after ACK failed"
   [ "$(cat "$home/state/reconcile-requests/review-call.request")" = "$before" ] || fail "ACK/retry changed original request"
@@ -5250,7 +5277,7 @@ test_hold_requires_real_choices_or_a_recorded_escape() {
   assert_no_grep sample-bare-call "$home/data/backlog.md" "an unsupported category still created its task"
 
   local category
-  for category in product-design unbacked-destructive money credentials-security captain-only-fact; do
+  for category in product-design unbacked-destructive money credentials-security captain-only-fact requirement-reduction; do
     run_captain "$home" hold "sample-category-$category" --title "Allowed category" --reason "captain decision" \
       --repo sample --action fixture --category "$category" --challenge fixture --charge 'Sample registry plan, 10 USD' \
       --question "Which route?" --option yes=Yes --option no=No >/dev/null \
@@ -6504,6 +6531,7 @@ test_standing_grants() {
   out=$(run_captain "$home" hold second --action 'remove clean idle copy' --reason 'decide' \
     --category product-design 2>&1) && fail 'covered action opened a hold'
   case "$out" in *'Sí, siempre.'*'act and report'*) ;; *) fail "grant refusal missing: $out" ;; esac
+  run_captain "$home" hold reduction --action 'remove clean idle copy' --category requirement-reduction --challenge 'Captain must decide a requirement reduction' --reason 'Requirement would be reduced' --title 'Requirement' --question 'Reduce the requirement?' --option keep=Keep --option reduce=Reduce >/dev/null || fail 'standing grant blocked a requirement reduction hold'
   out=$(run_captain "$home" hold exception --action 'remove clean idle copy' --override-grant 'this copy has a distinct limit' \
     --category product-design --challenge fixture --reason decide --title Exception --question 'Proceed?' \
     --option yes=Yes --option no=No 2>&1) || fail "grant override failed: $out"

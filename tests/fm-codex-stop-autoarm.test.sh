@@ -105,10 +105,10 @@ if [ "${1:-}" = --case ]; then
     drain=$(bash "$ROOT/bin/fm-wake-drain.sh" 2>&1) || fail 'cannot drain fixture event'
     [ -s "$STATE/.wake-queue" ] || fail 'presentation acknowledged the wake'
     printf 'one action\n' >> "$CASE_HOME/handled"
-    sequence=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--ack-through \([0-9]*\).*/\1/p')
+    sequence=$(printf '%s\n' "$drain" | awk -F '\t' 'NF >= 5 && $3 ~ /^(signal|stale|check|heartbeat)$/ { print $2 }')
     recovery=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p')
     [ -n "$sequence" ] && [ -n "$recovery" ] || fail 'drain omitted bounded ACK command'
-    bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
+    bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
       || fail 'handled wake could not be acknowledged'
     [ ! -s "$STATE/.wake-queue" ] || fail 'ACK did not retire handled wake'
   }
@@ -464,10 +464,10 @@ PY
       assert_contains "$drain" 'controlled foreground handoff event' 'drain omitted controlled status event'
       [ -s "$STATE/.wake-queue" ] || fail 'foreground presentation acknowledged the wake'
       : > "$CASE_HOME/foreground-event-handled"
-      sequence=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--ack-through \([0-9]*\).*/\1/p')
+      sequence=$(printf '%s\n' "$drain" | awk -F '\t' 'NF >= 5 && $3 ~ /^(signal|stale|check|heartbeat)$/ { print $2 }')
       recovery=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p')
       [ -n "$sequence" ] && [ -n "$recovery" ] || fail 'foreground drain omitted bounded ACK command'
-      bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
+      bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
         || fail 'handled foreground event could not be acknowledged'
       [ ! -s "$STATE/.wake-queue" ] || fail 'foreground ACK did not retire the handled wake'
       bash "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 90 > "$CASE_HOME/foreground.out" 2> "$CASE_HOME/foreground.err" &
@@ -596,10 +596,10 @@ PY
         [ -s "$STATE/.wake-queue" ] || fail 'presentation acknowledged the wake'
         # The handler, never the Stop owner, acknowledges after its action.
         : > "$CASE_HOME/handled"
-        sequence=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--ack-through \([0-9]*\).*/\1/p')
+        sequence=$(printf '%s\n' "$drain" | awk -F '\t' 'NF >= 5 && $3 ~ /^(signal|stale|check|heartbeat)$/ { print $2 }')
         recovery=$(printf '%s\n' "$drain" | sed -n 's/.*WAKE_ACK_REQUIRED:.*--recovery-generation \([A-Za-z0-9._-]*\).*/\1/p')
         [ -n "$sequence" ] && [ -n "$recovery" ] || fail 'drain omitted bounded ACK command'
-        bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
+        bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$recovery" >/dev/null 2>&1 \
           || fail 'handled wake could not be acknowledged'
         [ ! -s "$STATE/.wake-queue" ] || fail 'ACK did not retire the handled wake'
         jq '.turn_id = "turn-two"' "$CASE_HOME/payload" > "$CASE_HOME/next-payload"

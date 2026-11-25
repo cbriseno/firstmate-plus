@@ -940,15 +940,23 @@ case "$cmd" in
     rm -f "$world/$w.id" "$world/$w.path"
     ;;
   send-keys)
-    if [ "$text" = "treehouse get Enter" ]; then
+    case "$text" in
+    'treehouse get;'*)
       w=$(window_name "$target")
+      if [ -f "$world/full" ]; then
+        marker=$(printf '%s\n' "$text" | sed -n "s/.*'\(FM_TREEHOUSE_RESULT_[0-9]*:\)'.*/\1/p")
+        printf 'all 1 worktrees are in use or dirty\n%s1\n' "$marker" > "$world/$w.capture"
+        exit 0
+      fi
       for slot in "$slots"/*/project; do
         grep -qxF -- "$slot" "$world"/*.path 2>/dev/null && continue
         printf '%s\n' "$slot" > "$world/$w.path"
         break
       done
-    fi
+      ;;
+    esac
     ;;
+  capture-pane) cat "$world/$(window_name "$target").capture" 2>/dev/null || true ;;
 esac
 exit 0
 SH
@@ -1163,7 +1171,7 @@ test_scout_base_branch_refused_on_gerrit_forge() {
   pass "a based scout on a forge=gerrit project is refused at spawn"
 }
 
-test_full_pool_retries_spawn_after_recycling() {
+test_full_pool_reports_failure_without_recycling() {
   local rec id out status slot_root world saved
   id="pool-recycle-dispatch"
   rec=$(make_originless_case recycle-dispatch "$id")
@@ -1178,24 +1186,17 @@ test_full_pool_retries_spawn_after_recycling() {
   saved=$(git -C "$POOL_DIR" rev-parse HEAD)
   world="$CASE_DIR/tmux-world"
   install_pool_world_tmux "$FAKEBIN_DIR" "$world" "$slot_root"
-  python3 - "$FAKEBIN_DIR/tmux" <<'PYTMUX'
-import sys
-p = sys.argv[1]
-s = open(p).read().replace('if [ "$text" = "treehouse get Enter" ]; then',
-    'if [ "$text" = "treehouse get Enter" ]; then\n      [ -f "$world/recycled" ] || exit 0')
-open(p, 'w').write(s)
-PYTMUX
+  : > "$world/full"
   install_pool_lease_fixture "$FAKEBIN_DIR" "$POOL_DIR" "$slot_root/1/fixture-lease" "$world"
   fm_test_fake_sleep_noop "$FAKEBIN_DIR"
   out=$(FM_MODEL_CATEGORY_OVERRIDE=1 run_spawn "$id" --scout)
   status=$?
-  expect_code 0 "$status" "dispatch should retry after recycling"$'\n'"$out"
-  assert_contains "$out" "spawned $id" "dispatch did not launch after recycling"
+  [ "$status" -ne 0 ] || fail "dispatch accepted an exhausted pool"
+  assert_contains "$out" "all 1 worktrees are in use or dirty" "dispatch omitted the Treehouse failure"
   [ "$(git -C "$PROJECT_DIR" rev-parse saved)" = "$saved" ] || fail "dispatch lost the saved commit"
-  assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" "dispatch recorded the wrong copy"
-  [ "$(cat "$slot_root/1/fixture-lease")" = "firstmate:$id" ] \
-    || fail "the recycled slot was not reserved for the dispatched task"
-  pass "dispatch retries the full pool after recycling a saved idle copy"
+  [ ! -e "$world/recycled" ] || fail "dispatch returned a pool slot"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "dispatch published a task after exhaustion"
+  pass "dispatch reports an exhausted pool without returning a slot"
 }
 
 test_existing_and_new_task_copies_remain_reserved() {
@@ -1285,7 +1286,7 @@ fi
 test_existing_and_new_task_copies_remain_reserved
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
-test_full_pool_retries_spawn_after_recycling
+test_full_pool_reports_failure_without_recycling
 test_refused_launch_keeps_its_window
 test_treehouse_isolation_refusal_points_at_what_survives
 test_linked_spawning_home_rejects_primary_before_refresh

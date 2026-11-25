@@ -70,7 +70,9 @@ case "${1:-}" in
     for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
-    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = swallowed ] && [ -s "$FM_SEND_LOG" ]; then
+      printf '\n❯ %s\n\n' "$(tail -1 "$FM_SEND_LOG")"
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
@@ -158,6 +160,18 @@ test_text_steer_rides_inbox() {
   *"please rebase onto main"*) fail "the payload must never be typed:"$'\n'"$typed" ;;
   esac
   pass "fm-send inbox: the payload is recorded durably and only the doorbell is typed"
+}
+
+test_inbox_does_not_confirm_a_swallowed_enter() {
+  local dir err
+  dir=$(setup_case swallowed)
+  err="$dir/send.err"
+  run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=swallowed -- t1 'keep the recorded steer' ||
+    fail 'the durable steer must remain successful'
+  assert_contains "$(cat "$err")" 'doorbell submission unconfirmed' 'typing the reminder was reported as confirmed submission'
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail 'the durable record was lost after a swallowed Enter'
+  [ "$(wc -l < "$dir/send.log" | tr -d ' ')" = 1 ] || fail 'the retry retyped the notice'
+  pass 'the inbox preserves its record and reports the unconfirmed doorbell'
 }
 
 # A home nested deep must not lengthen the doorbell: a long line wraps past
@@ -525,6 +539,24 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+# A steer that corrects or pushes a worker is recorded under its general cause
+# in the correction ledger after delivery; a malformed cause sends nothing.
+test_correction_steer_is_recorded() {
+  local dir err
+  dir=$(setup_case correction)
+  err="$dir/send.err"
+  if run_send "$dir" "$err" -- t1 --correction 'Not A Slug' 'resume now'; then
+    fail 'a malformed correction cause was accepted'
+  fi
+  [ ! -e "$dir/home/state/t1.inbox/001.msg" ] || fail 'a refused correction still delivered the steer'
+  run_send "$dir" "$err" -- t1 --correction expired-wait 'resume: your wait expired' || fail "correction steer failed: $(cat "$err")"
+  [ "$(record_body _ "$dir/home/state/t1.inbox/001.msg")" = 'resume: your wait expired' ] || fail 'the flag leaked into the steer'
+  jq -e '.level == "primary" and .cause == "expired-wait" and .target == "t1" and .text == "resume: your wait expired"' \
+    "$dir/home/state/nudges.jsonl" >/dev/null || fail 'the correction was not recorded'
+  assert_contains "$(cat "$err")" 'has no root task' 'an unlinked cause was not reported'
+  pass 'fm-send: a correction steer is delivered and recorded under its cause'
+}
+
 test_parked_resume_failure_keeps_response_pending() {
   local dir err
   dir=$(setup_case parked-start-failure)
@@ -542,6 +574,7 @@ test_parked_resume_failure_keeps_response_pending() {
 
 test_parked_record_with_live_agent_still_rings
 test_text_steer_rides_inbox
+test_inbox_does_not_confirm_a_swallowed_enter
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
@@ -557,5 +590,6 @@ test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
 test_empty_message_refused
+test_correction_steer_is_recorded
 
 test_parked_resume_failure_keeps_response_pending

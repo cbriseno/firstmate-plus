@@ -37,19 +37,13 @@ mark_status_seen() {
 # else differing.
 baseline_tree() {  # <dest-dir>
   local dest=$1 ref
-  # The baseline is read in a command substitution, so `fail` (which exits)
-  # would end only the SUBSHELL and leave the caller with an empty baseline -
-  # a silent skip, not a failure. Report here and return non-zero so the
-  # caller's guard aborts the whole test with the specific reason.
   if ! ref=$(git -C "$ROOT" rev-parse --verify --quiet '3064a12fc700fa6a57b06e010bebe22dc2facf87^{commit}'); then
-    printf 'not ok - missing fixed baseline 3064a12f in %s - fetch its history and re-run\n' "$ROOT" >&2
-    return 1
+    fail "missing fixed baseline 3064a12f in $ROOT - fetch its history and re-run"
   fi
   rm -rf "$dest"
   mkdir -p "$dest"
   if ! git -C "$ROOT" archive "$ref" bin | tar -x -C "$dest"; then
-    printf 'not ok - could not extract upstream main bin/ tree (%s)\n' "$ref" >&2
-    return 1
+    fail "could not extract upstream main bin/ tree ($ref)"
   fi
   printf '%s\n' "$dest/bin/fm-watch.sh"
 }

@@ -74,7 +74,12 @@
 #     carry no card for the captain to answer: bin/fm-captain-hold.sh hold is
 #     the one path that opens one, and it refuses a call without choices;
 #   - a future hold without --until or with an unresolved dependency: use
-#     `block <id> --by <task>` for dependency-only deferral;
+#     `block <id> --by <task> --because TEXT` for dependency-only deferral;
+#   - `block` without --because TEXT (one line, 3 to 200 characters, at least
+#     three words) naming what the task needs from the blocker that it cannot
+#     run in parallel without: independent work runs in parallel by default, so
+#     sequencing it needs a registered reason; a successful block appends
+#     `Blocked by <task> because: TEXT` to the task's body;
 #   - a data directory that cannot be resolved, or whose backend configuration
 #     cannot be read (bin/fm-tasks-axi-lib.sh owns that diagnostic);
 #   - a markdown `<data>/backlog.md` that is itself a symlink, because the
@@ -589,6 +594,28 @@ if [ "${1:-}" = hold ]; then
     [ -n "$hold_until" ] || fail 'a future hold requires --until; use block for a dependency or ask the captain now'
   fi
 fi
+if [ "${1:-}" = block ] && ! printf '%s\n' "$@" | grep -qxE -- '-h|--help'; then
+  BLOCK_ARGS=() block_reason='' block_have_reason=0 block_by='' previous_arg=''
+  for arg in "${ARGS[@]}"; do
+    if [ "$previous_arg" = --because ]; then
+      block_reason=$arg previous_arg=''
+      continue
+    fi
+    previous_arg=''
+    case "$arg" in
+      --because) block_have_reason=1 previous_arg=--because ;;
+      --because=*) block_have_reason=1 block_reason=${arg#*=} ;;
+      *) BLOCK_ARGS+=("$arg") ;;
+    esac
+  done
+  for i in "${!BLOCK_ARGS[@]}"; do
+    [ "${BLOCK_ARGS[$i]}" = --by ] && block_by=${BLOCK_ARGS[$((i + 1))]:-}
+  done
+  [ "$block_have_reason" = 1 ] || fail "block requires --because TEXT: independent work runs in parallel by default, so say what ${2:-this task} needs from ${block_by:-the blocker} that it cannot run in parallel without"
+  case "$block_reason" in *$'\n'*) fail 'the --because reason must be one line' ;; esac
+  block_reason_words=$(printf '%s\n' "$block_reason" | awk '{ print NF }')
+  [ "${#block_reason}" -le 200 ] && [ "$block_reason_words" -ge 3 ] || fail 'the --because reason must be 3 to 200 characters and at least three words naming what the task needs from its blocker'
+fi
 case "${1:-}" in
   add|create|accept) CREATION_DATA=$(fm_backlog_data_absolute "$DATA") || fail 'cannot resolve task creation data' ;;
   public-followup)
@@ -672,6 +699,18 @@ case "${1:-}" in
       FM_DATA_OVERRIDE="$DATA" bash "$SCRIPT_DIR/fm-captain-hold.sh" sweep-moot >&2 || {
         printf 'moot-retirement: closure succeeded; automatic retirement needs retry through sweep-moot\n' >&2
       }
+    fi
+    exit "$result"
+    ;;
+  block)
+    [ -n "${BLOCK_ARGS+x}" ] || { run_owner tasks-axi ${ARGS[@]+"${ARGS[@]}"}; exit $?; }
+    run_owner tasks-axi "${BLOCK_ARGS[@]}"
+    result=$?
+    if [ "$result" -eq 0 ] && [ -n "$block_by" ]; then
+      shown=$(tasks-axi show "$2" --full) \
+        && new_body=$(printf '%s\n' "$shown" | python3 "$SCRIPT_DIR/fm_block_reason.py" "$block_by" "$block_reason") \
+        && run_owner tasks-axi update "$2" --body "$new_body" >/dev/null \
+        || echo "warning: block recorded, but its reason could not be appended to the task body" >&2
     fi
     exit "$result"
     ;;

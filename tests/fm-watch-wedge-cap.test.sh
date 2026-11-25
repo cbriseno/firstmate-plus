@@ -21,29 +21,10 @@ TMP_ROOT=$(fm_test_tmproot fm-watch-wedge-cap-tests)
 export FM_FAKE_TMUX_DEFAULT_COMMAND=claude
 
 ack_stopped_cycle() {  # <state>
-  local state=$1 err sequence generation rc
-  err="$state/.test-cycle-drain.err"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2> "$err"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "ack_stopped_cycle: drain exited $rc: $(head -c 800 "$err")" >&2
-    return 1
-  fi
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
-  if [ -z "$sequence" ] || [ -z "$generation" ]; then
-    echo "ack_stopped_cycle: no WAKE_ACK_REQUIRED receipt: $(head -c 800 "$err")" >&2
-    rm -f "$err"
-    return 1
-  fi
-  rm -f "$err"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" \
-    --recovery-generation "$generation" 2> "$err"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "ack_stopped_cycle: acknowledgement refused rc=$rc: $(head -c 800 "$err")" >&2
-  fi
-  rm -f "$err"
+  local state=$1 out="$1/.test-drain.out" err="$1/.test-drain.err" rc=0
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || rc=$?
+  if [ "$rc" -eq 0 ]; then ack_drain_output "$state" "$out" "$err" || rc=$?; fi
+  rm -f "$out" "$err"
   return "$rc"
 }
 

@@ -42,14 +42,16 @@ OFF_CONFIG=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-off-config.XXXXXX") || exit 1
 export FM_CONFIG_OVERRIDE="$OFF_CONFIG"
 
 FAILED=0
-fail() { printf 'not ok - %s\n' "$1" >&2; FAILED=1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { FAILED=1; fm_test_fail "$1" "" continue; }
 pass() { printf 'ok - %s\n' "$1"; }
 
 # Every bare tmux call here and in the launch under test reaches this private
 # server, never the operator's default one.
 unset TMUX TMUX_PANE
 TMUX_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-tmux.XXXXXX") \
-  || { printf 'not ok - cannot create a private tmux directory\n' >&2; exit 1; }
+  || fm_test_fail "cannot create a private tmux directory"
 export TMUX_TMPDIR
 
 SLEEPER=$(mktemp "${TMPDIR:-/tmp}/fm-afk-sleeper.XXXXXX")

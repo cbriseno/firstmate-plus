@@ -219,10 +219,10 @@ PYFIX
   done
   grep -Fx "$(cat "$out")" "$state/.ready-work-wake" >/dev/null || fail "published dispatch reason was not preserved"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
+  sequence=$(fm_test_single_wake_sequence "$dir/drain.out")
+  generation=$(fm_test_wake_generation "$dir/drain.err")
   [ -n "$sequence" ] && [ -n "$generation" ] || fail 'fixture: no acknowledgement was offered'
-  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: acknowledgement failed'
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: acknowledgement failed'
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold missing --kind external --reason resolved >/dev/null || fail 'fixture: hold missing brief'
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_OBLIGATION_SECONDS=1 \
     FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=1 FM_DIAGNOSTICS_HOME="$dir/diag" bash "$WATCH" > "$out" 2>&1 &
@@ -239,9 +239,9 @@ PYFIX
   grep -F 'still unattended for' "$out" | grep -F '(demo:' >/dev/null || fail "wrong reminder: $(cat "$out")"
   jq -e 'select(.e == "obligation.overdue" and .category == "ready-work")' "$dir/diag/firstmate/events.jsonl" >/dev/null || fail 'reminder did not record its category'
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
-  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
-  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
-  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: reminder acknowledgement failed'
+  sequence=$(fm_test_single_wake_sequence "$dir/drain.out")
+  generation=$(fm_test_wake_generation "$dir/drain.err")
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" > /dev/null 2>&1 || fail 'fixture: reminder acknowledgement failed'
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold demo --kind external --reason resolved >/dev/null || fail 'fixture: hold demo'
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_OBLIGATION_SECONDS=1 \
     FM_POLL=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 FM_DIAGNOSTICS=0 bash "$WATCH" > "$out" 2>&1 &
@@ -342,9 +342,9 @@ test_ready_result_reminded_until_integrated() {
   )
   acknowledge_result() {
     FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2> "$dir/drain.err" || true
-    sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/drain.err")
-    generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain.err")
-    FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" --recovery-generation "$generation" >/dev/null 2>&1 || fail 'result acknowledgement failed'
+    sequence=$(fm_test_single_wake_sequence "$dir/drain.out")
+    generation=$(fm_test_wake_generation "$dir/drain.err")
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$ROOT/bin/fm-wake-drain.sh" --ack "$sequence" --recovery-generation "$generation" >/dev/null 2>&1 || fail 'result acknowledgement failed'
   }
   out=$(result_tick) || fail "first result check failed: $out"
   assert_contains "$out" 'ready work for the primary: result' 'first result wake'

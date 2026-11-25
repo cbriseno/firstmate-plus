@@ -68,3 +68,13 @@ fm_secondmate_parent_record_parse() {
   FM_SECONDMATE_PARENT_ROUTE=$route
   FM_SECONDMATE_PARENT_HOST=$parent_host
 }
+
+# A whole-home remote route returns work on the seeded Firstmate checkout.
+fm_secondmate_parent_returns_project() {  # <home> <project>
+  local home=$1 project=$2 top
+  [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ] &&
+    fm_secondmate_parent_record_parse "$home/.fm-secondmate-parent" &&
+    [ "$FM_SECONDMATE_PARENT_ROUTE" = remote ] || return 1
+  top=$(git -C "$project" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ "$top" = "$(git -C "$home" rev-parse --show-toplevel 2>/dev/null)" ]
+}

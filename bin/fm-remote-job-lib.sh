@@ -149,6 +149,13 @@ fm_remote_job_validate_settings() {
   return 0
 }
 
+# Budget for a caller sending an idempotent steering record. Let the remote
+# worker report its own queue or execution timeout before cutting transport.
+fm_remote_job_steer_wait_budget() {
+  fm_remote_job_validate_settings || return 1
+  printf '%s\n' "$((10#$FM_REMOTE_JOB_QUEUE_TIMEOUT + 10#$FM_REMOTE_JOB_TIMEOUT + 10#$FM_REMOTE_JOB_WAIT_GRACE + 30))"
+}
+
 fm_remote_job_platform() {
   local raw=${FM_REMOTE_JOB_PLATFORM_OVERRIDE:-}
   [ -n "$raw" ] || raw=$(uname -s 2>/dev/null || true)

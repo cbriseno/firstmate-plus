@@ -14,7 +14,10 @@
 # intent). bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
 # subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
 # `## Captain's intent` line opening with a Captain label or address. Secondmate
-# charters still use a single `{TASK}` charter fill. Firstmate may adjust other
+# charters still use a single `{TASK}` charter fill. `## Requested steps` lists any
+# step beyond the numbered requirements, each citing the captain's words in «...»;
+# bin/fm-dod-lib.sh (fm_brief_steps_untraced) owns that rule and bin/fm-spawn.sh refuses
+# a step whose cited words are not verbatim in the intent. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--effect <line>] [--publish] [--herdr-lab]
@@ -796,6 +799,9 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 ## Captain's requirements
 {CAPTAIN_REQUIREMENTS}
 
+## Requested steps
+- none beyond the requirements above
+
 ## Firstmate spec
 {FIRSTMATE_SPEC}
 
@@ -978,7 +984,7 @@ $RULE1
    Leave the worktree clean before reporting done.
 3. $FORGE_RULE_LINE
 4. Before handing off a code change, run its regression test that fails without the change, the project's check, and a short run of the critical flow.
-   For Firstmate itself, run \`bin/fm-test-run.sh --changed --base origin/main\` once per batch before publication, from a clean checkout of main.
+   For Firstmate itself, run \`bin/fm-test-run.sh --publish --changed --base origin/main\` once per batch before publication, from a clean checkout of main.
 Status command: \`$STATUS_REPORT\`
 $SHORT_INBOX
 Declared external-wait status: $PAUSED_VERB

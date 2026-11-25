@@ -358,6 +358,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/pretool-check.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/primary-write-guard.md",
       "audience": "maintainer-architecture"
     },

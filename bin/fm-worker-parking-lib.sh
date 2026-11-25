@@ -8,15 +8,17 @@
 # shellcheck disable=SC2034,SC2153
 
 do_park() {
-  local pending wait_line state verdict process_check socket='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
+  local pending wait_line state verdict process_check socket='' park_cause='' saved="$STATE/$ID.parked" note="$DATA/$ID/park-note.md"
   case "$KIND" in ship|scout|host) ;; *) die 'parking applies to task workers only' ;; esac
   # shellcheck source=bin/fm-classify-lib.sh
   . "$SCRIPT_DIR/fm-classify-lib.sh"
   wait_line=$(status_current_line "$STATE/$ID.status" "$KIND")
+  # The general pause (bin/fm-pause-general.sh) is itself the wait condition.
+  if [ -e "$STATE/.pause-general" ]; then park_cause=general-pause; else park_cause=$(fm_meta_get "$saved" park_cause); fi
   case "$(status_line_verb "$wait_line")" in
     done|needs-decision|captain-held) ;;
-    paused) status_paused_until "$wait_line" >/dev/null || status_paused_load1 "$wait_line" >/dev/null || die 'parking a pause requires an until date or load1 threshold' ;;
-    *) die 'parking requires a declared done, needs-decision, captain-held or dated pause' ;;
+    paused) [ -n "$park_cause" ] || status_paused_until "$wait_line" >/dev/null || status_paused_load1 "$wait_line" >/dev/null || die 'parking a pause requires an until date or load1 threshold' ;;
+    *) [ -n "$park_cause" ] || die 'parking requires a declared done, needs-decision, captain-held or dated pause' ;;
   esac
   if [ -f "$saved" ] && [ "$(fm_meta_get "$saved" park_phase)" = parked ]; then
     echo "already-parked $ID"
@@ -74,6 +76,7 @@ do_park() {
   {
     awk -F= '$1 ~ /^(harness|model|effort|kind|worktree|project|spawn_gen|spawned_at|sessions_file|window|backend|herdr_session|herdr_pane_id)$/ {print}' "$META"
     printf '\npark_phase=stopping\npark_wait=%s\npark_tmux_socket=%s\n' "$wait_line" "$socket"
+    [ -z "$park_cause" ] || printf 'park_cause=%s\n' "$park_cause"
   } > "$saved.tmp"
   mv "$saved.tmp" "$saved"
   {
@@ -116,28 +119,31 @@ resume_policy_harness() {
 }
 
 resume_check_policy() {
-  local policy
-  # An explicit profile is Firstmate applying the captain's recorded choice.
+  local policy category profile model effort config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
   [ "$HARNESS_SET" = 0 ] || return 0
-  policy=$(resume_policy_harness) || return 1
+  category=$(sed -n 's/^Dispatch category: //p' "$DATA/$ID/brief.md" 2>/dev/null | head -n 1)
+  if [ -n "$category" ] && [ -f "$config/crew-dispatch.json" ]; then
+    profile=$(jq -er --arg category "$category" '
+      (if $category == "default" then .default else
+       [.rules[]? | select(.category == $category) | .use] |
+       if length == 1 then .[0] else error("category must select one rule") end end) |
+      if type == "array" then if length == 1 then .[0] else error("profile selection required") end else . end |
+      if type == "object" and (.harness | type) == "string" then
+        [.harness, (.model // "__unset__"), (.effort // "__unset__")] | @tsv
+      else error("invalid dispatch profile") end
+    ' "$config/crew-dispatch.json") || die 'resolve the current dispatch profile before resume'
+    IFS=$'\t' read -r policy model effort <<< "$profile"
+    [ "$model" != __unset__ ] || model=$(sed -n 's/^Dispatch model: //p' "$DATA/$ID/brief.md" | head -n 1)
+    [ "$effort" != __unset__ ] || effort=$(sed -n 's/^Dispatch effort: //p' "$DATA/$ID/brief.md" | head -n 1)
+    if [ -n "$model" ] && [ "$MODEL_SET" = 0 ]; then NEW_MODEL=$model; MODEL_SET=1; fi
+    if [ -n "$effort" ] && [ "$EFFORT_SET" = 0 ]; then NEW_EFFORT=$effort; EFFORT_SET=1; fi
+  else
+    policy=$(resume_policy_harness) || return 1
+  fi
   fm_control_harness_supported "$policy" || die "unverified current usage policy: $policy"
   [ "$policy" != "$HARNESS" ] || return 0
-  # hold owns this same lifecycle lock. Nothing is launched after releasing it.
-  rm -f "$FM_COMPOSER_DIALOG_SINK"
-  FM_COMPOSER_DIALOG_SINK=
-  CONTROL_LOCK_HELD=0
-  fm_lock_release "$CONTROL_LOCK"
-  fm_lease_guard_release
-  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --action "resume a worker under a different harness" --category product-design \
-    --challenge 'Resuming on another harness than the saved worker would override the recorded usage policy choice' \
-    --reason "El worker guardado usa $HARNESS y la política actual usa $policy" \
-    --question 'Cambió el arnés de la política de uso. ¿Cómo quieres retomar este trabajo?' \
-    --option "original=Continuar con el worker original|Retomar el chat guardado en $HARNESS cuando sea posible." \
-    --option "current=Relevo con el arnés actual|Continuar en $policy con el avance guardado." \
-    --recommended current \
-    --context 'El trabajo y el mensaje pendiente se conservan. No se relanzará ningún agente hasta que elijas.' \
-    || return 1
-  die 'waiting for captain harness choice; record the answer, then resume with --harness and the selected profile; pending messages must not be resent'
+  NEW_HARNESS=$policy
+  HARNESS_SET=1
 }
 
 do_resume() {
@@ -155,7 +161,7 @@ do_resume() {
   resume_check_policy || return 1
   RESUME_SESSION=
   if [ "$HARNESS_SET" = 1 ] && [ "$NEW_HARNESS" != "$HARNESS" ]; then
-    reason="captain-selected harness takeover: $HARNESS -> $NEW_HARNESS"
+    reason="usage-policy harness takeover: $HARNESS -> $NEW_HARNESS"
     echo "resume-fallback $ID: $reason; starting fresh with saved progress note" >&2
   elif RESUME_SESSION=$(python3 "$SCRIPT_DIR/fm_task_sessions.py" resume-id "$STATE" "$ID" 2>"$STATE/$ID.resume-reason"); then
     echo "resume $ID chat=$RESUME_SESSION" >&2

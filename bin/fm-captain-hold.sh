@@ -22,10 +22,11 @@
 # Usage:
 #   hold requires --action with the exact action class and checks the home's
 #   standing grants before mutation. --repo selects project-scoped grants.
-#   A matching grant refuses the hold; --override-grant records why this case
+#   A matching grant refuses the hold except for requirement-reduction;
+#   --override-grant records why another case
 #   differs in the refusal/override output. answer --standing writes the action,
 #   scope, exact decision and optional --limits to the home's grants file.
-#   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact
+#   hold requires --category product-design|unbacked-destructive|money|credentials-security|captain-only-fact|requirement-reduction
 #   (SUPERVISOR.md section 9 owns their meaning). `money` also requires --charge
 #   naming the real payment or purchase, so quota, tokens, and subscription use
 #   cannot pass as money. Every hold that passes call fields (it opens or
@@ -169,7 +170,8 @@
 # tasks-axi --archive-body). It closes a question with `tasks-axi done` - or,
 # with `--release`, lifts the hold with `tasks-axi unhold` so a captain-gated
 # WORK item resumes without closing - and restores resolution-first body
-# ordering. `--release-in-flight` is the close a caller with no declared mode
+# ordering. An outstanding recorded or preserved branch also forces a release.
+# `--release-in-flight` is the close a caller with no declared mode
 # asks for: it releases when the task's backlog lifecycle state is in flight -
 # dispatched work whose completion belongs to landing and cleanup - and closes
 # anything else, read under the same task control lock as the transition. Kind,
@@ -1170,8 +1172,8 @@ EOF
 
 refuse_category() {
   printf 'fm-captain-hold: %s\n' "$1" >&2
-  printf '%s\n' 'Allowed --category values (SUPERVISOR.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact.' >&2
-  printf '%s\n' 'Ask the captain only about product preferences or vision, destructive or irreversible actions without a backup, real payments or purchases, credentials or security, or information only the captain has. Otherwise, act and report.' >&2
+  printf '%s\n' 'Allowed --category values (SUPERVISOR.md section 9 defines them): product-design, unbacked-destructive, money, credentials-security, captain-only-fact, requirement-reduction.' >&2
+  printf '%s\n' 'Ask the captain only about product preferences or vision, destructive or irreversible actions without a backup, real payments or purchases, credentials or security, information only the captain has, or a reduction of a captain requirement. Otherwise, act and report.' >&2
   exit 1
 }
 
@@ -1181,7 +1183,7 @@ refuse_charge() {
 }
 
 refuse_challenge() {
-  fail 'question the hold first: does a prior rule or decision answer it, does captain-shared authorize it, is it reversible, does it contradict what was asked? If any does, decide with your recommendation and note it on the task; if none does, pass --challenge "<why none settles it>"'
+  fail 'question the hold first: does a prior rule or decision answer it, does captain-shared authorize it, is it reversible, does it contradict what was asked? If any does, decide and note it unless it reduces a captain requirement; otherwise pass --challenge "<why the captain must decide>"'
 }
 
 # Record one `Captain hold <label>:` line right under the hold-set stamp.
@@ -1520,7 +1522,7 @@ command_hold() {
     fi
   fi
   [ "$grant_rc" -le 1 ] || fail 'cannot read standing grants'
-  if [ "$grant_rc" = 0 ]; then
+  if [ "$grant_rc" = 0 ] && [ "$category" != requirement-reduction ]; then
     if [ -z "$grant_override" ]; then
       fail "standing grant: $grant_match; act and report"
     fi
@@ -1529,7 +1531,7 @@ command_hold() {
   [ -n "$reason" ] || fail "reason must not be empty"
   [ "$repair_call" = 0 ] || [ "$call_given" = 1 ] || fail '--repair-call needs explicit call fields'
   case "$category" in
-    product-design|unbacked-destructive|money|credentials-security|captain-only-fact) ;;
+    product-design|unbacked-destructive|money|credentials-security|captain-only-fact|requirement-reduction) ;;
     '') refuse_category '--category is required' ;;
     *) refuse_category "unsupported --category: $category" ;;
   esac
@@ -1750,6 +1752,32 @@ apply_pending_retained_artifact() {  # <task-id>
   esac
 }
 
+# A held ship can outlive its worker; an answer must not complete its
+# outstanding branch. Resolve against the recorded project and default branch.
+answer_has_unintegrated_branch() {  # <task-id>
+  local meta="$STATE/$1.meta" project branch base
+  [ -f "$meta" ] || return 1
+  project=$(sed -n 's/^project=//p' "$meta" | tail -1)
+  branch=$(sed -n 's/^branch=//p' "$meta" | tail -1)
+  [ -n "$branch" ] || return 1
+  [ -n "$project" ] || return 0
+  git -C "$project" show-ref --verify --quiet "refs/heads/$branch" || return 0
+  base=$(git -C "$project" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  base=${base#origin/}
+  if [ -z "$base" ]; then
+    for base in main master; do
+      git -C "$project" show-ref --verify --quiet "refs/heads/$base" && break
+    done
+  fi
+  git -C "$project" merge-base --is-ancestor "refs/heads/$branch" "refs/heads/$base" 2>/dev/null && return 1
+  return 0
+}
+
+answer_preserves_work() {  # <task-id> <shown-body>
+  answer_has_unintegrated_branch "$1" \
+    || decode_shown_value "$2" | grep -q '^Preserved work: preserved-branch:'
+}
+
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
     tasks_axi unhold "$1" >/dev/null
@@ -1864,6 +1892,11 @@ command_answer() {
   attach_answer_files "$id" "${attach_files[@]+"${attach_files[@]}"}"
   # Read under the control lock with the row the transition acts on.
   if [ "$release_in_flight" = 1 ] && [ "$state" = in_flight ]; then release=1; fi
+  if [ "$completing" = 0 ] && [ "$state" != "done" ]; then
+    if answer_preserves_work "$id" "$body"; then
+      release=1
+    fi
+  fi
   if [ "$release" = 1 ]; then outcome=released; else outcome=answered; fi
   [ "$completing" = 0 ] || outcome='action-completed'
   # The occurrence the parent line names: the record about to be written is
@@ -2447,6 +2480,9 @@ command_answers() {
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     # An undeclared close replays as the close `answer` resolves it to.
     if [ "$answer_flag" = --release-in-flight ] && [ "$state" = in_flight ]; then
+      release_flag=--release
+    fi
+    if [ "$state" != "done" ] && answer_preserves_work "$id" "$body"; then
       release_flag=--release
     fi
     [ -n "$answer_flag" ] || answer_flag=$release_flag

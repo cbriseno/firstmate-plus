@@ -11,7 +11,8 @@
 # dialog on screen, press the keys that accept it, check that the accepting row
 # is selected before the last Enter, and stop once the agent is working or the
 # window ends. It always exits 0; a dialog it does not answer stays on screen
-# and one line on stderr says which and why.
+# and one line on stderr says which and why. A spawn may set
+# FM_STARTUP_DIALOGS_ALERT_ID to queue the same actionable notice once in its home.
 #
 # Answered (each recorded from a real pane, 2026-11-18):
 #   Codex 0.169  "Folder access ... Trust and continue"  Enter. Only when the
@@ -49,9 +50,17 @@ LAUNCH_DIR=${4:?launch-dir}
 WINDOW=${5:-45}
 LABEL=${6:-}
 POLL=${FM_STARTUP_DIALOGS_POLL:-1}
-LAUNCH_DIR=$(cd -P -- "$LAUNCH_DIR" 2>/dev/null && pwd -P) || exit 0
-
 note() { echo "startup-dialog: $*" >&2; }
+warn() {
+  note "$*"
+  if [ -n "${FM_STARTUP_DIALOGS_ALERT_ID:-}" ]; then
+    bash "$SCRIPT_DIR/fm-inbox.sh" note --request-id "$FM_STARTUP_DIALOGS_ALERT_ID" -- \
+      "Startup dialog for ${LABEL:-$TARGET} needs attention: $*. Inspect the pane before sending input." >/dev/null ||
+      note "could not queue the startup dialog notice; inspect ${LABEL:-$TARGET}"
+  fi
+}
+
+LAUNCH_DIR=$(cd -P -- "$LAUNCH_DIR" 2>/dev/null && pwd -P) || { warn "cannot resolve the launch directory; inspect the session"; exit 0; }
 
 screen_now() { fm_backend_visible_capture "$BACKEND" "$TARGET" "$LABEL" 2>/dev/null; }
 
@@ -61,9 +70,9 @@ classify() {
   printf '%s\n' "$1" | awk '
     /Folder access/ { f = 1 }
     /Trust this folder\?/ { ft = 1 }
-    /^[ \t]*[›>] 1\. Trust and continue/ { fs = 1 }
+    /^[ \t]*(›|>) 1\. Trust and continue/ { fs = 1 }
     /Hooks need review/ { h = 1 }
-    /^[ \t]*[›>] 1\. Review hooks/ { hs = 1 }
+    /^[ \t]*(›|>) 1\. Review hooks/ { hs = 1 }
     /2\. Trust all and continue/ { h2 = 1 }
     /Allow external CLAUDE\.md file imports\?/ { c = 1 }
     /^[ \t]*❯ No, disable external imports/ { cs = 1 }
@@ -106,15 +115,9 @@ refusal() {  # <name> <screen>
     [ "$p" = "$LAUNCH_DIR" ] || echo "the folder shown (${p:-unreadable}) is not the launch directory $LAUNCH_DIR"
     ;;
   codex-hooks)
-    if { [ -e "$LAUNCH_DIR/.codex/hooks.json" ] || [ -e "$LAUNCH_DIR/.codex/config.toml" ]; } \
-      && [ ! -e "$LAUNCH_DIR/bin/fm-turnend-guard.sh" ]; then
-      if [ -e "$LAUNCH_DIR/.codex/config.toml" ] || [ -L "$LAUNCH_DIR/.codex/hooks.json" ] ||
-        [ ! -L "$LAUNCH_DIR/AGENTS.md" ] ||
-        [ "$(readlink "$LAUNCH_DIR/AGENTS.md")" != "$FM_ROOT/overseer/AGENTS.md" ] ||
-        [ "$(cat "$LAUNCH_DIR/firstmate-home" 2>/dev/null)" != "$FM_HOME" ] ||
-        [ "$(cat "$LAUNCH_DIR/.codex/hooks.json" 2>/dev/null)" != "$(bash "$SCRIPT_DIR/fm-overseer.sh" hook)" ]; then
-        echo "$LAUNCH_DIR carries its own Codex hooks and is not a Firstmate checkout or prepared overseer"
-      fi
+    if { [ -e "$LAUNCH_DIR/.codex/hooks.json" ] || [ -e "$LAUNCH_DIR/.codex/config.toml" ]; } &&
+      [ ! -e "$LAUNCH_DIR/bin/fm-turnend-guard.sh" ]; then
+      echo "$LAUNCH_DIR carries its own Codex hooks and is not a Firstmate checkout"
     fi
     ;;
   claude-imports)
@@ -146,13 +149,13 @@ answer() {  # <name>
   codex-hooks)
     key Down || return 1
     sleep "$POLL"
-    selected '^[ \t]*› 2\. Trust all and continue' || { note "codex-hooks: the accepting row is not selected after Down; left for the operator"; return 1; }
+    selected '^[ \t]*(›|>) 2\. Trust all and continue' || { return 1; }
     key Enter
     ;;
   claude-imports)
     key Down || return 1
     sleep "$POLL"
-    selected '^[ \t]*❯ Yes, allow external imports' || { note "claude-imports: the accepting row is not selected after Down; left for the operator"; return 1; }
+    selected '^[ \t]*❯ Yes, allow external imports' || { return 1; }
     key Enter
     ;;
   esac
@@ -160,6 +163,7 @@ answer() {  # <name>
 
 tries=(0 0 0)
 empty_reads=0
+screen=
 deadline=$(( $(date +%s) + WINDOW ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   # The appended x keeps trailing newlines, so a pane of blank rows is not "empty".
@@ -167,7 +171,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   screen=${screen%x}
   if [ -z "$screen" ]; then
     empty_reads=$((empty_reads + 1))
-    [ "$empty_reads" -lt 2 ] || exit 0
+    [ "$empty_reads" -lt 2 ] || { warn "cannot read the launch pane; inspect the session"; exit 0; }
     sleep 0.2
     continue
   fi
@@ -177,19 +181,32 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ -n "$name" ]; then
     why=$(refusal "$name" "$screen")
     if [ -n "$why" ]; then
-      note "$name: left for the operator: $why"
+      warn "$name: left for the operator: $why"
       exit 0
     fi
     case "$name" in codex-folder) index=0 ;; codex-hooks) index=1 ;; claude-imports) index=2 ;; esac
     tries[index]=$((tries[index] + 1))
     if [ "${tries[$index]}" -gt 3 ]; then
-      note "$name: still on screen after 3 answers; left for the operator"
+      warn "$name: still on screen after 3 answers; left for the operator"
       exit 0
     fi
-    if answer "$name"; then note "$name: answered for the operator ($LAUNCH_DIR)"; fi
+    if answer "$name"; then
+      note "$name: answered for the operator ($LAUNCH_DIR)"
+    else
+      warn "$name: could not select or submit the accepting row; left for the operator"
+      exit 0
+    fi
   elif printf '%s\n' "$screen" | grep -Eq 'esc to interrupt'; then
     exit 0
   fi
   sleep "$POLL"
 done
+if { printf '%s\n' "$screen" | grep -Eq '^[ \t]*Folder access' &&
+     printf '%s\n' "$screen" | grep -Fq 'Trust this folder?'; } ||
+   { printf '%s\n' "$screen" | grep -Eq '^[ \t]*Hooks need review' &&
+     printf '%s\n' "$screen" | grep -Fq 'Trust all and continue'; } ||
+   { printf '%s\n' "$screen" | grep -Eq '^[ \t]*Allow external CLAUDE\.md file imports' &&
+     printf '%s\n' "$screen" | grep -Fq 'Yes, allow external imports'; }; then
+  warn "unrecognized startup dialog; inspect the session before sending input"
+fi
 exit 0

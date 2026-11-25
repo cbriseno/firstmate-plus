@@ -24,7 +24,9 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-fail() { echo "not ok - Codex delayed submit: $*" >&2; exit 1; }
+# shellcheck source=tests/reporter.sh
+. "$(dirname "${BASH_SOURCE[0]}")/reporter.sh"
+fail() { fm_test_fail "Codex delayed submit: $*"; }
 lab() { PATH="$ORIGINAL_PATH" "$HELPER" run "$SESSION" "$@"; }
 mkdir -p "$TMP_ROOT/fakebin"
 cat > "$TMP_ROOT/fakebin/herdr" <<EOF2
